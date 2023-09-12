@@ -2679,6 +2679,19 @@ static const struct arm64_cpu_capabilities arm64_features[] = {
 		.matches = has_cpuid_feature,
 		ARM64_CPUID_FIELDS(ID_AA64MMFR2_EL1, EVT, IMP)
 	},
+#ifdef CONFIG_ARM64_VA_BITS_52
+	{
+		.desc = "52-bit Virtual Addressing (LVA)",
+		.capability = ARM64_HAS_VA52,
+		.type = ARM64_CPUCAP_BOOT_CPU_FEATURE,
+		.sys_reg = SYS_ID_AA64MMFR2_EL1,
+		.sign = FTR_UNSIGNED,
+		.field_width = 4,
+		.field_pos = ID_AA64MMFR2_EL1_VARange_SHIFT,
+		.matches = has_cpuid_feature,
+		.min_field_value = ID_AA64MMFR2_EL1_VARange_52,
+	},
+#endif
 	{},
 };
 
