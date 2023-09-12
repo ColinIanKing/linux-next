@@ -803,7 +803,8 @@ static int get_user_mapping_size(struct kvm *kvm, u64 addr)
 {
 	struct kvm_pgtable pgt = {
 		.pgd		= (kvm_pteref_t)kvm->mm->pgd,
-		.ia_bits	= vabits_actual,
+		.ia_bits	= IS_ENABLED(CONFIG_ARM64_LPA2) ? 48
+								: vabits_actual,
 		.start_level	= (KVM_PGTABLE_MAX_LEVELS -
 				   ARM64_HW_PGTABLE_LEVELS(pgt.ia_bits)),
 		.mm_ops		= &kvm_user_mm_ops,
@@ -1908,6 +1909,8 @@ int __init kvm_mmu_init(u32 *hyp_va_bits)
 	idmap_bits = IDMAP_VA_BITS;
 	kernel_bits = vabits_actual;
 	*hyp_va_bits = max(idmap_bits, kernel_bits);
+	if (IS_ENABLED(CONFIG_ARM64_LPA2))
+		*hyp_va_bits = 48; // LPA2 is not yet supported in KVM
 
 	kvm_debug("Using %u-bit virtual addresses at EL2\n", *hyp_va_bits);
 	kvm_debug("IDMAP page: %lx\n", hyp_idmap_start);
