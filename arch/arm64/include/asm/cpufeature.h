@@ -921,6 +921,14 @@ extern struct arm64_ftr_override id_aa64isar2_override;
 
 extern struct arm64_ftr_override arm64_sw_feature_override;
 
+static inline bool kaslr_disabled_cmdline(void)
+{
+	if (cpuid_feature_extract_unsigned_field(arm64_sw_feature_override.val,
+						 ARM64_SW_FEATURE_OVERRIDE_NOKASLR))
+		return true;
+	return false;
+}
+
 u32 get_kvm_ipa_limit(void);
 void dump_cpu_features(void);
 
