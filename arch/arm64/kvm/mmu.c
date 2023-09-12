@@ -805,7 +805,7 @@ static int get_user_mapping_size(struct kvm *kvm, u64 addr)
 		.pgd		= (kvm_pteref_t)kvm->mm->pgd,
 		.ia_bits	= vabits_actual,
 		.start_level	= (KVM_PGTABLE_MAX_LEVELS -
-				   CONFIG_PGTABLE_LEVELS),
+				   ARM64_HW_PGTABLE_LEVELS(pgt.ia_bits)),
 		.mm_ops		= &kvm_user_mm_ops,
 	};
 	unsigned long flags;
