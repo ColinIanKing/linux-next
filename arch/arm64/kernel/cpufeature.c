@@ -1756,6 +1756,8 @@ kpti_install_ng_mappings(const struct arm64_cpu_capabilities *__unused)
 
 	if (levels == 5 && !pgtable_l5_enabled())
 		levels = 4;
+	else if (levels == 4 && !pgtable_l4_enabled())
+		levels = 3;
 
 	remap_fn = (void *)__pa_symbol(idmap_kpti_install_ng_mappings);
 

@@ -96,7 +96,8 @@ static inline void __pmd_free_tlb(struct mmu_gather *tlb, pmd_t *pmdp,
 static inline void __pud_free_tlb(struct mmu_gather *tlb, pud_t *pudp,
 				  unsigned long addr)
 {
-	tlb_remove_ptdesc(tlb, virt_to_ptdesc(pudp));
+	if (pgtable_l4_enabled())
+		tlb_remove_ptdesc(tlb, virt_to_ptdesc(pudp));
 }
 #endif
 
