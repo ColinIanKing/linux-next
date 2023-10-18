@@ -1686,7 +1686,7 @@ static int migrate_pages_batch(struct list_head *from,
 
 					if (!ret) {
 						stats->nr_thp_split += is_thp;
-						stats->nr_split += is_large;
+						stats->nr_split++;
 						break;
 					} else if (reason == MR_LONGTERM_PIN &&
 						   ret == -EAGAIN) {
