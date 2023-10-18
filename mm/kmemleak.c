@@ -623,7 +623,7 @@ static noinline depot_stack_handle_t set_track_prepare(void)
 	return trace_handle;
 }
 
-static struct kmemleak_object * __alloc_object(gfp_t gfp)
+static struct kmemleak_object *__alloc_object(gfp_t gfp)
 {
 	struct kmemleak_object *object;
 
