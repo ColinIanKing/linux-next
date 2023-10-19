@@ -126,7 +126,9 @@ struct mempolicy *mpol_shared_policy_lookup(struct shared_policy *sp,
 
 struct mempolicy *get_task_policy(struct task_struct *p);
 struct mempolicy *__get_vma_policy(struct vm_area_struct *vma,
-		unsigned long addr);
+		unsigned long addr, pgoff_t *ilx);
+struct mempolicy *get_vma_policy(struct vm_area_struct *vma,
+		unsigned long addr, int order, pgoff_t *ilx);
 bool vma_policy_mof(struct vm_area_struct *vma);
 
 extern void numa_default_policy(void);
@@ -140,8 +142,6 @@ extern int huge_node(struct vm_area_struct *vma,
 extern bool init_nodemask_of_mempolicy(nodemask_t *mask);
 extern bool mempolicy_in_oom_domain(struct task_struct *tsk,
 				const nodemask_t *mask);
-extern nodemask_t *policy_nodemask(gfp_t gfp, struct mempolicy *policy);
-
 extern unsigned int mempolicy_slab_node(void);
 
 extern enum zone_type policy_zone;
@@ -210,6 +210,13 @@ static inline void mpol_free_shared_policy(struct shared_policy *sp)
 static inline struct mempolicy *
 mpol_shared_policy_lookup(struct shared_policy *sp, pgoff_t idx)
 {
+	return NULL;
+}
+
+static inline struct mempolicy *get_vma_policy(struct vm_area_struct *vma,
+				unsigned long addr, int order, pgoff_t *ilx)
+{
+	*ilx = 0;
 	return NULL;
 }
 
