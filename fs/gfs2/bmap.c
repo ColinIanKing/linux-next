@@ -317,6 +317,26 @@ static void gfs2_metapath_ra(struct gfs2_glock *gl, __be64 *start, __be64 *end)
 	}
 }
 
+/*
+ * init_metapath - initialize a metapath
+ * @mp: The metapath
+ * @inode: The inode
+ */
+static int
+init_metapath(struct metapath *mp, struct inode *inode)
+{
+	struct gfs2_inode *ip = GFS2_I(inode);
+	struct buffer_head *dibh;
+	int ret;
+
+	memset(mp, 0, sizeof(*mp));
+	ret = gfs2_meta_inode_buffer(ip, &dibh);
+	if (!ret)
+		mp->mp_bh[0] = dibh;
+	mp->mp_aheight = gfs2_is_stuffed(ip) ? 0 : 1;
+	return ret;
+}
+
 static inline struct buffer_head *
 metapath_dibh(struct metapath *mp)
 {
@@ -849,10 +869,10 @@ static int __gfs2_iomap_get(struct inode *inode, loff_t pos, loff_t length,
 	__be64 *ptr;
 	sector_t lblock;
 	sector_t lblock_stop;
-	int ret;
+	int ret = 0;
 	int eob;
 	u64 len;
-	struct buffer_head *dibh = NULL, *bh;
+	struct buffer_head *bh;
 	u8 height;
 
 	if (!length)
@@ -860,12 +880,9 @@ static int __gfs2_iomap_get(struct inode *inode, loff_t pos, loff_t length,
 
 	down_read(&ip->i_rw_mutex);
 
-	ret = gfs2_meta_inode_buffer(ip, &dibh);
-	if (ret)
-		goto unlock;
-	mp->mp_bh[0] = dibh;
-
 	if (gfs2_is_stuffed(ip)) {
+		struct buffer_head *dibh = metapath_dibh(mp);
+
 		if (flags & IOMAP_WRITE) {
 			loff_t max_size = gfs2_max_stuffed_size(ip);
 
@@ -1055,7 +1072,7 @@ static int gfs2_iomap_begin_write(struct inode *inode, loff_t pos,
 			ret = gfs2_unstuff_dinode(ip);
 			if (ret)
 				goto out_trans_end;
-			release_metapath(mp);
+			mp->mp_aheight = 1;
 			ret = __gfs2_iomap_get(inode, iomap->offset,
 					       iomap->length, flags, iomap, mp);
 			if (ret)
@@ -1097,13 +1114,16 @@ static int gfs2_iomap_begin(struct inode *inode, loff_t pos, loff_t length,
 			    struct iomap *srcmap)
 {
 	struct gfs2_inode *ip = GFS2_I(inode);
-	struct metapath mp = { .mp_aheight = 1, };
+	struct metapath mp;
 	int ret;
 
 	if (gfs2_is_jdata(ip))
 		iomap->flags |= IOMAP_F_BUFFER_HEAD;
 
 	trace_gfs2_iomap_start(ip, pos, length, flags);
+	ret = init_metapath(&mp, inode);
+	if (ret)
+		goto out_unlock;
 	ret = __gfs2_iomap_get(inode, pos, length, flags, iomap, &mp);
 	if (ret)
 		goto out_unlock;
@@ -1409,9 +1429,12 @@ out:
 int gfs2_iomap_get(struct inode *inode, loff_t pos, loff_t length,
 		   struct iomap *iomap)
 {
-	struct metapath mp = { .mp_aheight = 1, };
+	struct metapath mp;
 	int ret;
 
+	ret = init_metapath(&mp, inode);
+	if (ret)
+		return ret;
 	ret = __gfs2_iomap_get(inode, pos, length, 0, iomap, &mp);
 	release_metapath(&mp);
 	return ret;
@@ -1420,9 +1443,12 @@ int gfs2_iomap_get(struct inode *inode, loff_t pos, loff_t length,
 int gfs2_iomap_alloc(struct inode *inode, loff_t pos, loff_t length,
 		     struct iomap *iomap)
 {
-	struct metapath mp = { .mp_aheight = 1, };
+	struct metapath mp;
 	int ret;
 
+	ret = init_metapath(&mp, inode);
+	if (ret)
+		return ret;
 	ret = __gfs2_iomap_get(inode, pos, length, IOMAP_WRITE, iomap, &mp);
 	if (!ret && iomap->type == IOMAP_HOLE)
 		ret = __gfs2_iomap_alloc(inode, iomap, &mp);
@@ -1716,8 +1742,8 @@ static int punch_hole(struct gfs2_inode *ip, u64 offset, u64 length)
 {
 	struct gfs2_sbd *sdp = GFS2_SB(&ip->i_inode);
 	u64 maxsize = sdp->sd_heightsize[ip->i_height];
-	struct metapath mp = {};
-	struct buffer_head *dibh, *bh;
+	struct metapath mp;
+	struct buffer_head *bh;
 	struct gfs2_holder rd_gh;
 	unsigned int bsize_shift = sdp->sd_sb.sb_bsize_shift;
 	u64 lblock = (offset + (1 << bsize_shift) - 1) >> bsize_shift;
@@ -1787,11 +1813,10 @@ static int punch_hole(struct gfs2_inode *ip, u64 offset, u64 length)
 	}
 	start_aligned = mp_h;
 
-	ret = gfs2_meta_inode_buffer(ip, &dibh);
+	ret = init_metapath(&mp, &ip->i_inode);
 	if (ret)
 		return ret;
 
-	mp.mp_bh[0] = dibh;
 	ret = lookup_metapath(ip, &mp);
 	if (ret)
 		goto out_metapath;
@@ -1944,6 +1969,8 @@ static int punch_hole(struct gfs2_inode *ip, u64 offset, u64 length)
 	}
 
 	if (btotal) {
+		struct buffer_head *dibh = metapath_dibh(&mp);
+
 		if (current->journal_info == NULL) {
 			ret = gfs2_trans_begin(sdp, RES_DINODE + RES_STATFS +
 					       RES_QUOTA, 0);
