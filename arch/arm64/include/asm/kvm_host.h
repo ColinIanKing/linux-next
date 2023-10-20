@@ -1048,7 +1048,7 @@ int kvm_arm_pvtime_has_attr(struct kvm_vcpu *vcpu,
 extern unsigned int __ro_after_init kvm_arm_vmid_bits;
 int __init kvm_arm_vmid_alloc_init(void);
 void __init kvm_arm_vmid_alloc_free(void);
-void kvm_arm_vmid_update(struct kvm_vmid *kvm_vmid);
+bool kvm_arm_vmid_update(struct kvm_vmid *kvm_vmid);
 void kvm_arm_vmid_clear_active(void);
 
 static inline void kvm_arm_pvtime_vcpu_init(struct kvm_vcpu_arch *vcpu_arch)
@@ -1134,8 +1134,8 @@ static inline bool kvm_set_pmuserenr(u64 val)
 }
 #endif
 
-void kvm_vcpu_load_sysregs_vhe(struct kvm_vcpu *vcpu);
-void kvm_vcpu_put_sysregs_vhe(struct kvm_vcpu *vcpu);
+void kvm_vcpu_load_vhe(struct kvm_vcpu *vcpu);
+void kvm_vcpu_put_vhe(struct kvm_vcpu *vcpu);
 
 int __init kvm_set_ipa_limit(void);
 
