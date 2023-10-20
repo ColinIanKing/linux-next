@@ -11,6 +11,10 @@ config IOMMUFD
 
 	  If you don't know what to do here, say N.
 
+config IOMMUFD_DRIVER
+	bool
+	default n
+
 if IOMMUFD
 config IOMMUFD_VFIO_CONTAINER
 	bool "IOMMUFD provides the VFIO container /dev/vfio/vfio"
