@@ -322,7 +322,7 @@ struct sgx_encl_page *sgx_encl_load_page(struct sgx_encl *encl,
  * ENCLS[EAUG] instruction.
  *
  * Returns: Appropriate vm_fault_t: VM_FAULT_NOPAGE when PTE was installed
- * successfully, VM_FAULT_SIGBUS or VM_FAULT_OOM as error otherwise.
+ * successfully, VM_FAULT_SIGBUS as error otherwise.
  */
 static vm_fault_t sgx_encl_eaug_page(struct vm_area_struct *vma,
 				     struct sgx_encl *encl, unsigned long addr)
@@ -348,7 +348,7 @@ static vm_fault_t sgx_encl_eaug_page(struct vm_area_struct *vma,
 	secinfo_flags = SGX_SECINFO_R | SGX_SECINFO_W | SGX_SECINFO_X;
 	encl_page = sgx_encl_page_alloc(encl, addr - encl->base, secinfo_flags);
 	if (IS_ERR(encl_page))
-		return VM_FAULT_OOM;
+		return VM_FAULT_SIGBUS;
 
 	mutex_lock(&encl->lock);
 
