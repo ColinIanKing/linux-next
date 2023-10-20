@@ -5053,8 +5053,8 @@ int find_next_best_node(int node, nodemask_t *used_node_mask)
 	int best_node = NUMA_NO_NODE;
 
 	/*
-	 * Use the local node if we haven't already. But for memoryless local
-	 * node, we should skip it and fallback to other nodes.
+	 * Use the local node if we haven't already, but for memoryless local
+	 * node, we should skip it and fall back to other nodes.
 	 */
 	if (!node_isset(node, *used_node_mask) && node_state(node, N_MEMORY)) {
 		node_set(node, *used_node_mask);
