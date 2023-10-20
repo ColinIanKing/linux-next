@@ -220,3 +220,55 @@ int iommufd_hwpt_set_dirty_tracking(struct iommufd_ucmd *ucmd)
 	iommufd_put_object(&hwpt->obj);
 	return rc;
 }
+
+int iommufd_check_iova_range(struct iommufd_ioas *ioas,
+			     struct iommu_hwpt_get_dirty_bitmap *bitmap)
+{
+	unsigned long npages;
+	size_t iommu_pgsize;
+	int rc = -EINVAL;
+
+	if (!bitmap->page_size)
+		return rc;
+
+	npages = bitmap->length / bitmap->page_size;
+	if (!npages || (npages > ULONG_MAX))
+		return rc;
+
+	iommu_pgsize = ioas->iopt.iova_alignment;
+
+	if (bitmap->iova & (iommu_pgsize - 1))
+		return rc;
+
+	if (!bitmap->length || bitmap->length & (iommu_pgsize - 1))
+		return rc;
+
+	return 0;
+}
+
+int iommufd_hwpt_get_dirty_bitmap(struct iommufd_ucmd *ucmd)
+{
+	struct iommu_hwpt_get_dirty_bitmap *cmd = ucmd->cmd;
+	struct iommufd_hw_pagetable *hwpt;
+	struct iommufd_ioas *ioas;
+	int rc = -EOPNOTSUPP;
+
+	if ((cmd->flags || cmd->__reserved))
+		return -EOPNOTSUPP;
+
+	hwpt = iommufd_get_hwpt(ucmd, cmd->hwpt_id);
+	if (IS_ERR(hwpt))
+		return PTR_ERR(hwpt);
+
+	ioas = hwpt->ioas;
+	rc = iommufd_check_iova_range(ioas, cmd);
+	if (rc)
+		goto out_put;
+
+	rc = iopt_read_and_clear_dirty_data(&ioas->iopt, hwpt->domain,
+					    cmd->flags, cmd);
+
+out_put:
+	iommufd_put_object(&hwpt->obj);
+	return rc;
+}
