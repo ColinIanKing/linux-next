@@ -227,13 +227,22 @@ static void vhost_vdpa_unsetup_vq_irq(struct vhost_vdpa *v, u16 qid)
 	irq_bypass_unregister_producer(&vq->call_ctx.producer);
 }
 
-static int vhost_vdpa_reset(struct vhost_vdpa *v)
+static int _compat_vdpa_reset(struct vhost_vdpa *v)
 {
 	struct vdpa_device *vdpa = v->vdpa;
+	u32 flags = 0;
 
+	flags |= !vhost_backend_has_feature(v->vdev.vqs[0],
+					    VHOST_BACKEND_F_IOTLB_PERSIST) ?
+		 VDPA_RESET_F_CLEAN_MAP : 0;
+
+	return vdpa_reset(vdpa, flags);
+}
+
+static int vhost_vdpa_reset(struct vhost_vdpa *v)
+{
 	v->in_batch = 0;
-
-	return vdpa_reset(vdpa);
+	return _compat_vdpa_reset(v);
 }
 
 static long vhost_vdpa_bind_mm(struct vhost_vdpa *v)
@@ -312,7 +321,7 @@ static long vhost_vdpa_set_status(struct vhost_vdpa *v, u8 __user *statusp)
 			vhost_vdpa_unsetup_vq_irq(v, i);
 
 	if (status == 0) {
-		ret = vdpa_reset(vdpa);
+		ret = _compat_vdpa_reset(v);
 		if (ret)
 			return ret;
 	} else
