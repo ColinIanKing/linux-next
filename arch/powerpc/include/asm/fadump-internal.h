@@ -42,7 +42,25 @@ static inline u64 fadump_str_to_u64(const char *str)
 
 #define FADUMP_CPU_UNKNOWN		(~((u32)0))
 
-#define FADUMP_CRASH_INFO_MAGIC		fadump_str_to_u64("FADMPINF")
+/*
+ * The introduction of new fields in the fadump crash info header has
+ * led to a change in the magic key, from `FADMPINF` to `FADMPSIG`.
+ * This alteration ensures backward compatibility, enabling the kernel
+ * with the updated fadump crash info to handle kernel dumps from older
+ * kernels.
+ *
+ * To prevent the need for further changes to the magic number in the
+ * event of future modifications to the fadump header, a version field
+ * has been introduced to track the fadump crash info header version.
+ *
+ * Historically, there was no connection between the magic number and
+ * the fadump crash info header version. However, moving forward, the
+ * `FADMPINF` magic number in header will be treated as version 0, while
+ * the `FADMPSIG` magic number in header will include a version field to
+ * determine its version.
+ */
+#define FADUMP_CRASH_INFO_MAGIC		fadump_str_to_u64("FADMPSIG")
+#define FADUMP_VERSION			1
 
 /* fadump crash info structure */
 struct fadump_crash_info_header {
@@ -51,6 +69,10 @@ struct fadump_crash_info_header {
 	u32		crashing_cpu;
 	struct pt_regs	regs;
 	struct cpumask	cpu_mask;
+	u32		version;
+	u64		elfcorehdr_size;
+	u64		vmcoreinfo_raddr;
+	u64		vmcoreinfo_size;
 };
 
 struct fadump_memory_range {
