@@ -307,7 +307,8 @@ static void monitor_thermal_zone(struct thermal_zone_device *tz)
 		thermal_zone_device_set_polling(tz, tz->polling_delay_jiffies);
 }
 
-static void handle_non_critical_trips(struct thermal_zone_device *tz, int trip)
+static void handle_non_critical_trips(struct thermal_zone_device *tz,
+				      const struct thermal_trip *trip)
 {
 	tz->governor ? tz->governor->throttle(tz, trip) :
 		       def_governor->throttle(tz, trip);
@@ -329,44 +330,43 @@ void thermal_zone_device_critical(struct thermal_zone_device *tz)
 EXPORT_SYMBOL(thermal_zone_device_critical);
 
 static void handle_critical_trips(struct thermal_zone_device *tz,
-				  int trip, int trip_temp, enum thermal_trip_type trip_type)
+				  const struct thermal_trip *trip)
 {
 	/* If we have not crossed the trip_temp, we do not care. */
-	if (trip_temp <= 0 || tz->temperature < trip_temp)
+	if (trip->temperature <= 0 || tz->temperature < trip->temperature)
 		return;
 
-	trace_thermal_zone_trip(tz, trip, trip_type);
+	trace_thermal_zone_trip(tz, thermal_zone_trip_id(tz, trip), trip->type);
 
-	if (trip_type == THERMAL_TRIP_HOT && tz->ops->hot)
-		tz->ops->hot(tz);
-	else if (trip_type == THERMAL_TRIP_CRITICAL)
+	if (trip->type == THERMAL_TRIP_CRITICAL)
 		tz->ops->critical(tz);
+	else if (tz->ops->hot)
+		tz->ops->hot(tz);
 }
 
-static void handle_thermal_trip(struct thermal_zone_device *tz, int trip_id)
+static void handle_thermal_trip(struct thermal_zone_device *tz,
+				const struct thermal_trip *trip)
 {
-	struct thermal_trip trip;
-
-	__thermal_zone_get_trip(tz, trip_id, &trip);
-
-	if (trip.temperature == THERMAL_TEMP_INVALID)
+	if (trip->temperature == THERMAL_TEMP_INVALID)
 		return;
 
 	if (tz->last_temperature != THERMAL_TEMP_INVALID) {
-		if (tz->last_temperature < trip.temperature &&
-		    tz->temperature >= trip.temperature)
-			thermal_notify_tz_trip_up(tz->id, trip_id,
+		if (tz->last_temperature < trip->temperature &&
+		    tz->temperature >= trip->temperature)
+			thermal_notify_tz_trip_up(tz->id,
+						  thermal_zone_trip_id(tz, trip),
 						  tz->temperature);
-		if (tz->last_temperature >= trip.temperature &&
-		    tz->temperature < (trip.temperature - trip.hysteresis))
-			thermal_notify_tz_trip_down(tz->id, trip_id,
+		if (tz->last_temperature >= trip->temperature &&
+		    tz->temperature < trip->temperature - trip->hysteresis)
+			thermal_notify_tz_trip_down(tz->id,
+						    thermal_zone_trip_id(tz, trip),
 						    tz->temperature);
 	}
 
-	if (trip.type == THERMAL_TRIP_CRITICAL || trip.type == THERMAL_TRIP_HOT)
-		handle_critical_trips(tz, trip_id, trip.temperature, trip.type);
+	if (trip->type == THERMAL_TRIP_CRITICAL || trip->type == THERMAL_TRIP_HOT)
+		handle_critical_trips(tz, trip);
 	else
-		handle_non_critical_trips(tz, trip_id);
+		handle_non_critical_trips(tz, trip);
 }
 
 static void update_temperature(struct thermal_zone_device *tz)
@@ -403,7 +403,7 @@ static void thermal_zone_device_init(struct thermal_zone_device *tz)
 void __thermal_zone_device_update(struct thermal_zone_device *tz,
 				  enum thermal_notify_event event)
 {
-	int count;
+	const struct thermal_trip *trip;
 
 	if (atomic_read(&in_suspend))
 		return;
@@ -422,8 +422,8 @@ void __thermal_zone_device_update(struct thermal_zone_device *tz,
 
 	tz->notify_event = event;
 
-	for (count = 0; count < tz->num_trips; count++)
-		handle_thermal_trip(tz, count);
+	for_each_trip(tz, trip)
+		handle_thermal_trip(tz, trip);
 
 	monitor_thermal_zone(tz);
 }
@@ -662,7 +662,8 @@ int thermal_bind_cdev_to_trip(struct thermal_zone_device *tz,
 	if (result)
 		goto release_ida;
 
-	sprintf(dev->attr_name, "cdev%d_trip_point", dev->id);
+	snprintf(dev->attr_name, sizeof(dev->attr_name), "cdev%d_trip_point",
+		 dev->id);
 	sysfs_attr_init(&dev->attr.attr);
 	dev->attr.attr.name = dev->attr_name;
 	dev->attr.attr.mode = 0444;
@@ -671,7 +672,8 @@ int thermal_bind_cdev_to_trip(struct thermal_zone_device *tz,
 	if (result)
 		goto remove_symbol_link;
 
-	sprintf(dev->weight_attr_name, "cdev%d_weight", dev->id);
+	snprintf(dev->weight_attr_name, sizeof(dev->weight_attr_name),
+		 "cdev%d_weight", dev->id);
 	sysfs_attr_init(&dev->weight_attr.attr);
 	dev->weight_attr.attr.name = dev->weight_attr_name;
 	dev->weight_attr.attr.mode = S_IWUSR | S_IRUGO;
