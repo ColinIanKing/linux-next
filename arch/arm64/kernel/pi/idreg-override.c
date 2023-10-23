@@ -14,6 +14,8 @@
 #include <asm/cpufeature.h>
 #include <asm/setup.h>
 
+#include "pi.h"
+
 #define FTR_DESC_NAME_LEN	20
 #define FTR_DESC_FIELD_LEN	10
 #define FTR_ALIAS_NAME_LEN	30
@@ -23,12 +25,18 @@ static u64 __boot_status __initdata;
 
 struct ftr_set_desc {
 	char 				name[FTR_DESC_NAME_LEN];
-	struct arm64_ftr_override	*override;
+	union {
+		struct arm64_ftr_override *override;
+		prel64_t		override_prel;
+	};
 	struct {
 		char			name[FTR_DESC_FIELD_LEN];
 		u8			shift;
 		u8			width;
-		bool			(*filter)(u64 val);
+		union {
+			bool		(*filter)(u64 val);
+			prel64_t	filter_prel;
+		};
 	} 				fields[];
 };
 
@@ -46,11 +54,40 @@ static bool __init mmfr1_vh_filter(u64 val)
 		 val == 0);
 }
 
-static const struct ftr_set_desc mmfr1 __initconst = {
+static const struct ftr_set_desc mmfr1 __prel64_initconst = {
 	.name		= "id_aa64mmfr1",
 	.override	= &id_aa64mmfr1_override,
 	.fields		= {
 		FIELD("vh", ID_AA64MMFR1_EL1_VH_SHIFT, mmfr1_vh_filter),
+		{}
+	},
+};
+
+
+static bool __init mmfr2_varange_filter(u64 val)
+{
+	int __maybe_unused feat;
+
+	if (val)
+		return false;
+
+#ifdef CONFIG_ARM64_LPA2
+	feat = cpuid_feature_extract_signed_field(read_sysreg(id_aa64mmfr0_el1),
+						  ID_AA64MMFR0_EL1_TGRAN_SHIFT);
+	if (feat >= ID_AA64MMFR0_EL1_TGRAN_LPA2) {
+		id_aa64mmfr0_override.val |=
+			(ID_AA64MMFR0_EL1_TGRAN_LPA2 - 1) << ID_AA64MMFR0_EL1_TGRAN_SHIFT;
+		id_aa64mmfr0_override.mask |= 0xfU << ID_AA64MMFR0_EL1_TGRAN_SHIFT;
+	}
+#endif
+	return true;
+}
+
+static const struct ftr_set_desc mmfr2 __prel64_initconst = {
+	.name		= "id_aa64mmfr2",
+	.override	= &id_aa64mmfr2_override,
+	.fields		= {
+		FIELD("varange", ID_AA64MMFR2_EL1_VARange_SHIFT, mmfr2_varange_filter),
 		{}
 	},
 };
@@ -70,7 +107,7 @@ static bool __init pfr0_sve_filter(u64 val)
 	return true;
 }
 
-static const struct ftr_set_desc pfr0 __initconst = {
+static const struct ftr_set_desc pfr0 __prel64_initconst = {
 	.name		= "id_aa64pfr0",
 	.override	= &id_aa64pfr0_override,
 	.fields		= {
@@ -94,7 +131,7 @@ static bool __init pfr1_sme_filter(u64 val)
 	return true;
 }
 
-static const struct ftr_set_desc pfr1 __initconst = {
+static const struct ftr_set_desc pfr1 __prel64_initconst = {
 	.name		= "id_aa64pfr1",
 	.override	= &id_aa64pfr1_override,
 	.fields		= {
@@ -105,7 +142,7 @@ static const struct ftr_set_desc pfr1 __initconst = {
 	},
 };
 
-static const struct ftr_set_desc isar1 __initconst = {
+static const struct ftr_set_desc isar1 __prel64_initconst = {
 	.name		= "id_aa64isar1",
 	.override	= &id_aa64isar1_override,
 	.fields		= {
@@ -117,7 +154,7 @@ static const struct ftr_set_desc isar1 __initconst = {
 	},
 };
 
-static const struct ftr_set_desc isar2 __initconst = {
+static const struct ftr_set_desc isar2 __prel64_initconst = {
 	.name		= "id_aa64isar2",
 	.override	= &id_aa64isar2_override,
 	.fields		= {
@@ -128,7 +165,7 @@ static const struct ftr_set_desc isar2 __initconst = {
 	},
 };
 
-static const struct ftr_set_desc smfr0 __initconst = {
+static const struct ftr_set_desc smfr0 __prel64_initconst = {
 	.name		= "id_aa64smfr0",
 	.override	= &id_aa64smfr0_override,
 	.fields		= {
@@ -149,32 +186,38 @@ static bool __init hvhe_filter(u64 val)
 						     ID_AA64MMFR1_EL1_VH_SHIFT));
 }
 
-static const struct ftr_set_desc sw_features __initconst = {
+static const struct ftr_set_desc sw_features __prel64_initconst = {
 	.name		= "arm64_sw",
 	.override	= &arm64_sw_feature_override,
 	.fields		= {
 		FIELD("nokaslr", ARM64_SW_FEATURE_OVERRIDE_NOKASLR, NULL),
 		FIELD("hvhe", ARM64_SW_FEATURE_OVERRIDE_HVHE, hvhe_filter),
+		FIELD("rodataoff", ARM64_SW_FEATURE_OVERRIDE_RODATA_OFF, NULL),
+		FIELD("nowxn", ARM64_SW_FEATURE_OVERRIDE_NOWXN, NULL),
 		{}
 	},
 };
 
-static const struct ftr_set_desc * const regs[] __initconst = {
-	&mmfr1,
-	&pfr0,
-	&pfr1,
-	&isar1,
-	&isar2,
-	&smfr0,
-	&sw_features,
+static const union {
+	const struct ftr_set_desc	*reg;
+	prel64_t			reg_prel;
+} regs[] __prel64_initconst = {
+	{ .reg = &mmfr1		},
+	{ .reg = &mmfr2		},
+	{ .reg = &pfr0 		},
+	{ .reg = &pfr1 		},
+	{ .reg = &isar1		},
+	{ .reg = &isar2		},
+	{ .reg = &smfr0		},
+	{ .reg = &sw_features	},
 };
 
 static const struct {
 	char	alias[FTR_ALIAS_NAME_LEN];
 	char	feature[FTR_ALIAS_OPTION_LEN];
 } aliases[] __initconst = {
-	{ "kvm-arm.mode=nvhe",		"id_aa64mmfr1.vh=0" },
-	{ "kvm-arm.mode=protected",	"id_aa64mmfr1.vh=0" },
+	{ "kvm_arm.mode=nvhe",		"id_aa64mmfr1.vh=0" },
+	{ "kvm_arm.mode=protected",	"id_aa64mmfr1.vh=0" },
 	{ "arm64.nosve",		"id_aa64pfr0.sve=0" },
 	{ "arm64.nosme",		"id_aa64pfr1.sme=0" },
 	{ "arm64.nobti",		"id_aa64pfr1.bt=0" },
@@ -185,47 +228,66 @@ static const struct {
 	{ "arm64.nomops",		"id_aa64isar2.mops=0" },
 	{ "arm64.nomte",		"id_aa64pfr1.mte=0" },
 	{ "nokaslr",			"arm64_sw.nokaslr=1" },
+	{ "rodata=off",			"arm64_sw.rodataoff=1 arm64_sw.nowxn=1" },
+	{ "arm64.nolva",		"id_aa64mmfr2.varange=0" },
+	{ "arm64.nowxn",		"arm64_sw.nowxn=1" },
 };
 
-static int __init parse_nokaslr(char *unused)
+static int __init parse_hexdigit(const char *p, u64 *v)
 {
-	/* nokaslr param handling is done by early cpufeature code */
+	// skip "0x" if it comes next
+	if (p[0] == '0' && tolower(p[1]) == 'x')
+		p += 2;
+
+	// check whether the RHS is a single hex digit
+	if (!isxdigit(p[0]) || (p[1] && !isspace(p[1])))
+		return -EINVAL;
+
+	*v = tolower(*p) - (isdigit(*p) ? '0' : 'a' - 10);
 	return 0;
 }
-early_param("nokaslr", parse_nokaslr);
 
-static int __init find_field(const char *cmdline,
+static int __init find_field(const char *cmdline, char *opt, int len,
 			     const struct ftr_set_desc *reg, int f, u64 *v)
 {
-	char opt[FTR_DESC_NAME_LEN + FTR_DESC_FIELD_LEN + 2];
-	int len;
+	int flen = strlen(reg->fields[f].name);
 
-	len = snprintf(opt, ARRAY_SIZE(opt), "%s.%s=",
-		       reg->name, reg->fields[f].name);
+	// append '<fieldname>=' to obtain '<name>.<fieldname>='
+	memcpy(opt + len, reg->fields[f].name, flen);
+	len += flen;
+	opt[len++] = '=';
 
-	if (!parameqn(cmdline, opt, len))
+	if (memcmp(cmdline, opt, len))
 		return -1;
 
-	return kstrtou64(cmdline + len, 0, v);
+	return parse_hexdigit(cmdline + len, v);
 }
 
 static void __init match_options(const char *cmdline)
 {
+	char opt[FTR_DESC_NAME_LEN + FTR_DESC_FIELD_LEN + 2];
 	int i;
 
 	for (i = 0; i < ARRAY_SIZE(regs); i++) {
+		const struct ftr_set_desc *reg = prel64_to_pointer(&regs[i].reg_prel);
+		struct arm64_ftr_override *override;
+		int len = strlen(reg->name);
 		int f;
 
-		if (!regs[i]->override)
-			continue;
+		override = prel64_to_pointer(&reg->override_prel);
 
-		for (f = 0; strlen(regs[i]->fields[f].name); f++) {
-			u64 shift = regs[i]->fields[f].shift;
-			u64 width = regs[i]->fields[f].width ?: 4;
+		// set opt[] to '<name>.'
+		memcpy(opt, reg->name, len);
+		opt[len++] = '.';
+
+		for (f = 0; reg->fields[f].name[0] != '\0'; f++) {
+			u64 shift = reg->fields[f].shift;
+			u64 width = reg->fields[f].width ?: 4;
 			u64 mask = GENMASK_ULL(shift + width - 1, shift);
+			bool (*filter)(u64 val);
 			u64 v;
 
-			if (find_field(cmdline, regs[i], f, &v))
+			if (find_field(cmdline, opt, len, reg, f, &v))
 				continue;
 
 			/*
@@ -233,16 +295,16 @@ static void __init match_options(const char *cmdline)
 			 * it by setting the value to the all-ones while
 			 * clearing the mask... Yes, this is fragile.
 			 */
-			if (regs[i]->fields[f].filter &&
-			    !regs[i]->fields[f].filter(v)) {
-				regs[i]->override->val  |= mask;
-				regs[i]->override->mask &= ~mask;
+			filter = prel64_to_pointer(&reg->fields[f].filter_prel);
+			if (filter && !filter(v)) {
+				override->val  |= mask;
+				override->mask &= ~mask;
 				continue;
 			}
 
-			regs[i]->override->val  &= ~mask;
-			regs[i]->override->val  |= (v << shift) & mask;
-			regs[i]->override->mask |= mask;
+			override->val  &= ~mask;
+			override->val  |= (v << shift) & mask;
+			override->mask |= mask;
 
 			return;
 		}
@@ -258,81 +320,90 @@ static __init void __parse_cmdline(const char *cmdline, bool parse_aliases)
 
 		cmdline = skip_spaces(cmdline);
 
-		for (len = 0; cmdline[len] && !isspace(cmdline[len]); len++);
+		/* terminate on "--" appearing on the command line by itself */
+		if (cmdline[0] == '-' && cmdline[1] == '-' && isspace(cmdline[2]))
+			return;
+
+		for (len = 0; cmdline[len] && !isspace(cmdline[len]); len++) {
+			if (len >= sizeof(buf) - 1)
+				break;
+			if (cmdline[len] == '-')
+				buf[len] = '_';
+			else
+				buf[len] = cmdline[len];
+		}
 		if (!len)
 			return;
 
-		len = min(len, ARRAY_SIZE(buf) - 1);
-		memcpy(buf, cmdline, len);
-		buf[len] = '\0';
-
-		if (strcmp(buf, "--") == 0)
-			return;
+		buf[len] = 0;
 
 		cmdline += len;
 
 		match_options(buf);
 
 		for (i = 0; parse_aliases && i < ARRAY_SIZE(aliases); i++)
-			if (parameq(buf, aliases[i].alias))
+			if (!memcmp(buf, aliases[i].alias, len + 1))
 				__parse_cmdline(aliases[i].feature, false);
 	} while (1);
 }
 
-static __init const u8 *get_bootargs_cmdline(void)
+static __init const u8 *get_bootargs_cmdline(const void *fdt, int node)
 {
+	static char const bootargs[] __initconst = "bootargs";
 	const u8 *prop;
-	void *fdt;
-	int node;
 
-	fdt = get_early_fdt_ptr();
-	if (!fdt)
-		return NULL;
-
-	node = fdt_path_offset(fdt, "/chosen");
 	if (node < 0)
 		return NULL;
 
-	prop = fdt_getprop(fdt, node, "bootargs", NULL);
+	prop = fdt_getprop(fdt, node, bootargs, NULL);
 	if (!prop)
 		return NULL;
 
 	return strlen(prop) ? prop : NULL;
 }
 
-static __init void parse_cmdline(void)
+static __init void parse_cmdline(const void *fdt, int chosen)
 {
-	const u8 *prop = get_bootargs_cmdline();
+	static char const cmdline[] __initconst = CONFIG_CMDLINE;
+	const u8 *prop = get_bootargs_cmdline(fdt, chosen);
 
 	if (IS_ENABLED(CONFIG_CMDLINE_FORCE) || !prop)
-		__parse_cmdline(CONFIG_CMDLINE, true);
+		__parse_cmdline(cmdline, true);
 
 	if (!IS_ENABLED(CONFIG_CMDLINE_FORCE) && prop)
 		__parse_cmdline(prop, true);
 }
 
-/* Keep checkers quiet */
-void init_feature_override(u64 boot_status);
-
-asmlinkage void __init init_feature_override(u64 boot_status)
+void __init init_feature_override(u64 boot_status, const void *fdt,
+				  int chosen)
 {
+	struct arm64_ftr_override *override;
+	const struct ftr_set_desc *reg;
 	int i;
 
 	for (i = 0; i < ARRAY_SIZE(regs); i++) {
-		if (regs[i]->override) {
-			regs[i]->override->val  = 0;
-			regs[i]->override->mask = 0;
-		}
+		reg = prel64_to_pointer(&regs[i].reg_prel);
+		override = prel64_to_pointer(&reg->override_prel);
+
+		override->val  = 0;
+		override->mask = 0;
 	}
 
 	__boot_status = boot_status;
 
-	parse_cmdline();
+	parse_cmdline(fdt, chosen);
 
 	for (i = 0; i < ARRAY_SIZE(regs); i++) {
-		if (regs[i]->override)
-			dcache_clean_inval_poc((unsigned long)regs[i]->override,
-					    (unsigned long)regs[i]->override +
-					    sizeof(*regs[i]->override));
+		reg = prel64_to_pointer(&regs[i].reg_prel);
+		override = prel64_to_pointer(&reg->override_prel);
+		dcache_clean_inval_poc((unsigned long)override,
+				       (unsigned long)(override + 1));
 	}
+}
+
+char * __init skip_spaces(const char *str)
+{
+	while (isspace(*str))
+		++str;
+	return (char *)str;
 }

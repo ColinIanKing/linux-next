@@ -655,13 +655,15 @@ static const struct arm64_ftr_bits ftr_raz[] = {
 #define ARM64_FTR_REG(id, table)		\
 	__ARM64_FTR_REG_OVERRIDE(#id, id, table, &no_override)
 
-struct arm64_ftr_override __ro_after_init id_aa64mmfr1_override;
-struct arm64_ftr_override __ro_after_init id_aa64pfr0_override;
-struct arm64_ftr_override __ro_after_init id_aa64pfr1_override;
-struct arm64_ftr_override __ro_after_init id_aa64zfr0_override;
-struct arm64_ftr_override __ro_after_init id_aa64smfr0_override;
-struct arm64_ftr_override __ro_after_init id_aa64isar1_override;
-struct arm64_ftr_override __ro_after_init id_aa64isar2_override;
+struct arm64_ftr_override id_aa64mmfr0_override;
+struct arm64_ftr_override id_aa64mmfr1_override;
+struct arm64_ftr_override id_aa64mmfr2_override;
+struct arm64_ftr_override id_aa64pfr0_override;
+struct arm64_ftr_override id_aa64pfr1_override;
+struct arm64_ftr_override id_aa64zfr0_override;
+struct arm64_ftr_override id_aa64smfr0_override;
+struct arm64_ftr_override id_aa64isar1_override;
+struct arm64_ftr_override id_aa64isar2_override;
 
 struct arm64_ftr_override arm64_sw_feature_override;
 
@@ -719,10 +721,12 @@ static const struct __ftr_reg_entry {
 			       &id_aa64isar2_override),
 
 	/* Op1 = 0, CRn = 0, CRm = 7 */
-	ARM64_FTR_REG(SYS_ID_AA64MMFR0_EL1, ftr_id_aa64mmfr0),
+	ARM64_FTR_REG_OVERRIDE(SYS_ID_AA64MMFR0_EL1, ftr_id_aa64mmfr0,
+			       &id_aa64mmfr0_override),
 	ARM64_FTR_REG_OVERRIDE(SYS_ID_AA64MMFR1_EL1, ftr_id_aa64mmfr1,
 			       &id_aa64mmfr1_override),
-	ARM64_FTR_REG(SYS_ID_AA64MMFR2_EL1, ftr_id_aa64mmfr2),
+	ARM64_FTR_REG_OVERRIDE(SYS_ID_AA64MMFR2_EL1, ftr_id_aa64mmfr2,
+			       &id_aa64mmfr2_override),
 	ARM64_FTR_REG(SYS_ID_AA64MMFR3_EL1, ftr_id_aa64mmfr3),
 
 	/* Op1 = 1, CRn = 0, CRm = 0 */
@@ -1611,46 +1615,6 @@ has_useable_cnp(const struct arm64_cpu_capabilities *entry, int scope)
 	return has_cpuid_feature(entry, scope);
 }
 
-/*
- * This check is triggered during the early boot before the cpufeature
- * is initialised. Checking the status on the local CPU allows the boot
- * CPU to detect the need for non-global mappings and thus avoiding a
- * pagetable re-write after all the CPUs are booted. This check will be
- * anyway run on individual CPUs, allowing us to get the consistent
- * state once the SMP CPUs are up and thus make the switch to non-global
- * mappings if required.
- */
-bool kaslr_requires_kpti(void)
-{
-	if (!IS_ENABLED(CONFIG_RANDOMIZE_BASE))
-		return false;
-
-	/*
-	 * E0PD does a similar job to KPTI so can be used instead
-	 * where available.
-	 */
-	if (IS_ENABLED(CONFIG_ARM64_E0PD)) {
-		u64 mmfr2 = read_sysreg_s(SYS_ID_AA64MMFR2_EL1);
-		if (cpuid_feature_extract_unsigned_field(mmfr2,
-						ID_AA64MMFR2_EL1_E0PD_SHIFT))
-			return false;
-	}
-
-	/*
-	 * Systems affected by Cavium erratum 24756 are incompatible
-	 * with KPTI.
-	 */
-	if (IS_ENABLED(CONFIG_CAVIUM_ERRATUM_27456)) {
-		extern const struct midr_range cavium_erratum_27456_cpus[];
-
-		if (is_midr_in_range_list(read_cpuid_id(),
-					  cavium_erratum_27456_cpus))
-			return false;
-	}
-
-	return kaslr_enabled();
-}
-
 static bool __meltdown_safe = true;
 static int __kpti_forced; /* 0: not forced, >0: forced on, <0: forced off */
 
@@ -1703,7 +1667,7 @@ static bool unmap_kernel_at_el0(const struct arm64_cpu_capabilities *entry,
 	}
 
 	/* Useful for KASLR robustness */
-	if (kaslr_requires_kpti()) {
+	if (kaslr_enabled() && kaslr_requires_kpti()) {
 		if (!__kpti_forced) {
 			str = "KASLR";
 			__kpti_forced = 1;
@@ -1759,6 +1723,11 @@ static int __init __kpti_install_ng_mappings(void *__unused)
 	pgd_t *kpti_ng_temp_pgd;
 	u64 alloc = 0;
 
+	if (levels == 5 && !pgtable_l5_enabled())
+		levels = 4;
+	else if (levels == 4 && !pgtable_l4_enabled())
+		levels = 3;
+
 	remap_fn = (void *)__pa_symbol(idmap_kpti_install_ng_mappings);
 
 	if (!cpu) {
@@ -1772,9 +1741,9 @@ static int __init __kpti_install_ng_mappings(void *__unused)
 		//
 		// The physical pages are laid out as follows:
 		//
-		// +--------+-/-------+-/------ +-\\--------+
-		// :  PTE[] : | PMD[] : | PUD[] : || PGD[]  :
-		// +--------+-\-------+-\------ +-//--------+
+		// +--------+-/-------+-/------ +-/------ +-\\\--------+
+		// :  PTE[] : | PMD[] : | PUD[] : | P4D[] : ||| PGD[]  :
+		// +--------+-\-------+-\------ +-\------ +-///--------+
 		//      ^
 		// The first page is mapped into this hierarchy at a PMD_SHIFT
 		// aligned virtual address, so that we can manipulate the PTE
@@ -2701,6 +2670,33 @@ static const struct arm64_cpu_capabilities arm64_features[] = {
 		.matches = has_cpuid_feature,
 		ARM64_CPUID_FIELDS(ID_AA64MMFR2_EL1, EVT, IMP)
 	},
+#ifdef CONFIG_ARM64_VA_BITS_52
+	{
+		.capability = ARM64_HAS_VA52,
+		.type = ARM64_CPUCAP_BOOT_CPU_FEATURE,
+		.matches = has_cpuid_feature,
+		.field_width = 4,
+#ifdef CONFIG_ARM64_64K_PAGES
+		.desc = "52-bit Virtual Addressing (LVA)",
+		.sign = FTR_SIGNED,
+		.sys_reg = SYS_ID_AA64MMFR2_EL1,
+		.field_pos = ID_AA64MMFR2_EL1_VARange_SHIFT,
+		.min_field_value = ID_AA64MMFR2_EL1_VARange_52,
+#else
+		.desc = "52-bit Virtual Addressing (LPA2)",
+		.sys_reg = SYS_ID_AA64MMFR0_EL1,
+#ifdef CONFIG_ARM64_4K_PAGES
+		.sign = FTR_SIGNED,
+		.field_pos = ID_AA64MMFR0_EL1_TGRAN4_SHIFT,
+		.min_field_value = ID_AA64MMFR0_EL1_TGRAN4_52_BIT,
+#else
+		.sign = FTR_UNSIGNED,
+		.field_pos = ID_AA64MMFR0_EL1_TGRAN16_SHIFT,
+		.min_field_value = ID_AA64MMFR0_EL1_TGRAN16_52_BIT,
+#endif
+#endif
+	},
+#endif
 	{},
 };
 
