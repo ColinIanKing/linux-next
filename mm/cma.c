@@ -375,6 +375,9 @@ int __init cma_declare_contiguous_nid(phys_addr_t base,
 	if (ret)
 		goto free_mem;
 
+	if (nid == NUMA_NO_NODE)
+		nid = early_pfn_to_nid(PHYS_PFN(base));
+
 	pr_info("Reserved %ld MiB at %pa on node %d\n", (unsigned long)size / SZ_1M,
 		&base, nid);
 	return 0;
