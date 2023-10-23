@@ -96,10 +96,12 @@ static inline void __pmd_free_tlb(struct mmu_gather *tlb, pmd_t *pmdp,
 static inline void __pud_free_tlb(struct mmu_gather *tlb, pud_t *pudp,
 				  unsigned long addr)
 {
-	struct ptdesc *ptdesc = virt_to_ptdesc(pudp);
+	if (pgtable_l4_enabled()) {
+		struct ptdesc *ptdesc = virt_to_ptdesc(pudp);
 
-	pagetable_pud_dtor(ptdesc);
-	tlb_remove_ptdesc(tlb, ptdesc);
+		pagetable_pud_dtor(ptdesc);
+		tlb_remove_ptdesc(tlb, ptdesc);
+	}
 }
 #endif
 

@@ -128,6 +128,8 @@ static void prepare_host_vtcr(void)
 	/* The host stage 2 is id-mapped, so use parange for T0SZ */
 	parange = kvm_get_parange(id_aa64mmfr0_el1_sys_val);
 	phys_shift = id_aa64mmfr0_parange_to_phys_shift(parange);
+	if (IS_ENABLED(CONFIG_ARM64_LPA2) && phys_shift > 48)
+		phys_shift = 48; // not implemented yet
 
 	host_mmu.arch.vtcr = kvm_get_vtcr(id_aa64mmfr0_el1_sys_val,
 					  id_aa64mmfr1_el1_sys_val, phys_shift);
