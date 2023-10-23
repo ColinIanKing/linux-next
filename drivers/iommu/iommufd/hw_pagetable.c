@@ -231,7 +231,7 @@ int iommufd_check_iova_range(struct iommufd_ioas *ioas,
 	if (!bitmap->page_size)
 		return rc;
 
-	npages = bitmap->length / bitmap->page_size;
+	npages = div_u64(bitmap->length, bitmap->page_size);
 	if (!npages || (npages > ULONG_MAX))
 		return rc;
 
