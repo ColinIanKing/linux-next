@@ -158,6 +158,16 @@ struct kvm_s2_mmu {
 	phys_addr_t	pgd_phys;
 	struct kvm_pgtable *pgt;
 
+	/*
+	 * VTCR value used on the host. For a non-NV guest (or a NV
+	 * guest that runs in a context where its own S2 doesn't
+	 * apply), its T0SZ value reflects that of the IPA size.
+	 *
+	 * For a shadow S2 MMU, T0SZ reflects the PARange exposed to
+	 * the guest.
+	 */
+	u64	vtcr;
+
 	/* The last vcpu id that ran on each physical CPU */
 	int __percpu *last_vcpu_ran;
 
@@ -229,9 +239,6 @@ static inline u16 kvm_mpidr_index(struct kvm_mpidr_data *data, u64 mpidr)
 
 struct kvm_arch {
 	struct kvm_s2_mmu mmu;
-
-	/* VTCR_EL2 value for this VM */
-	u64    vtcr;
 
 	/* Interrupt controller */
 	struct vgic_dist	vgic;
