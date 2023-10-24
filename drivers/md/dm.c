@@ -2650,7 +2650,7 @@ static int lock_fs(struct mapped_device *md)
 
 	WARN_ON(test_bit(DMF_FROZEN, &md->flags));
 
-	r = freeze_bdev(md->disk->part0);
+	r = bdev_freeze(md->disk->part0);
 	if (!r)
 		set_bit(DMF_FROZEN, &md->flags);
 	return r;
@@ -2660,7 +2660,7 @@ static void unlock_fs(struct mapped_device *md)
 {
 	if (!test_bit(DMF_FROZEN, &md->flags))
 		return;
-	thaw_bdev(md->disk->part0);
+	bdev_thaw(md->disk->part0);
 	clear_bit(DMF_FROZEN, &md->flags);
 }
 
