@@ -282,7 +282,6 @@ struct vme_resource *vme_slave_request(struct vme_dev *vdev, u32 address,
 				       u32 cycle)
 {
 	struct vme_bridge *bridge;
-	struct list_head *slave_pos = NULL;
 	struct vme_slave_resource *allocated_image = NULL;
 	struct vme_slave_resource *slave_image = NULL;
 	struct vme_resource *resource = NULL;
@@ -294,10 +293,7 @@ struct vme_resource *vme_slave_request(struct vme_dev *vdev, u32 address,
 	}
 
 	/* Loop through slave resources */
-	list_for_each(slave_pos, &bridge->slave_resources) {
-		slave_image = list_entry(slave_pos,
-					 struct vme_slave_resource, list);
-
+	list_for_each_entry(slave_image, &bridge->slave_resources, list) {
 		if (!slave_image) {
 			printk(KERN_ERR "Registered NULL Slave resource\n");
 			continue;
@@ -482,7 +478,6 @@ struct vme_resource *vme_master_request(struct vme_dev *vdev, u32 address,
 					u32 cycle, u32 dwidth)
 {
 	struct vme_bridge *bridge;
-	struct list_head *master_pos = NULL;
 	struct vme_master_resource *allocated_image = NULL;
 	struct vme_master_resource *master_image = NULL;
 	struct vme_resource *resource = NULL;
@@ -494,10 +489,7 @@ struct vme_resource *vme_master_request(struct vme_dev *vdev, u32 address,
 	}
 
 	/* Loop through master resources */
-	list_for_each(master_pos, &bridge->master_resources) {
-		master_image = list_entry(master_pos,
-					  struct vme_master_resource, list);
-
+	list_for_each_entry(master_image, &bridge->master_resources, list) {
 		if (!master_image) {
 			printk(KERN_WARNING "Registered NULL master resource\n");
 			continue;
@@ -857,7 +849,6 @@ EXPORT_SYMBOL(vme_master_free);
 struct vme_resource *vme_dma_request(struct vme_dev *vdev, u32 route)
 {
 	struct vme_bridge *bridge;
-	struct list_head *dma_pos = NULL;
 	struct vme_dma_resource *allocated_ctrlr = NULL;
 	struct vme_dma_resource *dma_ctrlr = NULL;
 	struct vme_resource *resource = NULL;
@@ -872,9 +863,7 @@ struct vme_resource *vme_dma_request(struct vme_dev *vdev, u32 route)
 	}
 
 	/* Loop through DMA resources */
-	list_for_each(dma_pos, &bridge->dma_resources) {
-		dma_ctrlr = list_entry(dma_pos,
-				       struct vme_dma_resource, list);
+	list_for_each_entry(dma_ctrlr, &bridge->dma_resources, list) {
 		if (!dma_ctrlr) {
 			printk(KERN_ERR "Registered NULL DMA resource\n");
 			continue;
@@ -1241,14 +1230,11 @@ EXPORT_SYMBOL(vme_dma_free);
 void vme_bus_error_handler(struct vme_bridge *bridge,
 			   unsigned long long address, int am)
 {
-	struct list_head *handler_pos = NULL;
 	struct vme_error_handler *handler;
 	int handler_triggered = 0;
 	u32 aspace = vme_get_aspace(am);
 
-	list_for_each(handler_pos, &bridge->vme_error_handlers) {
-		handler = list_entry(handler_pos, struct vme_error_handler,
-				     list);
+	list_for_each_entry(handler, &bridge->vme_error_handlers, list) {
 		if ((aspace == handler->aspace) &&
 		    (address >= handler->start) &&
 		    (address < handler->end)) {
@@ -1460,7 +1446,6 @@ EXPORT_SYMBOL(vme_irq_generate);
 struct vme_resource *vme_lm_request(struct vme_dev *vdev)
 {
 	struct vme_bridge *bridge;
-	struct list_head *lm_pos = NULL;
 	struct vme_lm_resource *allocated_lm = NULL;
 	struct vme_lm_resource *lm = NULL;
 	struct vme_resource *resource = NULL;
@@ -1472,9 +1457,7 @@ struct vme_resource *vme_lm_request(struct vme_dev *vdev)
 	}
 
 	/* Loop through LM resources */
-	list_for_each(lm_pos, &bridge->lm_resources) {
-		lm = list_entry(lm_pos,
-				struct vme_lm_resource, list);
+	list_for_each_entry(lm, &bridge->lm_resources, list) {
 		if (!lm) {
 			printk(KERN_ERR "Registered NULL Location Monitor resource\n");
 			continue;
@@ -1620,7 +1603,7 @@ EXPORT_SYMBOL(vme_lm_get);
  * @callback: Pointer to callback function called when triggered.
  * @data: Generic pointer that will be passed to the callback function.
  *
- * Attach a callback to the specificed offset into the location monitors
+ * Attach a callback to the specified offset into the location monitors
  * monitored addresses. A generic pointer is provided to allow data to be
  * passed to the callback when called.
  *
@@ -1655,7 +1638,7 @@ EXPORT_SYMBOL(vme_lm_attach);
  * @resource: Pointer to VME location monitor resource.
  * @monitor: Offset to which callback should be removed.
  *
- * Remove the callback associated with the specificed offset into the
+ * Remove the callback associated with the specified offset into the
  * location monitors monitored addresses.
  *
  * Return: Zero on success, -EINVAL when provided with an invalid location
@@ -1866,8 +1849,9 @@ static int __vme_register_driver_bus(struct vme_driver *drv,
 		if (vdev->dev.platform_data) {
 			list_add_tail(&vdev->drv_list, &drv->devices);
 			list_add_tail(&vdev->bridge_list, &bridge->devices);
-		} else
+		} else {
 			device_unregister(&vdev->dev);
+		}
 	}
 	return 0;
 

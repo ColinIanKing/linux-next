@@ -132,7 +132,6 @@ enum rt_customer_id {
 
 enum reset_type {
 	RESET_TYPE_NORESET = 0x00,
-	RESET_TYPE_NORMAL = 0x01,
 	RESET_TYPE_SILENT = 0x02
 };
 
@@ -264,7 +263,6 @@ struct r8192_priv {
 	short	promisc;
 
 	short	chan;
-	bool ps_force;
 
 	u32 irq_mask[2];
 
@@ -345,7 +343,6 @@ struct r8192_priv {
 	u8		rfa_txpowertrackingindex;
 	u8		rfa_txpowertrackingindex_real;
 	u8		rfa_txpowertracking_default;
-	u8		rfc_txpowertrackingindex;
 	bool		btxpower_tracking;
 	bool		bcck_in_ch14;
 
@@ -369,14 +366,9 @@ struct r8192_priv {
 	u32		continue_diff_count;
 	bool		bswitch_fsync;
 	u8		framesync;
-	u32		reset_count;
 
-	enum reset_type rst_progress;
 	u16		tx_counter;
 	u16		rx_ctr;
-	bool		reset_in_progress;
-	bool		force_reset;
-	bool		force_lps;
 };
 
 extern const struct ethtool_ops rtl819x_ethtool_ops;
