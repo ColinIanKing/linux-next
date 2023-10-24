@@ -195,18 +195,8 @@ int x509_note_sig_algo(void *context, size_t hdrlen, unsigned char tag,
 	pr_debug("PubKey Algo: %u\n", ctx->last_oid);
 
 	switch (ctx->last_oid) {
-	case OID_md2WithRSAEncryption:
-	case OID_md3WithRSAEncryption:
 	default:
 		return -ENOPKG; /* Unsupported combination */
-
-	case OID_md4WithRSAEncryption:
-		ctx->cert->sig->hash_algo = "md4";
-		goto rsa_pkcs1;
-
-	case OID_sha1WithRSAEncryption:
-		ctx->cert->sig->hash_algo = "sha1";
-		goto rsa_pkcs1;
 
 	case OID_sha256WithRSAEncryption:
 		ctx->cert->sig->hash_algo = "sha256";
@@ -223,10 +213,6 @@ int x509_note_sig_algo(void *context, size_t hdrlen, unsigned char tag,
 	case OID_sha224WithRSAEncryption:
 		ctx->cert->sig->hash_algo = "sha224";
 		goto rsa_pkcs1;
-
-	case OID_id_ecdsa_with_sha1:
-		ctx->cert->sig->hash_algo = "sha1";
-		goto ecdsa;
 
 	case OID_id_ecdsa_with_sha224:
 		ctx->cert->sig->hash_algo = "sha224";

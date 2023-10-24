@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0
 obj-$(CONFIG_CRYPTO_DEV_QAT) += intel_qat.o
+ccflags-y += -DDEFAULT_SYMBOL_NAMESPACE=CRYPTO_QAT
 intel_qat-objs := adf_cfg.o \
 	adf_isr.o \
 	adf_ctl_drv.o \
@@ -31,8 +32,11 @@ intel_qat-objs := adf_cfg.o \
 
 intel_qat-$(CONFIG_DEBUG_FS) += adf_transport_debug.o \
 				adf_fw_counters.o \
+				adf_cnv_dbgfs.o \
+				adf_gen4_pm_debugfs.o \
 				adf_heartbeat.o \
 				adf_heartbeat_dbgfs.o \
+				adf_pm_dbgfs.o \
 				adf_dbgfs.o
 
 intel_qat-$(CONFIG_PCI_IOV) += adf_sriov.o adf_vf_isr.o adf_pfvf_utils.o \

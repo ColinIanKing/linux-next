@@ -4963,7 +4963,7 @@ static const struct alg_test_desc alg_test_descs[] = {
 		}
 	}, {
 		.alg = "ecb(arc4)",
-		.generic_driver = "ecb(arc4)-generic",
+		.generic_driver = "arc4-generic",
 		.test = alg_test_skcipher,
 		.suite = {
 			.cipher = __VECS(arc4_tv_template)
@@ -5773,16 +5773,6 @@ static const struct alg_test_desc alg_test_descs[] = {
 			.hash = __VECS(xxhash64_tv_template)
 		}
 	}, {
-		.alg = "zlib-deflate",
-		.test = alg_test_comp,
-		.fips_allowed = 1,
-		.suite = {
-			.comp = {
-				.comp = __VECS(zlib_deflate_comp_tv_template),
-				.decomp = __VECS(zlib_deflate_decomp_tv_template)
-			}
-		}
-	}, {
 		.alg = "zstd",
 		.test = alg_test_comp,
 		.fips_allowed = 1,
@@ -5945,6 +5935,25 @@ test_done:
 	return rc;
 
 notest:
+	if ((type & CRYPTO_ALG_TYPE_MASK) == CRYPTO_ALG_TYPE_LSKCIPHER) {
+		char nalg[CRYPTO_MAX_ALG_NAME];
+
+		if (snprintf(nalg, sizeof(nalg), "ecb(%s)", alg) >=
+		    sizeof(nalg))
+			goto notest2;
+
+		i = alg_find_test(nalg);
+		if (i < 0)
+			goto notest2;
+
+		if (fips_enabled && !alg_test_descs[i].fips_allowed)
+			goto non_fips_alg;
+
+		rc = alg_test_skcipher(alg_test_descs + i, driver, type, mask);
+		goto test_done;
+	}
+
+notest2:
 	printk(KERN_INFO "alg: No test for %s (%s)\n", alg, driver);
 
 	if (type & CRYPTO_ALG_FIPS_INTERNAL)

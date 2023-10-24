@@ -29,7 +29,7 @@
 #define ADF_PCI_MAX_BARS 3
 #define ADF_DEVICE_NAME_LENGTH 32
 #define ADF_ETR_MAX_RINGS_PER_BANK 16
-#define ADF_MAX_MSIX_VECTOR_NAME 16
+#define ADF_MAX_MSIX_VECTOR_NAME 48
 #define ADF_DEVICE_NAME_PREFIX "qat_"
 
 enum adf_accel_capabilities {
@@ -291,6 +291,18 @@ struct adf_dc_data {
 	dma_addr_t ovf_buff_p;
 };
 
+struct adf_pm {
+	struct dentry *debugfs_pm_status;
+	bool present;
+	int idle_irq_counters;
+	int throttle_irq_counters;
+	int fw_irq_counters;
+	int host_ack_counter;
+	int host_nack_counter;
+	ssize_t (*print_pm_status)(struct adf_accel_dev *accel_dev,
+				   char __user *buf, size_t count, loff_t *pos);
+};
+
 struct adf_accel_dev {
 	struct adf_etr_data *transport;
 	struct adf_hw_device_data *hw_device;
@@ -298,12 +310,14 @@ struct adf_accel_dev {
 	struct adf_fw_loader_data *fw_loader;
 	struct adf_admin_comms *admin;
 	struct adf_dc_data *dc_data;
+	struct adf_pm power_management;
 	struct list_head crypto_list;
 	struct list_head compression_list;
 	unsigned long status;
 	atomic_t ref_count;
 	struct dentry *debugfs_dir;
 	struct dentry *fw_cntr_dbgfile;
+	struct dentry *cnv_dbgfile;
 	struct list_head list;
 	struct module *owner;
 	struct adf_accel_pci accel_pci_dev;
