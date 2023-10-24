@@ -1597,7 +1597,7 @@ struct bt_coexist_8723 {
 	u8 c2h_bt_info;
 	bool c2h_bt_info_req_sent;
 	bool c2h_bt_inquiry_page;
-	u32 bt_inq_page_start_time;
+	unsigned long bt_inq_page_start_time;
 	u8 bt_retry_cnt;
 	u8 c2h_bt_info_original;
 	u8 bt_inquiry_page_cnt;
@@ -2249,7 +2249,6 @@ struct rtl_hal_ops {
 	void (*fill_fake_txdesc)(struct ieee80211_hw *hw, u8 *pdesc,
 				 u32 buffer_len, bool bsspspoll);
 	void (*fill_tx_cmddesc)(struct ieee80211_hw *hw, u8 *pdesc,
-				bool firstseg, bool lastseg,
 				struct sk_buff *skb);
 	void (*fill_tx_special_desc)(struct ieee80211_hw *hw,
 				     u8 *pdesc, u8 *pbd_desc,
@@ -2708,7 +2707,7 @@ struct rtl_c2hcmd {
 struct rtl_bssid_entry {
 	struct list_head list;
 	u8 bssid[ETH_ALEN];
-	u32 age;
+	unsigned long age;
 };
 
 struct rtl_scan_list {

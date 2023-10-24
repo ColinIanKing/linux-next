@@ -131,6 +131,8 @@ void tcp_time_wait(struct sock *sk, int state, int timeo);
 #define TCP_FIN_TIMEOUT_MAX (120 * HZ) /* max TCP_LINGER2 value (two minutes) */
 
 #define TCP_DELACK_MAX	((unsigned)(HZ/5))	/* maximal time to delay before sending an ACK */
+static_assert((1 << ATO_BITS) > TCP_DELACK_MAX);
+
 #if HZ >= 100
 #define TCP_DELACK_MIN	((unsigned)(HZ/25))	/* minimal time to delay before sending an ACK */
 #define TCP_ATO_MIN	((unsigned)(HZ/25))
@@ -164,7 +166,12 @@ void tcp_time_wait(struct sock *sk, int state, int timeo);
 #define MAX_TCP_KEEPCNT		127
 #define MAX_TCP_SYNCNT		127
 
-#define TCP_PAWS_24DAYS	(60 * 60 * 24 * 24)
+/* Ensure that TCP PAWS checks are relaxed after ~2147 seconds
+ * to avoid overflows. This assumes a clock smaller than 1 Mhz.
+ * Default clock is 1 Khz, tcp_usec_ts uses 1 Mhz.
+ */
+#define TCP_PAWS_WRAP (INT_MAX / USEC_PER_SEC)
+
 #define TCP_PAWS_MSL	60		/* Per-host timestamps are invalidated
 					 * after this time. It should be equal
 					 * (or greater than) TCP_TIMEWAIT_LEN
@@ -723,8 +730,10 @@ static inline void tcp_fast_path_check(struct sock *sk)
 		tcp_fast_path_on(tp);
 }
 
+u32 tcp_delack_max(const struct sock *sk);
+
 /* Compute the actual rto_min value */
-static inline u32 tcp_rto_min(struct sock *sk)
+static inline u32 tcp_rto_min(const struct sock *sk)
 {
 	const struct dst_entry *dst = __sk_dst_get(sk);
 	u32 rto_min = inet_csk(sk)->icsk_rto_min;
@@ -734,7 +743,7 @@ static inline u32 tcp_rto_min(struct sock *sk)
 	return rto_min;
 }
 
-static inline u32 tcp_rto_min_us(struct sock *sk)
+static inline u32 tcp_rto_min_us(const struct sock *sk)
 {
 	return jiffies_to_usecs(tcp_rto_min(sk));
 }
@@ -794,22 +803,31 @@ static inline u64 tcp_clock_us(void)
 	return div_u64(tcp_clock_ns(), NSEC_PER_USEC);
 }
 
-/* This should only be used in contexts where tp->tcp_mstamp is up to date */
-static inline u32 tcp_time_stamp(const struct tcp_sock *tp)
+static inline u64 tcp_clock_ms(void)
 {
-	return div_u64(tp->tcp_mstamp, USEC_PER_SEC / TCP_TS_HZ);
+	return div_u64(tcp_clock_ns(), NSEC_PER_MSEC);
 }
 
-/* Convert a nsec timestamp into TCP TSval timestamp (ms based currently) */
-static inline u32 tcp_ns_to_ts(u64 ns)
+/* TCP Timestamp included in TS option (RFC 1323) can either use ms
+ * or usec resolution. Each socket carries a flag to select one or other
+ * resolution, as the route attribute could change anytime.
+ * Each flow must stick to initial resolution.
+ */
+static inline u32 tcp_clock_ts(bool usec_ts)
 {
-	return div_u64(ns, NSEC_PER_SEC / TCP_TS_HZ);
+	return usec_ts ? tcp_clock_us() : tcp_clock_ms();
 }
 
-/* Could use tcp_clock_us() / 1000, but this version uses a single divide */
-static inline u32 tcp_time_stamp_raw(void)
+static inline u32 tcp_time_stamp_ms(const struct tcp_sock *tp)
 {
-	return tcp_ns_to_ts(tcp_clock_ns());
+	return div_u64(tp->tcp_mstamp, USEC_PER_MSEC);
+}
+
+static inline u32 tcp_time_stamp_ts(const struct tcp_sock *tp)
+{
+	if (tp->tcp_usec_ts)
+		return tp->tcp_mstamp;
+	return tcp_time_stamp_ms(tp);
 }
 
 void tcp_mstamp_refresh(struct tcp_sock *tp);
@@ -819,17 +837,30 @@ static inline u32 tcp_stamp_us_delta(u64 t1, u64 t0)
 	return max_t(s64, t1 - t0, 0);
 }
 
-static inline u32 tcp_skb_timestamp(const struct sk_buff *skb)
-{
-	return tcp_ns_to_ts(skb->skb_mstamp_ns);
-}
-
 /* provide the departure time in us unit */
 static inline u64 tcp_skb_timestamp_us(const struct sk_buff *skb)
 {
 	return div_u64(skb->skb_mstamp_ns, NSEC_PER_USEC);
 }
 
+/* Provide skb TSval in usec or ms unit */
+static inline u32 tcp_skb_timestamp_ts(bool usec_ts, const struct sk_buff *skb)
+{
+	if (usec_ts)
+		return tcp_skb_timestamp_us(skb);
+
+	return div_u64(skb->skb_mstamp_ns, NSEC_PER_MSEC);
+}
+
+static inline u32 tcp_tw_tsval(const struct tcp_timewait_sock *tcptw)
+{
+	return tcp_clock_ts(tcptw->tw_sk.tw_usec_ts) + tcptw->tw_ts_offset;
+}
+
+static inline u32 tcp_rsk_tsval(const struct tcp_request_sock *treq)
+{
+	return tcp_clock_ts(treq->req_usec_ts) + treq->ts_off;
+}
 
 #define tcp_flag_byte(th) (((u_int8_t *)th)[13])
 
@@ -1595,7 +1626,7 @@ static inline bool tcp_paws_check(const struct tcp_options_received *rx_opt,
 	if ((s32)(rx_opt->ts_recent - rx_opt->rcv_tsval) <= paws_win)
 		return true;
 	if (unlikely(!time_before32(ktime_get_seconds(),
-				    rx_opt->ts_recent_stamp + TCP_PAWS_24DAYS)))
+				    rx_opt->ts_recent_stamp + TCP_PAWS_WRAP)))
 		return true;
 	/*
 	 * Some OSes send SYN and SYNACK messages with tsval=0 tsecr=0,
@@ -2080,7 +2111,11 @@ INDIRECT_CALLABLE_DECLARE(int tcp4_gro_complete(struct sk_buff *skb, int thoff))
 INDIRECT_CALLABLE_DECLARE(struct sk_buff *tcp4_gro_receive(struct list_head *head, struct sk_buff *skb));
 INDIRECT_CALLABLE_DECLARE(int tcp6_gro_complete(struct sk_buff *skb, int thoff));
 INDIRECT_CALLABLE_DECLARE(struct sk_buff *tcp6_gro_receive(struct list_head *head, struct sk_buff *skb));
+#ifdef CONFIG_INET
 void tcp_gro_complete(struct sk_buff *skb);
+#else
+static inline void tcp_gro_complete(struct sk_buff *skb) { }
+#endif
 
 void __tcp_v4_send_check(struct sk_buff *skb, __be32 saddr, __be32 daddr);
 

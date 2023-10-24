@@ -1759,8 +1759,7 @@ static void gswip_get_strings(struct dsa_switch *ds, int port, u32 stringset,
 		return;
 
 	for (i = 0; i < ARRAY_SIZE(gswip_rmon_cnt); i++)
-		strncpy(data + i * ETH_GSTRING_LEN, gswip_rmon_cnt[i].name,
-			ETH_GSTRING_LEN);
+		ethtool_sprintf(&data, "%s", gswip_rmon_cnt[i].name);
 }
 
 static u32 gswip_bcm_ram_entry_read(struct gswip_priv *priv, u32 table,
@@ -2207,13 +2206,13 @@ put_mdio_node:
 	return err;
 }
 
-static int gswip_remove(struct platform_device *pdev)
+static void gswip_remove(struct platform_device *pdev)
 {
 	struct gswip_priv *priv = platform_get_drvdata(pdev);
 	int i;
 
 	if (!priv)
-		return 0;
+		return;
 
 	/* disable the switch */
 	gswip_mdio_mask(priv, GSWIP_MDIO_GLOB_ENABLE, 0, GSWIP_MDIO_GLOB);
@@ -2228,8 +2227,6 @@ static int gswip_remove(struct platform_device *pdev)
 
 	for (i = 0; i < priv->num_gphy_fw; i++)
 		gswip_gphy_fw_remove(priv, &priv->gphy_fw[i]);
-
-	return 0;
 }
 
 static void gswip_shutdown(struct platform_device *pdev)
@@ -2266,7 +2263,7 @@ MODULE_DEVICE_TABLE(of, gswip_of_match);
 
 static struct platform_driver gswip_driver = {
 	.probe = gswip_probe,
-	.remove = gswip_remove,
+	.remove_new = gswip_remove,
 	.shutdown = gswip_shutdown,
 	.driver = {
 		.name = "gswip",

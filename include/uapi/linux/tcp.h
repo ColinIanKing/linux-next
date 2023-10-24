@@ -170,6 +170,7 @@ enum tcp_fastopen_client_fail {
 #define TCPI_OPT_ECN		8 /* ECN was negociated at TCP session init */
 #define TCPI_OPT_ECN_SEEN	16 /* we received at least one packet with ECT */
 #define TCPI_OPT_SYN_DATA	32 /* SYN-ACK acked data in SYN sent or rcvd */
+#define TCPI_OPT_USEC_TS	64 /* usec timestamps */
 
 /*
  * Sender's congestion state indicating normal or abnormal situations
@@ -289,6 +290,18 @@ struct tcp_info {
 				      */
 
 	__u32   tcpi_rehash;         /* PLB or timeout triggered rehash attempts */
+
+	__u16	tcpi_total_rto;	/* Total number of RTO timeouts, including
+				 * SYN/SYN-ACK and recurring timeouts.
+				 */
+	__u16	tcpi_total_rto_recoveries;	/* Total number of RTO
+						 * recoveries, including any
+						 * unfinished recovery.
+						 */
+	__u32	tcpi_total_rto_time;	/* Total time spent in RTO recoveries
+					 * in milliseconds, including any
+					 * unfinished recovery.
+					 */
 };
 
 /* netlink attributes types for SCM_TIMESTAMPING_OPT_STATS */

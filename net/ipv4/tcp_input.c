@@ -693,6 +693,23 @@ new_measure:
 	tp->rcv_rtt_est.time = tp->tcp_mstamp;
 }
 
+static s32 tcp_rtt_tsopt_us(const struct tcp_sock *tp)
+{
+	u32 delta, delta_us;
+
+	delta = tcp_time_stamp_ts(tp) - tp->rx_opt.rcv_tsecr;
+	if (tp->tcp_usec_ts)
+		return delta;
+
+	if (likely(delta < INT_MAX / (USEC_PER_SEC / TCP_TS_HZ))) {
+		if (!delta)
+			delta = 1;
+		delta_us = delta * (USEC_PER_SEC / TCP_TS_HZ);
+		return delta_us;
+	}
+	return -1;
+}
+
 static inline void tcp_rcv_rtt_measure_ts(struct sock *sk,
 					  const struct sk_buff *skb)
 {
@@ -704,15 +721,10 @@ static inline void tcp_rcv_rtt_measure_ts(struct sock *sk,
 
 	if (TCP_SKB_CB(skb)->end_seq -
 	    TCP_SKB_CB(skb)->seq >= inet_csk(sk)->icsk_ack.rcv_mss) {
-		u32 delta = tcp_time_stamp(tp) - tp->rx_opt.rcv_tsecr;
-		u32 delta_us;
+		s32 delta = tcp_rtt_tsopt_us(tp);
 
-		if (likely(delta < INT_MAX / (USEC_PER_SEC / TCP_TS_HZ))) {
-			if (!delta)
-				delta = 1;
-			delta_us = delta * (USEC_PER_SEC / TCP_TS_HZ);
-			tcp_rcv_rtt_update(tp, delta_us, 0);
-		}
+		if (delta >= 0)
+			tcp_rcv_rtt_update(tp, delta, 0);
 	}
 }
 
@@ -778,6 +790,16 @@ new_measure:
 	tp->rcvq_space.time = tp->tcp_mstamp;
 }
 
+static void tcp_save_lrcv_flowlabel(struct sock *sk, const struct sk_buff *skb)
+{
+#if IS_ENABLED(CONFIG_IPV6)
+	struct inet_connection_sock *icsk = inet_csk(sk);
+
+	if (skb->protocol == htons(ETH_P_IPV6))
+		icsk->icsk_ack.lrcv_flowlabel = ntohl(ip6_flowlabel(ipv6_hdr(skb)));
+#endif
+}
+
 /* There is something which you must keep in mind when you analyze the
  * behavior of the tp->ato delayed ack timeout interval.  When a
  * connection starts up, we want to ack as quickly as possible.  The
@@ -826,6 +848,7 @@ static void tcp_event_data_recv(struct sock *sk, struct sk_buff *skb)
 		}
 	}
 	icsk->icsk_ack.lrcvtime = now;
+	tcp_save_lrcv_flowlabel(sk, skb);
 
 	tcp_ecn_check_ce(sk, skb);
 
@@ -940,8 +963,8 @@ static void tcp_update_pacing_rate(struct sock *sk)
 	 * without any lock. We want to make sure compiler wont store
 	 * intermediate values in this location.
 	 */
-	WRITE_ONCE(sk->sk_pacing_rate, min_t(u64, rate,
-					     sk->sk_max_pacing_rate));
+	WRITE_ONCE(sk->sk_pacing_rate,
+		   min_t(u64, rate, READ_ONCE(sk->sk_max_pacing_rate)));
 }
 
 /* Calculate rto without backoff.  This is the second half of Van Jacobson's
@@ -2101,6 +2124,10 @@ void tcp_clear_retrans(struct tcp_sock *tp)
 	tp->undo_marker = 0;
 	tp->undo_retrans = -1;
 	tp->sacked_out = 0;
+	tp->rto_stamp = 0;
+	tp->total_rto = 0;
+	tp->total_rto_recoveries = 0;
+	tp->total_rto_time = 0;
 }
 
 static inline void tcp_init_undo(struct tcp_sock *tp)
@@ -2428,7 +2455,7 @@ static bool tcp_skb_spurious_retrans(const struct tcp_sock *tp,
 				     const struct sk_buff *skb)
 {
 	return (TCP_SKB_CB(skb)->sacked & TCPCB_RETRANS) &&
-	       tcp_tsopt_ecr_before(tp, tcp_skb_timestamp(skb));
+	       tcp_tsopt_ecr_before(tp, tcp_skb_timestamp_ts(tp->tcp_usec_ts, skb));
 }
 
 /* Nothing was retransmitted or returned timestamp is less
@@ -2839,6 +2866,14 @@ void tcp_enter_recovery(struct sock *sk, bool ece_ack)
 	tcp_set_ca_state(sk, TCP_CA_Recovery);
 }
 
+static void tcp_update_rto_time(struct tcp_sock *tp)
+{
+	if (tp->rto_stamp) {
+		tp->total_rto_time += tcp_time_stamp_ms(tp) - tp->rto_stamp;
+		tp->rto_stamp = 0;
+	}
+}
+
 /* Process an ACK in CA_Loss state. Move to CA_Open if lost data are
  * recovered or spurious. Otherwise retransmits more on partial ACKs.
  */
@@ -3043,6 +3078,8 @@ static void tcp_fastretrans_alert(struct sock *sk, const u32 prior_snd_una,
 		break;
 	case TCP_CA_Loss:
 		tcp_process_loss(sk, flag, num_dupack, rexmit);
+		if (icsk->icsk_ca_state != TCP_CA_Loss)
+			tcp_update_rto_time(tp);
 		tcp_identify_packet_loss(sk, ack_flag);
 		if (!(icsk->icsk_ca_state == TCP_CA_Open ||
 		      (*ack_flag & FLAG_LOST_RETRANS)))
@@ -3122,17 +3159,10 @@ static bool tcp_ack_update_rtt(struct sock *sk, const int flag,
 	 * left edge of the send window.
 	 * See draft-ietf-tcplw-high-performance-00, section 3.3.
 	 */
-	if (seq_rtt_us < 0 && tp->rx_opt.saw_tstamp && tp->rx_opt.rcv_tsecr &&
-	    flag & FLAG_ACKED) {
-		u32 delta = tcp_time_stamp(tp) - tp->rx_opt.rcv_tsecr;
+	if (seq_rtt_us < 0 && tp->rx_opt.saw_tstamp &&
+	    tp->rx_opt.rcv_tsecr && flag & FLAG_ACKED)
+		seq_rtt_us = ca_rtt_us = tcp_rtt_tsopt_us(tp);
 
-		if (likely(delta < INT_MAX / (USEC_PER_SEC / TCP_TS_HZ))) {
-			if (!delta)
-				delta = 1;
-			seq_rtt_us = delta * (USEC_PER_SEC / TCP_TS_HZ);
-			ca_rtt_us = seq_rtt_us;
-		}
-	}
 	rs->rtt_us = ca_rtt_us; /* RTT of last (S)ACKed packet (or -1) */
 	if (seq_rtt_us < 0)
 		return false;
@@ -4500,12 +4530,23 @@ static void tcp_rcv_spurious_retrans(struct sock *sk, const struct sk_buff *skb)
 {
 	/* When the ACK path fails or drops most ACKs, the sender would
 	 * timeout and spuriously retransmit the same segment repeatedly.
-	 * The receiver remembers and reflects via DSACKs. Leverage the
-	 * DSACK state and change the txhash to re-route speculatively.
+	 * If it seems our ACKs are not reaching the other side,
+	 * based on receiving a duplicate data segment with new flowlabel
+	 * (suggesting the sender suffered an RTO), and we are not already
+	 * repathing due to our own RTO, then rehash the socket to repath our
+	 * packets.
 	 */
-	if (TCP_SKB_CB(skb)->seq == tcp_sk(sk)->duplicate_sack[0].start_seq &&
+#if IS_ENABLED(CONFIG_IPV6)
+	if (inet_csk(sk)->icsk_ca_state != TCP_CA_Loss &&
+	    skb->protocol == htons(ETH_P_IPV6) &&
+	    (tcp_sk(sk)->inet_conn.icsk_ack.lrcv_flowlabel !=
+	     ntohl(ip6_flowlabel(ipv6_hdr(skb)))) &&
 	    sk_rethink_txhash(sk))
 		NET_INC_STATS(sock_net(sk), LINUX_MIB_TCPDUPLICATEDATAREHASH);
+
+	/* Save last flowlabel after a spurious retrans. */
+	tcp_save_lrcv_flowlabel(sk, skb);
+#endif
 }
 
 static void tcp_send_dupack(struct sock *sk, const struct sk_buff *skb)
@@ -4822,6 +4863,7 @@ static void tcp_data_queue_ofo(struct sock *sk, struct sk_buff *skb)
 	u32 seq, end_seq;
 	bool fragstolen;
 
+	tcp_save_lrcv_flowlabel(sk, skb);
 	tcp_ecn_check_ce(sk, skb);
 
 	if (unlikely(tcp_try_rmem_schedule(sk, skb, skb->truesize))) {
@@ -5567,6 +5609,14 @@ static void __tcp_ack_snd_check(struct sock *sk, int ofo_possible)
 	    tcp_in_quickack_mode(sk) ||
 	    /* Protocol state mandates a one-time immediate ACK */
 	    inet_csk(sk)->icsk_ack.pending & ICSK_ACK_NOW) {
+		/* If we are running from __release_sock() in user context,
+		 * Defer the ack until tcp_release_cb().
+		 */
+		if (sock_owned_by_user_nocheck(sk) &&
+		    READ_ONCE(sock_net(sk)->ipv4.sysctl_tcp_backlog_ack_defer)) {
+			set_bit(TCP_ACK_DEFERRED, &sk->sk_tsq_flags);
+			return;
+		}
 send_now:
 		tcp_send_ack(sk);
 		return;
@@ -6249,7 +6299,7 @@ static int tcp_rcv_synsent_state_process(struct sock *sk, struct sk_buff *skb,
 
 		if (tp->rx_opt.saw_tstamp && tp->rx_opt.rcv_tsecr &&
 		    !between(tp->rx_opt.rcv_tsecr, tp->retrans_stamp,
-			     tcp_time_stamp(tp))) {
+			     tcp_time_stamp_ts(tp))) {
 			NET_INC_STATS(sock_net(sk),
 					LINUX_MIB_PAWSACTIVEREJECTED);
 			goto reset_and_undo;
@@ -6450,22 +6500,24 @@ reset_and_undo:
 
 static void tcp_rcv_synrecv_state_fastopen(struct sock *sk)
 {
+	struct tcp_sock *tp = tcp_sk(sk);
 	struct request_sock *req;
 
 	/* If we are still handling the SYNACK RTO, see if timestamp ECR allows
 	 * undo. If peer SACKs triggered fast recovery, we can't undo here.
 	 */
-	if (inet_csk(sk)->icsk_ca_state == TCP_CA_Loss)
-		tcp_try_undo_loss(sk, false);
+	if (inet_csk(sk)->icsk_ca_state == TCP_CA_Loss && !tp->packets_out)
+		tcp_try_undo_recovery(sk);
 
 	/* Reset rtx states to prevent spurious retransmits_timed_out() */
-	tcp_sk(sk)->retrans_stamp = 0;
+	tcp_update_rto_time(tp);
+	tp->retrans_stamp = 0;
 	inet_csk(sk)->icsk_retransmits = 0;
 
 	/* Once we leave TCP_SYN_RECV or TCP_FIN_WAIT_1,
 	 * we no longer need req so release it.
 	 */
-	req = rcu_dereference_protected(tcp_sk(sk)->fastopen_rsk,
+	req = rcu_dereference_protected(tp->fastopen_rsk,
 					lockdep_sock_is_held(sk));
 	reqsk_fastopen_remove(sk, req, false);
 
@@ -6996,6 +7048,7 @@ int tcp_conn_request(struct request_sock_ops *rsk_ops,
 	req->syncookie = want_cookie;
 	tcp_rsk(req)->af_specific = af_ops;
 	tcp_rsk(req)->ts_off = 0;
+	tcp_rsk(req)->req_usec_ts = -1;
 #if IS_ENABLED(CONFIG_MPTCP)
 	tcp_rsk(req)->is_mptcp = 0;
 #endif
