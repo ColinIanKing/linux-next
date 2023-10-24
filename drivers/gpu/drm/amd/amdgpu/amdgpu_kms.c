@@ -1365,6 +1365,12 @@ int amdgpu_driver_open_kms(struct drm_device *dev, struct drm_file *file_priv)
 			goto error_vm;
 	}
 
+	r = amdgpu_seq64_map(adev, &fpriv->vm, &fpriv->seq64_va,
+			     AMDGPU_SEQ64_VADDR_START,
+			     AMDGPU_SEQ64_SIZE);
+	if (r)
+		goto error_vm;
+
 	mutex_init(&fpriv->bo_list_lock);
 	idr_init_base(&fpriv->bo_list_handles, 1);
 
@@ -1427,6 +1433,8 @@ void amdgpu_driver_postclose_kms(struct drm_device *dev,
 						fpriv->csa_va, csa_addr));
 		fpriv->csa_va = NULL;
 	}
+
+	amdgpu_seq64_unmap(adev, fpriv);
 
 	pasid = fpriv->vm.pasid;
 	pd = amdgpu_bo_ref(fpriv->vm.root.bo);
