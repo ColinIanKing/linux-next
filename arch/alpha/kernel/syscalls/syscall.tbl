@@ -492,3 +492,6 @@
 560	common	set_mempolicy_home_node		sys_ni_syscall
 561	common	cachestat			sys_cachestat
 562	common	fchmodat2			sys_fchmodat2
+563	common	lsm_get_self_attr		sys_lsm_get_self_attr
+564	common	lsm_set_self_attr		sys_lsm_set_self_attr
+565	common	lsm_list_modules		sys_lsm_list_modules
