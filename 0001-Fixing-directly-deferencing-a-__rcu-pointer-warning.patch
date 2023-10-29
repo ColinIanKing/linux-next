@@ -1,0 +1,61 @@
+From bb388fe71c289aebc7403883d5986963e3c3c37c Mon Sep 17 00:00:00 2001
+From: Abhinav Singh <singhabhinav9051571833@gmail.com>
+Date: Fri, 27 Oct 2023 08:06:46 +0530
+Subject: [PATCH v3] Fixing directly deferencing a __rcu pointer warning
+
+This patch fixes the warning about directly dereferencing a pointer
+tagged with __rcu annotation.
+
+Dereferencing the pointers tagged with __rcu directly should
+always be avoided according to the docs. There is a rcu helper
+function rcu_dereference(...) to use when dereferencing a __rcu
+pointer inside rcu read side critical sections. This function 
+returns the non __rcu tagged pointer which can be dereferenced 
+just like a normal pointer.
+
+Signed-off-by: Abhinav Singh <singhabhinav9051571833@gmail.com>
+---
+
+Link to original patch 
+ https://lore.kernel.org/all/20231025222811.855336-1-singhabhinav9051571833@gmail.com/
+
+Change from original -> v2 : 
+ 1. removed the null check before dereferencing the dereferenced rcu
+    pointer at line 2372.
+ 2. added rcu_dereference(...) at line 2694
+    
+Changes from v2 -> v3 
+ 1. added rcu_dereference(...) at line 2693
+
+ kernel/fork.c | 8 ++++----
+ 1 file changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/kernel/fork.c b/kernel/fork.c
+index 10917c3e1f03..e78649974669 100644
+--- a/kernel/fork.c
++++ b/kernel/fork.c
+@@ -2369,7 +2369,7 @@ __latent_entropy struct task_struct *copy_process(
+ 
+ 	retval = -EAGAIN;
+ 	if (is_rlimit_overlimit(task_ucounts(p), UCOUNT_RLIMIT_NPROC, rlimit(RLIMIT_NPROC))) {
+-		if (p->real_cred->user != INIT_USER &&
++		if (rcu_dereference(p->real_cred)->user != INIT_USER &&
+ 		    !capable(CAP_SYS_RESOURCE) && !capable(CAP_SYS_ADMIN))
+ 			goto bad_fork_cleanup_count;
+ 	}
+@@ -2690,9 +2690,9 @@ __latent_entropy struct task_struct *copy_process(
+ 			 * tasklist_lock with adding child to the process tree
+ 			 * for propagate_has_child_subreaper optimization.
+ 			 */
+-			p->signal->has_child_subreaper = p->real_parent->signal->has_child_subreaper ||
+-							 p->real_parent->signal->is_child_subreaper;
+-			list_add_tail(&p->sibling, &p->real_parent->children);
++			p->signal->has_child_subreaper = rcu_dereference(p->real_parent)->signal->has_child_subreaper ||
++							rcu_dereference(p->real_parent)->signal->is_child_subreaper;
++			list_add_tail(&p->sibling, &rcu_dereference(p->real_parent)->children);
+ 			list_add_tail_rcu(&p->tasks, &init_task.tasks);
+ 			attach_pid(p, PIDTYPE_TGID);
+ 			attach_pid(p, PIDTYPE_PGID);
+-- 
+2.39.2
+
