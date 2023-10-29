@@ -1,0 +1,36 @@
+From 598bf82b611a9af96c5d412855957e378523f529 Mon Sep 17 00:00:00 2001
+From: Abhinav Singh <singhabhinav9051571833@gmail.com>
+Date: Tue, 24 Oct 2023 15:24:52 +0530
+Subject: [PATCH] Fixing warning cast removes address space '__iomem' of
+ expression
+
+This patch fixes sparse complaining about the removal of __iomem address
+space when casting the return value of this function ioremap_cache(...)
+from `void __ioremap*` to `void*`.
+
+I think there are two way of fixing it, first one is changing the
+datatype of variable `ghcb_va` from `void*` to `void __iomem*` . 
+Second way of fixing it is using the memremap(...) which is 
+done in this patch.
+
+Signed-off-by: Abhinav Singh <singhabhinav9051571833@gmail.com>
+---
+ arch/x86/hyperv/hv_init.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/arch/x86/hyperv/hv_init.c b/arch/x86/hyperv/hv_init.c
+index 21556ad87f4b..c14161add274 100644
+--- a/arch/x86/hyperv/hv_init.c
++++ b/arch/x86/hyperv/hv_init.c
+@@ -70,7 +70,7 @@ static int hyperv_init_ghcb(void)
+ 
+ 	/* Mask out vTOM bit. ioremap_cache() maps decrypted */
+ 	ghcb_gpa &= ~ms_hyperv.shared_gpa_boundary;
+-	ghcb_va = (void *)ioremap_cache(ghcb_gpa, HV_HYP_PAGE_SIZE);
++	ghcb_va = memremap(ghcb_gpa, HV_HYP_PAGE_SIZE, MEMREMAP_WB);
+ 	if (!ghcb_va)
+ 		return -ENOMEM;
+ 
+-- 
+2.39.2
+
