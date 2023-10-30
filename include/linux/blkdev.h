@@ -1468,8 +1468,23 @@ struct blk_holder_ops {
 	 * Sync the file system mounted on the block device.
 	 */
 	void (*sync)(struct block_device *bdev);
+
+	/*
+	 * Freeze the file system mounted on the block device.
+	 */
+	int (*freeze)(struct block_device *bdev);
+
+	/*
+	 * Thaw the file system mounted on the block device.
+	 */
+	int (*thaw)(struct block_device *bdev);
 };
 
+/*
+ * For filesystems using @fs_holder_ops, the @holder argument passed to
+ * helpers used to open and claim block devices via
+ * bd_prepare_to_claim() must point to a superblock.
+ */
 extern const struct blk_holder_ops fs_holder_ops;
 
 /*
@@ -1479,14 +1494,25 @@ extern const struct blk_holder_ops fs_holder_ops;
 #define sb_open_mode(flags) \
 	(BLK_OPEN_READ | (((flags) & SB_RDONLY) ? 0 : BLK_OPEN_WRITE))
 
+struct bdev_handle {
+	struct block_device *bdev;
+	void *holder;
+	blk_mode_t mode;
+};
+
 struct block_device *blkdev_get_by_dev(dev_t dev, blk_mode_t mode, void *holder,
 		const struct blk_holder_ops *hops);
 struct block_device *blkdev_get_by_path(const char *path, blk_mode_t mode,
+		void *holder, const struct blk_holder_ops *hops);
+struct bdev_handle *bdev_open_by_dev(dev_t dev, blk_mode_t mode, void *holder,
+		const struct blk_holder_ops *hops);
+struct bdev_handle *bdev_open_by_path(const char *path, blk_mode_t mode,
 		void *holder, const struct blk_holder_ops *hops);
 int bd_prepare_to_claim(struct block_device *bdev, void *holder,
 		const struct blk_holder_ops *hops);
 void bd_abort_claiming(struct block_device *bdev, void *holder);
 void blkdev_put(struct block_device *bdev, void *holder);
+void bdev_release(struct bdev_handle *handle);
 
 /* just for blk-cgroup, don't use elsewhere */
 struct block_device *blkdev_get_no_open(dev_t dev);
@@ -1530,8 +1556,8 @@ static inline int early_lookup_bdev(const char *pathname, dev_t *dev)
 }
 #endif /* CONFIG_BLOCK */
 
-int freeze_bdev(struct block_device *bdev);
-int thaw_bdev(struct block_device *bdev);
+int bdev_freeze(struct block_device *bdev);
+int bdev_thaw(struct block_device *bdev);
 
 struct io_comp_batch {
 	struct request *req_list;
