@@ -116,7 +116,8 @@ static int reconn_set_ipaddr_from_hostname(struct TCP_Server_Info *server)
 	return rc;
 }
 
-static void smb2_query_server_interfaces(struct work_struct *work)
+void
+smb2_query_server_interfaces(struct work_struct *work)
 {
 	int rc;
 	int xid;
@@ -134,6 +135,9 @@ static void smb2_query_server_interfaces(struct work_struct *work)
 	if (rc) {
 		cifs_dbg(FYI, "%s: failed to query server interfaces: %d\n",
 				__func__, rc);
+
+		if (rc == -EOPNOTSUPP)
+			return;
 	}
 
 	queue_delayed_work(cifsiod_wq, &tcon->query_interfaces,
