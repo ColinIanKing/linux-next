@@ -3344,6 +3344,7 @@ int cifs_mount_get_tcon(struct cifs_mount_ctx *mnt_ctx)
 		tcon = NULL;
 		goto out;
 	}
+	tcon->cifs_sb = cifs_sb;
 
 	/* if new SMB3.11 POSIX extensions are supported do not remap / and \ */
 	if (tcon->posix_extensions)
@@ -3975,6 +3976,7 @@ cifs_construct_tcon(struct cifs_sb_info *cifs_sb, kuid_t fsuid)
 		cifs_put_smb_ses(ses);
 		goto out;
 	}
+	tcon->cifs_sb = cifs_sb;
 
 #ifdef CONFIG_CIFS_ALLOW_INSECURE_LEGACY
 	if (cap_unix(ses))
