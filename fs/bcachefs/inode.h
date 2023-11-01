@@ -8,11 +8,11 @@
 enum bkey_invalid_flags;
 extern const char * const bch2_inode_opts[];
 
-int bch2_inode_invalid(const struct bch_fs *, struct bkey_s_c,
+int bch2_inode_invalid(struct bch_fs *, struct bkey_s_c,
 		       enum bkey_invalid_flags, struct printbuf *);
-int bch2_inode_v2_invalid(const struct bch_fs *, struct bkey_s_c,
+int bch2_inode_v2_invalid(struct bch_fs *, struct bkey_s_c,
 			  enum bkey_invalid_flags, struct printbuf *);
-int bch2_inode_v3_invalid(const struct bch_fs *, struct bkey_s_c,
+int bch2_inode_v3_invalid(struct bch_fs *, struct bkey_s_c,
 			  enum bkey_invalid_flags, struct printbuf *);
 void bch2_inode_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
 
@@ -52,7 +52,7 @@ static inline bool bkey_is_inode(const struct bkey *k)
 		k->type == KEY_TYPE_inode_v3;
 }
 
-int bch2_inode_generation_invalid(const struct bch_fs *, struct bkey_s_c,
+int bch2_inode_generation_invalid(struct bch_fs *, struct bkey_s_c,
 				  enum bkey_invalid_flags, struct printbuf *);
 void bch2_inode_generation_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
 
@@ -200,6 +200,7 @@ void bch2_inode_nlink_dec(struct btree_trans *, struct bch_inode_unpacked *);
 struct bch_opts bch2_inode_opts_to_opts(struct bch_inode_unpacked *);
 void bch2_inode_opts_get(struct bch_io_opts *, struct bch_fs *,
 			 struct bch_inode_unpacked *);
+int bch2_inum_opts_get(struct btree_trans*, subvol_inum, struct bch_io_opts *);
 
 int bch2_inode_rm_snapshot(struct btree_trans *, u64, u32);
 int bch2_delete_dead_inodes(struct bch_fs *);

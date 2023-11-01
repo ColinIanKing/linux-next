@@ -37,25 +37,26 @@ static bool extent_matches_bp(struct bch_fs *c,
 	return false;
 }
 
-int bch2_backpointer_invalid(const struct bch_fs *c, struct bkey_s_c k,
+int bch2_backpointer_invalid(struct bch_fs *c, struct bkey_s_c k,
 			     enum bkey_invalid_flags flags,
 			     struct printbuf *err)
 {
 	struct bkey_s_c_backpointer bp = bkey_s_c_to_backpointer(k);
 	struct bpos bucket = bp_pos_to_bucket(c, bp.k->p);
+	int ret = 0;
 
-	if (!bpos_eq(bp.k->p, bucket_pos_to_bp(c, bucket, bp.v->bucket_offset))) {
-		prt_str(err, "backpointer at wrong pos");
-		return -BCH_ERR_invalid_bkey;
-	}
-
-	return 0;
+	bkey_fsck_err_on(!bpos_eq(bp.k->p, bucket_pos_to_bp(c, bucket, bp.v->bucket_offset)),
+			 c, err,
+			 backpointer_pos_wrong,
+			 "backpointer at wrong pos");
+fsck_err:
+	return ret;
 }
 
 void bch2_backpointer_to_text(struct printbuf *out, const struct bch_backpointer *bp)
 {
 	prt_printf(out, "btree=%s l=%u offset=%llu:%u len=%u pos=",
-	       bch2_btree_ids[bp->btree_id],
+	       bch2_btree_id_str(bp->btree_id),
 	       bp->level,
 	       (u64) (bp->bucket_offset >> MAX_EXTENT_COMPRESS_RATIO_SHIFT),
 	       (u32) bp->bucket_offset & ~(~0U << MAX_EXTENT_COMPRESS_RATIO_SHIFT),
@@ -356,6 +357,7 @@ static int bch2_check_btree_backpointer(struct btree_trans *trans, struct btree_
 	int ret = 0;
 
 	if (fsck_err_on(!bch2_dev_exists2(c, k.k->p.inode), c,
+			backpointer_to_missing_device,
 			"backpointer for missing device:\n%s",
 			(bch2_bkey_val_to_text(&buf, c, k), buf.buf))) {
 		ret = bch2_btree_delete_at(trans, bp_iter, 0);
@@ -369,6 +371,7 @@ static int bch2_check_btree_backpointer(struct btree_trans *trans, struct btree_
 		goto out;
 
 	if (fsck_err_on(alloc_k.k->type != KEY_TYPE_alloc_v4, c,
+			backpointer_to_missing_alloc,
 			"backpointer for nonexistent alloc key: %llu:%llu:0\n%s",
 			alloc_iter.pos.inode, alloc_iter.pos.offset,
 			(bch2_bkey_val_to_text(&buf, c, alloc_k), buf.buf))) {
@@ -453,14 +456,14 @@ fsck_err:
 	return ret;
 missing:
 	prt_printf(&buf, "missing backpointer for btree=%s l=%u ",
-	       bch2_btree_ids[bp.btree_id], bp.level);
+	       bch2_btree_id_str(bp.btree_id), bp.level);
 	bch2_bkey_val_to_text(&buf, c, orig_k);
 	prt_printf(&buf, "\nbp pos ");
 	bch2_bpos_to_text(&buf, bp_iter.pos);
 
 	if (c->sb.version_upgrade_complete < bcachefs_metadata_version_backpointers ||
 	    c->opts.reconstruct_alloc ||
-	    fsck_err(c, "%s", buf.buf))
+	    fsck_err(c, ptr_to_missing_backpointer, "%s", buf.buf))
 		ret = bch2_bucket_backpointer_mod(trans, bucket, bp, orig_k, true);
 
 	goto out;
@@ -793,6 +796,7 @@ static int check_one_backpointer(struct btree_trans *trans,
 	}
 
 	if (fsck_err_on(!k.k, c,
+			backpointer_to_missing_ptr,
 			"backpointer for missing extent\n  %s",
 			(bch2_bkey_val_to_text(&buf, c, bp.s_c), buf.buf))) {
 		ret = bch2_btree_delete_at_buffered(trans, BTREE_ID_backpointers, bp.k->p);

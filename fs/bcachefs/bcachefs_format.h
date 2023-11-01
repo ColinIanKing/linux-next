@@ -613,31 +613,17 @@ struct bch_extent_stripe_ptr {
 #endif
 };
 
-struct bch_extent_reservation {
-#if defined(__LITTLE_ENDIAN_BITFIELD)
-	__u64			type:6,
-				unused:22,
-				replicas:4,
-				generation:32;
-#elif defined (__BIG_ENDIAN_BITFIELD)
-	__u64			generation:32,
-				replicas:4,
-				unused:22,
-				type:6;
-#endif
-};
-
 struct bch_extent_rebalance {
 #if defined(__LITTLE_ENDIAN_BITFIELD)
-	__u64			type:7,
-				unused:33,
-				compression:8,
+	__u64			type:6,
+				unused:34,
+				compression:8, /* enum bch_compression_opt */
 				target:16;
 #elif defined (__BIG_ENDIAN_BITFIELD)
 	__u64			target:16,
 				compression:8,
-				unused:33,
-				type:7;
+				unused:34,
+				type:6;
 #endif
 };
 
@@ -1232,7 +1218,8 @@ struct bch_sb_field {
 	x(journal_seq_blacklist, 8)		\
 	x(journal_v2,	9)			\
 	x(counters,	10)			\
-	x(members_v2,	11)
+	x(members_v2,	11)			\
+	x(errors,	12)
 
 enum bch_sb_field_type {
 #define x(f, nr)	BCH_SB_FIELD_##f = nr,
@@ -1282,6 +1269,18 @@ enum bch_iops_measurement {
 	BCH_IOPS_NR
 };
 
+#define BCH_MEMBER_ERROR_TYPES()		\
+	x(read,		0)			\
+	x(write,	1)			\
+	x(checksum,	2)
+
+enum bch_member_error_type {
+#define x(t, n) BCH_MEMBER_ERROR_##t = n,
+	BCH_MEMBER_ERROR_TYPES()
+#undef x
+	BCH_MEMBER_ERROR_NR
+};
+
 struct bch_member {
 	__uuid_t		uuid;
 	__le64			nbuckets;	/* device size */
@@ -1292,6 +1291,9 @@ struct bch_member {
 
 	__le64			flags;
 	__le32			iops[4];
+	__le64			errors[BCH_MEMBER_ERROR_NR];
+	__le64			errors_at_reset[BCH_MEMBER_ERROR_NR];
+	__le64			errors_reset_time;
 };
 
 #define BCH_MEMBER_V1_BYTES	56
@@ -1615,10 +1617,19 @@ struct journal_seq_blacklist_entry {
 
 struct bch_sb_field_journal_seq_blacklist {
 	struct bch_sb_field	field;
-
-	struct journal_seq_blacklist_entry start[0];
-	__u64			_data[];
+	struct journal_seq_blacklist_entry start[];
 };
+
+struct bch_sb_field_errors {
+	struct bch_sb_field	field;
+	struct bch_sb_field_error_entry {
+		__le64		v;
+		__le64		last_error_time;
+	}			entries[];
+};
+
+LE64_BITMASK(BCH_SB_ERROR_ENTRY_ID,	struct bch_sb_field_error_entry, v,  0, 16);
+LE64_BITMASK(BCH_SB_ERROR_ENTRY_NR,	struct bch_sb_field_error_entry, v, 16, 64);
 
 /* Superblock: */
 
@@ -1682,7 +1693,9 @@ struct bch_sb_field_journal_seq_blacklist {
 	x(snapshot_skiplists,		BCH_VERSION(1,  1),		\
 	  BIT_ULL(BCH_RECOVERY_PASS_check_snapshots))			\
 	x(deleted_inodes,		BCH_VERSION(1,  2),		\
-	  BIT_ULL(BCH_RECOVERY_PASS_check_inodes))
+	  BIT_ULL(BCH_RECOVERY_PASS_check_inodes))			\
+	x(rebalance_work,		BCH_VERSION(1,  3),		\
+	  BIT_ULL(BCH_RECOVERY_PASS_set_fs_needs_rebalance))
 
 enum bcachefs_metadata_version {
 	bcachefs_metadata_version_min = 9,
@@ -1693,7 +1706,7 @@ enum bcachefs_metadata_version {
 };
 
 static const __maybe_unused
-unsigned bcachefs_metadata_required_upgrade_below = bcachefs_metadata_version_major_minor;
+unsigned bcachefs_metadata_required_upgrade_below = bcachefs_metadata_version_rebalance_work;
 
 #define bcachefs_metadata_version_current	(bcachefs_metadata_version_max - 1)
 
@@ -2306,7 +2319,9 @@ enum btree_id_flags {
 	  BIT_ULL(KEY_TYPE_set))						\
 	x(logged_ops,		17,	0,					\
 	  BIT_ULL(KEY_TYPE_logged_op_truncate)|					\
-	  BIT_ULL(KEY_TYPE_logged_op_finsert))
+	  BIT_ULL(KEY_TYPE_logged_op_finsert))					\
+	x(rebalance_work,	18,	BTREE_ID_SNAPSHOTS,			\
+	  BIT_ULL(KEY_TYPE_set)|BIT_ULL(KEY_TYPE_cookie))
 
 enum btree_id {
 #define x(name, nr, ...) BTREE_ID_##name = nr,

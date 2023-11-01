@@ -13,6 +13,7 @@
 #include "replicas.h"
 #include "quota.h"
 #include "sb-clean.h"
+#include "sb-errors.h"
 #include "sb-members.h"
 #include "super-io.h"
 #include "super.h"
@@ -805,7 +806,12 @@ static void write_super_endio(struct bio *bio)
 
 	/* XXX: return errors directly */
 
-	if (bch2_dev_io_err_on(bio->bi_status, ca, "superblock write error: %s",
+	if (bch2_dev_io_err_on(bio->bi_status, ca,
+			       bio_data_dir(bio)
+			       ? BCH_MEMBER_ERROR_write
+			       : BCH_MEMBER_ERROR_read,
+			       "superblock %s error: %s",
+			       bio_data_dir(bio) ? "write" : "read",
 			       bch2_blk_status_to_str(bio->bi_status)))
 		ca->sb_write_error = 1;
 
@@ -892,7 +898,9 @@ int bch2_write_super(struct bch_fs *c)
 	SET_BCH_SB_BIG_ENDIAN(c->disk_sb.sb, CPU_BIG_ENDIAN);
 
 	bch2_sb_counters_from_cpu(c);
-	bch_members_cpy_v2_v1(&c->disk_sb);
+	bch2_sb_members_from_cpu(c);
+	bch2_sb_members_cpy_v2_v1(&c->disk_sb);
+	bch2_sb_errors_from_cpu(c);
 
 	for_each_online_member(ca, c, i)
 		bch2_sb_from_fs(c, ca);

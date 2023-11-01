@@ -351,10 +351,13 @@ static int bch2_write_index_default(struct bch_write_op *op)
 				     bkey_start_pos(&sk.k->k),
 				     BTREE_ITER_SLOTS|BTREE_ITER_INTENT);
 
-		ret = bch2_extent_update(trans, inum, &iter, sk.k,
-					 &op->res,
-					 op->new_i_size, &op->i_sectors_delta,
-					 op->flags & BCH_WRITE_CHECK_ENOSPC);
+		ret =   bch2_bkey_set_needs_rebalance(c, sk.k,
+					op->opts.background_target,
+					op->opts.background_compression) ?:
+			bch2_extent_update(trans, inum, &iter, sk.k,
+					&op->res,
+					op->new_i_size, &op->i_sectors_delta,
+					op->flags & BCH_WRITE_CHECK_ENOSPC);
 		bch2_trans_iter_exit(trans, &iter);
 
 		if (bch2_err_matches(ret, BCH_ERR_transaction_restart))
@@ -495,7 +498,6 @@ static void __bch2_write_index(struct bch_write_op *op)
 {
 	struct bch_fs *c = op->c;
 	struct keylist *keys = &op->insert_keys;
-	struct bkey_i *k;
 	unsigned dev;
 	int ret = 0;
 
@@ -504,14 +506,6 @@ static void __bch2_write_index(struct bch_write_op *op)
 		if (ret)
 			goto err;
 	}
-
-	/*
-	 * probably not the ideal place to hook this in, but I don't
-	 * particularly want to plumb io_opts all the way through the btree
-	 * update stack right now
-	 */
-	for_each_keylist_key(keys, k)
-		bch2_rebalance_add_key(c, bkey_i_to_s_c(k), &op->opts);
 
 	if (!bch2_keylist_empty(keys)) {
 		u64 sectors_start = keylist_sectors(keys);
@@ -643,7 +637,7 @@ static void bch2_write_endio(struct bio *bio)
 	struct bch_fs *c		= wbio->c;
 	struct bch_dev *ca		= bch_dev_bkey_exists(c, wbio->dev);
 
-	if (bch2_dev_inum_io_err_on(bio->bi_status, ca,
+	if (bch2_dev_inum_io_err_on(bio->bi_status, ca, BCH_MEMBER_ERROR_write,
 				    op->pos.inode,
 				    wbio->inode_offset << 9,
 				    "data write error: %s",
@@ -816,6 +810,7 @@ static enum prep_encoded_ret {
 
 	/* Can we just write the entire extent as is? */
 	if (op->crc.uncompressed_size == op->crc.live_size &&
+	    op->crc.uncompressed_size <= c->opts.encoded_extent_max >> 9 &&
 	    op->crc.compressed_size <= wp->sectors_free &&
 	    (op->crc.compression_type == bch2_compression_opt_to_type(op->compression_opt) ||
 	     op->incompressible)) {
@@ -1091,9 +1086,7 @@ static bool bch2_extent_is_writeable(struct bch_write_op *op,
 
 	e = bkey_s_c_to_extent(k);
 	extent_for_each_ptr_decode(e, p, entry) {
-		if (p.crc.csum_type ||
-		    crc_is_compressed(p.crc) ||
-		    p.has_ec)
+		if (crc_is_encoded(p.crc) || p.has_ec)
 			return false;
 
 		replicas += bch2_extent_ptr_durability(c, &p);
