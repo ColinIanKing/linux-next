@@ -81,7 +81,7 @@ extern char *cifs_build_path_to_root(struct smb3_fs_context *ctx,
 extern char *build_wildcard_path_from_dentry(struct dentry *direntry);
 char *cifs_build_devname(char *nodename, const char *prepath);
 extern void delete_mid(struct mid_q_entry *mid);
-extern void release_mid(struct mid_q_entry *mid);
+void __release_mid(struct kref *refcount);
 extern void cifs_wake_up_task(struct mid_q_entry *mid);
 extern int cifs_handle_standard(struct TCP_Server_Info *server,
 				struct mid_q_entry *mid);
@@ -132,6 +132,10 @@ extern int SendReceiveBlockingLock(const unsigned int xid,
 			struct smb_hdr *in_buf,
 			struct smb_hdr *out_buf,
 			int *bytes_returned);
+
+void
+smb2_query_server_interfaces(struct work_struct *work);
+
 void
 cifs_signal_cifsd_for_reconnect(struct TCP_Server_Info *server,
 				      bool all_channels);
@@ -738,6 +742,11 @@ static inline bool dfs_src_pathname_equal(const char *s1, const char *s2)
 			return false;
 	}
 	return true;
+}
+
+static inline void release_mid(struct mid_q_entry *mid)
+{
+	kref_put(&mid->refcount, __release_mid);
 }
 
 #endif			/* _CIFSPROTO_H */

@@ -1131,6 +1131,7 @@ struct cifs_tcon {
 	int tc_count;
 	struct list_head rlist; /* reconnect list */
 	spinlock_t tc_lock;  /* protect anything here that is not protected */
+	struct cifs_sb_info *cifs_sb; /* back pointer to cifs super block */
 	atomic_t num_local_opens;  /* num of all opens including disconnected */
 	atomic_t num_remote_opens; /* num of all network opens on server */
 	struct list_head openFileList;
