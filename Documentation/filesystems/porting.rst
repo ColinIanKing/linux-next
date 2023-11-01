@@ -1052,3 +1052,24 @@ kill_anon_super(), or kill_block_super() helpers.
 
 Lock ordering has been changed so that s_umount ranks above open_mutex again.
 All places where s_umount was taken under open_mutex have been fixed up.
+
+---
+
+**recommended**
+
+Block device freezing and thawing have been moved to holder operations.
+
+Before this change, get_active_super() would only be able to find the
+superblock of the main block device, i.e., the one stored in sb->s_bdev. Block
+device freezing now works for any block device owned by a given superblock, not
+just the main block device. The get_active_super() helper and bd_fsfreeze_sb
+pointer are gone.
+
+---
+
+**mandatory**
+
+export_operations ->encode_fh() no longer has a default implementation to
+encode FILEID_INO32_GEN* file handles.
+Filesystems that used the default implementation may use the generic helper
+generic_encode_ino32_fh() explicitly.

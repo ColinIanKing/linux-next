@@ -207,85 +207,88 @@ int sync_blockdev_range(struct block_device *bdev, loff_t lstart, loff_t lend)
 EXPORT_SYMBOL(sync_blockdev_range);
 
 /**
- * freeze_bdev - lock a filesystem and force it into a consistent state
+ * bdev_freeze - lock a filesystem and force it into a consistent state
  * @bdev:	blockdevice to lock
  *
  * If a superblock is found on this device, we take the s_umount semaphore
  * on it to make sure nobody unmounts until the snapshot creation is done.
  * The reference counter (bd_fsfreeze_count) guarantees that only the last
  * unfreeze process can unfreeze the frozen filesystem actually when multiple
- * freeze requests arrive simultaneously. It counts up in freeze_bdev() and
- * count down in thaw_bdev(). When it becomes 0, thaw_bdev() will unfreeze
+ * freeze requests arrive simultaneously. It counts up in bdev_freeze() and
+ * count down in bdev_thaw(). When it becomes 0, thaw_bdev() will unfreeze
  * actually.
+ *
+ * Return: On success zero is returned, negative error code on failure.
  */
-int freeze_bdev(struct block_device *bdev)
+int bdev_freeze(struct block_device *bdev)
 {
-	struct super_block *sb;
 	int error = 0;
 
 	mutex_lock(&bdev->bd_fsfreeze_mutex);
-	if (++bdev->bd_fsfreeze_count > 1)
-		goto done;
 
-	sb = get_active_super(bdev);
-	if (!sb)
-		goto sync;
-	if (sb->s_op->freeze_super)
-		error = sb->s_op->freeze_super(sb, FREEZE_HOLDER_USERSPACE);
-	else
-		error = freeze_super(sb, FREEZE_HOLDER_USERSPACE);
-	deactivate_super(sb);
-
-	if (error) {
-		bdev->bd_fsfreeze_count--;
-		goto done;
+	if (atomic_inc_return(&bdev->bd_fsfreeze_count) > 1) {
+		mutex_unlock(&bdev->bd_fsfreeze_mutex);
+		return 0;
 	}
-	bdev->bd_fsfreeze_sb = sb;
 
-sync:
-	sync_blockdev(bdev);
-done:
+	mutex_lock(&bdev->bd_holder_lock);
+	if (bdev->bd_holder_ops && bdev->bd_holder_ops->freeze) {
+		error = bdev->bd_holder_ops->freeze(bdev);
+		lockdep_assert_not_held(&bdev->bd_holder_lock);
+	} else {
+		mutex_unlock(&bdev->bd_holder_lock);
+		error = sync_blockdev(bdev);
+	}
+
+	if (error)
+		atomic_dec(&bdev->bd_fsfreeze_count);
+
 	mutex_unlock(&bdev->bd_fsfreeze_mutex);
 	return error;
 }
-EXPORT_SYMBOL(freeze_bdev);
+EXPORT_SYMBOL(bdev_freeze);
 
 /**
- * thaw_bdev - unlock filesystem
+ * bdev_thaw - unlock filesystem
  * @bdev:	blockdevice to unlock
  *
- * Unlocks the filesystem and marks it writeable again after freeze_bdev().
+ * Unlocks the filesystem and marks it writeable again after bdev_freeze().
+ *
+ * Return: On success zero is returned, negative error code on failure.
  */
-int thaw_bdev(struct block_device *bdev)
+int bdev_thaw(struct block_device *bdev)
 {
-	struct super_block *sb;
-	int error = -EINVAL;
+	int error = -EINVAL, nr_freeze;
 
 	mutex_lock(&bdev->bd_fsfreeze_mutex);
-	if (!bdev->bd_fsfreeze_count)
+
+	/*
+	 * If this returns < 0 it means that @bd_fsfreeze_count was
+	 * already 0 and no decrement was performed.
+	 */
+	nr_freeze = atomic_dec_if_positive(&bdev->bd_fsfreeze_count);
+	if (nr_freeze < 0)
 		goto out;
 
 	error = 0;
-	if (--bdev->bd_fsfreeze_count > 0)
+	if (nr_freeze > 0)
 		goto out;
 
-	sb = bdev->bd_fsfreeze_sb;
-	if (!sb)
-		goto out;
+	mutex_lock(&bdev->bd_holder_lock);
+	if (bdev->bd_holder_ops && bdev->bd_holder_ops->thaw) {
+		error = bdev->bd_holder_ops->thaw(bdev);
+		lockdep_assert_not_held(&bdev->bd_holder_lock);
+	} else {
+		mutex_unlock(&bdev->bd_holder_lock);
+	}
 
-	if (sb->s_op->thaw_super)
-		error = sb->s_op->thaw_super(sb, FREEZE_HOLDER_USERSPACE);
-	else
-		error = thaw_super(sb, FREEZE_HOLDER_USERSPACE);
 	if (error)
-		bdev->bd_fsfreeze_count++;
-	else
-		bdev->bd_fsfreeze_sb = NULL;
+		atomic_inc(&bdev->bd_fsfreeze_count);
 out:
 	mutex_unlock(&bdev->bd_fsfreeze_mutex);
 	return error;
 }
-EXPORT_SYMBOL(thaw_bdev);
+EXPORT_SYMBOL(bdev_thaw);
 
 /*
  * pseudo-fs
