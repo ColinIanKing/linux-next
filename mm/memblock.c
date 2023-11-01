@@ -734,6 +734,27 @@ int __init_memblock memblock_add(phys_addr_t base, phys_addr_t size)
 	return memblock_add_range(&memblock.memory, base, size, MAX_NUMNODES, 0);
 }
 
+bool __init_memblock memblock_validate_numa_coverage(const u64 limit)
+{
+	unsigned long lose_pg = 0;
+	unsigned long start_pfn, end_pfn;
+	int nid, i;
+
+	/* calculate lose page */
+	for_each_mem_pfn_range(i, MAX_NUMNODES, &start_pfn, &end_pfn, &nid) {
+		if (nid == NUMA_NO_NODE)
+			lose_pg += end_pfn - start_pfn;
+	}
+
+	if (lose_pg >= limit) {
+		pr_err("NUMA: We lost %ld pages.\n", lose_pg);
+		return false;
+	}
+
+	return true;
+}
+
+
 /**
  * memblock_isolate_range - isolate given range into disjoint memblocks
  * @type: memblock type to isolate range for
