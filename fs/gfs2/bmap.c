@@ -808,29 +808,28 @@ out:
  * gfs2_alloc_size - Compute the maximum allocation size
  * @inode: The inode
  * @mp: The metapath
+ * @lblock: The logical starting block number
  * @size: Requested size in blocks
  *
  * Compute the maximum size of the next allocation at @mp.
  *
  * Returns: size in blocks
  */
-static u64 gfs2_alloc_size(struct inode *inode, struct metapath *mp, u64 size)
+static u64 gfs2_alloc_size(struct inode *inode, struct metapath *mp,
+			   sector_t lblock, u64 size)
 {
 	struct gfs2_inode *ip = GFS2_I(inode);
 	struct gfs2_sbd *sdp = GFS2_SB(inode);
 	const __be64 *first, *ptr, *end;
 
-	/*
-	 * For writes to stuffed files, this function is called twice via
-	 * __gfs2_iomap_get, before and after unstuffing. The size we return the
-	 * first time needs to be large enough to get the reservation and
-	 * allocation sizes right.  The size we return the second time must
-	 * be exact or else __gfs2_iomap_alloc won't do the right thing.
-	 */
-
 	if (gfs2_is_stuffed(ip) || mp->mp_fheight != mp->mp_aheight) {
-		unsigned int maxsize = mp->mp_fheight > 1 ?
-			sdp->sd_inptrs : sdp->sd_diptrs;
+		unsigned int maxsize;
+
+		/* Are we writing to the block resulting from unstuffing? */
+		if (gfs2_is_stuffed(ip) && lblock == 0 && inode->i_size != 0)
+			return 1;
+
+		maxsize = mp->mp_fheight > 1 ? sdp->sd_inptrs : sdp->sd_diptrs;
 		maxsize -= mp->mp_list[mp->mp_fheight - 1];
 		if (size > maxsize)
 			size = maxsize;
@@ -964,7 +963,7 @@ do_alloc:
 		if (flags & IOMAP_DIRECT)
 			goto out;  /* (see gfs2_file_direct_write) */
 
-		len = gfs2_alloc_size(inode, mp, len);
+		len = gfs2_alloc_size(inode, mp, lblock, len);
 		alloc_size = len << inode->i_blkbits;
 		if (alloc_size < iomap->length)
 			iomap->length = alloc_size;
@@ -1073,10 +1072,14 @@ static int gfs2_iomap_begin_write(struct inode *inode, loff_t pos,
 			if (ret)
 				goto out_trans_end;
 			mp->mp_aheight = 1;
-			ret = __gfs2_iomap_get(inode, iomap->offset,
-					       iomap->length, flags, iomap, mp);
-			if (ret)
-				goto out_trans_end;
+			if (iomap->offset == 0 && inode->i_size != 0) {
+				__be64 *ptr = metapointer(0, mp);
+				u64 dblock = be64_to_cpu(*ptr);
+
+				iomap->type = IOMAP_MAPPED;
+				iomap->addr = dblock << inode->i_blkbits;
+				iomap->flags |= IOMAP_F_MERGED;
+			}
 		}
 
 		if (iomap->type == IOMAP_HOLE) {
