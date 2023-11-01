@@ -2049,6 +2049,7 @@ DEFINE_PER_CPU_ALIGNED(struct pcpu_hot, pcpu_hot) = {
 	.top_of_stack	= TOP_OF_INIT_STACK,
 };
 EXPORT_PER_CPU_SYMBOL(pcpu_hot);
+EXPORT_PER_CPU_SYMBOL(const_pcpu_hot);
 
 #ifdef CONFIG_X86_64
 DEFINE_PER_CPU_FIRST(struct fixed_percpu_data,
@@ -2164,8 +2165,6 @@ static inline void setup_getcpu(int cpu)
 }
 
 #ifdef CONFIG_X86_64
-static inline void ucode_cpu_init(int cpu) { }
-
 static inline void tss_setup_ist(struct tss_struct *tss)
 {
 	/* Set up the per-CPU TSS IST stacks */
@@ -2176,16 +2175,8 @@ static inline void tss_setup_ist(struct tss_struct *tss)
 	/* Only mapped when SEV-ES is active */
 	tss->x86_tss.ist[IST_INDEX_VC] = __this_cpu_ist_top_va(VC);
 }
-
 #else /* CONFIG_X86_64 */
-
-static inline void ucode_cpu_init(int cpu)
-{
-	show_ucode_info_early();
-}
-
 static inline void tss_setup_ist(struct tss_struct *tss) { }
-
 #endif /* !CONFIG_X86_64 */
 
 static inline void tss_setup_io_bitmap(struct tss_struct *tss)
@@ -2240,8 +2231,6 @@ void cpu_init(void)
 {
 	struct task_struct *cur = current;
 	int cpu = raw_smp_processor_id();
-
-	ucode_cpu_init(cpu);
 
 #ifdef CONFIG_NUMA
 	if (this_cpu_read(numa_node) == 0 &&
