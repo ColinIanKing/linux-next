@@ -2406,7 +2406,7 @@ static inline bool ufshcd_ready_for_uic_cmd(struct ufs_hba *hba)
 	int ret = read_poll_timeout(ufshcd_readl, val, val & UIC_COMMAND_READY,
 				    500, UIC_CMD_TIMEOUT * 1000, false, hba,
 				    REG_CONTROLLER_STATUS);
-	return ret == 0 ? true : false;
+	return ret == 0;
 }
 
 /**
@@ -3728,7 +3728,7 @@ int ufshcd_read_string_desc(struct ufs_hba *hba, u8 desc_index,
 		 */
 		ret = utf16s_to_utf8s(uc_str->uc,
 				      uc_str->len - QUERY_DESC_HDR_SIZE,
-				      UTF16_BIG_ENDIAN, str, ascii_len);
+				      UTF16_BIG_ENDIAN, str, ascii_len - 1);
 
 		/* replace non-printable or non-ASCII characters with spaces */
 		for (i = 0; i < ret; i++)
@@ -5615,13 +5615,13 @@ static void ufshcd_mcq_compl_pending_transfer(struct ufs_hba *hba,
 			 * For those cmds of which the cqes are not present
 			 * in the cq, complete them explicitly.
 			 */
+			spin_lock_irqsave(&hwq->cq_lock, flags);
 			if (cmd && !test_bit(SCMD_STATE_COMPLETE, &cmd->state)) {
-				spin_lock_irqsave(&hwq->cq_lock, flags);
 				set_host_byte(cmd, DID_REQUEUE);
 				ufshcd_release_scsi_cmd(hba, lrbp);
 				scsi_done(cmd);
-				spin_unlock_irqrestore(&hwq->cq_lock, flags);
 			}
+			spin_unlock_irqrestore(&hwq->cq_lock, flags);
 		} else {
 			ufshcd_mcq_poll_cqe_lock(hba, hwq);
 		}
