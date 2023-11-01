@@ -1023,20 +1023,14 @@ static const struct iomap_folio_ops gfs2_iomap_folio_ops = {
 	.put_folio = gfs2_iomap_put_folio,
 };
 
-static int gfs2_iomap_begin_write(struct inode *inode, loff_t pos,
-				  loff_t length, unsigned flags,
-				  struct iomap *iomap,
-				  struct metapath *mp)
+static int gfs2_iomap_begin_write(struct inode *inode,
+				  struct iomap *iomap, struct metapath *mp)
 {
 	struct gfs2_inode *ip = GFS2_I(inode);
 	struct gfs2_sbd *sdp = GFS2_SB(inode);
-	bool unstuff;
 	int ret;
 
-	unstuff = gfs2_is_stuffed(ip) &&
-		  pos + length > gfs2_max_stuffed_size(ip);
-
-	if (unstuff || iomap->type == IOMAP_HOLE) {
+	if (iomap->type == IOMAP_HOLE) {
 		unsigned int data_blocks, ind_blocks;
 		struct gfs2_alloc_parms ap = {};
 		unsigned int rblocks;
@@ -1067,7 +1061,7 @@ static int gfs2_iomap_begin_write(struct inode *inode, loff_t pos,
 		if (ret)
 			goto out_trans_fail;
 
-		if (unstuff) {
+		if (gfs2_is_stuffed(ip)) {
 			ret = gfs2_unstuff_dinode(ip);
 			if (ret)
 				goto out_trans_end;
@@ -1151,7 +1145,7 @@ static int gfs2_iomap_begin(struct inode *inode, loff_t pos, loff_t length,
 		goto out_unlock;
 	}
 
-	ret = gfs2_iomap_begin_write(inode, pos, length, flags, iomap, &mp);
+	ret = gfs2_iomap_begin_write(inode, iomap, &mp);
 
 out_unlock:
 	release_metapath(&mp);
