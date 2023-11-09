@@ -1,0 +1,46 @@
+From 3e446775bef78965588b2071fdcacfb697d6deac Mon Sep 17 00:00:00 2001
+From: Abhinav Singh <singhabhinav9051571833@gmail.com>
+Date: Wed, 8 Nov 2023 09:52:08 +0530
+Subject: [PATCH] fs : Fix warning using plain integer as NULL
+
+Sparse static analysis tools generate a warning with this message
+"Using plain integer as NULL pointer". In this case this warning is
+being shown because we are trying to initialize  pointer to NULL using
+integer value 0.
+
+Signed-off-by: Abhinav Singh <singhabhinav9051571833@gmail.com>
+Reviewed-by: Jan Kara <jack@suse.cz>
+---
+ fs/dax.c       | 2 +-
+ fs/direct-io.c | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/fs/dax.c b/fs/dax.c
+index 3380b43cb6bb..423fc1607dfa 100644
+--- a/fs/dax.c
++++ b/fs/dax.c
+@@ -1128,7 +1128,7 @@ static int dax_iomap_copy_around(loff_t pos, uint64_t length, size_t align_size,
+ 	/* zero the edges if srcmap is a HOLE or IOMAP_UNWRITTEN */
+ 	bool zero_edge = srcmap->flags & IOMAP_F_SHARED ||
+ 			 srcmap->type == IOMAP_UNWRITTEN;
+-	void *saddr = 0;
++	void *saddr = NULL;
+ 	int ret = 0;
+ 
+ 	if (!zero_edge) {
+diff --git a/fs/direct-io.c b/fs/direct-io.c
+index 20533266ade6..60456263a338 100644
+--- a/fs/direct-io.c
++++ b/fs/direct-io.c
+@@ -1114,7 +1114,7 @@ ssize_t __blockdev_direct_IO(struct kiocb *iocb, struct inode *inode,
+ 	loff_t offset = iocb->ki_pos;
+ 	const loff_t end = offset + count;
+ 	struct dio *dio;
+-	struct dio_submit sdio = { 0, };
++	struct dio_submit sdio = { NULL, };
+ 	struct buffer_head map_bh = { 0, };
+ 	struct blk_plug plug;
+ 	unsigned long align = offset | iov_iter_alignment(iter);
+-- 
+2.39.2
+
