@@ -1,0 +1,81 @@
+From f5e9b1defa3beaf8ef29d5ee8b989f6cab11c58f Mon Sep 17 00:00:00 2001
+From: Abhinav Singh <singhabhinav9051571833@gmail.com>
+Date: Fri, 10 Nov 2023 01:02:39 +0530
+Subject: [PATCH] driver : edac : Fix warning using plain integer as NULL
+
+Sparse static analysis tools generate a warning with this message
+"Using plain integer as NULL pointer". In this case this warning is
+being shown because we are trying to initialize  pointer to NULL using
+integer value 0.
+
+Signed-off-by: Abhinav Singh <singhabhinav9051571833@gmail.com>
+---
+ drivers/edac/i7core_edac.c |  2 +-
+ drivers/edac/sb_edac.c     | 10 +++++-----
+ 2 files changed, 6 insertions(+), 6 deletions(-)
+
+diff --git a/drivers/edac/i7core_edac.c b/drivers/edac/i7core_edac.c
+index 23d25724bae4..08bf20c60111 100644
+--- a/drivers/edac/i7core_edac.c
++++ b/drivers/edac/i7core_edac.c
+@@ -376,7 +376,7 @@ static const struct pci_id_table pci_dev_table[] = {
+ 	PCI_ID_TABLE_ENTRY(pci_dev_descr_i7core_nehalem),
+ 	PCI_ID_TABLE_ENTRY(pci_dev_descr_lynnfield),
+ 	PCI_ID_TABLE_ENTRY(pci_dev_descr_i7core_westmere),
+-	{0,}			/* 0 terminated list. */
++	{NULL,}			/* 0 terminated list. */
+ };
+ 
+ /*
+diff --git a/drivers/edac/sb_edac.c b/drivers/edac/sb_edac.c
+index 0c779a0326b6..a3f50a66de33 100644
+--- a/drivers/edac/sb_edac.c
++++ b/drivers/edac/sb_edac.c
+@@ -439,7 +439,7 @@ static const struct pci_id_descr pci_dev_descr_sbridge[] = {
+ 
+ static const struct pci_id_table pci_dev_descr_sbridge_table[] = {
+ 	PCI_ID_TABLE_ENTRY(pci_dev_descr_sbridge, ARRAY_SIZE(pci_dev_descr_sbridge), 1, SANDY_BRIDGE),
+-	{0,}			/* 0 terminated list. */
++	{NULL,}			/* 0 terminated list. */
+ };
+ 
+ /* This changes depending if 1HA or 2HA:
+@@ -505,7 +505,7 @@ static const struct pci_id_descr pci_dev_descr_ibridge[] = {
+ 
+ static const struct pci_id_table pci_dev_descr_ibridge_table[] = {
+ 	PCI_ID_TABLE_ENTRY(pci_dev_descr_ibridge, 12, 2, IVY_BRIDGE),
+-	{0,}			/* 0 terminated list. */
++	{NULL,}			/* 0 terminated list. */
+ };
+ 
+ /* Haswell support */
+@@ -576,7 +576,7 @@ static const struct pci_id_descr pci_dev_descr_haswell[] = {
+ 
+ static const struct pci_id_table pci_dev_descr_haswell_table[] = {
+ 	PCI_ID_TABLE_ENTRY(pci_dev_descr_haswell, 13, 2, HASWELL),
+-	{0,}			/* 0 terminated list. */
++	{NULL,}			/* 0 terminated list. */
+ };
+ 
+ /* Knight's Landing Support */
+@@ -620,7 +620,7 @@ static const struct pci_id_descr pci_dev_descr_knl[] = {
+ 
+ static const struct pci_id_table pci_dev_descr_knl_table[] = {
+ 	PCI_ID_TABLE_ENTRY(pci_dev_descr_knl, ARRAY_SIZE(pci_dev_descr_knl), 1, KNIGHTS_LANDING),
+-	{0,}
++	{NULL,}
+ };
+ 
+ /*
+@@ -686,7 +686,7 @@ static const struct pci_id_descr pci_dev_descr_broadwell[] = {
+ 
+ static const struct pci_id_table pci_dev_descr_broadwell_table[] = {
+ 	PCI_ID_TABLE_ENTRY(pci_dev_descr_broadwell, 10, 2, BROADWELL),
+-	{0,}			/* 0 terminated list. */
++	{NULL,}			/* 0 terminated list. */
+ };
+ 
+ 
+-- 
+2.39.2
+
