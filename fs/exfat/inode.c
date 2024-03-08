@@ -564,6 +564,11 @@ int exfat_block_truncate_page(struct inode *inode, loff_t from)
 	return block_truncate_page(inode->i_mapping, from, exfat_get_block);
 }
 
+int exfat_block_page_mkwrite(struct vm_area_struct *vma, struct vm_fault *vmf)
+{
+	return block_page_mkwrite(vma, vmf, exfat_get_block);
+}
+
 static const struct address_space_operations exfat_aops = {
 	.dirty_folio	= block_dirty_folio,
 	.invalidate_folio = block_invalidate_folio,
