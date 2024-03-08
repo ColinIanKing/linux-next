@@ -1677,21 +1677,11 @@ static void rcu_sr_normal_gp_cleanup(void)
 	WARN_ON_ONCE(!rcu_sr_is_wait_head(wait_tail));
 
 	/*
-	 * Process (a) and (d) cases. See an illustration. Apart of
-	 * that it handles the scenario when all clients are done,
-	 * wait-head is released if last. The worker is not kicked.
+	 * Process (a) and (d) cases. See an illustration.
 	 */
 	llist_for_each_safe(rcu, next, wait_tail->next) {
-		if (rcu_sr_is_wait_head(rcu)) {
-			if (!rcu->next) {
-				rcu_sr_put_wait_head(rcu);
-				wait_tail->next = NULL;
-			} else {
-				wait_tail->next = rcu;
-			}
-
+		if (rcu_sr_is_wait_head(rcu))
 			break;
-		}
 
 		rcu_sr_normal_complete(rcu);
 		// It can be last, update a next on this step.
@@ -1705,8 +1695,12 @@ static void rcu_sr_normal_gp_cleanup(void)
 	smp_store_release(&rcu_state.srs_done_tail, wait_tail);
 	ASSERT_EXCLUSIVE_WRITER(rcu_state.srs_done_tail);
 
-	if (wait_tail->next)
-		schedule_work(&rcu_state.srs_cleanup_work);
+	/*
+	 * We schedule a work in order to perform a final processing
+	 * of outstanding users(if still left) and releasing wait-heads
+	 * added by rcu_sr_normal_gp_init() call.
+	 */
+	schedule_work(&rcu_state.srs_cleanup_work);
 }
 
 /*
