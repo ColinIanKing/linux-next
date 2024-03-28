@@ -192,27 +192,6 @@ struct gfs2_glock *gfs2_glock_hold(struct gfs2_glock *gl)
 	return gl;
 }
 
-/**
- * demote_ok - Check to see if it's ok to unlock a glock
- * @gl: the glock
- *
- * Returns: 1 if it's ok
- */
-
-static int demote_ok(const struct gfs2_glock *gl)
-{
-	const struct gfs2_glock_operations *glops = gl->gl_ops;
-
-	if (gl->gl_state == LM_ST_UNLOCKED)
-		return 0;
-	if (!list_empty(&gl->gl_holders))
-		return 0;
-	if (glops->go_demote_ok)
-		return glops->go_demote_ok(gl);
-	return 1;
-}
-
-
 void gfs2_glock_add_to_lru(struct gfs2_glock *gl)
 {
 	if (!(gl->gl_ops->go_flags & GLOF_LRU))
@@ -1674,7 +1653,7 @@ static void __gfs2_glock_dq(struct gfs2_holder *gh)
 			fast_path = 1;
 	}
 
-	if (!test_bit(GLF_LFLUSH, &gl->gl_flags) && demote_ok(gl))
+	if (!test_bit(GLF_LFLUSH, &gl->gl_flags))
 		gfs2_glock_add_to_lru(gl);
 
 	if (unlikely(!fast_path)) {
@@ -2033,7 +2012,7 @@ add_back_to_lru:
 			goto add_back_to_lru;
 		}
 		gl->gl_lockref.count++;
-		if (demote_ok(gl))
+		if (gl->gl_state != LM_ST_UNLOCKED)
 			handle_callback(gl, LM_ST_UNLOCKED, 0, false);
 		__gfs2_glock_queue_work(gl, 0);
 		spin_unlock(&gl->gl_lockref.lock);

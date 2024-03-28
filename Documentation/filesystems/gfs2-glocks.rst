@@ -61,8 +61,6 @@ Field              Purpose
 go_xmote_th        Called before remote state change (e.g. to sync dirty data)
 go_xmote_bh        Called after remote state change (e.g. to refill cache)
 go_inval           Called if remote state change requires invalidating the cache
-go_demote_ok       Returns boolean value of whether its ok to demote a glock
-                   (e.g. checks timeout, and that there is no cached data)
 go_lock            Called for the first local holder of a lock
 go_unlock          Called on the final local unlock of a lock
 go_dump            Called to print content of object for debugfs file, or on
@@ -96,7 +94,6 @@ Operation        GLF_LOCK bit lock held    gl_lockref.lock spinlock held
 go_xmote_th           Yes                       No
 go_xmote_bh           Yes                       No
 go_inval              Yes                       No
-go_demote_ok          Sometimes                 Yes
 go_lock               Yes                       No
 go_unlock             Yes                       No
 go_dump               Sometimes                 Yes
