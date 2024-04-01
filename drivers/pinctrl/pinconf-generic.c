@@ -75,7 +75,7 @@ static void pinconf_generic_dump_one(struct pinctrl_dev *pctldev,
 		else
 			ret = pin_config_get_for_pin(pctldev, pin, &config);
 		/* These are legal errors */
-		if (ret == -EINVAL || ret == -ENOTSUPP)
+		if (ret == -EINVAL || ret == -ENOTSUPP || ret == -EOPNOTSUPP)
 			continue;
 		if (ret) {
 			seq_printf(s, "ERROR READING CONFIG SETTING %d ", i);
