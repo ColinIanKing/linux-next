@@ -10,6 +10,7 @@
 #define _GNU_SOURCE
 #include <asm/termbits.h>
 #include <fcntl.h>
+#include <linux/fiemap.h>
 #include <linux/landlock.h>
 #include <linux/magic.h>
 #include <sched.h>
@@ -3933,6 +3934,100 @@ TEST_F_FORK(layout1, o_path_ftruncate_and_ioctl)
 
 	EXPECT_EQ(EBADF, test_ftruncate(fd));
 	EXPECT_EQ(EBADF, test_fs_ioc_getflags_ioctl(fd));
+
+	ASSERT_EQ(0, close(fd));
+}
+
+/*
+ * ioctl_error - generically call the given ioctl with a pointer to a
+ * sufficiently large memory region
+ *
+ * Returns the IOCTLs error, or 0.
+ */
+static int ioctl_error(int fd, unsigned int cmd)
+{
+	char buf[1024]; /* sufficiently large */
+	int res = ioctl(fd, cmd, &buf);
+
+	if (res < 0)
+		return errno;
+
+	return 0;
+}
+
+/* Define some linux/falloc.h IOCTL commands which are not available in uapi headers. */
+struct space_resv {
+	__s16 l_type;
+	__s16 l_whence;
+	__s64 l_start;
+	__s64 l_len; /* len == 0 means until end of file */
+	__s32 l_sysid;
+	__u32 l_pid;
+	__s32 l_pad[4]; /* reserved area */
+};
+
+#define FS_IOC_RESVSP _IOW('X', 40, struct space_resv)
+#define FS_IOC_UNRESVSP _IOW('X', 41, struct space_resv)
+#define FS_IOC_RESVSP64 _IOW('X', 42, struct space_resv)
+#define FS_IOC_UNRESVSP64 _IOW('X', 43, struct space_resv)
+#define FS_IOC_ZERO_RANGE _IOW('X', 57, struct space_resv)
+
+/*
+ * Tests a series of blanket-permitted and denied IOCTLs.
+ */
+TEST_F_FORK(layout1, blanket_permitted_ioctls)
+{
+	const struct landlock_ruleset_attr attr = {
+		.handled_access_fs = LANDLOCK_ACCESS_FS_IOCTL_DEV,
+	};
+	int ruleset_fd, fd;
+
+	/* Enables Landlock. */
+	ruleset_fd = landlock_create_ruleset(&attr, sizeof(attr), 0);
+	ASSERT_LE(0, ruleset_fd);
+	enforce_ruleset(_metadata, ruleset_fd);
+	ASSERT_EQ(0, close(ruleset_fd));
+
+	fd = open("/dev/null", O_RDWR | O_CLOEXEC);
+	ASSERT_LE(0, fd);
+
+	/*
+	 * Checks permitted commands.
+	 * These ones may return errors, but should not be blocked by Landlock.
+	 */
+	EXPECT_NE(EACCES, ioctl_error(fd, FIOCLEX));
+	EXPECT_NE(EACCES, ioctl_error(fd, FIONCLEX));
+	EXPECT_NE(EACCES, ioctl_error(fd, FIONBIO));
+	EXPECT_NE(EACCES, ioctl_error(fd, FIOASYNC));
+	EXPECT_NE(EACCES, ioctl_error(fd, FIOQSIZE));
+	EXPECT_NE(EACCES, ioctl_error(fd, FIFREEZE));
+	EXPECT_NE(EACCES, ioctl_error(fd, FITHAW));
+	EXPECT_NE(EACCES, ioctl_error(fd, FS_IOC_FIEMAP));
+	EXPECT_NE(EACCES, ioctl_error(fd, FIGETBSZ));
+	EXPECT_NE(EACCES, ioctl_error(fd, FICLONE));
+	EXPECT_NE(EACCES, ioctl_error(fd, FICLONERANGE));
+	EXPECT_NE(EACCES, ioctl_error(fd, FIDEDUPERANGE));
+	EXPECT_NE(EACCES, ioctl_error(fd, FS_IOC_GETFSUUID));
+	EXPECT_NE(EACCES, ioctl_error(fd, FS_IOC_GETFSSYSFSPATH));
+
+	/*
+	 * Checks blocked commands.
+	 * A call to a blocked IOCTL command always returns EACCES.
+	 */
+	EXPECT_EQ(EACCES, ioctl_error(fd, FIONREAD));
+	EXPECT_EQ(EACCES, ioctl_error(fd, FS_IOC_GETFLAGS));
+	EXPECT_EQ(EACCES, ioctl_error(fd, FS_IOC_SETFLAGS));
+	EXPECT_EQ(EACCES, ioctl_error(fd, FS_IOC_FSGETXATTR));
+	EXPECT_EQ(EACCES, ioctl_error(fd, FS_IOC_FSSETXATTR));
+	EXPECT_EQ(EACCES, ioctl_error(fd, FIBMAP));
+	EXPECT_EQ(EACCES, ioctl_error(fd, FS_IOC_RESVSP));
+	EXPECT_EQ(EACCES, ioctl_error(fd, FS_IOC_RESVSP64));
+	EXPECT_EQ(EACCES, ioctl_error(fd, FS_IOC_UNRESVSP));
+	EXPECT_EQ(EACCES, ioctl_error(fd, FS_IOC_UNRESVSP64));
+	EXPECT_EQ(EACCES, ioctl_error(fd, FS_IOC_ZERO_RANGE));
+
+	/* Default case is also blocked. */
+	EXPECT_EQ(EACCES, ioctl_error(fd, 0xc00ffeee));
 
 	ASSERT_EQ(0, close(fd));
 }
