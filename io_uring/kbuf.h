@@ -55,8 +55,6 @@ int io_register_pbuf_ring(struct io_ring_ctx *ctx, void __user *arg);
 int io_unregister_pbuf_ring(struct io_ring_ctx *ctx, void __user *arg);
 int io_register_pbuf_status(struct io_ring_ctx *ctx, void __user *arg);
 
-void io_kbuf_mmap_list_free(struct io_ring_ctx *ctx);
-
 void __io_put_kbuf(struct io_kiocb *req, unsigned issue_flags);
 
 bool io_kbuf_recycle_legacy(struct io_kiocb *req, unsigned issue_flags);
@@ -64,6 +62,7 @@ bool io_kbuf_recycle_legacy(struct io_kiocb *req, unsigned issue_flags);
 void io_put_bl(struct io_ring_ctx *ctx, struct io_buffer_list *bl);
 struct io_buffer_list *io_pbuf_get_bl(struct io_ring_ctx *ctx,
 				      unsigned long bgid);
+int io_pbuf_mmap(struct file *file, struct vm_area_struct *vma);
 
 static inline bool io_kbuf_recycle_ring(struct io_kiocb *req)
 {
@@ -121,18 +120,14 @@ static inline void __io_put_kbuf_list(struct io_kiocb *req,
 	}
 }
 
-static inline unsigned int io_put_kbuf_comp(struct io_kiocb *req)
+static inline void io_kbuf_drop(struct io_kiocb *req)
 {
-	unsigned int ret;
-
 	lockdep_assert_held(&req->ctx->completion_lock);
 
 	if (!(req->flags & (REQ_F_BUFFER_SELECTED|REQ_F_BUFFER_RING)))
-		return 0;
+		return;
 
-	ret = IORING_CQE_F_BUFFER | (req->buf_index << IORING_CQE_BUFFER_SHIFT);
 	__io_put_kbuf_list(req, &req->ctx->io_buffers_comp);
-	return ret;
 }
 
 static inline unsigned int io_put_kbuf(struct io_kiocb *req,
