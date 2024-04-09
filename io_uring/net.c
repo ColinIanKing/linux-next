@@ -1016,8 +1016,11 @@ int io_send_zc_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
 		if (zc->flags & ~IO_ZC_FLAGS_VALID)
 			return -EINVAL;
 		if (zc->flags & IORING_SEND_ZC_REPORT_USAGE) {
-			io_notif_set_extended(notif);
-			io_notif_to_data(notif)->zc_report = true;
+			struct io_notif_data *nd = io_notif_to_data(notif);
+
+			nd->zc_report = true;
+			nd->zc_used = false;
+			nd->zc_copied = false;
 		}
 	}
 
@@ -1045,7 +1048,7 @@ int io_send_zc_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
 
 	zc->buf = u64_to_user_ptr(READ_ONCE(sqe->addr));
 	zc->len = READ_ONCE(sqe->len);
-	zc->msg_flags = READ_ONCE(sqe->msg_flags) | MSG_NOSIGNAL;
+	zc->msg_flags = READ_ONCE(sqe->msg_flags) | MSG_NOSIGNAL | MSG_ZEROCOPY;
 	if (zc->msg_flags & MSG_DONTWAIT)
 		req->flags |= REQ_F_NOWAIT;
 
@@ -1126,7 +1129,6 @@ static int io_send_zc_import(struct io_kiocb *req, struct io_async_msghdr *kmsg)
 			return ret;
 		kmsg->msg.sg_from_iter = io_sg_from_iter;
 	} else {
-		io_notif_set_extended(sr->notif);
 		ret = import_ubuf(ITER_SOURCE, sr->buf, sr->len, &kmsg->msg.msg_iter);
 		if (unlikely(ret))
 			return ret;
@@ -1163,7 +1165,7 @@ int io_send_zc(struct io_kiocb *req, unsigned int issue_flags)
 			return ret;
 	}
 
-	msg_flags = zc->msg_flags | MSG_ZEROCOPY;
+	msg_flags = zc->msg_flags;
 	if (issue_flags & IO_URING_F_NONBLOCK)
 		msg_flags |= MSG_DONTWAIT;
 	if (msg_flags & MSG_WAITALL)
@@ -1215,8 +1217,6 @@ int io_sendmsg_zc(struct io_kiocb *req, unsigned int issue_flags)
 	unsigned flags;
 	int ret, min_ret = 0;
 
-	io_notif_set_extended(sr->notif);
-
 	sock = sock_from_file(req->file);
 	if (unlikely(!sock))
 		return -ENOTSOCK;
@@ -1227,7 +1227,7 @@ int io_sendmsg_zc(struct io_kiocb *req, unsigned int issue_flags)
 	    (sr->flags & IORING_RECVSEND_POLL_FIRST))
 		return -EAGAIN;
 
-	flags = sr->msg_flags | MSG_ZEROCOPY;
+	flags = sr->msg_flags;
 	if (issue_flags & IO_URING_F_NONBLOCK)
 		flags |= MSG_DONTWAIT;
 	if (flags & MSG_WAITALL)
