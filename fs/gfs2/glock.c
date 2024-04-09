@@ -1988,29 +1988,30 @@ static bool can_free_glock(struct gfs2_glock *gl)
  * private)
  */
 
-static void gfs2_dispose_glock_lru(struct list_head *list)
+static long gfs2_dispose_glock_lru(struct list_head *list)
 __releases(&lru_lock)
 __acquires(&lru_lock)
 {
 	struct gfs2_glock *gl;
+	long freed = 0;
 
 	list_sort(NULL, list, glock_cmp);
 
 	while(!list_empty(list)) {
 		gl = list_first_entry(list, struct gfs2_glock, gl_lru);
-		list_del_init(&gl->gl_lru);
-		clear_bit(GLF_LRU, &gl->gl_flags);
 		if (!spin_trylock(&gl->gl_lockref.lock)) {
 add_back_to_lru:
-			list_add(&gl->gl_lru, &lru_list);
-			set_bit(GLF_LRU, &gl->gl_flags);
-			atomic_inc(&lru_count);
+			list_move(&gl->gl_lru, &lru_list);
 			continue;
 		}
 		if (!can_free_glock(gl)) {
 			spin_unlock(&gl->gl_lockref.lock);
 			goto add_back_to_lru;
 		}
+		list_del_init(&gl->gl_lru);
+		atomic_dec(&lru_count);
+		clear_bit(GLF_LRU, &gl->gl_flags);
+		freed++;
 		gl->gl_lockref.count++;
 		if (gl->gl_state != LM_ST_UNLOCKED)
 			handle_callback(gl, LM_ST_UNLOCKED, 0, false);
@@ -2018,6 +2019,7 @@ add_back_to_lru:
 		spin_unlock(&gl->gl_lockref.lock);
 		cond_resched_lock(&lru_lock);
 	}
+	return freed;
 }
 
 /**
@@ -2039,14 +2041,11 @@ static long gfs2_scan_glock_lru(int nr)
 	list_for_each_entry_safe(gl, next, &lru_list, gl_lru) {
 		if (nr-- <= 0)
 			break;
-		if (can_free_glock(gl)) {
+		if (can_free_glock(gl))
 			list_move(&gl->gl_lru, &dispose);
-			atomic_dec(&lru_count);
-			freed++;
-		}
 	}
 	if (!list_empty(&dispose))
-		gfs2_dispose_glock_lru(&dispose);
+		freed = gfs2_dispose_glock_lru(&dispose);
 	spin_unlock(&lru_lock);
 
 	return freed;
