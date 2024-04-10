@@ -189,7 +189,7 @@ int swap_writepage(struct page *page, struct writeback_control *wbc)
 	 * Arch code may have to preserve more data than just the page
 	 * contents, e.g. memory tags.
 	 */
-	ret = arch_prepare_to_swap(&folio->page);
+	ret = arch_prepare_to_swap(folio);
 	if (ret) {
 		folio_mark_dirty(folio);
 		folio_unlock(folio);
@@ -212,13 +212,17 @@ int swap_writepage(struct page *page, struct writeback_control *wbc)
 
 static inline void count_swpout_vm_event(struct folio *folio)
 {
+	long nr_pages = folio_nr_pages(folio);
+
 #ifdef CONFIG_TRANSPARENT_HUGEPAGE
 	if (unlikely(folio_test_pmd_mappable(folio))) {
 		count_memcg_folio_events(folio, THP_SWPOUT, 1);
 		count_vm_event(THP_SWPOUT);
 	}
+	if (nr_pages > 0)
+		count_mthp_stat(folio_order(folio), MTHP_STAT_ANON_SWPOUT);
 #endif
-	count_vm_events(PSWPOUT, folio_nr_pages(folio));
+	count_vm_events(PSWPOUT, nr_pages);
 }
 
 #if defined(CONFIG_MEMCG) && defined(CONFIG_BLK_CGROUP)
