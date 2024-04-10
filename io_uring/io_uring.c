@@ -668,26 +668,11 @@ static void io_cq_unlock_post(struct io_ring_ctx *ctx)
 	io_commit_cqring_flush(ctx);
 }
 
-static void io_cqring_overflow_kill(struct io_ring_ctx *ctx)
-{
-	struct io_overflow_cqe *ocqe;
-	LIST_HEAD(list);
-
-	spin_lock(&ctx->completion_lock);
-	list_splice_init(&ctx->cq_overflow_list, &list);
-	clear_bit(IO_CHECK_CQ_OVERFLOW_BIT, &ctx->check_cq);
-	spin_unlock(&ctx->completion_lock);
-
-	while (!list_empty(&list)) {
-		ocqe = list_first_entry(&list, struct io_overflow_cqe, list);
-		list_del(&ocqe->list);
-		kfree(ocqe);
-	}
-}
-
-static void __io_cqring_overflow_flush(struct io_ring_ctx *ctx)
+static void __io_cqring_overflow_flush(struct io_ring_ctx *ctx, bool dying)
 {
 	size_t cqe_size = sizeof(struct io_uring_cqe);
+
+	lockdep_assert_held(&ctx->uring_lock);
 
 	if (__io_cqring_events(ctx) == ctx->cq_entries)
 		return;
@@ -700,11 +685,14 @@ static void __io_cqring_overflow_flush(struct io_ring_ctx *ctx)
 		struct io_uring_cqe *cqe;
 		struct io_overflow_cqe *ocqe;
 
-		if (!io_get_cqe_overflow(ctx, &cqe, true))
-			break;
 		ocqe = list_first_entry(&ctx->cq_overflow_list,
 					struct io_overflow_cqe, list);
-		memcpy(cqe, &ocqe->cqe, cqe_size);
+
+		if (!dying) {
+			if (!io_get_cqe_overflow(ctx, &cqe, true))
+				break;
+			memcpy(cqe, &ocqe->cqe, cqe_size);
+		}
 		list_del(&ocqe->list);
 		kfree(ocqe);
 	}
@@ -716,20 +704,17 @@ static void __io_cqring_overflow_flush(struct io_ring_ctx *ctx)
 	io_cq_unlock_post(ctx);
 }
 
-static void io_cqring_do_overflow_flush(struct io_ring_ctx *ctx)
+static void io_cqring_overflow_kill(struct io_ring_ctx *ctx)
 {
-	/* iopoll syncs against uring_lock, not completion_lock */
-	if (ctx->flags & IORING_SETUP_IOPOLL)
-		mutex_lock(&ctx->uring_lock);
-	__io_cqring_overflow_flush(ctx);
-	if (ctx->flags & IORING_SETUP_IOPOLL)
-		mutex_unlock(&ctx->uring_lock);
+	if (ctx->rings)
+		__io_cqring_overflow_flush(ctx, true);
 }
 
-static void io_cqring_overflow_flush(struct io_ring_ctx *ctx)
+static void io_cqring_do_overflow_flush(struct io_ring_ctx *ctx)
 {
-	if (test_bit(IO_CHECK_CQ_OVERFLOW_BIT, &ctx->check_cq))
-		io_cqring_do_overflow_flush(ctx);
+	mutex_lock(&ctx->uring_lock);
+	__io_cqring_overflow_flush(ctx, false);
+	mutex_unlock(&ctx->uring_lock);
 }
 
 /* can be called by any task */
@@ -819,7 +804,7 @@ static bool io_cqring_event_overflow(struct io_ring_ctx *ctx, u64 user_data,
 	return true;
 }
 
-void io_req_cqe_overflow(struct io_kiocb *req)
+static void io_req_cqe_overflow(struct io_kiocb *req)
 {
 	io_cqring_event_overflow(req->ctx, req->cqe.user_data,
 				req->cqe.res, req->cqe.flags,
@@ -1528,13 +1513,15 @@ static int io_iopoll_check(struct io_ring_ctx *ctx, long min)
 	unsigned int nr_events = 0;
 	unsigned long check_cq;
 
+	lockdep_assert_held(&ctx->uring_lock);
+
 	if (!io_allowed_run_tw(ctx))
 		return -EEXIST;
 
 	check_cq = READ_ONCE(ctx->check_cq);
 	if (unlikely(check_cq)) {
 		if (check_cq & BIT(IO_CHECK_CQ_OVERFLOW_BIT))
-			__io_cqring_overflow_flush(ctx);
+			__io_cqring_overflow_flush(ctx, false);
 		/*
 		 * Similarly do not spin if we have not informed the user of any
 		 * dropped CQE.
@@ -2452,8 +2439,9 @@ static int io_cqring_wait(struct io_ring_ctx *ctx, int min_events,
 	if (!llist_empty(&ctx->work_llist))
 		io_run_local_work(ctx, min_events);
 	io_run_task_work();
-	io_cqring_overflow_flush(ctx);
-	/* if user messes with these they will just get an early return */
+
+	if (unlikely(test_bit(IO_CHECK_CQ_OVERFLOW_BIT, &ctx->check_cq)))
+		io_cqring_do_overflow_flush(ctx);
 	if (__io_cqring_events_user(ctx) >= min_events)
 		return 0;
 
@@ -3238,8 +3226,6 @@ SYSCALL_DEFINE6(io_uring_enter, unsigned int, fd, u32, to_submit,
 	 */
 	ret = 0;
 	if (ctx->flags & IORING_SETUP_SQPOLL) {
-		io_cqring_overflow_flush(ctx);
-
 		if (unlikely(ctx->sq_data->thread == NULL)) {
 			ret = -EOWNERDEAD;
 			goto out;
