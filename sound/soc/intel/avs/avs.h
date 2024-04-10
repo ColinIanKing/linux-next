@@ -107,7 +107,7 @@ struct avs_spec {
 };
 
 struct avs_fw_entry {
-	char *name;
+	const char *name;
 	const struct firmware *fw;
 
 	struct list_head node;
@@ -381,6 +381,7 @@ struct avs_apl_log_buffer_layout {
 	u32 write_ptr;
 	u8 buffer[];
 } __packed;
+static_assert(sizeof(struct avs_apl_log_buffer_layout) == 8);
 
 #define avs_apl_log_payload_size(adev) \
 	(avs_log_buffer_size(adev) - sizeof(struct avs_apl_log_buffer_layout))

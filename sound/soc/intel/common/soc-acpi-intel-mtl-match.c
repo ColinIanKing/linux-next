@@ -8,6 +8,7 @@
 
 #include <sound/soc-acpi.h>
 #include <sound/soc-acpi-intel-match.h>
+#include <sound/soc-acpi-intel-ssp-common.h>
 #include "soc-acpi-intel-sdw-mockup-match.h"
 
 static const struct snd_soc_acpi_codecs mtl_max98357a_amp = {
@@ -20,14 +21,9 @@ static const struct snd_soc_acpi_codecs mtl_max98360a_amp = {
 	.codecs = {"MX98360A"}
 };
 
-static const struct snd_soc_acpi_codecs mtl_rt1019p_amp = {
-	.num_codecs = 1,
-	.codecs = {"RTL1019"}
-};
-
 static const struct snd_soc_acpi_codecs mtl_rt5682_rt5682s_hp = {
 	.num_codecs = 2,
-	.codecs = {"10EC5682", "RTL5682"},
+	.codecs = {RT5682_ACPI_HID, RT5682S_ACPI_HID},
 };
 
 static const struct snd_soc_acpi_codecs mtl_essx_83x6 = {
@@ -38,11 +34,6 @@ static const struct snd_soc_acpi_codecs mtl_essx_83x6 = {
 static const struct snd_soc_acpi_codecs mtl_lt6911_hdmi = {
 	.num_codecs = 1,
 	.codecs = {"INTC10B0"}
-};
-
-static const struct snd_soc_acpi_codecs mtl_rt5650_amp = {
-	.num_codecs = 1,
-	.codecs = {"10EC5650"}
 };
 
 struct snd_soc_acpi_mach snd_soc_acpi_intel_mtl_machines[] = {
@@ -61,13 +52,6 @@ struct snd_soc_acpi_mach snd_soc_acpi_intel_mtl_machines[] = {
 		.sof_tplg_filename = "sof-mtl-max98360a-rt5682.tplg",
 	},
 	{
-		.comp_ids = &mtl_rt5682_rt5682s_hp,
-		.drv_name = "mtl_rt5682_def",
-		.machine_quirk = snd_soc_acpi_codec_list,
-		.quirk_data = &mtl_rt1019p_amp,
-		.sof_tplg_filename = "sof-mtl-rt1019-rt5682.tplg",
-	},
-	{
 		.comp_ids = &mtl_essx_83x6,
 		.drv_name = "mtl_es83x6_c1_h02",
 		.machine_quirk = snd_soc_acpi_codec_list,
@@ -82,12 +66,36 @@ struct snd_soc_acpi_mach snd_soc_acpi_intel_mtl_machines[] = {
 					SND_SOC_ACPI_TPLG_INTEL_SSP_MSB |
 					SND_SOC_ACPI_TPLG_INTEL_DMIC_NUMBER,
 	},
+	/* place boards for each headphone codec: sof driver will complete the
+	 * tplg name and machine driver will detect the amp type
+	 */
 	{
-		.id = "10EC5650",
+		.id = CS42L42_ACPI_HID,
+		.drv_name = "mtl_cs42l42_def",
+		.sof_tplg_filename = "sof-mtl", /* the tplg suffix is added at run time */
+		.tplg_quirk_mask = SND_SOC_ACPI_TPLG_INTEL_AMP_NAME |
+					SND_SOC_ACPI_TPLG_INTEL_CODEC_NAME,
+	},
+	{
+		.id = NAU8825_ACPI_HID,
+		.drv_name = "mtl_nau8825_def",
+		.sof_tplg_filename = "sof-mtl", /* the tplg suffix is added at run time */
+		.tplg_quirk_mask = SND_SOC_ACPI_TPLG_INTEL_AMP_NAME |
+					SND_SOC_ACPI_TPLG_INTEL_CODEC_NAME,
+	},
+	{
+		.id = RT5650_ACPI_HID,
 		.drv_name = "mtl_rt5682_def",
-		.machine_quirk = snd_soc_acpi_codec_list,
-		.quirk_data = &mtl_rt5650_amp,
-		.sof_tplg_filename = "sof-mtl-rt5650.tplg",
+		.sof_tplg_filename = "sof-mtl", /* the tplg suffix is added at run time */
+		.tplg_quirk_mask = SND_SOC_ACPI_TPLG_INTEL_AMP_NAME |
+					SND_SOC_ACPI_TPLG_INTEL_CODEC_NAME,
+	},
+	{
+		.comp_ids = &mtl_rt5682_rt5682s_hp,
+		.drv_name = "mtl_rt5682_def",
+		.sof_tplg_filename = "sof-mtl", /* the tplg suffix is added at run time */
+		.tplg_quirk_mask = SND_SOC_ACPI_TPLG_INTEL_AMP_NAME |
+					SND_SOC_ACPI_TPLG_INTEL_CODEC_NAME,
 	},
 	/* place amp-only boards in the end of table */
 	{
@@ -338,11 +346,38 @@ static const struct snd_soc_acpi_link_adr mtl_712_only[] = {
 	{}
 };
 
+static const struct snd_soc_acpi_endpoint cs42l43_endpoints[] = {
+	{ /* Jack Playback Endpoint */
+		.num = 0,
+		.aggregated = 0,
+		.group_position = 0,
+		.group_id = 0,
+	},
+	{ /* DMIC Capture Endpoint */
+		.num = 1,
+		.aggregated = 0,
+		.group_position = 0,
+		.group_id = 0,
+	},
+	{ /* Jack Capture Endpoint */
+		.num = 2,
+		.aggregated = 0,
+		.group_position = 0,
+		.group_id = 0,
+	},
+	{ /* Speaker Playback Endpoint */
+		.num = 3,
+		.aggregated = 0,
+		.group_position = 0,
+		.group_id = 0,
+	},
+};
+
 static const struct snd_soc_acpi_adr_device cs42l43_0_adr[] = {
 	{
 		.adr = 0x00003001FA424301ull,
-		.num_endpoints = 1,
-		.endpoints = &single_endpoint,
+		.num_endpoints = ARRAY_SIZE(cs42l43_endpoints),
+		.endpoints = cs42l43_endpoints,
 		.name_prefix = "cs42l43"
 	}
 };
@@ -352,13 +387,13 @@ static const struct snd_soc_acpi_adr_device cs35l56_1_adr[] = {
 		.adr = 0x00013701FA355601ull,
 		.num_endpoints = 1,
 		.endpoints = &spk_r_endpoint,
-		.name_prefix = "AMP8"
+		.name_prefix = "AMP3"
 	},
 	{
 		.adr = 0x00013601FA355601ull,
 		.num_endpoints = 1,
 		.endpoints = &spk_3_endpoint,
-		.name_prefix = "AMP7"
+		.name_prefix = "AMP4"
 	}
 };
 

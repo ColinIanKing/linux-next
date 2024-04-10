@@ -19,19 +19,23 @@
 #include <sound/hda_register.h>
 
 #include <linux/acpi.h>
+#include <linux/debugfs.h>
 #include <linux/module.h>
 #include <linux/soundwire/sdw.h>
 #include <linux/soundwire/sdw_intel.h>
 #include <sound/intel-dsp-config.h>
 #include <sound/intel-nhlt.h>
+#include <sound/soc-acpi-intel-ssp-common.h>
 #include <sound/sof.h>
 #include <sound/sof/xtensa.h>
 #include <sound/hda-mlink.h>
 #include "../sof-audio.h"
 #include "../sof-pci-dev.h"
 #include "../ops.h"
+#include "../ipc4-topology.h"
 #include "hda.h"
 #include "telemetry.h"
+#include "mtl.h"
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/sof_intel.h>
@@ -144,12 +148,37 @@ static int sdw_params_stream(struct device *dev,
 
 	data.dai_index = (params_data->link_id << 8) | d->id;
 	data.dai_data = params_data->alh_stream_id;
+	data.dai_node_id = data.dai_data;
 
 	return hda_dai_config(w, SOF_DAI_CONFIG_FLAGS_HW_PARAMS, &data);
 }
 
+static int sdw_params_free(struct device *dev, struct sdw_intel_stream_free_data *free_data)
+{
+	struct snd_soc_dai *d = free_data->dai;
+	struct snd_soc_dapm_widget *w = snd_soc_dai_get_widget(d, free_data->substream->stream);
+	struct snd_sof_dev *sdev = widget_to_sdev(w);
+
+	if (sdev->pdata->ipc_type == SOF_IPC_TYPE_4) {
+		struct snd_sof_widget *swidget = w->dobj.private;
+		struct snd_sof_dai *dai = swidget->private;
+		struct sof_ipc4_copier_data *copier_data;
+		struct sof_ipc4_copier *ipc4_copier;
+
+		ipc4_copier = dai->private;
+		ipc4_copier->dai_index = 0;
+		copier_data = &ipc4_copier->data;
+
+		/* clear the node ID */
+		copier_data->gtw_cfg.node_id &= ~SOF_IPC4_NODE_INDEX_MASK;
+	}
+
+	return 0;
+}
+
 struct sdw_intel_ops sdw_callback = {
 	.params_stream = sdw_params_stream,
+	.free_stream = sdw_params_free,
 };
 
 static int sdw_ace2x_params_stream(struct device *dev,
@@ -158,7 +187,8 @@ static int sdw_ace2x_params_stream(struct device *dev,
 	return sdw_hda_dai_hw_params(params_data->substream,
 				     params_data->hw_params,
 				     params_data->dai,
-				     params_data->link_id);
+				     params_data->link_id,
+				     params_data->alh_stream_id);
 }
 
 static int sdw_ace2x_free_stream(struct device *dev,
@@ -568,7 +598,7 @@ static const struct hda_dsp_msg_code hda_dsp_rom_fw_error_texts[] = {
 };
 
 #define FSR_ROM_STATE_ENTRY(state)	{FSR_STATE_ROM_##state, #state}
-static const struct hda_dsp_msg_code fsr_rom_state_names[] = {
+static const struct hda_dsp_msg_code cavs_fsr_rom_state_names[] = {
 	FSR_ROM_STATE_ENTRY(INIT),
 	FSR_ROM_STATE_ENTRY(INIT_DONE),
 	FSR_ROM_STATE_ENTRY(CSE_MANIFEST_LOADED),
@@ -589,6 +619,58 @@ static const struct hda_dsp_msg_code fsr_rom_state_names[] = {
 	FSR_ROM_STATE_ENTRY(CSE_IPC_OPERATIONAL_ENTRY),
 	FSR_ROM_STATE_ENTRY(CSE_IPC_OPERATIONAL),
 	FSR_ROM_STATE_ENTRY(CSE_IPC_DOWN),
+};
+
+static const struct hda_dsp_msg_code ace_fsr_rom_state_names[] = {
+	FSR_ROM_STATE_ENTRY(INIT),
+	FSR_ROM_STATE_ENTRY(INIT_DONE),
+	FSR_ROM_STATE_ENTRY(CSE_MANIFEST_LOADED),
+	FSR_ROM_STATE_ENTRY(FW_MANIFEST_LOADED),
+	FSR_ROM_STATE_ENTRY(FW_FW_LOADED),
+	FSR_ROM_STATE_ENTRY(FW_ENTERED),
+	FSR_ROM_STATE_ENTRY(VERIFY_FEATURE_MASK),
+	FSR_ROM_STATE_ENTRY(GET_LOAD_OFFSET),
+	FSR_ROM_STATE_ENTRY(RESET_VECTOR_DONE),
+	FSR_ROM_STATE_ENTRY(PURGE_BOOT),
+	FSR_ROM_STATE_ENTRY(RESTORE_BOOT),
+	FSR_ROM_STATE_ENTRY(FW_ENTRY_POINT),
+	FSR_ROM_STATE_ENTRY(VALIDATE_PUB_KEY),
+	FSR_ROM_STATE_ENTRY(POWER_DOWN_HPSRAM),
+	FSR_ROM_STATE_ENTRY(POWER_DOWN_ULPSRAM),
+	FSR_ROM_STATE_ENTRY(POWER_UP_ULPSRAM_STACK),
+	FSR_ROM_STATE_ENTRY(POWER_UP_HPSRAM_DMA),
+	FSR_ROM_STATE_ENTRY(BEFORE_EP_POINTER_READ),
+	FSR_ROM_STATE_ENTRY(VALIDATE_MANIFEST),
+	FSR_ROM_STATE_ENTRY(VALIDATE_FW_MODULE),
+	FSR_ROM_STATE_ENTRY(PROTECT_IMR_REGION),
+	FSR_ROM_STATE_ENTRY(PUSH_MODEL_ROUTINE),
+	FSR_ROM_STATE_ENTRY(PULL_MODEL_ROUTINE),
+	FSR_ROM_STATE_ENTRY(VALIDATE_PKG_DIR),
+	FSR_ROM_STATE_ENTRY(VALIDATE_CPD),
+	FSR_ROM_STATE_ENTRY(VALIDATE_CSS_MAN_HEADER),
+	FSR_ROM_STATE_ENTRY(VALIDATE_BLOB_SVN),
+	FSR_ROM_STATE_ENTRY(VERIFY_IFWI_PARTITION),
+	FSR_ROM_STATE_ENTRY(REMOVE_ACCESS_CONTROL),
+	FSR_ROM_STATE_ENTRY(AUTH_BYPASS),
+	FSR_ROM_STATE_ENTRY(AUTH_ENABLED),
+	FSR_ROM_STATE_ENTRY(INIT_DMA),
+	FSR_ROM_STATE_ENTRY(PURGE_FW_ENTRY),
+	FSR_ROM_STATE_ENTRY(PURGE_FW_END),
+	FSR_ROM_STATE_ENTRY(CLEAN_UP_BSS_DONE),
+	FSR_ROM_STATE_ENTRY(IMR_RESTORE_ENTRY),
+	FSR_ROM_STATE_ENTRY(IMR_RESTORE_END),
+	FSR_ROM_STATE_ENTRY(FW_MANIFEST_IN_DMA_BUFF),
+	FSR_ROM_STATE_ENTRY(LOAD_CSE_MAN_TO_IMR),
+	FSR_ROM_STATE_ENTRY(LOAD_FW_MAN_TO_IMR),
+	FSR_ROM_STATE_ENTRY(LOAD_FW_CODE_TO_IMR),
+	FSR_ROM_STATE_ENTRY(FW_LOADING_DONE),
+	FSR_ROM_STATE_ENTRY(FW_CODE_LOADED),
+	FSR_ROM_STATE_ENTRY(VERIFY_IMAGE_TYPE),
+	FSR_ROM_STATE_ENTRY(AUTH_API_INIT),
+	FSR_ROM_STATE_ENTRY(AUTH_API_PROC),
+	FSR_ROM_STATE_ENTRY(AUTH_API_FIRST_BUSY),
+	FSR_ROM_STATE_ENTRY(AUTH_API_FIRST_RESULT),
+	FSR_ROM_STATE_ENTRY(AUTH_API_CLEANUP),
 };
 
 #define FSR_BRINGUP_STATE_ENTRY(state)	{FSR_STATE_BRINGUP_##state, #state}
@@ -635,7 +717,7 @@ hda_dsp_get_state_text(u32 code, const struct hda_dsp_msg_code *msg_code,
 	return NULL;
 }
 
-static void hda_dsp_get_state(struct snd_sof_dev *sdev, const char *level)
+void hda_dsp_get_state(struct snd_sof_dev *sdev, const char *level)
 {
 	const struct sof_intel_dsp_desc *chip = get_chip_info(sdev->pdata);
 	const char *state_text, *error_text, *module_text;
@@ -651,12 +733,19 @@ static void hda_dsp_get_state(struct snd_sof_dev *sdev, const char *level)
 	else
 		module_text = fsr_module_names[module];
 
-	if (module == FSR_MOD_BRNGUP)
+	if (module == FSR_MOD_BRNGUP) {
 		state_text = hda_dsp_get_state_text(state, fsr_bringup_state_names,
 						    ARRAY_SIZE(fsr_bringup_state_names));
-	else
-		state_text = hda_dsp_get_state_text(state, fsr_rom_state_names,
-						    ARRAY_SIZE(fsr_rom_state_names));
+	} else {
+		if (chip->hw_ip_version < SOF_INTEL_ACE_1_0)
+			state_text = hda_dsp_get_state_text(state,
+							cavs_fsr_rom_state_names,
+							ARRAY_SIZE(cavs_fsr_rom_state_names));
+		else
+			state_text = hda_dsp_get_state_text(state,
+							ace_fsr_rom_state_names,
+							ARRAY_SIZE(ace_fsr_rom_state_names));
+	}
 
 	/* not for us, must be generic sof message */
 	if (!state_text) {
@@ -1676,13 +1765,36 @@ void hda_set_mach_params(struct snd_soc_acpi_mach *mach,
 	mach_params->dai_drivers = desc->ops->drv;
 }
 
+static int check_tplg_quirk_mask(struct snd_soc_acpi_mach *mach)
+{
+	u32 dmic_ssp_quirk;
+	u32 codec_amp_name_quirk;
+
+	/*
+	 * In current implementation dmic and ssp quirks are designed for es8336
+	 * machine driver and could not be mixed with codec name and amp name
+	 * quirks.
+	 */
+	dmic_ssp_quirk = mach->tplg_quirk_mask &
+			 (SND_SOC_ACPI_TPLG_INTEL_DMIC_NUMBER | SND_SOC_ACPI_TPLG_INTEL_SSP_NUMBER);
+	codec_amp_name_quirk = mach->tplg_quirk_mask &
+			 (SND_SOC_ACPI_TPLG_INTEL_AMP_NAME | SND_SOC_ACPI_TPLG_INTEL_CODEC_NAME);
+
+	if (dmic_ssp_quirk && codec_amp_name_quirk)
+		return -EINVAL;
+
+	return 0;
+}
+
 struct snd_soc_acpi_mach *hda_machine_select(struct snd_sof_dev *sdev)
 {
 	u32 interface_mask = hda_get_interface_mask(sdev);
 	struct snd_sof_pdata *sof_pdata = sdev->pdata;
 	const struct sof_dev_desc *desc = sof_pdata->desc;
 	struct snd_soc_acpi_mach *mach = NULL;
+	enum snd_soc_acpi_intel_codec codec_type;
 	const char *tplg_filename;
+	const char *tplg_suffix;
 
 	/* Try I2S or DMIC if it is supported */
 	if (interface_mask & (BIT(SOF_DAI_INTEL_SSP) | BIT(SOF_DAI_INTEL_DMIC)))
@@ -1699,6 +1811,17 @@ struct snd_soc_acpi_mach *hda_machine_select(struct snd_sof_dev *sdev)
 		if (!sof_pdata->tplg_filename) {
 			sof_pdata->tplg_filename = mach->sof_tplg_filename;
 			tplg_fixup = true;
+		}
+
+		/*
+		 * Checking quirk mask integrity; some quirk flags could not be
+		 * set concurrently.
+		 */
+		if (tplg_fixup &&
+		    check_tplg_quirk_mask(mach)) {
+			dev_err(sdev->dev, "Invalid tplg quirk mask 0x%x\n",
+				mach->tplg_quirk_mask);
+			return NULL;
 		}
 
 		/* report to machine driver if any DMICs are found */
@@ -1775,6 +1898,52 @@ struct snd_soc_acpi_mach *hda_machine_select(struct snd_sof_dev *sdev)
 			}
 		}
 
+		codec_type = snd_soc_acpi_intel_detect_amp_type(sdev->dev);
+
+		if (tplg_fixup &&
+		    mach->tplg_quirk_mask & SND_SOC_ACPI_TPLG_INTEL_AMP_NAME &&
+		    codec_type != CODEC_NONE) {
+			tplg_suffix = snd_soc_acpi_intel_get_amp_tplg_suffix(codec_type);
+			if (!tplg_suffix) {
+				dev_err(sdev->dev, "no tplg suffix found, amp %d\n",
+					codec_type);
+				return NULL;
+			}
+
+			tplg_filename = devm_kasprintf(sdev->dev, GFP_KERNEL,
+						       "%s-%s",
+						       sof_pdata->tplg_filename,
+						       tplg_suffix);
+			if (!tplg_filename)
+				return NULL;
+
+			sof_pdata->tplg_filename = tplg_filename;
+			add_extension = true;
+		}
+
+		codec_type = snd_soc_acpi_intel_detect_codec_type(sdev->dev);
+
+		if (tplg_fixup &&
+		    mach->tplg_quirk_mask & SND_SOC_ACPI_TPLG_INTEL_CODEC_NAME &&
+		    codec_type != CODEC_NONE) {
+			tplg_suffix = snd_soc_acpi_intel_get_codec_tplg_suffix(codec_type);
+			if (!tplg_suffix) {
+				dev_err(sdev->dev, "no tplg suffix found, codec %d\n",
+					codec_type);
+				return NULL;
+			}
+
+			tplg_filename = devm_kasprintf(sdev->dev, GFP_KERNEL,
+						       "%s-%s",
+						       sof_pdata->tplg_filename,
+						       tplg_suffix);
+			if (!tplg_filename)
+				return NULL;
+
+			sof_pdata->tplg_filename = tplg_filename;
+			add_extension = true;
+		}
+
 		if (tplg_fixup && add_extension) {
 			tplg_filename = devm_kasprintf(sdev->dev, GFP_KERNEL,
 						       "%s%s",
@@ -1842,3 +2011,4 @@ MODULE_IMPORT_NS(SND_INTEL_SOUNDWIRE_ACPI);
 MODULE_IMPORT_NS(SOUNDWIRE_INTEL_INIT);
 MODULE_IMPORT_NS(SOUNDWIRE_INTEL);
 MODULE_IMPORT_NS(SND_SOC_SOF_HDA_MLINK);
+MODULE_IMPORT_NS(SND_SOC_ACPI_INTEL_MATCH);
