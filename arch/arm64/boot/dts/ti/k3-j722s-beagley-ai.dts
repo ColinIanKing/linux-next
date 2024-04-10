@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-only OR MIT
 /*
- * Device Tree file for the J722S EVM
- * Copyright (C) 2024 Texas Instruments Incorporated - https://www.ti.com/
+ * https://beagley-ai.org/
  *
- * Schematics: https://www.ti.com/lit/zip/sprr495
+ * Copyright (C) 2024 Texas Instruments Incorporated - https://www.ti.com/
+ * Copyright (C) 2024 Robert Nelson, BeagleBoard.org Foundation
  */
 
 /dts-v1/;
@@ -12,14 +12,13 @@
 #include "k3-j722s.dtsi"
 
 / {
-	compatible = "ti,j722s-evm", "ti,j722s";
-	model = "Texas Instruments J722S EVM";
+	compatible = "beagle,j722s-beagley-ai", "ti,j722s";
+	model = "BeagleBoard.org BeagleY-AI";
 
 	aliases {
 		serial0 = &wkup_uart0;
 		serial2 = &main_uart0;
-		mmc0 = &sdhci0;
-		mmc1 = &sdhci1;
+		mmc0 = &sdhci1;
 	};
 
 	chosen {
@@ -27,9 +26,9 @@
 	};
 
 	memory@80000000 {
-		/* 8G RAM */
+		/* 4G RAM */
 		reg = <0x00000000 0x80000000 0x00000000 0x80000000>,
-		      <0x00000008 0x80000000 0x00000001 0x80000000>;
+		      <0x00000008 0x80000000 0x00000000 0x80000000>;
 		device_type = "memory";
 		bootph-pre-ram;
 	};
@@ -57,10 +56,9 @@
 
 	};
 
-	vmain_pd: regulator-0 {
-		/* TPS65988 PD CONTROLLER OUTPUT */
+	vsys_5v0: regulator-1 {
 		compatible = "regulator-fixed";
-		regulator-name = "vmain_pd";
+		regulator-name = "vsys_5v0";
 		regulator-min-microvolt = <5000000>;
 		regulator-max-microvolt = <5000000>;
 		regulator-always-on;
@@ -68,26 +66,26 @@
 		bootph-all;
 	};
 
-	vsys_5v0: regulator-vsys5v0 {
-		/* Output of LM5140 */
+	vdd_3v3: regulator-2 {
 		compatible = "regulator-fixed";
-		regulator-name = "vsys_5v0";
-		regulator-min-microvolt = <5000000>;
-		regulator-max-microvolt = <5000000>;
-		vin-supply = <&vmain_pd>;
+		regulator-name = "vdd_3v3";
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		vin-supply = <&vsys_5v0>;
 		regulator-always-on;
 		regulator-boot-on;
 	};
 
 	vdd_mmc1: regulator-mmc1 {
-		/* TPS22918DBVR */
 		compatible = "regulator-fixed";
 		regulator-name = "vdd_mmc1";
+		pinctrl-names = "default";
+		pinctrl-0 = <&vdd_3v3_sd_pins_default>;
 		regulator-min-microvolt = <3300000>;
 		regulator-max-microvolt = <3300000>;
 		regulator-boot-on;
 		enable-active-high;
-		gpio = <&exp1 15 GPIO_ACTIVE_HIGH>;
+		gpio = <&main_gpio1 50 GPIO_ACTIVE_HIGH>;
 		bootph-all;
 	};
 
@@ -100,7 +98,7 @@
 		regulator-max-microvolt = <3300000>;
 		regulator-boot-on;
 		vin-supply = <&vsys_5v0>;
-		gpios = <&main_gpio0 70 GPIO_ACTIVE_HIGH>;
+		gpios = <&main_gpio1 49 GPIO_ACTIVE_HIGH>;
 		states = <1800000 0x0>,
 			 <3300000 0x1>;
 	};
@@ -144,7 +142,7 @@
 
 	vdd_sd_dv_pins_default: vdd-sd-dv-default-pins {
 		pinctrl-single,pins = <
-			J722S_IOPAD(0x0120, PIN_INPUT, 7) /* (F27) MMC2_CMD.GPIO0_70 */
+			J722S_IOPAD(0x0244, PIN_OUTPUT, 7) /* (A24) MMC1_SDWP.GPIO1_49 */
 		>;
 		bootph-all;
 	};
@@ -169,23 +167,6 @@
 		>;
 	};
 
-	ospi0_pins_default: ospi0-default-pins {
-		pinctrl-single,pins = <
-			J722S_IOPAD(0x0000, PIN_OUTPUT, 0) /* (L24) OSPI0_CLK */
-			J722S_IOPAD(0x002c, PIN_OUTPUT, 0) /* (K26) OSPI0_CSn0 */
-			J722S_IOPAD(0x000c, PIN_INPUT, 0) /* (K27) OSPI0_D0 */
-			J722S_IOPAD(0x0010, PIN_INPUT, 0) /* (L27) OSPI0_D1 */
-			J722S_IOPAD(0x0014, PIN_INPUT, 0) /* (L26) OSPI0_D2 */
-			J722S_IOPAD(0x0018, PIN_INPUT, 0) /* (L25) OSPI0_D3 */
-			J722S_IOPAD(0x001c, PIN_INPUT, 0) /* (L21) OSPI0_D4 */
-			J722S_IOPAD(0x0020, PIN_INPUT, 0) /* (M26) OSPI0_D5 */
-			J722S_IOPAD(0x0024, PIN_INPUT, 0) /* (N27) OSPI0_D6 */
-			J722S_IOPAD(0x0028, PIN_INPUT, 0) /* (M27) OSPI0_D7 */
-			J722S_IOPAD(0x0008, PIN_INPUT, 0) /* (L22) OSPI0_DQS */
-		>;
-		bootph-all;
-	};
-
 	rgmii1_pins_default: rgmii1-default-pins {
 		pinctrl-single,pins = <
 			J722S_IOPAD(0x014c, PIN_INPUT, 0) /* (AC25) RGMII1_RD0 */
@@ -202,18 +183,33 @@
 			J722S_IOPAD(0x012c, PIN_OUTPUT, 0) /* (AF25) RGMII1_TX_CTL */
 		>;
 	};
+
+	pmic_irq_pins_default: pmic-irq-default-pins {
+		pinctrl-single,pins = <
+			J722S_IOPAD(0x01f4, PIN_INPUT_PULLUP, 0) /* (B23) EXTINTn */
+		>;
+	};
+
+	vdd_3v3_sd_pins_default: vdd-3v3-sd-pins-default {
+		pinctrl-single,pins = <
+			J722S_IOPAD(0x0254, PIN_OUTPUT, 7) /* (E25) USB0_DRVVBUS.GPIO1_50 */
+		>;
+	};
 };
 
 &cpsw3g {
-	status = "okay";
 	pinctrl-names = "default";
-	pinctrl-0 = <&rgmii1_pins_default>;
+	pinctrl-0 = <&rgmii1_pins_default>, <&gbe_pmx_obsclk>;
+
+	assigned-clocks = <&k3_clks 227 0>;
+	assigned-clock-parents = <&k3_clks 227 6>;
+	status = "okay";
 };
 
 &cpsw3g_mdio {
-	status = "okay";
 	pinctrl-names = "default";
 	pinctrl-0 = <&mdio_pins_default>;
+	status = "okay";
 
 	cpsw3g_phy0: ethernet-phy@0 {
 		reg = <0>;
@@ -236,8 +232,8 @@
 &main_uart0 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&main_uart0_pins_default>;
-	status = "okay";
 	bootph-all;
+	status = "okay";
 };
 
 &mcu_pmx0 {
@@ -259,118 +255,105 @@
 		>;
 		bootph-all;
 	};
+
+	gbe_pmx_obsclk: gbe-pmx-obsclk-default-pins {
+		pinctrl-single,pins = <
+			J722S_MCU_IOPAD(0x0004, PIN_OUTPUT, 1) /* (A10) MCU_SPI0_CS1.MCU_OBSCLK0 */
+		>;
+	};
 };
 
 &wkup_uart0 {
 	/* WKUP UART0 is used by Device Manager firmware */
 	pinctrl-names = "default";
 	pinctrl-0 = <&wkup_uart0_pins_default>;
-	status = "reserved";
 	bootph-all;
+	status = "reserved";
 };
 
 &wkup_i2c0 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&wkup_i2c0_pins_default>;
 	clock-frequency = <400000>;
-	status = "okay";
 	bootph-all;
-};
-
-&main_i2c0 {
-	pinctrl-names = "default";
-	pinctrl-0 = <&main_i2c0_pins_default>;
-	clock-frequency = <400000>;
-	status = "okay";
-	bootph-all;
-
-	exp1: gpio@23 {
-		compatible = "ti,tca6424";
-		reg = <0x23>;
-		gpio-controller;
-		#gpio-cells = <2>;
-		gpio-line-names = "TRC_MUX_SEL", "OSPI/ONAND_MUX_SEL",
-				  "MCASP1_FET_SEL", "CTRL_PM_I2C_OE#",
-				  "CSI_VIO_SEL", "USB2.0_MUX_SEL",
-				  "CSI01_MUX_SEL_2", "CSI23_MUX_SEL_2",
-				  "LMK1_OE1", "LMK1_OE0",
-				  "LMK2_OE0", "LMK2_OE1",
-				  "GPIO_RGMII1_RST#", "GPIO_AUD_RSTn",
-				  "GPIO_eMMC_RSTn", "GPIO_uSD_PWR_EN",
-				  "USER_LED2", "MCAN0_STB",
-				  "PCIe0_1L_RC_RSTz", "PCIe0_1L_PRSNT#",
-				  "ENET1_EXP_SPARE2", "ENET1_EXP_PWRDN",
-				  "PD_I2ENET1_I2CMUX_SELC_IRQ", "ENET1_EXP_RESETZ";
-	};
-};
-
-&ospi0 {
-	pinctrl-names = "default";
-	pinctrl-0 = <&ospi0_pins_default>;
 	status = "okay";
 
-	flash@0 {
-		compatible = "jedec,spi-nor";
-		reg = <0x0>;
-		spi-tx-bus-width = <8>;
-		spi-rx-bus-width = <8>;
-		spi-max-frequency = <25000000>;
-		cdns,tshsl-ns = <60>;
-		cdns,tsd2d-ns = <60>;
-		cdns,tchsh-ns = <60>;
-		cdns,tslch-ns = <60>;
-		cdns,read-delay = <4>;
+	tps65219: pmic@30 {
 		bootph-all;
+		compatible = "ti,tps65219";
+		reg = <0x30>;
+		buck1-supply = <&vsys_5v0>;
+		buck2-supply = <&vsys_5v0>;
+		buck3-supply = <&vsys_5v0>;
+		ldo1-supply = <&vdd_3v3>;
+		ldo3-supply = <&vdd_3v3>;
+		ldo4-supply = <&vdd_3v3>;
 
-		partitions {
-			compatible = "fixed-partitions";
-			#address-cells = <1>;
-			#size-cells = <1>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&pmic_irq_pins_default>;
+		interrupt-parent = <&gic500>;
+		interrupts = <GIC_SPI 224 IRQ_TYPE_LEVEL_HIGH>;
+		interrupt-controller;
+		#interrupt-cells = <1>;
 
-			partition@0 {
-				label = "ospi.tiboot3";
-				reg = <0x00 0x80000>;
+		system-power-controller;
+		ti,power-button;
+
+		regulators {
+			buck1_reg: buck1 {
+				regulator-name = "VDD_3V3";
+				regulator-min-microvolt = <3300000>;
+				regulator-max-microvolt = <3300000>;
+				regulator-boot-on;
+				regulator-always-on;
 			};
 
-			partition@80000 {
-				label = "ospi.tispl";
-				reg = <0x80000 0x200000>;
+			buck2_reg: buck2 {
+				regulator-name = "VDD_1V8";
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+				regulator-boot-on;
+				regulator-always-on;
 			};
 
-			partition@280000 {
-				label = "ospi.u-boot";
-				reg = <0x280000 0x400000>;
+			buck3_reg: buck3 {
+				regulator-name = "VDD_1V1";
+				regulator-min-microvolt = <1100000>;
+				regulator-max-microvolt = <1100000>;
+				regulator-boot-on;
+				regulator-always-on;
 			};
 
-			partition@680000 {
-				label = "ospi.env";
-				reg = <0x680000 0x40000>;
+			ldo1_reg: ldo1 {
+				regulator-name = "VDDSHV5_SDIO";
+				regulator-min-microvolt = <3300000>;
+				regulator-max-microvolt = <3300000>;
+				regulator-allow-bypass;
+				regulator-boot-on;
+				regulator-always-on;
 			};
 
-			partition@6c0000 {
-				label = "ospi.env.backup";
-				reg = <0x6c0000 0x40000>;
+			ldo2_reg: ldo2 {
+				//Regulator is left as is unused.
 			};
 
-			partition@800000 {
-				label = "ospi.rootfs";
-				reg = <0x800000 0x37c0000>;
+			ldo3_reg: ldo3 {
+				regulator-name = "VDDA_PHY_1V8";
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+				regulator-boot-on;
+				regulator-always-on;
 			};
 
-			partition@3fc0000 {
-				label = "ospi.phypattern";
-				reg = <0x3fc0000 0x40000>;
+			ldo4_reg: ldo4 {
+				regulator-name = "VDDA_PLL_1V8";
+				regulator-min-microvolt = <1800000>;
+				regulator-max-microvolt = <1800000>;
+				regulator-boot-on;
+				regulator-always-on;
 			};
 		};
 	};
-
-};
-
-&sdhci0 {
-	disable-wp;
-	bootph-all;
-	ti,driver-strength-ohm = <50>;
-	status = "okay";
 };
 
 &sdhci1 {
@@ -379,9 +362,9 @@
 	vqmmc-supply = <&vdd_sd_dv>;
 	pinctrl-names = "default";
 	pinctrl-0 = <&main_mmc1_pins_default>;
-	ti,driver-strength-ohm = <50>;
 	disable-wp;
 	no-1-8-v;
-	status = "okay";
 	bootph-all;
+	status = "okay";
+	ti,driver-strength-ohm = <50>;
 };
