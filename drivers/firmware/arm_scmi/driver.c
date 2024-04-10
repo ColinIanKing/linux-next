@@ -697,6 +697,45 @@ scmi_xfer_lookup_unlocked(struct scmi_xfers_info *minfo, u16 xfer_id)
 }
 
 /**
+ * scmi_bad_message_trace  - A helper to trace weird messages
+ *
+ * @cinfo: A reference to the channel descriptor on which the message was
+ *	   received
+ * @msg_hdr: Message header to track
+ * @err: A specific error code used as a status value in traces.
+ *
+ * This helper can be used to trace any kind of weird, incomplete, unexpected,
+ * timed-out message that arrives and as such, can be traced only referring to
+ * the header content, since the payload is missing/unreliable.
+ */
+void scmi_bad_message_trace(struct scmi_chan_info *cinfo, u32 msg_hdr,
+			    enum scmi_bad_msg err)
+{
+	char *tag;
+	struct scmi_info *info = handle_to_scmi_info(cinfo->handle);
+
+	switch (MSG_XTRACT_TYPE(msg_hdr)) {
+	case MSG_TYPE_COMMAND:
+		tag = "!RESP";
+		break;
+	case MSG_TYPE_DELAYED_RESP:
+		tag = "!DLYD";
+		break;
+	case MSG_TYPE_NOTIFICATION:
+		tag = "!NOTI";
+		break;
+	default:
+		tag = "!UNKN";
+		break;
+	}
+
+	trace_scmi_msg_dump(info->id, cinfo->id,
+			    MSG_XTRACT_PROT_ID(msg_hdr),
+			    MSG_XTRACT_ID(msg_hdr), tag,
+			    MSG_XTRACT_TOKEN(msg_hdr), err, NULL, 0);
+}
+
+/**
  * scmi_msg_response_validate  - Validate message type against state of related
  * xfer
  *
@@ -822,6 +861,9 @@ scmi_xfer_command_acquire(struct scmi_chan_info *cinfo, u32 msg_hdr)
 			"Message for %d type %d is not expected!\n",
 			xfer_id, msg_type);
 		spin_unlock_irqrestore(&minfo->xfer_lock, flags);
+
+		scmi_bad_message_trace(cinfo, msg_hdr, MSG_UNEXPECTED);
+
 		return xfer;
 	}
 	refcount_inc(&xfer->users);
@@ -846,6 +888,9 @@ scmi_xfer_command_acquire(struct scmi_chan_info *cinfo, u32 msg_hdr)
 		dev_err(cinfo->dev,
 			"Invalid message type:%d for %d - HDR:0x%X  state:%d\n",
 			msg_type, xfer_id, msg_hdr, xfer->state);
+
+		scmi_bad_message_trace(cinfo, msg_hdr, MSG_INVALID);
+
 		/* On error the refcount incremented above has to be dropped */
 		__scmi_xfer_put(minfo, xfer);
 		xfer = ERR_PTR(-EINVAL);
@@ -882,6 +927,9 @@ static void scmi_handle_notification(struct scmi_chan_info *cinfo,
 	if (IS_ERR(xfer)) {
 		dev_err(dev, "failed to get free message slot (%ld)\n",
 			PTR_ERR(xfer));
+
+		scmi_bad_message_trace(cinfo, msg_hdr, MSG_NOMEM);
+
 		scmi_clear_channel(info, cinfo);
 		return;
 	}
@@ -1001,6 +1049,7 @@ void scmi_rx_callback(struct scmi_chan_info *cinfo, u32 msg_hdr, void *priv)
 		break;
 	default:
 		WARN_ONCE(1, "received unknown msg_type:%d\n", msg_type);
+		scmi_bad_message_trace(cinfo, msg_hdr, MSG_UNKNOWN);
 		break;
 	}
 }
@@ -2491,6 +2540,10 @@ scmi_txrx_setup(struct scmi_info *info, struct device_node *of_node,
 			ret = 0;
 	}
 
+	if (ret)
+		dev_err(info->dev,
+			"failed to setup channel for protocol:0x%X\n", prot_id);
+
 	return ret;
 }
 
@@ -2760,6 +2813,7 @@ static int scmi_debugfs_raw_mode_setup(struct scmi_info *info)
 static int scmi_probe(struct platform_device *pdev)
 {
 	int ret;
+	char *err_str = "probe failure\n";
 	struct scmi_handle *handle;
 	const struct scmi_desc *desc;
 	struct scmi_info *info;
@@ -2810,27 +2864,37 @@ static int scmi_probe(struct platform_device *pdev)
 
 	if (desc->ops->link_supplier) {
 		ret = desc->ops->link_supplier(dev);
-		if (ret)
+		if (ret) {
+			err_str = "transport not ready\n";
 			goto clear_ida;
+		}
 	}
 
 	/* Setup all channels described in the DT at first */
 	ret = scmi_channels_setup(info);
-	if (ret)
+	if (ret) {
+		err_str = "failed to setup channels\n";
 		goto clear_ida;
+	}
 
 	ret = bus_register_notifier(&scmi_bus_type, &info->bus_nb);
-	if (ret)
+	if (ret) {
+		err_str = "failed to register bus notifier\n";
 		goto clear_txrx_setup;
+	}
 
 	ret = blocking_notifier_chain_register(&scmi_requested_devices_nh,
 					       &info->dev_req_nb);
-	if (ret)
+	if (ret) {
+		err_str = "failed to register device notifier\n";
 		goto clear_bus_notifier;
+	}
 
 	ret = scmi_xfer_info_init(info);
-	if (ret)
+	if (ret) {
+		err_str = "failed to init xfers pool\n";
 		goto clear_dev_req_notifier;
+	}
 
 	if (scmi_top_dentry) {
 		info->dbg = scmi_debugfs_common_setup(info);
@@ -2867,9 +2931,11 @@ static int scmi_probe(struct platform_device *pdev)
 	 */
 	ret = scmi_protocol_acquire(handle, SCMI_PROTOCOL_BASE);
 	if (ret) {
-		dev_err(dev, "unable to communicate with SCMI\n");
-		if (coex)
+		err_str = "unable to communicate with SCMI\n";
+		if (coex) {
+			dev_err(dev, "%s", err_str);
 			return 0;
+		}
 		goto notification_exit;
 	}
 
@@ -2923,7 +2989,8 @@ clear_txrx_setup:
 	scmi_cleanup_txrx_channels(info);
 clear_ida:
 	ida_free(&scmi_id, info->id);
-	return ret;
+
+	return dev_err_probe(dev, ret, "%s", err_str);
 }
 
 static void scmi_remove(struct platform_device *pdev)
