@@ -2050,7 +2050,7 @@ static int hpp_list__parse(struct perf_hpp_list *hpp_list,
 	perf_hpp__setup_output_field(hpp_list);
 
 	/*
-	 * We dont need other sorting keys other than those
+	 * We don't need other sorting keys other than those
 	 * we already specified. It also really slows down
 	 * the processing a lot with big number of output
 	 * fields, so switching this off for c2c.
@@ -2319,11 +2319,7 @@ static int setup_nodes(struct perf_session *session)
 
 		nodes[node] = set;
 
-		/* empty node, skip */
-		if (perf_cpu_map__has_any_cpu_or_is_empty(map))
-			continue;
-
-		perf_cpu_map__for_each_cpu(cpu, idx, map) {
+		perf_cpu_map__for_each_cpu_skip_any(cpu, idx, map) {
 			__set_bit(cpu.cpu, set);
 
 			if (WARN_ONCE(cpu2node[cpu.cpu] != -1, "node/cpu topology bug"))

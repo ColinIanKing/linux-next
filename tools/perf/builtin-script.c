@@ -136,6 +136,7 @@ enum perf_output_field {
 	PERF_OUTPUT_RETIRE_LAT      = 1ULL << 40,
 	PERF_OUTPUT_DSOFF           = 1ULL << 41,
 	PERF_OUTPUT_DISASM          = 1ULL << 42,
+	PERF_OUTPUT_BRSTACKDISASM   = 1ULL << 43,
 };
 
 struct perf_script {
@@ -210,6 +211,7 @@ struct output_option {
 	{.str = "vcpu", .field = PERF_OUTPUT_VCPU},
 	{.str = "cgroup", .field = PERF_OUTPUT_CGROUP},
 	{.str = "retire_lat", .field = PERF_OUTPUT_RETIRE_LAT},
+	{.str = "brstackdisasm", .field = PERF_OUTPUT_BRSTACKDISASM},
 };
 
 enum {
@@ -510,7 +512,8 @@ static int evsel__check_attr(struct evsel *evsel, struct perf_session *session)
 		       "selected. Hence, no address to lookup the source line number.\n");
 		return -EINVAL;
 	}
-	if ((PRINT_FIELD(BRSTACKINSN) || PRINT_FIELD(BRSTACKINSNLEN)) && !allow_user_set &&
+	if ((PRINT_FIELD(BRSTACKINSN) || PRINT_FIELD(BRSTACKINSNLEN) || PRINT_FIELD(BRSTACKDISASM))
+	    && !allow_user_set &&
 	    !(evlist__combined_branch_type(session->evlist) & PERF_SAMPLE_BRANCH_ANY)) {
 		pr_err("Display of branch stack assembler requested, but non all-branch filter set\n"
 		       "Hint: run 'perf record -b ...'\n");
@@ -1162,6 +1165,31 @@ out:
 	return ret;
 }
 
+static int any_dump_insn(struct perf_event_attr *attr __maybe_unused,
+			 struct perf_insn *x, uint64_t ip,
+			 u8 *inbuf, int inlen, int *lenp,
+			 FILE *fp)
+{
+#ifdef HAVE_LIBCAPSTONE_SUPPORT
+	if (PRINT_FIELD(BRSTACKDISASM)) {
+		int printed = fprintf_insn_asm(x->machine, x->thread, x->cpumode, x->is64bit,
+					       (uint8_t *)inbuf, inlen, ip, lenp,
+					       PRINT_INSN_IMM_HEX, fp);
+
+		if (printed > 0)
+			return printed;
+	}
+#endif
+	return fprintf(fp, "%s", dump_insn(x, ip, inbuf, inlen, lenp));
+}
+
+static int add_padding(FILE *fp, int printed, int padding)
+{
+	if (printed >= 0 && printed < padding)
+		printed += fprintf(fp, "%*s", padding - printed, "");
+	return printed;
+}
+
 static int ip__fprintf_jump(uint64_t ip, struct branch_entry *en,
 			    struct perf_insn *x, u8 *inbuf, int len,
 			    int insn, FILE *fp, int *total_cycles,
@@ -1169,8 +1197,10 @@ static int ip__fprintf_jump(uint64_t ip, struct branch_entry *en,
 			    struct thread *thread)
 {
 	int ilen = 0;
-	int printed = fprintf(fp, "\t%016" PRIx64 "\t%-30s\t", ip,
-			      dump_insn(x, ip, inbuf, len, &ilen));
+	int printed = fprintf(fp, "\t%016" PRIx64 "\t", ip);
+
+	printed += add_padding(fp, any_dump_insn(attr, x, ip, inbuf, len, &ilen, fp), 30);
+	printed += fprintf(fp, "\t");
 
 	if (PRINT_FIELD(BRSTACKINSNLEN))
 		printed += fprintf(fp, "ilen: %d\t", ilen);
@@ -1262,6 +1292,7 @@ static int perf_sample__fprintf_brstackinsn(struct perf_sample *sample,
 		nr = max_blocks + 1;
 
 	x.thread = thread;
+	x.machine = machine;
 	x.cpu = sample->cpu;
 
 	printed += fprintf(fp, "%c", '\n');
@@ -1312,8 +1343,8 @@ static int perf_sample__fprintf_brstackinsn(struct perf_sample *sample,
 				break;
 			} else {
 				ilen = 0;
-				printed += fprintf(fp, "\t%016" PRIx64 "\t%s", ip,
-						   dump_insn(&x, ip, buffer + off, len - off, &ilen));
+				printed += fprintf(fp, "\t%016" PRIx64 "\t", ip);
+				printed += any_dump_insn(attr, &x, ip, buffer + off, len - off, &ilen, fp);
 				if (PRINT_FIELD(BRSTACKINSNLEN))
 					printed += fprintf(fp, "\tilen: %d", ilen);
 				printed += fprintf(fp, "\n");
@@ -1360,8 +1391,8 @@ static int perf_sample__fprintf_brstackinsn(struct perf_sample *sample,
 		if (len <= 0)
 			goto out;
 		ilen = 0;
-		printed += fprintf(fp, "\t%016" PRIx64 "\t%s", sample->ip,
-			dump_insn(&x, sample->ip, buffer, len, &ilen));
+		printed += fprintf(fp, "\t%016" PRIx64 "\t", sample->ip);
+		printed += any_dump_insn(attr, &x, sample->ip, buffer, len, &ilen, fp);
 		if (PRINT_FIELD(BRSTACKINSNLEN))
 			printed += fprintf(fp, "\tilen: %d", ilen);
 		printed += fprintf(fp, "\n");
@@ -1371,8 +1402,8 @@ static int perf_sample__fprintf_brstackinsn(struct perf_sample *sample,
 	}
 	for (off = 0; off <= end - start; off += ilen) {
 		ilen = 0;
-		printed += fprintf(fp, "\t%016" PRIx64 "\t%s", start + off,
-				   dump_insn(&x, start + off, buffer + off, len - off, &ilen));
+		printed += fprintf(fp, "\t%016" PRIx64 "\t", start + off);
+		printed += any_dump_insn(attr, &x, start + off, buffer + off, len - off, &ilen, fp);
 		if (PRINT_FIELD(BRSTACKINSNLEN))
 			printed += fprintf(fp, "\tilen: %d", ilen);
 		printed += fprintf(fp, "\n");
@@ -1517,7 +1548,8 @@ void script_fetch_insn(struct perf_sample *sample, struct thread *thread,
 static int perf_sample__fprintf_insn(struct perf_sample *sample,
 				     struct perf_event_attr *attr,
 				     struct thread *thread,
-				     struct machine *machine, FILE *fp)
+				     struct machine *machine, FILE *fp,
+				     struct addr_location *al)
 {
 	int printed = 0;
 
@@ -1531,9 +1563,9 @@ static int perf_sample__fprintf_insn(struct perf_sample *sample,
 	}
 	if (PRINT_FIELD(DISASM) && sample->insn_len) {
 		printed += fprintf(fp, "\t\t");
-		printed += sample__fprintf_insn_asm(sample, thread, machine, fp);
+		printed += sample__fprintf_insn_asm(sample, thread, machine, fp, al);
 	}
-	if (PRINT_FIELD(BRSTACKINSN) || PRINT_FIELD(BRSTACKINSNLEN))
+	if (PRINT_FIELD(BRSTACKINSN) || PRINT_FIELD(BRSTACKINSNLEN) || PRINT_FIELD(BRSTACKDISASM))
 		printed += perf_sample__fprintf_brstackinsn(sample, thread, attr, machine, fp);
 
 	return printed;
@@ -1606,7 +1638,7 @@ static int perf_sample__fprintf_bts(struct perf_sample *sample,
 	if (print_srcline_last)
 		printed += map__fprintf_srcline(al->map, al->addr, "\n  ", fp);
 
-	printed += perf_sample__fprintf_insn(sample, attr, thread, machine, fp);
+	printed += perf_sample__fprintf_insn(sample, attr, thread, machine, fp, al);
 	printed += fprintf(fp, "\n");
 	if (PRINT_FIELD(SRCCODE)) {
 		int ret = map__fprintf_srccode(al->map, al->addr, stdout,
@@ -2259,7 +2291,7 @@ static void process_event(struct perf_script *script,
 
 	if (evsel__is_bpf_output(evsel) && PRINT_FIELD(BPF_OUTPUT))
 		perf_sample__fprintf_bpf_output(sample, fp);
-	perf_sample__fprintf_insn(sample, attr, thread, machine, fp);
+	perf_sample__fprintf_insn(sample, attr, thread, machine, fp, al);
 
 	if (PRINT_FIELD(PHYS_ADDR))
 		fprintf(fp, "%16" PRIx64, sample->phys_addr);
@@ -3471,7 +3503,7 @@ static int check_ev_match(char *dir_name, char *scriptname,
 
 			match = 0;
 			evlist__for_each_entry(session->evlist, pos) {
-				if (!strcmp(evsel__name(pos), evname)) {
+				if (evsel__name_is(pos, evname)) {
 					match = 1;
 					break;
 				}
@@ -3806,7 +3838,7 @@ static int parse_insn_trace(const struct option *opt __maybe_unused,
 	if (ret < 0)
 		return ret;
 
-	itrace_parse_synth_opts(opt, "i0ns", 0);
+	itrace_parse_synth_opts(opt, "i0nse", 0);
 	symbol_conf.nanosecs = true;
 	return 0;
 }
@@ -3939,7 +3971,7 @@ int cmd_script(int argc, const char **argv)
 		     "Fields: comm,tid,pid,time,cpu,event,trace,ip,sym,dso,dsoff,"
 		     "addr,symoff,srcline,period,iregs,uregs,brstack,"
 		     "brstacksym,flags,data_src,weight,bpf-output,brstackinsn,"
-		     "brstackinsnlen,brstackoff,callindent,insn,disasm,insnlen,synth,"
+		     "brstackinsnlen,brstackdisasm,brstackoff,callindent,insn,disasm,insnlen,synth,"
 		     "phys_addr,metric,misc,srccode,ipc,tod,data_page_size,"
 		     "code_page_size,ins_lat,machine_pid,vcpu,cgroup,retire_lat",
 		     parse_output_fields),

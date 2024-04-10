@@ -8,8 +8,10 @@
 #include <linux/types.h>
 
 struct annotated_op_loc;
+struct debuginfo;
 struct evsel;
 struct map_symbol;
+struct thread;
 
 /**
  * struct annotated_member - Type of member field
@@ -71,6 +73,40 @@ struct annotated_data_type {
 
 extern struct annotated_data_type unknown_type;
 extern struct annotated_data_type stackop_type;
+extern struct annotated_data_type canary_type;
+
+/**
+ * struct data_loc_info - Data location information
+ * @arch: CPU architecture info
+ * @thread: Thread info
+ * @ms: Map and Symbol info
+ * @ip: Instruction address
+ * @var_addr: Data address (for global variables)
+ * @cpumode: CPU execution mode
+ * @op: Instruction operand location (regs and offset)
+ * @di: Debug info
+ * @fbreg: Frame base register
+ * @fb_cfa: Whether the frame needs to check CFA
+ * @type_offset: Final offset in the type
+ */
+struct data_loc_info {
+	/* These are input field, should be filled by caller */
+	struct arch *arch;
+	struct thread *thread;
+	struct map_symbol *ms;
+	u64 ip;
+	u64 var_addr;
+	u8 cpumode;
+	struct annotated_op_loc *op;
+
+	/* These are used internally */
+	struct debuginfo *di;
+	int fbreg;
+	bool fb_cfa;
+
+	/* This is for the result */
+	int type_offset;
+};
 
 /**
  * struct annotated_data_stat - Debug statistics
@@ -100,15 +136,14 @@ struct annotated_data_stat {
 	int no_typeinfo;
 	int invalid_size;
 	int bad_offset;
+	int insn_track;
 };
 extern struct annotated_data_stat ann_data_stat;
 
 #ifdef HAVE_DWARF_SUPPORT
 
 /* Returns data type at the location (ip, reg, offset) */
-struct annotated_data_type *find_data_type(struct map_symbol *ms, u64 ip,
-					   struct annotated_op_loc *loc, u64 addr,
-					   const char *var_name);
+struct annotated_data_type *find_data_type(struct data_loc_info *dloc);
 
 /* Update type access histogram at the given offset */
 int annotated_data_type__update_samples(struct annotated_data_type *adt,
@@ -118,12 +153,13 @@ int annotated_data_type__update_samples(struct annotated_data_type *adt,
 /* Release all data type information in the tree */
 void annotated_data_type__tree_delete(struct rb_root *root);
 
+/* Release all global variable information in the tree */
+void global_var_type__tree_delete(struct rb_root *root);
+
 #else /* HAVE_DWARF_SUPPORT */
 
 static inline struct annotated_data_type *
-find_data_type(struct map_symbol *ms __maybe_unused, u64 ip __maybe_unused,
-	       struct annotated_op_loc *loc __maybe_unused,
-	       u64 addr __maybe_unused, const char *var_name __maybe_unused)
+find_data_type(struct data_loc_info *dloc __maybe_unused)
 {
 	return NULL;
 }
@@ -139,6 +175,10 @@ annotated_data_type__update_samples(struct annotated_data_type *adt __maybe_unus
 }
 
 static inline void annotated_data_type__tree_delete(struct rb_root *root __maybe_unused)
+{
+}
+
+static inline void global_var_type__tree_delete(struct rb_root *root __maybe_unused)
 {
 }
 
