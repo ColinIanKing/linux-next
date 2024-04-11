@@ -169,6 +169,7 @@ config X86
 	select GENERIC_TIME_VSYSCALL
 	select GENERIC_GETTIMEOFDAY
 	select GENERIC_VDSO_TIME_NS
+	select GENERIC_VDSO_OVERFLOW_PROTECT
 	select GUP_GET_PXX_LOW_HIGH		if X86_PAE
 	select HARDIRQS_SW_RESEND
 	select HARDLOCKUP_CHECK_TIMESTAMP	if X86_64
@@ -501,7 +502,7 @@ config X86_FRED
 	  When enabled, try to use Flexible Return and Event Delivery
 	  instead of the legacy SYSCALL/SYSENTER/IDT architecture for
 	  ring transitions and exception/interrupt handling if the
-	  system supports.
+	  system supports it.
 
 if X86_32
 config X86_BIGSMP
@@ -2430,18 +2431,20 @@ source "kernel/livepatch/Kconfig"
 endmenu
 
 config CC_HAS_NAMED_AS
-	def_bool CC_IS_GCC && GCC_VERSION >= 120100
+	def_bool CC_IS_GCC && GCC_VERSION >= 90100
+
+config CC_HAS_NAMED_AS_FIXED_SANITIZERS
+	def_bool CC_IS_GCC && GCC_VERSION >= 130300
 
 config USE_X86_SEG_SUPPORT
 	def_bool y
 	depends on CC_HAS_NAMED_AS
 	#
-	# -fsanitize=kernel-address (KASAN) is at the moment incompatible
-	# with named address spaces - see GCC PR sanitizer/111736.
+	# -fsanitize=kernel-address (KASAN) and -fsanitize=thread
+	# (KCSAN) are incompatible with named address spaces with
+	# GCC < 13.3 - see GCC PR sanitizer/111736.
 	#
-	depends on !KASAN
-	# -fsanitize=thread (KCSAN) is also incompatible.
-	depends on !KCSAN
+	depends on !(KASAN || KCSAN) || CC_HAS_NAMED_AS_FIXED_SANITIZERS
 
 config CC_HAS_SLS
 	def_bool $(cc-option,-mharden-sls=all)
