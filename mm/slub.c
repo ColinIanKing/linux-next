@@ -604,10 +604,20 @@ static void slub_set_cpu_partial(struct kmem_cache *s, unsigned int nr_objects)
 	nr_slabs = DIV_ROUND_UP(nr_objects * 2, oo_objects(s->oo));
 	s->cpu_partial_slabs = nr_slabs;
 }
+
+static inline unsigned int slub_get_cpu_partial(struct kmem_cache *s)
+{
+	return s->cpu_partial_slabs;
+}
 #else
 static inline void
 slub_set_cpu_partial(struct kmem_cache *s, unsigned int nr_objects)
 {
+}
+
+static inline unsigned int slub_get_cpu_partial(struct kmem_cache *s)
+{
+	return 0;
 }
 #endif /* CONFIG_SLUB_CPU_PARTIAL */
 
@@ -2678,19 +2688,18 @@ static struct slab *get_partial_node(struct kmem_cache *s,
 		if (!partial) {
 			partial = slab;
 			stat(s, ALLOC_FROM_PARTIAL);
+
+			if ((slub_get_cpu_partial(s) == 0)) {
+				break;
+			}
 		} else {
 			put_cpu_partial(s, slab, 0);
 			stat(s, CPU_PARTIAL_NODE);
-			partial_slabs++;
-		}
-#ifdef CONFIG_SLUB_CPU_PARTIAL
-		if (!kmem_cache_has_cpu_partial(s)
-			|| partial_slabs > s->cpu_partial_slabs / 2)
-			break;
-#else
-		break;
-#endif
 
+			if (++partial_slabs > slub_get_cpu_partial(s) / 2) {
+				break;
+			}
+		}
 	}
 	spin_unlock_irqrestore(&n->list_lock, flags);
 	return partial;
@@ -2773,7 +2782,7 @@ static struct slab *get_partial(struct kmem_cache *s, int node,
 		searchnode = numa_mem_id();
 
 	slab = get_partial_node(s, get_node(s, searchnode), pc);
-	if (slab || node != NUMA_NO_NODE)
+	if (slab || (node != NUMA_NO_NODE && (pc->flags & __GFP_THISNODE)))
 		return slab;
 
 	return get_any_partial(s, pc);
@@ -3449,6 +3458,7 @@ static void *___slab_alloc(struct kmem_cache *s, gfp_t gfpflags, int node,
 	struct slab *slab;
 	unsigned long flags;
 	struct partial_context pc;
+	bool try_thisnode = true;
 
 	stat(s, ALLOC_SLOWPATH);
 
@@ -3575,6 +3585,21 @@ new_slab:
 new_objects:
 
 	pc.flags = gfpflags;
+	/*
+	 * When a preferred node is indicated but no __GFP_THISNODE
+	 *
+	 * 1) try to get a partial slab from target node only by having
+	 *    __GFP_THISNODE in pc.flags for get_partial()
+	 * 2) if 1) failed, try to allocate a new slab from target node with
+	 *    GPF_NOWAIT | __GFP_THISNODE opportunistically
+	 * 3) if 2) failed, retry with original gfpflags which will allow
+	 *    get_partial() try partial lists of other nodes before potentially
+	 *    allocating new page from other nodes
+	 */
+	if (unlikely(node != NUMA_NO_NODE && !(gfpflags & __GFP_THISNODE)
+		     && try_thisnode))
+		pc.flags = GFP_NOWAIT | __GFP_THISNODE;
+
 	pc.orig_size = orig_size;
 	slab = get_partial(s, node, &pc);
 	if (slab) {
@@ -3596,10 +3621,15 @@ new_objects:
 	}
 
 	slub_put_cpu_ptr(s->cpu_slab);
-	slab = new_slab(s, gfpflags, node);
+	slab = new_slab(s, pc.flags, node);
 	c = slub_get_cpu_ptr(s->cpu_slab);
 
 	if (unlikely(!slab)) {
+		if (node != NUMA_NO_NODE && !(gfpflags & __GFP_THISNODE)
+		    && try_thisnode) {
+			try_thisnode = false;
+			goto new_objects;
+		}
 		slab_out_of_memory(s, gfpflags, node);
 		return NULL;
 	}
@@ -4308,7 +4338,7 @@ redo:
 	c = raw_cpu_ptr(s->cpu_slab);
 	tid = READ_ONCE(c->tid);
 
-	/* Same with comment on barrier() in slab_alloc_node() */
+	/* Same with comment on barrier() in __slab_alloc_node() */
 	barrier();
 
 	if (unlikely(slab != c->slab)) {
@@ -4938,7 +4968,6 @@ static void early_kmem_cache_node_alloc(int node)
 	BUG_ON(!n);
 #ifdef CONFIG_SLUB_DEBUG
 	init_object(kmem_cache_node, n, SLUB_RED_ACTIVE);
-	init_tracking(kmem_cache_node, n);
 #endif
 	n = kasan_slab_alloc(kmem_cache_node, n, GFP_KERNEL, false);
 	slab->freelist = get_freepointer(kmem_cache_node, n);
@@ -6128,7 +6157,7 @@ static ssize_t show_slab_objects(struct kmem_cache *s,
 				else if (flags & SO_OBJECTS)
 					WARN_ON_ONCE(1);
 				else
-					x = slab->slabs;
+					x = data_race(slab->slabs);
 				total += x;
 				nodes[node] += x;
 			}
@@ -6333,7 +6362,7 @@ static ssize_t slabs_cpu_partial_show(struct kmem_cache *s, char *buf)
 		slab = slub_percpu_partial(per_cpu_ptr(s->cpu_slab, cpu));
 
 		if (slab)
-			slabs += slab->slabs;
+			slabs += data_race(slab->slabs);
 	}
 #endif
 
@@ -6347,7 +6376,7 @@ static ssize_t slabs_cpu_partial_show(struct kmem_cache *s, char *buf)
 
 		slab = slub_percpu_partial(per_cpu_ptr(s->cpu_slab, cpu));
 		if (slab) {
-			slabs = READ_ONCE(slab->slabs);
+			slabs = data_race(slab->slabs);
 			objects = (slabs * oo_objects(s->oo)) / 2;
 			len += sysfs_emit_at(buf, len, " C%d=%d(%d)",
 					     cpu, objects, slabs);
@@ -7190,15 +7219,5 @@ void get_slabinfo(struct kmem_cache *s, struct slabinfo *sinfo)
 	sinfo->num_slabs = nr_slabs;
 	sinfo->objects_per_slab = oo_objects(s->oo);
 	sinfo->cache_order = oo_order(s->oo);
-}
-
-void slabinfo_show_stats(struct seq_file *m, struct kmem_cache *s)
-{
-}
-
-ssize_t slabinfo_write(struct file *file, const char __user *buffer,
-		       size_t count, loff_t *ppos)
-{
-	return -EIO;
 }
 #endif /* CONFIG_SLUB_DEBUG */
