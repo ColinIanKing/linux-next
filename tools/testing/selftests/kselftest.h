@@ -16,10 +16,12 @@
  * For each test, report any progress, debugging, etc with:
  *
  *     ksft_print_msg(fmt, ...);
+ *     ksft_perror(msg);
  *
  * and finally report the pass/fail/skip/xfail state of the test with one of:
  *
  *     ksft_test_result(condition, fmt, ...);
+ *     ksft_test_result_report(result, fmt, ...);
  *     ksft_test_result_pass(fmt, ...);
  *     ksft_test_result_fail(fmt, ...);
  *     ksft_test_result_skip(fmt, ...);
@@ -39,6 +41,7 @@
  * the program is aborting before finishing all tests):
  *
  *    ksft_exit_fail_msg(fmt, ...);
+ *    ksft_exit_fail_perror(msg);
  *
  */
 #ifndef __KSELFTEST_H
@@ -300,6 +303,27 @@ void ksft_test_result_code(int exit_code, const char *test_name,
 	va_end(args);
 }
 
+/**
+ * ksft_test_result() - Report test success based on truth of condition
+ *
+ * @condition: if true, report test success, otherwise failure.
+ */
+#define ksft_test_result_report(result, fmt, ...) do {		\
+	switch (result) {					\
+	case KSFT_PASS:						\
+		ksft_test_result_pass(fmt, ##__VA_ARGS__);	\
+		break;						\
+	case KSFT_FAIL:						\
+		ksft_test_result_fail(fmt, ##__VA_ARGS__);	\
+		break;						\
+	case KSFT_XFAIL:					\
+		ksft_test_result_xfail(fmt, ##__VA_ARGS__);	\
+		break;						\
+	case KSFT_SKIP:						\
+		ksft_test_result_skip(fmt, ##__VA_ARGS__);	\
+		break;						\
+	} } while (0)
+
 static inline int ksft_exit_pass(void)
 {
 	ksft_print_cnts();
@@ -346,6 +370,19 @@ static inline __printf(1, 2) int ksft_exit_fail_msg(const char *msg, ...)
 
 	ksft_print_cnts();
 	exit(KSFT_FAIL);
+}
+
+static inline void ksft_exit_fail_perror(const char *msg)
+{
+#ifndef NOLIBC
+	ksft_exit_fail_msg("%s: %s (%d)\n", msg, strerror(errno), errno);
+#else
+	/*
+	 * nolibc doesn't provide strerror() and it seems
+	 * inappropriate to add one, just print the errno.
+	 */
+	ksft_exit_fail_msg("%s: %d)\n", msg, errno);
+#endif
 }
 
 static inline int ksft_exit_xfail(void)
