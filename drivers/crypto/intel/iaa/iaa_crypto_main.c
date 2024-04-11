@@ -1079,8 +1079,8 @@ static void iaa_desc_complete(struct idxd_desc *idxd_desc,
 		update_total_comp_bytes_out(ctx->req->dlen);
 		update_wq_comp_bytes(iaa_wq->wq, ctx->req->dlen);
 	} else {
-		update_total_decomp_bytes_in(ctx->req->dlen);
-		update_wq_decomp_bytes(iaa_wq->wq, ctx->req->dlen);
+		update_total_decomp_bytes_in(ctx->req->slen);
+		update_wq_decomp_bytes(iaa_wq->wq, ctx->req->slen);
 	}
 
 	if (ctx->compress && compression_ctx->verify_compress) {
@@ -1498,7 +1498,6 @@ static int iaa_comp_acompress(struct acomp_req *req)
 	u32 compression_crc;
 	struct idxd_wq *wq;
 	struct device *dev;
-	u64 start_time_ns;
 	int order = -1;
 
 	compression_ctx = crypto_tfm_ctx(tfm);
@@ -1572,10 +1571,8 @@ static int iaa_comp_acompress(struct acomp_req *req)
 		" req->dlen %d, sg_dma_len(sg) %d\n", dst_addr, nr_sgs,
 		req->dst, req->dlen, sg_dma_len(req->dst));
 
-	start_time_ns = iaa_get_ts();
 	ret = iaa_compress(tfm, req, wq, src_addr, req->slen, dst_addr,
 			   &req->dlen, &compression_crc, disable_async);
-	update_max_comp_delay_ns(start_time_ns);
 	if (ret == -EINPROGRESS)
 		return ret;
 
@@ -1622,7 +1619,6 @@ static int iaa_comp_adecompress_alloc_dest(struct acomp_req *req)
 	struct iaa_wq *iaa_wq;
 	struct device *dev;
 	struct idxd_wq *wq;
-	u64 start_time_ns;
 	int order = -1;
 
 	cpu = get_cpu();
@@ -1679,10 +1675,8 @@ alloc_dest:
 	dev_dbg(dev, "dma_map_sg, dst_addr %llx, nr_sgs %d, req->dst %p,"
 		" req->dlen %d, sg_dma_len(sg) %d\n", dst_addr, nr_sgs,
 		req->dst, req->dlen, sg_dma_len(req->dst));
-	start_time_ns = iaa_get_ts();
 	ret = iaa_decompress(tfm, req, wq, src_addr, req->slen,
 			     dst_addr, &req->dlen, true);
-	update_max_decomp_delay_ns(start_time_ns);
 	if (ret == -EOVERFLOW) {
 		dma_unmap_sg(dev, req->dst, sg_nents(req->dst), DMA_FROM_DEVICE);
 		req->dlen *= 2;
@@ -1713,7 +1707,6 @@ static int iaa_comp_adecompress(struct acomp_req *req)
 	int nr_sgs, cpu, ret = 0;
 	struct iaa_wq *iaa_wq;
 	struct device *dev;
-	u64 start_time_ns;
 	struct idxd_wq *wq;
 
 	if (!iaa_crypto_enabled) {
@@ -1773,10 +1766,8 @@ static int iaa_comp_adecompress(struct acomp_req *req)
 		" req->dlen %d, sg_dma_len(sg) %d\n", dst_addr, nr_sgs,
 		req->dst, req->dlen, sg_dma_len(req->dst));
 
-	start_time_ns = iaa_get_ts();
 	ret = iaa_decompress(tfm, req, wq, src_addr, req->slen,
 			     dst_addr, &req->dlen, false);
-	update_max_decomp_delay_ns(start_time_ns);
 	if (ret == -EINPROGRESS)
 		return ret;
 
