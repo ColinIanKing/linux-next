@@ -527,12 +527,12 @@ static int intel_dp_mst_compute_config(struct intel_encoder *encoder,
 	struct intel_atomic_state *state = to_intel_atomic_state(conn_state->state);
 	struct intel_dp_mst_encoder *intel_mst = enc_to_mst(encoder);
 	struct intel_dp *intel_dp = &intel_mst->primary->dp;
-	const struct intel_connector *connector =
+	struct intel_connector *connector =
 		to_intel_connector(conn_state->connector);
 	const struct drm_display_mode *adjusted_mode =
 		&pipe_config->hw.adjusted_mode;
 	struct link_config_limits limits;
-	bool dsc_needed;
+	bool dsc_needed, joiner_needs_dsc;
 	int ret = 0;
 
 	if (pipe_config->fec_enable &&
@@ -546,7 +546,9 @@ static int intel_dp_mst_compute_config(struct intel_encoder *encoder,
 	pipe_config->output_format = INTEL_OUTPUT_FORMAT_RGB;
 	pipe_config->has_pch_encoder = false;
 
-	dsc_needed = intel_dp->force_dsc_en ||
+	joiner_needs_dsc = intel_dp_joiner_needs_dsc(dev_priv, pipe_config->bigjoiner_pipes);
+
+	dsc_needed = joiner_needs_dsc || intel_dp->force_dsc_en ||
 		     !intel_dp_mst_compute_config_limits(intel_dp,
 							 connector,
 							 pipe_config,
@@ -566,8 +568,8 @@ static int intel_dp_mst_compute_config(struct intel_encoder *encoder,
 
 	/* enable compression if the mode doesn't fit available BW */
 	if (dsc_needed) {
-		drm_dbg_kms(&dev_priv->drm, "Try DSC (fallback=%s, force=%s)\n",
-			    str_yes_no(ret),
+		drm_dbg_kms(&dev_priv->drm, "Try DSC (fallback=%s, joiner=%s, force=%s)\n",
+			    str_yes_no(ret), str_yes_no(joiner_needs_dsc),
 			    str_yes_no(intel_dp->force_dsc_en));
 
 		if (!intel_dp_mst_dsc_source_support(pipe_config))
@@ -1117,6 +1119,39 @@ static void intel_mst_pre_enable_dp(struct intel_atomic_state *state,
 	intel_ddi_set_dp_msa(pipe_config, conn_state);
 }
 
+static void enable_bs_jitter_was(const struct intel_crtc_state *crtc_state)
+{
+	struct drm_i915_private *i915 = to_i915(crtc_state->uapi.crtc->dev);
+	u32 clear = 0;
+	u32 set = 0;
+
+	if (!IS_ALDERLAKE_P(i915))
+		return;
+
+	if (!IS_DISPLAY_STEP(i915, STEP_D0, STEP_FOREVER))
+		return;
+
+	/* Wa_14013163432:adlp */
+	if (crtc_state->fec_enable || intel_dp_is_uhbr(crtc_state))
+		set |= DP_MST_FEC_BS_JITTER_WA(crtc_state->cpu_transcoder);
+
+	/* Wa_14014143976:adlp */
+	if (IS_DISPLAY_STEP(i915, STEP_E0, STEP_FOREVER)) {
+		if (intel_dp_is_uhbr(crtc_state))
+			set |= DP_MST_SHORT_HBLANK_WA(crtc_state->cpu_transcoder);
+		else if (crtc_state->fec_enable)
+			clear |= DP_MST_SHORT_HBLANK_WA(crtc_state->cpu_transcoder);
+
+		if (crtc_state->fec_enable || intel_dp_is_uhbr(crtc_state))
+			set |= DP_MST_DPT_DPTP_ALIGN_WA(crtc_state->cpu_transcoder);
+	}
+
+	if (!clear && !set)
+		return;
+
+	intel_de_rmw(i915, CHICKEN_MISC_3, clear, set);
+}
+
 static void intel_mst_enable_dp(struct intel_atomic_state *state,
 				struct intel_encoder *encoder,
 				const struct intel_crtc_state *pipe_config,
@@ -1144,6 +1179,8 @@ static void intel_mst_enable_dp(struct intel_atomic_state *state,
 		intel_de_write(dev_priv, TRANS_DP2_VFREQLOW(pipe_config->cpu_transcoder),
 			       TRANS_DP2_VFREQ_PIXEL_CLOCK(crtc_clock_hz & 0xffffff));
 	}
+
+	enable_bs_jitter_was(pipe_config);
 
 	intel_ddi_enable_transcoder_func(encoder, pipe_config);
 
@@ -1285,7 +1322,7 @@ intel_dp_mst_mode_valid_ctx(struct drm_connector *connector,
 	struct drm_dp_mst_topology_mgr *mgr = &intel_dp->mst_mgr;
 	struct drm_dp_mst_port *port = intel_connector->port;
 	const int min_bpp = 18;
-	int max_dotclk = to_i915(connector->dev)->max_dotclk_freq;
+	int max_dotclk = to_i915(connector->dev)->display.cdclk.max_dotclk_freq;
 	int max_rate, mode_rate, max_lanes, max_link_clock;
 	int ret;
 	bool dsc = false, bigjoiner = false;
@@ -1302,8 +1339,13 @@ intel_dp_mst_mode_valid_ctx(struct drm_connector *connector,
 	if (*status != MODE_OK)
 		return 0;
 
-	if (mode->flags & DRM_MODE_FLAG_DBLSCAN) {
-		*status = MODE_NO_DBLESCAN;
+	if (mode->flags & DRM_MODE_FLAG_DBLCLK) {
+		*status = MODE_H_ILLEGAL;
+		return 0;
+	}
+
+	if (mode->clock < 10000) {
+		*status = MODE_CLOCK_LOW;
 		return 0;
 	}
 
@@ -1335,18 +1377,8 @@ intel_dp_mst_mode_valid_ctx(struct drm_connector *connector,
 		*status = MODE_CLOCK_HIGH;
 		return 0;
 	}
-
-	if (mode->clock < 10000) {
-		*status = MODE_CLOCK_LOW;
-		return 0;
-	}
-
-	if (mode->flags & DRM_MODE_FLAG_DBLCLK) {
-		*status = MODE_H_ILLEGAL;
-		return 0;
-	}
-
-	if (intel_dp_need_bigjoiner(intel_dp, mode->hdisplay, target_clock)) {
+	if (intel_dp_need_bigjoiner(intel_dp, intel_connector,
+				    mode->hdisplay, target_clock)) {
 		bigjoiner = true;
 		max_dotclk *= 2;
 
@@ -1383,11 +1415,7 @@ intel_dp_mst_mode_valid_ctx(struct drm_connector *connector,
 		dsc = dsc_max_compressed_bpp && dsc_slice_count;
 	}
 
-	/*
-	 * Big joiner configuration needs DSC for TGL which is not true for
-	 * XE_LPD where uncompressed joiner is supported.
-	 */
-	if (DISPLAY_VER(dev_priv) < 13 && bigjoiner && !dsc) {
+	if (intel_dp_joiner_needs_dsc(dev_priv, bigjoiner) && !dsc) {
 		*status = MODE_CLOCK_HIGH;
 		return 0;
 	}
