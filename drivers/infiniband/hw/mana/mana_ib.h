@@ -45,6 +45,12 @@ struct mana_ib_adapter_caps {
 	u32 max_inline_data_size;
 };
 
+struct mana_ib_queue {
+	struct ib_umem *umem;
+	u64 gdma_region;
+	u64 id;
+};
+
 struct mana_ib_dev {
 	struct ib_device ib_dev;
 	struct gdma_dev *gdma_dev;
@@ -53,11 +59,9 @@ struct mana_ib_dev {
 
 struct mana_ib_wq {
 	struct ib_wq ibwq;
-	struct ib_umem *umem;
+	struct mana_ib_queue queue;
 	int wqe;
 	u32 wq_buf_size;
-	u64 gdma_region;
-	u64 id;
 	mana_handle_t rx_object;
 };
 
@@ -82,22 +86,16 @@ struct mana_ib_mr {
 
 struct mana_ib_cq {
 	struct ib_cq ibcq;
-	struct ib_umem *umem;
+	struct mana_ib_queue queue;
 	int cqe;
-	u64 gdma_region;
-	u64 id;
 	u32 comp_vector;
 };
 
 struct mana_ib_qp {
 	struct ib_qp ibqp;
 
-	/* Work queue info */
-	struct ib_umem *sq_umem;
-	int sqe;
-	u64 sq_gdma_region;
-	u64 sq_id;
-	mana_handle_t tx_object;
+	mana_handle_t qp_handle;
+	struct mana_ib_queue raw_sq;
 
 	/* The port on the IB device, starting with 1 */
 	u32 port;
@@ -168,6 +166,10 @@ int mana_ib_create_dma_region(struct mana_ib_dev *dev, struct ib_umem *umem,
 
 int mana_ib_gd_destroy_dma_region(struct mana_ib_dev *dev,
 				  mana_handle_t gdma_region);
+
+int mana_ib_create_queue(struct mana_ib_dev *mdev, u64 addr, u32 size,
+			 struct mana_ib_queue *queue);
+void mana_ib_destroy_queue(struct mana_ib_dev *mdev, struct mana_ib_queue *queue);
 
 struct ib_wq *mana_ib_create_wq(struct ib_pd *pd,
 				struct ib_wq_init_attr *init_attr,
