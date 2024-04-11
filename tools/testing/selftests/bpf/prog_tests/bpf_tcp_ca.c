@@ -13,6 +13,7 @@
 #include "tcp_ca_write_sk_pacing.skel.h"
 #include "tcp_ca_incompl_cong_ops.skel.h"
 #include "tcp_ca_unsupp_cong_op.skel.h"
+#include "tcp_ca_kfunc.skel.h"
 
 #ifndef ENOTSUPP
 #define ENOTSUPP 524
@@ -78,11 +79,9 @@ done:
 
 static void do_test(const char *tcp_ca, const struct bpf_map *sk_stg_map)
 {
-	struct sockaddr_in6 sa6 = {};
 	ssize_t nr_recv = 0, bytes = 0;
 	int lfd = -1, fd = -1;
 	pthread_t srv_thread;
-	socklen_t addrlen = sizeof(sa6);
 	void *thread_ret;
 	char batch[1500];
 	int err;
@@ -99,12 +98,7 @@ static void do_test(const char *tcp_ca, const struct bpf_map *sk_stg_map)
 		return;
 	}
 
-	if (settcpca(lfd, tcp_ca) || settcpca(fd, tcp_ca) ||
-	    settimeo(lfd, 0) || settimeo(fd, 0))
-		goto done;
-
-	err = getsockname(lfd, (struct sockaddr *)&sa6, &addrlen);
-	if (!ASSERT_NEQ(err, -1, "getsockname"))
+	if (settcpca(lfd, tcp_ca) || settcpca(fd, tcp_ca))
 		goto done;
 
 	if (sk_stg_map) {
@@ -115,7 +109,7 @@ static void do_test(const char *tcp_ca, const struct bpf_map *sk_stg_map)
 	}
 
 	/* connect to server */
-	err = connect(fd, (struct sockaddr *)&sa6, addrlen);
+	err = connect_fd_to_fd(fd, lfd, 0);
 	if (!ASSERT_NEQ(err, -1, "connect"))
 		goto done;
 
@@ -304,7 +298,7 @@ static void test_rel_setsockopt(void)
 	struct bpf_dctcp_release *rel_skel;
 	libbpf_print_fn_t old_print_fn;
 
-	err_str = "unknown func bpf_setsockopt";
+	err_str = "program of this type cannot use helper bpf_setsockopt";
 	found = false;
 
 	old_print_fn = libbpf_set_print(libbpf_debug_print);
@@ -518,6 +512,15 @@ static void test_link_replace(void)
 	tcp_ca_update__destroy(skel);
 }
 
+static void test_tcp_ca_kfunc(void)
+{
+	struct tcp_ca_kfunc *skel;
+
+	skel = tcp_ca_kfunc__open_and_load();
+	ASSERT_OK_PTR(skel, "tcp_ca_kfunc__open_and_load");
+	tcp_ca_kfunc__destroy(skel);
+}
+
 void test_bpf_tcp_ca(void)
 {
 	if (test__start_subtest("dctcp"))
@@ -546,4 +549,6 @@ void test_bpf_tcp_ca(void)
 		test_multi_links();
 	if (test__start_subtest("link_replace"))
 		test_link_replace();
+	if (test__start_subtest("tcp_ca_kfunc"))
+		test_tcp_ca_kfunc();
 }
