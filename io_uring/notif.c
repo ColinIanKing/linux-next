@@ -9,12 +9,12 @@
 #include "notif.h"
 #include "rsrc.h"
 
-static void io_notif_complete_tw_ext(struct io_kiocb *notif, struct io_tw_state *ts)
+void io_notif_tw_complete(struct io_kiocb *notif, struct io_tw_state *ts)
 {
 	struct io_notif_data *nd = io_notif_to_data(notif);
 	struct io_ring_ctx *ctx = notif->ctx;
 
-	if (nd->zc_report && (nd->zc_copied || !nd->zc_used))
+	if (unlikely(nd->zc_report) && (nd->zc_copied || !nd->zc_used))
 		notif->cqe.res |= IORING_NOTIF_USAGE_ZC_COPIED;
 
 	if (nd->account_pages && ctx->user) {
@@ -30,35 +30,16 @@ static void io_tx_ubuf_callback(struct sk_buff *skb, struct ubuf_info *uarg,
 	struct io_notif_data *nd = container_of(uarg, struct io_notif_data, uarg);
 	struct io_kiocb *notif = cmd_to_io_kiocb(nd);
 
-	if (refcount_dec_and_test(&uarg->refcnt))
-		__io_req_task_work_add(notif, IOU_F_TWQ_LAZY_WAKE);
-}
-
-static void io_tx_ubuf_callback_ext(struct sk_buff *skb, struct ubuf_info *uarg,
-			     bool success)
-{
-	struct io_notif_data *nd = container_of(uarg, struct io_notif_data, uarg);
-
 	if (nd->zc_report) {
 		if (success && !nd->zc_used && skb)
 			WRITE_ONCE(nd->zc_used, true);
 		else if (!success && !nd->zc_copied)
 			WRITE_ONCE(nd->zc_copied, true);
 	}
-	io_tx_ubuf_callback(skb, uarg, success);
-}
 
-void io_notif_set_extended(struct io_kiocb *notif)
-{
-	struct io_notif_data *nd = io_notif_to_data(notif);
-
-	if (nd->uarg.callback != io_tx_ubuf_callback_ext) {
-		nd->account_pages = 0;
-		nd->zc_report = false;
-		nd->zc_used = false;
-		nd->zc_copied = false;
-		nd->uarg.callback = io_tx_ubuf_callback_ext;
-		notif->io_task_work.func = io_notif_complete_tw_ext;
+	if (refcount_dec_and_test(&uarg->refcnt)) {
+		notif->io_task_work.func = io_notif_tw_complete;
+		__io_req_task_work_add(notif, IOU_F_TWQ_LAZY_WAKE);
 	}
 }
 
@@ -76,9 +57,10 @@ struct io_kiocb *io_alloc_notif(struct io_ring_ctx *ctx)
 	notif->task = current;
 	io_get_task_refs(1);
 	notif->rsrc_node = NULL;
-	notif->io_task_work.func = io_req_task_complete;
 
 	nd = io_notif_to_data(notif);
+	nd->zc_report = false;
+	nd->account_pages = 0;
 	nd->uarg.flags = IO_NOTIF_UBUF_FLAGS;
 	nd->uarg.callback = io_tx_ubuf_callback;
 	refcount_set(&nd->uarg.refcnt, 1);
