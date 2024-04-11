@@ -642,6 +642,19 @@ config THINKPAD_LMI
 
 source "drivers/platform/x86/intel/Kconfig"
 
+config ACPI_QUICKSTART
+	tristate "ACPI Quickstart button driver"
+	depends on ACPI
+	depends on INPUT
+	select INPUT_SPARSEKMAP
+	help
+	  This driver adds support for ACPI quickstart button (PNP0C32) devices.
+	  The button emits a manufacturer-specific key value when pressed, so
+	  userspace has to map this value to a standard key code.
+
+	  To compile this driver as a module, choose M here: the module will be
+	  called quickstart.
+
 config MSI_EC
 	tristate "MSI EC Extras"
 	depends on ACPI
@@ -995,6 +1008,18 @@ config INSPUR_PLATFORM_PROFILE
 
 	To compile this driver as a module, choose M here: the module
 	will be called inspur-platform-profile.
+
+config LENOVO_WMI_CAMERA
+	tristate "Lenovo WMI Camera Button driver"
+	depends on ACPI_WMI
+	depends on INPUT
+	help
+	  This driver provides support for Lenovo camera button. The Camera
+	  button is a GPIO device. This driver receives ACPI notifications when
+	  the camera button is switched on/off.
+
+	  To compile this driver as a module, choose M here: the module
+	  will be called lenovo-wmi-camera.
 
 source "drivers/platform/x86/x86-android-tablets/Kconfig"
 
