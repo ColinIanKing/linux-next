@@ -2,6 +2,7 @@
 /*
  * Copyright (c) 2024-2025, NVIDIA CORPORATION & AFFILIATES
  */
+#define DEBUG
 #include <linux/fwctl.h>
 #include <linux/auxiliary_bus.h>
 #include <linux/mlx5/device.h>
@@ -136,10 +137,10 @@ static int mlx5ctl_open_uctx(struct fwctl_uctx *uctx)
 	 * which allows commands to manipulate the global device state.
 	 * Otherwise only basic existing RDMA devx privilege are allowed.
 	 */
-	if (MLX5_CAP_GEN(mcdev->mdev, uctx_cap) &
+/*	if (MLX5_CAP_GEN(mcdev->mdev, uctx_cap) &
 	    MLX5_UCTX_OBJECT_CAP_TOOLS_RESOURCES)
 		mfd->uctx_caps |= MLX5_UCTX_OBJECT_CAP_TOOLS_RESOURCES;
-
+*/
 	uid = mlx5ctl_alloc_uid(mcdev, mfd->uctx_caps);
 	if (uid < 0)
 		return uid;
