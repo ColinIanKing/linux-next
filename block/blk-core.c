@@ -442,6 +442,8 @@ struct request_queue *blk_alloc_queue(struct queue_limits *lim, int node_id)
 	init_waitqueue_head(&q->mq_freeze_wq);
 	mutex_init(&q->mq_freeze_lock);
 
+	blkg_init_queue(q);
+
 	/*
 	 * Init percpu_ref in atomic mode so that it's faster to shutdown.
 	 * See blk_register_queue() for details.
@@ -494,7 +496,8 @@ __setup("fail_make_request=", setup_fail_make_request);
 
 bool should_fail_request(struct block_device *part, unsigned int bytes)
 {
-	return part->bd_make_it_fail && should_fail(&fail_make_request, bytes);
+	return bdev_test_flag(part, BD_MAKE_IT_FAIL) &&
+	       should_fail(&fail_make_request, bytes);
 }
 
 static int __init fail_make_request_debugfs(void)
@@ -514,10 +517,11 @@ static inline void bio_check_ro(struct bio *bio)
 		if (op_is_flush(bio->bi_opf) && !bio_sectors(bio))
 			return;
 
-		if (bio->bi_bdev->bd_ro_warned)
+		if (bdev_test_flag(bio->bi_bdev, BD_RO_WARNED))
 			return;
 
-		bio->bi_bdev->bd_ro_warned = true;
+		bdev_set_flag(bio->bi_bdev, BD_RO_WARNED);
+
 		/*
 		 * Use ioctl to set underlying disk of raid/dm to read-only
 		 * will trigger this.
@@ -615,7 +619,7 @@ static void __submit_bio(struct bio *bio)
 	if (unlikely(!blk_crypto_bio_prep(&bio)))
 		return;
 
-	if (!bio->bi_bdev->bd_has_submit_bio) {
+	if (!bdev_test_flag(bio->bi_bdev, BD_HAS_SUBMIT_BIO)) {
 		blk_mq_submit_bio(bio);
 	} else if (likely(bio_queue_enter(bio) == 0)) {
 		struct gendisk *disk = bio->bi_bdev->bd_disk;
@@ -723,7 +727,7 @@ void submit_bio_noacct_nocheck(struct bio *bio)
 	 */
 	if (current->bio_list)
 		bio_list_add(&current->bio_list[0], bio);
-	else if (!bio->bi_bdev->bd_has_submit_bio)
+	else if (!bdev_test_flag(bio->bi_bdev, BD_HAS_SUBMIT_BIO))
 		__submit_bio_noacct_mq(bio);
 	else
 		__submit_bio_noacct(bio);
@@ -759,7 +763,8 @@ void submit_bio_noacct(struct bio *bio)
 	if (!bio_flagged(bio, BIO_REMAPPED)) {
 		if (unlikely(bio_check_eod(bio)))
 			goto end_io;
-		if (bdev->bd_partno && unlikely(blk_partition_remap(bio)))
+		if (bdev_is_partition(bdev) &&
+		    unlikely(blk_partition_remap(bio)))
 			goto end_io;
 	}
 
@@ -989,7 +994,7 @@ again:
 		if (likely(try_cmpxchg(&part->bd_stamp, &stamp, now)))
 			__part_stat_add(part, io_ticks, end ? now - stamp : 1);
 	}
-	if (part->bd_partno) {
+	if (bdev_is_partition(part)) {
 		part = bdev_whole(part);
 		goto again;
 	}
@@ -1195,6 +1200,7 @@ void __blk_flush_plug(struct blk_plug *plug, bool from_schedule)
 	if (unlikely(!rq_list_empty(plug->cached_rq)))
 		blk_mq_free_plug_rqs(plug);
 
+	plug->cur_ktime = 0;
 	current->flags &= ~PF_BLOCK_TS;
 }
 
