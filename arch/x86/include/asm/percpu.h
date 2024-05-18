@@ -144,7 +144,68 @@
 #define __pcpu_reg_imm_4(x) "ri" (x)
 #define __pcpu_reg_imm_8(x) "re" (x)
 
-#define percpu_to_op(size, qual, op, _var, _val)			\
+#ifdef CONFIG_USE_X86_SEG_SUPPORT
+
+#define __raw_cpu_read(size, qual, pcp)					\
+({									\
+	*(qual __my_cpu_type(pcp) *)__my_cpu_ptr(&(pcp));		\
+})
+
+#define __raw_cpu_write(size, qual, pcp, val)				\
+do {									\
+	*(qual __my_cpu_type(pcp) *)__my_cpu_ptr(&(pcp)) = (val);	\
+} while (0)
+
+#define __raw_cpu_read_const(pcp)	__raw_cpu_read(, , pcp)
+
+#else /* CONFIG_USE_X86_SEG_SUPPORT */
+
+#define __raw_cpu_read(size, qual, _var)				\
+({									\
+	__pcpu_type_##size pfo_val__;					\
+	asm qual (__pcpu_op2_##size("mov", __percpu_arg([var]), "%[val]") \
+	    : [val] __pcpu_reg_##size("=", pfo_val__)			\
+	    : [var] "m" (__my_cpu_var(_var)));				\
+	(typeof(_var))(unsigned long) pfo_val__;			\
+})
+
+#define __raw_cpu_write(size, qual, _var, _val)				\
+do {									\
+	__pcpu_type_##size pto_val__ = __pcpu_cast_##size(_val);	\
+	if (0) {		                                        \
+		typeof(_var) pto_tmp__;					\
+		pto_tmp__ = (_val);					\
+		(void)pto_tmp__;					\
+	}								\
+	asm qual(__pcpu_op2_##size("mov", "%[val]", __percpu_arg([var])) \
+	    : [var] "=m" (__my_cpu_var(_var))				\
+	    : [val] __pcpu_reg_imm_##size(pto_val__));			\
+} while (0)
+
+/*
+ * The generic per-cpu infrastrucutre is not suitable for
+ * reading const-qualified variables.
+ */
+#define __raw_cpu_read_const(pcp)	({ BUILD_BUG(); (typeof(pcp))0; })
+
+#endif /* CONFIG_USE_X86_SEG_SUPPORT */
+
+#define percpu_stable_op(size, op, _var)				\
+({									\
+	__pcpu_type_##size pfo_val__;					\
+	asm(__pcpu_op2_##size(op, __force_percpu_arg(a[var]), "%[val]")	\
+	    : [val] __pcpu_reg_##size("=", pfo_val__)			\
+	    : [var] "i" (&(_var)));					\
+	(typeof(_var))(unsigned long) pfo_val__;			\
+})
+
+#define percpu_unary_op(size, qual, op, _var)				\
+({									\
+	asm qual (__pcpu_op1_##size(op, __percpu_arg([var]))		\
+	    : [var] "+m" (__my_cpu_var(_var)));				\
+})
+
+#define percpu_binary_op(size, qual, op, _var, _val)			\
 do {									\
 	__pcpu_type_##size pto_val__ = __pcpu_cast_##size(_val);	\
 	if (0) {		                                        \
@@ -156,12 +217,6 @@ do {									\
 	    : [var] "+m" (__my_cpu_var(_var))				\
 	    : [val] __pcpu_reg_imm_##size(pto_val__));			\
 } while (0)
-
-#define percpu_unary_op(size, qual, op, _var)				\
-({									\
-	asm qual (__pcpu_op1_##size(op, __percpu_arg([var]))		\
-	    : [var] "+m" (__my_cpu_var(_var)));				\
-})
 
 /*
  * Generate a percpu add to memory instruction and optimize code
@@ -182,26 +237,8 @@ do {									\
 	else if (pao_ID__ == -1)					\
 		percpu_unary_op(size, qual, "dec", var);		\
 	else								\
-		percpu_to_op(size, qual, "add", var, val);		\
+		percpu_binary_op(size, qual, "add", var, val);		\
 } while (0)
-
-#define percpu_from_op(size, qual, op, _var)				\
-({									\
-	__pcpu_type_##size pfo_val__;					\
-	asm qual (__pcpu_op2_##size(op, __percpu_arg([var]), "%[val]")	\
-	    : [val] __pcpu_reg_##size("=", pfo_val__)			\
-	    : [var] "m" (__my_cpu_var(_var)));				\
-	(typeof(_var))(unsigned long) pfo_val__;			\
-})
-
-#define percpu_stable_op(size, op, _var)				\
-({									\
-	__pcpu_type_##size pfo_val__;					\
-	asm(__pcpu_op2_##size(op, __force_percpu_arg(a[var]), "%[val]")	\
-	    : [val] __pcpu_reg_##size("=", pfo_val__)			\
-	    : [var] "i" (&(_var)));					\
-	(typeof(_var))(unsigned long) pfo_val__;			\
-})
 
 /*
  * Add return operation
@@ -419,71 +456,29 @@ do {									\
  */
 #define this_cpu_read_stable(pcp)	__pcpu_size_call_return(this_cpu_read_stable_, pcp)
 
-#ifdef CONFIG_USE_X86_SEG_SUPPORT
+#define raw_cpu_read_1(pcp)		__raw_cpu_read(1, , pcp)
+#define raw_cpu_read_2(pcp)		__raw_cpu_read(2, , pcp)
+#define raw_cpu_read_4(pcp)		__raw_cpu_read(4, , pcp)
+#define raw_cpu_write_1(pcp, val)	__raw_cpu_write(1, , pcp, val)
+#define raw_cpu_write_2(pcp, val)	__raw_cpu_write(2, , pcp, val)
+#define raw_cpu_write_4(pcp, val)	__raw_cpu_write(4, , pcp, val)
 
-#define __raw_cpu_read(qual, pcp)					\
-({									\
-	*(qual __my_cpu_type(pcp) *)__my_cpu_ptr(&(pcp));		\
-})
-
-#define __raw_cpu_write(qual, pcp, val)					\
-do {									\
-	*(qual __my_cpu_type(pcp) *)__my_cpu_ptr(&(pcp)) = (val);	\
-} while (0)
-
-#define raw_cpu_read_1(pcp)		__raw_cpu_read(, pcp)
-#define raw_cpu_read_2(pcp)		__raw_cpu_read(, pcp)
-#define raw_cpu_read_4(pcp)		__raw_cpu_read(, pcp)
-#define raw_cpu_write_1(pcp, val)	__raw_cpu_write(, pcp, val)
-#define raw_cpu_write_2(pcp, val)	__raw_cpu_write(, pcp, val)
-#define raw_cpu_write_4(pcp, val)	__raw_cpu_write(, pcp, val)
-
-#define this_cpu_read_1(pcp)		__raw_cpu_read(volatile, pcp)
-#define this_cpu_read_2(pcp)		__raw_cpu_read(volatile, pcp)
-#define this_cpu_read_4(pcp)		__raw_cpu_read(volatile, pcp)
-#define this_cpu_write_1(pcp, val)	__raw_cpu_write(volatile, pcp, val)
-#define this_cpu_write_2(pcp, val)	__raw_cpu_write(volatile, pcp, val)
-#define this_cpu_write_4(pcp, val)	__raw_cpu_write(volatile, pcp, val)
+#define this_cpu_read_1(pcp)		__raw_cpu_read(1, volatile, pcp)
+#define this_cpu_read_2(pcp)		__raw_cpu_read(2, volatile, pcp)
+#define this_cpu_read_4(pcp)		__raw_cpu_read(4, volatile, pcp)
+#define this_cpu_write_1(pcp, val)	__raw_cpu_write(1, volatile, pcp, val)
+#define this_cpu_write_2(pcp, val)	__raw_cpu_write(2, volatile, pcp, val)
+#define this_cpu_write_4(pcp, val)	__raw_cpu_write(4, volatile, pcp, val)
 
 #ifdef CONFIG_X86_64
-#define raw_cpu_read_8(pcp)		__raw_cpu_read(, pcp)
-#define raw_cpu_write_8(pcp, val)	__raw_cpu_write(, pcp, val)
+#define raw_cpu_read_8(pcp)		__raw_cpu_read(8, , pcp)
+#define raw_cpu_write_8(pcp, val)	__raw_cpu_write(8, , pcp, val)
 
-#define this_cpu_read_8(pcp)		__raw_cpu_read(volatile, pcp)
-#define this_cpu_write_8(pcp, val)	__raw_cpu_write(volatile, pcp, val)
+#define this_cpu_read_8(pcp)		__raw_cpu_read(8, volatile, pcp)
+#define this_cpu_write_8(pcp, val)	__raw_cpu_write(8, volatile, pcp, val)
 #endif
 
-#define this_cpu_read_const(pcp)	__raw_cpu_read(, pcp)
-#else /* CONFIG_USE_X86_SEG_SUPPORT */
-
-#define raw_cpu_read_1(pcp)		percpu_from_op(1, , "mov", pcp)
-#define raw_cpu_read_2(pcp)		percpu_from_op(2, , "mov", pcp)
-#define raw_cpu_read_4(pcp)		percpu_from_op(4, , "mov", pcp)
-#define raw_cpu_write_1(pcp, val)	percpu_to_op(1, , "mov", (pcp), val)
-#define raw_cpu_write_2(pcp, val)	percpu_to_op(2, , "mov", (pcp), val)
-#define raw_cpu_write_4(pcp, val)	percpu_to_op(4, , "mov", (pcp), val)
-
-#define this_cpu_read_1(pcp)		percpu_from_op(1, volatile, "mov", pcp)
-#define this_cpu_read_2(pcp)		percpu_from_op(2, volatile, "mov", pcp)
-#define this_cpu_read_4(pcp)		percpu_from_op(4, volatile, "mov", pcp)
-#define this_cpu_write_1(pcp, val)	percpu_to_op(1, volatile, "mov", (pcp), val)
-#define this_cpu_write_2(pcp, val)	percpu_to_op(2, volatile, "mov", (pcp), val)
-#define this_cpu_write_4(pcp, val)	percpu_to_op(4, volatile, "mov", (pcp), val)
-
-#ifdef CONFIG_X86_64
-#define raw_cpu_read_8(pcp)		percpu_from_op(8, , "mov", pcp)
-#define raw_cpu_write_8(pcp, val)	percpu_to_op(8, , "mov", (pcp), val)
-
-#define this_cpu_read_8(pcp)		percpu_from_op(8, volatile, "mov", pcp)
-#define this_cpu_write_8(pcp, val)	percpu_to_op(8, volatile, "mov", (pcp), val)
-#endif
-
-/*
- * The generic per-cpu infrastrucutre is not suitable for
- * reading const-qualified variables.
- */
-#define this_cpu_read_const(pcp)	({ BUILD_BUG(); (typeof(pcp))0; })
-#endif /* CONFIG_USE_X86_SEG_SUPPORT */
+#define this_cpu_read_const(pcp)	__raw_cpu_read_const(pcp)
 
 #define this_cpu_read_stable_1(pcp)	percpu_stable_op(1, "mov", pcp)
 #define this_cpu_read_stable_2(pcp)	percpu_stable_op(2, "mov", pcp)
@@ -492,12 +487,12 @@ do {									\
 #define raw_cpu_add_1(pcp, val)		percpu_add_op(1, , (pcp), val)
 #define raw_cpu_add_2(pcp, val)		percpu_add_op(2, , (pcp), val)
 #define raw_cpu_add_4(pcp, val)		percpu_add_op(4, , (pcp), val)
-#define raw_cpu_and_1(pcp, val)		percpu_to_op(1, , "and", (pcp), val)
-#define raw_cpu_and_2(pcp, val)		percpu_to_op(2, , "and", (pcp), val)
-#define raw_cpu_and_4(pcp, val)		percpu_to_op(4, , "and", (pcp), val)
-#define raw_cpu_or_1(pcp, val)		percpu_to_op(1, , "or", (pcp), val)
-#define raw_cpu_or_2(pcp, val)		percpu_to_op(2, , "or", (pcp), val)
-#define raw_cpu_or_4(pcp, val)		percpu_to_op(4, , "or", (pcp), val)
+#define raw_cpu_and_1(pcp, val)		percpu_binary_op(1, , "and", (pcp), val)
+#define raw_cpu_and_2(pcp, val)		percpu_binary_op(2, , "and", (pcp), val)
+#define raw_cpu_and_4(pcp, val)		percpu_binary_op(4, , "and", (pcp), val)
+#define raw_cpu_or_1(pcp, val)		percpu_binary_op(1, , "or", (pcp), val)
+#define raw_cpu_or_2(pcp, val)		percpu_binary_op(2, , "or", (pcp), val)
+#define raw_cpu_or_4(pcp, val)		percpu_binary_op(4, , "or", (pcp), val)
 #define raw_cpu_xchg_1(pcp, val)	raw_percpu_xchg_op(pcp, val)
 #define raw_cpu_xchg_2(pcp, val)	raw_percpu_xchg_op(pcp, val)
 #define raw_cpu_xchg_4(pcp, val)	raw_percpu_xchg_op(pcp, val)
@@ -505,12 +500,12 @@ do {									\
 #define this_cpu_add_1(pcp, val)	percpu_add_op(1, volatile, (pcp), val)
 #define this_cpu_add_2(pcp, val)	percpu_add_op(2, volatile, (pcp), val)
 #define this_cpu_add_4(pcp, val)	percpu_add_op(4, volatile, (pcp), val)
-#define this_cpu_and_1(pcp, val)	percpu_to_op(1, volatile, "and", (pcp), val)
-#define this_cpu_and_2(pcp, val)	percpu_to_op(2, volatile, "and", (pcp), val)
-#define this_cpu_and_4(pcp, val)	percpu_to_op(4, volatile, "and", (pcp), val)
-#define this_cpu_or_1(pcp, val)		percpu_to_op(1, volatile, "or", (pcp), val)
-#define this_cpu_or_2(pcp, val)		percpu_to_op(2, volatile, "or", (pcp), val)
-#define this_cpu_or_4(pcp, val)		percpu_to_op(4, volatile, "or", (pcp), val)
+#define this_cpu_and_1(pcp, val)	percpu_binary_op(1, volatile, "and", (pcp), val)
+#define this_cpu_and_2(pcp, val)	percpu_binary_op(2, volatile, "and", (pcp), val)
+#define this_cpu_and_4(pcp, val)	percpu_binary_op(4, volatile, "and", (pcp), val)
+#define this_cpu_or_1(pcp, val)		percpu_binary_op(1, volatile, "or", (pcp), val)
+#define this_cpu_or_2(pcp, val)		percpu_binary_op(2, volatile, "or", (pcp), val)
+#define this_cpu_or_4(pcp, val)		percpu_binary_op(4, volatile, "or", (pcp), val)
 #define this_cpu_xchg_1(pcp, nval)	this_percpu_xchg_op(pcp, nval)
 #define this_cpu_xchg_2(pcp, nval)	this_percpu_xchg_op(pcp, nval)
 #define this_cpu_xchg_4(pcp, nval)	this_percpu_xchg_op(pcp, nval)
@@ -543,16 +538,16 @@ do {									\
 #define this_cpu_read_stable_8(pcp)	percpu_stable_op(8, "mov", pcp)
 
 #define raw_cpu_add_8(pcp, val)			percpu_add_op(8, , (pcp), val)
-#define raw_cpu_and_8(pcp, val)			percpu_to_op(8, , "and", (pcp), val)
-#define raw_cpu_or_8(pcp, val)			percpu_to_op(8, , "or", (pcp), val)
+#define raw_cpu_and_8(pcp, val)			percpu_binary_op(8, , "and", (pcp), val)
+#define raw_cpu_or_8(pcp, val)			percpu_binary_op(8, , "or", (pcp), val)
 #define raw_cpu_add_return_8(pcp, val)		percpu_add_return_op(8, , pcp, val)
 #define raw_cpu_xchg_8(pcp, nval)		raw_percpu_xchg_op(pcp, nval)
 #define raw_cpu_cmpxchg_8(pcp, oval, nval)	percpu_cmpxchg_op(8, , pcp, oval, nval)
 #define raw_cpu_try_cmpxchg_8(pcp, ovalp, nval)	percpu_try_cmpxchg_op(8, , pcp, ovalp, nval)
 
 #define this_cpu_add_8(pcp, val)		percpu_add_op(8, volatile, (pcp), val)
-#define this_cpu_and_8(pcp, val)		percpu_to_op(8, volatile, "and", (pcp), val)
-#define this_cpu_or_8(pcp, val)			percpu_to_op(8, volatile, "or", (pcp), val)
+#define this_cpu_and_8(pcp, val)		percpu_binary_op(8, volatile, "and", (pcp), val)
+#define this_cpu_or_8(pcp, val)			percpu_binary_op(8, volatile, "or", (pcp), val)
 #define this_cpu_add_return_8(pcp, val)		percpu_add_return_op(8, volatile, pcp, val)
 #define this_cpu_xchg_8(pcp, nval)		this_percpu_xchg_op(pcp, nval)
 #define this_cpu_cmpxchg_8(pcp, oval, nval)	percpu_cmpxchg_op(8, volatile, pcp, oval, nval)
