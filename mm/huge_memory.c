@@ -212,6 +212,7 @@ retry:
 		folio_put(zero_folio);
 		goto retry;
 	}
+	__folio_set_reserved(zero_folio);
 	WRITE_ONCE(huge_zero_pfn, folio_pfn(zero_folio));
 
 	/* We take additional reference here. It will be put back by shrinker */
@@ -264,6 +265,7 @@ static unsigned long shrink_huge_zero_page_scan(struct shrinker *shrink,
 		struct folio *zero_folio = xchg(&huge_zero_folio, NULL);
 		BUG_ON(zero_folio == NULL);
 		WRITE_ONCE(huge_zero_pfn, ~0UL);
+		__folio_clear_reserved(zero_folio);
 		folio_put(zero_folio);
 		return HPAGE_PMD_NR;
 	}
