@@ -44,6 +44,7 @@
 #include "xe_migrate.h"
 #include "xe_mmio.h"
 #include "xe_pat.h"
+#include "xe_pcode.h"
 #include "xe_pm.h"
 #include "xe_mocs.h"
 #include "xe_reg_sr.h"
@@ -160,7 +161,7 @@ static int emit_wa_job(struct xe_gt *gt, struct xe_exec_queue *q)
 
 	if (q->hwe->class == XE_ENGINE_CLASS_RENDER)
 		/* Big enough to emit all of the context's 3DSTATE */
-		bb = xe_bb_new(gt, xe_lrc_size(gt_to_xe(gt), q->hwe->class), false);
+		bb = xe_bb_new(gt, xe_gt_lrc_size(gt, q->hwe->class), false);
 	else
 		/* Just pick a large BB size */
 		bb = xe_bb_new(gt, SZ_4K, false);
@@ -244,7 +245,7 @@ int xe_gt_record_default_lrcs(struct xe_gt *gt)
 		xe_tuning_process_lrc(hwe);
 
 		default_lrc = drmm_kzalloc(&xe->drm,
-					   xe_lrc_size(xe, hwe->class),
+					   xe_gt_lrc_size(gt, hwe->class),
 					   GFP_KERNEL);
 		if (!default_lrc)
 			return -ENOMEM;
@@ -294,7 +295,7 @@ int xe_gt_record_default_lrcs(struct xe_gt *gt)
 		xe_map_memcpy_from(xe, default_lrc,
 				   &q->lrc[0].bo->vmap,
 				   xe_lrc_pphwsp_offset(&q->lrc[0]),
-				   xe_lrc_size(xe, hwe->class));
+				   xe_gt_lrc_size(gt, hwe->class));
 
 		gt->default_lrc[hwe->class] = default_lrc;
 put_nop_q:
@@ -318,14 +319,6 @@ int xe_gt_init_early(struct xe_gt *gt)
 			return err;
 	}
 
-	err = xe_force_wake_get(gt_to_fw(gt), XE_FW_GT);
-	if (err)
-		return err;
-
-	err = xe_force_wake_put(gt_to_fw(gt), XE_FW_GT);
-	if (err)
-		return err;
-
 	xe_reg_sr_init(&gt->reg_sr, "GT", gt_to_xe(gt));
 
 	err = xe_wa_init(gt);
@@ -335,6 +328,9 @@ int xe_gt_init_early(struct xe_gt *gt)
 	xe_wa_process_gt(gt);
 	xe_wa_process_oob(gt);
 	xe_tuning_process_gt(gt);
+
+	xe_force_wake_init_gt(gt, gt_to_fw(gt));
+	xe_pcode_init(gt);
 
 	return 0;
 }
@@ -434,6 +430,10 @@ static int all_fw_domain_init(struct xe_gt *gt)
 	if (err)
 		goto err_force_wake;
 
+	err = xe_uc_init_post_hwconfig(&gt->uc);
+	if (err)
+		goto err_force_wake;
+
 	if (!xe_gt_is_media_type(gt)) {
 		/*
 		 * USM has its only SA pool to non-block behind user operations
@@ -460,10 +460,6 @@ static int all_fw_domain_init(struct xe_gt *gt)
 		}
 	}
 
-	err = xe_uc_init_post_hwconfig(&gt->uc);
-	if (err)
-		goto err_force_wake;
-
 	err = xe_uc_init_hw(&gt->uc);
 	if (err)
 		goto err_force_wake;
@@ -476,6 +472,9 @@ static int all_fw_domain_init(struct xe_gt *gt)
 
 	if (IS_SRIOV_PF(gt_to_xe(gt)) && !xe_gt_is_media_type(gt))
 		xe_lmtt_init_hw(&gt_to_tile(gt)->sriov.pf.lmtt);
+
+	if (IS_SRIOV_PF(gt_to_xe(gt)))
+		xe_gt_sriov_pf_init_hw(gt);
 
 	err = xe_force_wake_put(gt_to_fw(gt), XE_FORCEWAKE_ALL);
 	XE_WARN_ON(err);
@@ -514,9 +513,6 @@ int xe_gt_init_hwconfig(struct xe_gt *gt)
 	err = xe_uc_init_hwconfig(&gt->uc);
 	if (err)
 		goto out_fw;
-
-	/* XXX: Fake that we pull the engine mask from hwconfig blob */
-	gt->info.engine_mask = gt->info.__engine_mask;
 
 out_fw:
 	xe_force_wake_put(gt_to_fw(gt), XE_FW_GT);
@@ -613,6 +609,9 @@ static int do_gt_restart(struct xe_gt *gt)
 	if (IS_SRIOV_PF(gt_to_xe(gt)) && !xe_gt_is_media_type(gt))
 		xe_lmtt_init_hw(&gt_to_tile(gt)->sriov.pf.lmtt);
 
+	if (IS_SRIOV_PF(gt_to_xe(gt)))
+		xe_gt_sriov_pf_init_hw(gt);
+
 	xe_mocs_init(gt);
 	err = xe_uc_start(&gt->uc);
 	if (err)
@@ -632,6 +631,9 @@ static int do_gt_restart(struct xe_gt *gt)
 static int gt_reset(struct xe_gt *gt)
 {
 	int err;
+
+	if (xe_device_wedged(gt_to_xe(gt)))
+		return -ECANCELED;
 
 	/* We only support GT resets with GuC submission */
 	if (!xe_device_uc_enabled(gt_to_xe(gt)))
@@ -655,9 +657,7 @@ static int gt_reset(struct xe_gt *gt)
 	xe_uc_stop_prepare(&gt->uc);
 	xe_gt_pagefault_reset(gt);
 
-	err = xe_uc_stop(&gt->uc);
-	if (err)
-		goto err_out;
+	xe_uc_stop(&gt->uc);
 
 	xe_gt_tlb_invalidation_reset(gt);
 
@@ -685,7 +685,7 @@ err_msg:
 err_fail:
 	xe_gt_err(gt, "reset failed (%pe)\n", ERR_PTR(err));
 
-	gt_to_xe(gt)->needs_flr_on_fini = true;
+	xe_device_declare_wedged(gt_to_xe(gt));
 
 	return err;
 }
