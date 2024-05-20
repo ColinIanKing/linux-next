@@ -220,6 +220,8 @@ extern int amdgpu_discovery;
 extern int amdgpu_mes;
 extern int amdgpu_mes_log_enable;
 extern int amdgpu_mes_kiq;
+extern int amdgpu_uni_mes;
+extern int amdgpu_jpeg_test;
 extern int amdgpu_noretry;
 extern int amdgpu_force_asic_type;
 extern int amdgpu_smartshift_bias;
@@ -253,10 +255,12 @@ extern int amdgpu_cik_support;
 extern int amdgpu_num_kcq;
 
 #define AMDGPU_VCNFW_LOG_SIZE (32 * 1024)
+#define AMDGPU_UMSCHFW_LOG_SIZE (32 * 1024)
 extern int amdgpu_vcnfw_log;
 extern int amdgpu_sg_display;
 extern int amdgpu_umsch_mm;
 extern int amdgpu_seamless;
+extern int amdgpu_umsch_mm_fwlog;
 
 extern int amdgpu_user_partt_mode;
 extern int amdgpu_agp;
@@ -1014,6 +1018,7 @@ struct amdgpu_device {
 
 	/* jpeg */
 	struct amdgpu_jpeg		jpeg;
+	bool enable_jpeg_test;
 
 	/* vpe */
 	struct amdgpu_vpe		vpe;
@@ -1046,6 +1051,7 @@ struct amdgpu_device {
 	/* mes */
 	bool                            enable_mes;
 	bool                            enable_mes_kiq;
+	bool                            enable_uni_mes;
 	struct amdgpu_mes               mes;
 	struct amdgpu_mqd               mqds[AMDGPU_HW_IP_NUM];
 
@@ -1161,6 +1167,7 @@ struct amdgpu_device {
 	bool                            debug_largebar;
 	bool                            debug_disable_soft_recovery;
 	bool                            debug_use_vram_fw_buf;
+	bool                            debug_enable_ras_aca;
 };
 
 static inline uint32_t amdgpu_ip_version(const struct amdgpu_device *adev,
