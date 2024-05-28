@@ -98,10 +98,10 @@ static void __init alloc_reserved_mem_array(void)
 }
 
 /*
- * fdt_reserved_mem_save_node() - save fdt node for second pass initialization
+ * of_reserved_mem_save_node() - save fdt node for second pass initialization
  */
-static void __init fdt_reserved_mem_save_node(struct device_node *node, const char *uname,
-					      phys_addr_t base, phys_addr_t size)
+static void __init of_reserved_mem_save_node(struct device_node *node, const char *uname,
+					     phys_addr_t base, phys_addr_t size)
 {
 	struct reserved_mem *rmem = &reserved_mem[reserved_mem_count];
 
@@ -202,16 +202,16 @@ static int __init __fdt_reserved_mem_check_root(unsigned long node)
 }
 
 /**
- * fdt_scan_reserved_mem_reg_nodes() - Store info for the "reg" defined
+ * of_scan_reserved_mem_reg_nodes() - Store info for the "reg" defined
  * reserved memory regions.
  *
  * This function is used to scan through the DT and store the
  * information for the reserved memory regions that are defined using
  * the "reg" property. The region node number, name, base address, and
  * size are all stored in the reserved_mem array by calling the
- * fdt_reserved_mem_save_node() function.
+ * of_reserved_mem_save_node() function.
  */
-static void __init fdt_scan_reserved_mem_reg_nodes(void)
+static void __init of_scan_reserved_mem_reg_nodes(void)
 {
 	struct device_node *node, *child;
 	phys_addr_t base, size;
@@ -244,7 +244,7 @@ static void __init fdt_scan_reserved_mem_reg_nodes(void)
 		size = res.end - res.start + 1;
 
 		if (size)
-			fdt_reserved_mem_save_node(child, uname, base, size);
+			of_reserved_mem_save_node(child, uname, base, size);
 	}
 }
 
@@ -442,7 +442,7 @@ static int __init __reserved_mem_alloc_size(unsigned long node, const char *unam
 		       uname, (unsigned long)(size / SZ_1M));
 		return -ENOMEM;
 	}
-	fdt_reserved_mem_save_node(NULL, uname, base, size);
+	of_reserved_mem_save_node(NULL, uname, base, size);
 	return 0;
 }
 
@@ -526,15 +526,15 @@ static void __init __rmem_check_for_overlap(void)
 }
 
 /**
- * fdt_init_reserved_mem() - allocate and init all saved reserved memory regions
+ * of_init_reserved_mem() - allocate and init all saved reserved memory regions
  */
-void __init fdt_init_reserved_mem(void)
+void __init of_init_reserved_mem(void)
 {
 	int i;
 
 	alloc_reserved_mem_array();
 
-	fdt_scan_reserved_mem_reg_nodes();
+	of_scan_reserved_mem_reg_nodes();
 
 	/* check for overlapping reserved regions */
 	__rmem_check_for_overlap();
