@@ -732,6 +732,12 @@ static const struct dmi_system_id dmi_ignore_port_nodes[] = {
 			DMI_EXACT_MATCH(DMI_PRODUCT_NAME, "XPS 9315"),
 		},
 	},
+	{
+		.matches = {
+			DMI_EXACT_MATCH(DMI_SYS_VENDOR, "Dell Inc."),
+			DMI_EXACT_MATCH(DMI_PRODUCT_NAME, "XPS 9320"),
+		},
+	},
 	{ }
 };
 
