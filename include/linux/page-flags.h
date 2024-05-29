@@ -957,6 +957,7 @@ PAGEFLAG_FALSE(HasHWPoisoned, has_hwpoisoned)
 #define PG_guard	0x08000000
 #define PG_hugetlb	0x04000000
 #define PG_slab		0x02000000
+#define PG_zsmalloc	0x01000000
 #define PAGE_MAPCOUNT_RESERVE	(~0x0000ffff)
 
 #define PageType(page, flag)						\
@@ -1071,6 +1072,8 @@ FOLIO_TYPE_OPS(hugetlb, hugetlb)
 #else
 FOLIO_TEST_FLAG_FALSE(hugetlb)
 #endif
+
+PAGE_TYPE_OPS(Zsmalloc, zsmalloc, zsmalloc)
 
 /**
  * PageHuge - Determine if the page belongs to hugetlbfs
