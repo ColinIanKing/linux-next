@@ -15,6 +15,7 @@
 #include <linux/errno.h>
 #include <linux/io.h>
 #include <linux/kernel.h>
+#include <linux/of.h>
 
 #include "sh_pfc.h"
 
@@ -3048,13 +3049,22 @@ static const struct pinmux_bias_reg pinmux_bias_regs[] = {
 	{ /* sentinel */ }
 };
 
+static int r8a77980_pinmux_init(struct sh_pfc *pfc)
+{
+	if (of_machine_is_compatible("renesas,r8a77980a"))
+		r8a77980_pinmux_info.nr_fuse_regs = 5;
+
+	return 0;
+}
+
 static const struct sh_pfc_soc_operations r8a77980_pfc_ops = {
+	.init = r8a77980_pinmux_init,
 	.pin_to_pocctrl = r8a77980_pin_to_pocctrl,
 	.get_bias = rcar_pinmux_get_bias,
 	.set_bias = rcar_pinmux_set_bias,
 };
 
-const struct sh_pfc_soc_info r8a77980_pinmux_info = {
+struct sh_pfc_soc_info r8a77980_pinmux_info = {
 	.name = "r8a77980_pfc",
 	.ops = &r8a77980_pfc_ops,
 	.unlock_reg = 0xe6060000, /* PMMR */
@@ -3074,4 +3084,6 @@ const struct sh_pfc_soc_info r8a77980_pinmux_info = {
 
 	.pinmux_data = pinmux_data,
 	.pinmux_data_size = ARRAY_SIZE(pinmux_data),
+
+	.nr_fuse_regs = 1,
 };

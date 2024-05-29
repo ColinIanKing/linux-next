@@ -290,6 +290,8 @@ struct sh_pfc_soc_info {
 	unsigned int pinmux_data_size;
 
 	u32 unlock_reg;		/* can be literal address or mask */
+
+	unsigned int nr_fuse_regs;
 };
 
 extern const struct sh_pfc_soc_info emev2_pinmux_info;
@@ -316,7 +318,7 @@ extern const struct sh_pfc_soc_info r8a77960_pinmux_info;
 extern const struct sh_pfc_soc_info r8a77961_pinmux_info;
 extern const struct sh_pfc_soc_info r8a77965_pinmux_info;
 extern const struct sh_pfc_soc_info r8a77970_pinmux_info;
-extern const struct sh_pfc_soc_info r8a77980_pinmux_info;
+extern struct sh_pfc_soc_info r8a77980_pinmux_info;
 extern const struct sh_pfc_soc_info r8a77990_pinmux_info;
 extern const struct sh_pfc_soc_info r8a77995_pinmux_info;
 extern const struct sh_pfc_soc_info r8a779a0_pinmux_info;
