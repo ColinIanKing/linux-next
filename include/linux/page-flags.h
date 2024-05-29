@@ -945,15 +945,19 @@ PAGEFLAG_FALSE(HasHWPoisoned, has_hwpoisoned)
  * mistaken for a page type value.
  */
 
-#define PAGE_TYPE_BASE	0xf0000000
-/* Reserve		0x0000007f to catch underflows of _mapcount */
-#define PAGE_MAPCOUNT_RESERVE	-128
-#define PG_buddy	0x00000080
-#define PG_offline	0x00000100
-#define PG_table	0x00000200
-#define PG_guard	0x00000400
-#define PG_hugetlb	0x00000800
-#define PG_slab		0x00001000
+#define PAGE_TYPE_BASE	0x80000000
+/*
+ * Reserve 0xffff0000 - 0xfffffffe to catch _mapcount underflows and
+ * allow owners that set a type to reuse the lower 16 bit for their own
+ * purposes.
+ */
+#define PG_buddy	0x40000000
+#define PG_offline	0x20000000
+#define PG_table	0x10000000
+#define PG_guard	0x08000000
+#define PG_hugetlb	0x04008000
+#define PG_slab		0x02000000
+#define PAGE_MAPCOUNT_RESERVE	(~0x0000ffff)
 
 #define PageType(page, flag)						\
 	((page->page_type & (PAGE_TYPE_BASE | flag)) == PAGE_TYPE_BASE)
