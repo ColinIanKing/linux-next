@@ -955,7 +955,7 @@ PAGEFLAG_FALSE(HasHWPoisoned, has_hwpoisoned)
 #define PG_offline	0x20000000
 #define PG_table	0x10000000
 #define PG_guard	0x08000000
-#define PG_hugetlb	0x04008000
+#define PG_hugetlb	0x04000000
 #define PG_slab		0x02000000
 #define PAGE_MAPCOUNT_RESERVE	(~0x0000ffff)
 
