@@ -945,7 +945,7 @@ enum pagetype {
 	PG_offline	= 0x20000000,
 	PG_table	= 0x10000000,
 	PG_guard	= 0x08000000,
-	PG_hugetlb	= 0x04008000,
+	PG_hugetlb	= 0x04000000,
 	PG_slab		= 0x02000000,
 
 	PAGE_TYPE_BASE	= 0x80000000,
