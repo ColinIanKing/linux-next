@@ -95,9 +95,51 @@ static inline int object_is_on_stack(const void *obj)
 extern void thread_stack_cache_init(void);
 
 #ifdef CONFIG_DEBUG_STACK_USAGE
+#ifdef CONFIG_VM_EVENT_COUNTERS
+#include <linux/vm_event_item.h>
+
+/* Count the maximum pages reached in kernel stacks */
+static inline void kstack_histogram(unsigned long used_stack)
+{
+	if (used_stack <= 1024)
+		this_cpu_inc(vm_event_states.event[KSTACK_1K]);
+#if THREAD_SIZE > 1024
+	else if (used_stack <= 2048)
+		this_cpu_inc(vm_event_states.event[KSTACK_2K]);
+#endif
+#if THREAD_SIZE > 2048
+	else if (used_stack <= 4096)
+		this_cpu_inc(vm_event_states.event[KSTACK_4K]);
+#endif
+#if THREAD_SIZE > 4096
+	else if (used_stack <= 8192)
+		this_cpu_inc(vm_event_states.event[KSTACK_8K]);
+#endif
+#if THREAD_SIZE > 8192
+	else if (used_stack <= 16384)
+		this_cpu_inc(vm_event_states.event[KSTACK_16K]);
+#endif
+#if THREAD_SIZE > 16384
+	else if (used_stack <= 32768)
+		this_cpu_inc(vm_event_states.event[KSTACK_32K]);
+#endif
+#if THREAD_SIZE > 32768
+	else if (used_stack <= 65536)
+		this_cpu_inc(vm_event_states.event[KSTACK_64K]);
+#endif
+#if THREAD_SIZE > 65536
+	else
+		this_cpu_inc(vm_event_states.event[KSTACK_REST]);
+#endif
+}
+#else /* !CONFIG_VM_EVENT_COUNTERS */
+static inline void kstack_histogram(unsigned long used_stack) {}
+#endif /* CONFIG_VM_EVENT_COUNTERS */
+
 static inline unsigned long stack_not_used(struct task_struct *p)
 {
 	unsigned long *n = end_of_stack(p);
+	unsigned long unused_stack;
 
 	do { 	/* Skip over canary */
 # ifdef CONFIG_STACK_GROWSUP
@@ -108,10 +150,13 @@ static inline unsigned long stack_not_used(struct task_struct *p)
 	} while (!*n);
 
 # ifdef CONFIG_STACK_GROWSUP
-	return (unsigned long)end_of_stack(p) - (unsigned long)n;
+	unused_stack = (unsigned long)end_of_stack(p) - (unsigned long)n;
 # else
-	return (unsigned long)n - (unsigned long)end_of_stack(p);
+	unused_stack = (unsigned long)n - (unsigned long)end_of_stack(p);
 # endif
+	kstack_histogram(THREAD_SIZE - unused_stack);
+
+	return unused_stack;
 }
 #endif
 extern void set_task_stack_end_magic(struct task_struct *tsk);
