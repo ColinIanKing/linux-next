@@ -156,8 +156,10 @@ static struct io_timer *get_expired_timer(struct io_clock *clock,
 	spin_lock(&clock->timer_lock);
 
 	if (clock->timers.nr &&
-	    time_after_eq(now, clock->timers.data[0]->expire))
+	    time_after_eq(now, clock->timers.data[0]->expire)) {
+		ret = *min_heap_peek(&clock->timers);
 		min_heap_pop(&clock->timers, &callbacks, NULL);
+	}
 
 	spin_unlock(&clock->timer_lock);
 
