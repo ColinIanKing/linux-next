@@ -4829,7 +4829,7 @@ vm_fault_t finish_fault(struct vm_fault *vmf)
 	vm_fault_t ret;
 	bool is_cow = (vmf->flags & FAULT_FLAG_WRITE) &&
 		      !(vma->vm_flags & VM_SHARED);
-	int type, nr_pages, i;
+	int type, nr_pages;
 	unsigned long addr = vmf->address;
 
 	/* Did we COW the page? */
