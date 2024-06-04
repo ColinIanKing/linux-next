@@ -29,6 +29,8 @@ void run_dio_using_hugetlb(unsigned int start_off, unsigned int end_off)
 	size_t writesize;
 	int free_hpage_b = 0;
 	int free_hpage_a = 0;
+	const int mmap_flags = MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB;
+	const int mmap_prot  = PROT_READ | PROT_WRITE;
 
 	writesize = end_off - start_off;
 
@@ -40,7 +42,7 @@ void run_dio_using_hugetlb(unsigned int start_off, unsigned int end_off)
 	/* Open the file to DIO */
 	fd = open("/tmp", O_TMPFILE | O_RDWR | O_DIRECT);
 	if (fd < 0)
-		ksft_exit_fail_msg("Error opening file");
+		ksft_exit_fail_perror("Error opening file\n");
 
 	/* Get the free huge pages before allocation */
 	free_hpage_b = get_free_hugepages();
@@ -50,11 +52,10 @@ void run_dio_using_hugetlb(unsigned int start_off, unsigned int end_off)
 	}
 
 	/* Allocate a hugetlb page */
-	orig_buffer = mmap(NULL, h_pagesize, PROT_READ | PROT_WRITE, MAP_PRIVATE
-			| MAP_ANONYMOUS | MAP_HUGETLB, -1, 0);
+	orig_buffer = mmap(NULL, h_pagesize, mmap_prot, mmap_flags, -1, 0);
 	if (orig_buffer == MAP_FAILED) {
 		close(fd);
-		ksft_exit_fail_msg("Error mapping memory");
+		ksft_exit_fail_perror("Error mapping memory\n");
 	}
 	buffer = orig_buffer;
 	buffer += start_off;
@@ -65,7 +66,7 @@ void run_dio_using_hugetlb(unsigned int start_off, unsigned int end_off)
 	if (write(fd, buffer, writesize) != (writesize)) {
 		munmap(orig_buffer, h_pagesize);
 		close(fd);
-		ksft_exit_fail_msg("Error writing to file");
+		ksft_exit_fail_perror("Error writing to file\n");
 	}
 
 	/* unmap the huge page */
@@ -80,12 +81,12 @@ void run_dio_using_hugetlb(unsigned int start_off, unsigned int end_off)
 	 * not match - that means there could still be a page which is pinned.
 	 */
 	if (free_hpage_a != free_hpage_b) {
-		printf("No. Free pages before allocation : %d\n", free_hpage_b);
-		printf("No. Free pages after munmap : %d\n", free_hpage_a);
+		ksft_print_msg("No. Free pages before allocation : %d\n", free_hpage_b);
+		ksft_print_msg("No. Free pages after munmap : %d\n", free_hpage_a);
 		ksft_test_result_fail(": Huge pages not freed!\n");
 	} else {
-		printf("No. Free pages before allocation : %d\n", free_hpage_b);
-		printf("No. Free pages after munmap : %d\n", free_hpage_a);
+		ksft_print_msg("No. Free pages before allocation : %d\n", free_hpage_b);
+		ksft_print_msg("No. Free pages after munmap : %d\n", free_hpage_a);
 		ksft_test_result_pass(": Huge pages freed successfully !\n");
 	}
 }
@@ -113,6 +114,5 @@ int main(void)
 	run_dio_using_hugetlb(pagesize / 2, (pagesize * 3) + (pagesize / 2));
 
 	ksft_finished();
-	return 0;
 }
 
