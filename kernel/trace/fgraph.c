@@ -255,24 +255,11 @@ static inline int get_frame_offset(struct task_struct *t, int offset)
 	return __get_offset(t->ret_stack[offset]);
 }
 
-/* Get FGRAPH_TYPE from the word from the @offset at ret_stack */
-static inline int get_fgraph_type(struct task_struct *t, int offset)
-{
-	return __get_type(t->ret_stack[offset]);
-}
-
 /* For BITMAP type: get the bitmask from the @offset at ret_stack */
 static inline unsigned long
 get_bitmap_bits(struct task_struct *t, int offset)
 {
 	return (t->ret_stack[offset] >> FGRAPH_INDEX_SHIFT) & FGRAPH_INDEX_MASK;
-}
-
-/* For BITMAP type: set the bits in the bitmap bitmask at @offset on ret_stack */
-static inline void
-set_bitmap_bits(struct task_struct *t, int offset, unsigned long bitmap)
-{
-	t->ret_stack[offset] |= (bitmap << FGRAPH_INDEX_SHIFT);
 }
 
 /* Write the bitmap to the ret_stack at @offset (does index, offset and bitmask) */
@@ -515,7 +502,7 @@ static struct fgraph_ops fgraph_stub = {
 static struct fgraph_ops *fgraph_direct_gops = &fgraph_stub;
 DEFINE_STATIC_CALL(fgraph_func, ftrace_graph_entry_stub);
 DEFINE_STATIC_CALL(fgraph_retfunc, ftrace_graph_ret_stub);
-DEFINE_STATIC_KEY_TRUE(fgraph_do_direct);
+static DEFINE_STATIC_KEY_TRUE(fgraph_do_direct);
 
 /**
  * ftrace_graph_stop - set to permanently disable function graph tracing
@@ -1177,6 +1164,7 @@ void fgraph_update_pid_func(void)
 	if (!(graph_ops.flags & FTRACE_OPS_FL_INITIALIZED))
 		return;
 
+#ifdef CONFIG_DYNAMIC_FTRACE
 	list_for_each_entry(op, &graph_ops.subop_list, list) {
 		if (op->flags & FTRACE_OPS_FL_PID) {
 			gops = container_of(op, struct fgraph_ops, ops);
@@ -1186,6 +1174,7 @@ void fgraph_update_pid_func(void)
 				static_call_update(fgraph_func, gops->entryfunc);
 		}
 	}
+#endif
 }
 
 /* Allocate a return stack for each task */
