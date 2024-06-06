@@ -197,7 +197,7 @@ INCORRECT (uses FOLL_GET calls):
     put_page()
 
 folio_maybe_dma_pinned(): the whole point of pinning
-===================================================
+====================================================
 
 The whole point of marking folios as "DMA-pinned" or "gup-pinned" is to be able
 to query, "is this folio DMA-pinned?" That allows code such as page_mkclean()
