@@ -629,7 +629,7 @@ static void btrfs_clear_oneshot_options(struct btrfs_fs_info *fs_info)
 	btrfs_clear_opt(fs_info->mount_opt, NOSPACECACHE);
 }
 
-static bool check_ro_option(struct btrfs_fs_info *fs_info,
+static bool check_ro_option(const struct btrfs_fs_info *fs_info,
 			    unsigned long mount_opt, unsigned long opt,
 			    const char *opt_name)
 {
@@ -641,7 +641,7 @@ static bool check_ro_option(struct btrfs_fs_info *fs_info,
 	return false;
 }
 
-bool btrfs_check_options(struct btrfs_fs_info *info, unsigned long *mount_opt,
+bool btrfs_check_options(const struct btrfs_fs_info *info, unsigned long *mount_opt,
 			 unsigned long flags)
 {
 	bool ret = true;
@@ -983,7 +983,7 @@ int btrfs_sync_fs(struct super_block *sb, int wait)
 		return 0;
 	}
 
-	btrfs_wait_ordered_roots(fs_info, U64_MAX, 0, (u64)-1);
+	btrfs_wait_ordered_roots(fs_info, U64_MAX, NULL);
 
 	trans = btrfs_attach_transaction_barrier(root);
 	if (IS_ERR(trans)) {
@@ -2257,9 +2257,7 @@ out:
 
 static int btrfs_freeze(struct super_block *sb)
 {
-	struct btrfs_trans_handle *trans;
 	struct btrfs_fs_info *fs_info = btrfs_sb(sb);
-	struct btrfs_root *root = fs_info->tree_root;
 
 	set_bit(BTRFS_FS_FROZEN, &fs_info->flags);
 	/*
@@ -2268,14 +2266,7 @@ static int btrfs_freeze(struct super_block *sb)
 	 * we want to avoid on a frozen filesystem), or do the commit
 	 * ourselves.
 	 */
-	trans = btrfs_attach_transaction_barrier(root);
-	if (IS_ERR(trans)) {
-		/* no transaction, don't bother */
-		if (PTR_ERR(trans) == -ENOENT)
-			return 0;
-		return PTR_ERR(trans);
-	}
-	return btrfs_commit_transaction(trans);
+	return btrfs_commit_current_transaction(fs_info->tree_root);
 }
 
 static int check_dev_super(struct btrfs_device *dev)
@@ -2590,6 +2581,7 @@ static int __init init_btrfs_fs(void)
 late_initcall(init_btrfs_fs);
 module_exit(exit_btrfs_fs)
 
+MODULE_DESCRIPTION("B-Tree File System (BTRFS)");
 MODULE_LICENSE("GPL");
 MODULE_SOFTDEP("pre: crc32c");
 MODULE_SOFTDEP("pre: xxhash64");
