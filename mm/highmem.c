@@ -136,6 +136,7 @@ unsigned long __totalhigh_pages(void)
 
 	return pages;
 }
+EXPORT_SYMBOL(__totalhigh_pages);
 
 static int pkmap_count[LAST_PKMAP];
 static  __cacheline_aligned_in_smp DEFINE_SPINLOCK(kmap_lock);
