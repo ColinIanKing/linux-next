@@ -111,9 +111,6 @@ static inline wait_queue_head_t *get_pkmap_wait_queue_head(unsigned int color)
 }
 #endif
 
-atomic_long_t _totalhigh_pages __read_mostly;
-EXPORT_SYMBOL(_totalhigh_pages);
-
 unsigned int __nr_free_highpages(void)
 {
 	struct zone *zone;
@@ -122,6 +119,19 @@ unsigned int __nr_free_highpages(void)
 	for_each_populated_zone(zone) {
 		if (is_highmem(zone))
 			pages += zone_page_state(zone, NR_FREE_PAGES);
+	}
+
+	return pages;
+}
+
+unsigned long __totalhigh_pages(void)
+{
+	unsigned long pages = 0;
+	struct zone *zone;
+
+	for_each_populated_zone(zone) {
+		if (is_highmem(zone))
+			pages += zone_managed_pages(zone);
 	}
 
 	return pages;
