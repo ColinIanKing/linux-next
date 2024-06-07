@@ -40,7 +40,7 @@ void run_dio_using_hugetlb(unsigned int start_off, unsigned int end_off)
 		ksft_exit_fail_msg("Unable to determine huge page size\n");
 
 	/* Open the file to DIO */
-	fd = open("/tmp", O_TMPFILE | O_RDWR | O_DIRECT);
+	fd = open("/tmp", O_TMPFILE | O_RDWR | O_DIRECT, 0664);
 	if (fd < 0)
 		ksft_exit_fail_perror("Error opening file\n");
 
