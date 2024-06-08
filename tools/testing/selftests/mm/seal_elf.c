@@ -16,6 +16,7 @@
 #include <sys/ioctl.h>
 #include <sys/vfs.h>
 #include <sys/stat.h>
+#include "mseal_helpers.h"
 
 /*
  * need those definition for manually build using gcc.
