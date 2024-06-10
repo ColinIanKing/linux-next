@@ -300,7 +300,7 @@ int vfs_fstatat(int dfd, const char __user *filename,
 			return vfs_fstat(dfd, stat);
 	}
 
-	name = getname_flags(filename, getname_statx_lookup_flags(statx_flags), NULL);
+	name = getname_flags(filename, getname_statx_lookup_flags(statx_flags));
 	ret = vfs_statx(dfd, name, statx_flags, stat, STATX_BASIC_STATS);
 	putname(name);
 
@@ -488,34 +488,39 @@ static int do_readlinkat(int dfd, const char __user *pathname,
 			 char __user *buf, int bufsiz)
 {
 	struct path path;
+	struct filename *name;
 	int error;
-	int empty = 0;
 	unsigned int lookup_flags = LOOKUP_EMPTY;
 
 	if (bufsiz <= 0)
 		return -EINVAL;
 
 retry:
-	error = user_path_at_empty(dfd, pathname, lookup_flags, &path, &empty);
-	if (!error) {
-		struct inode *inode = d_backing_inode(path.dentry);
+	name = getname_flags(pathname, lookup_flags);
+	error = filename_lookup(dfd, name, lookup_flags, &path, NULL);
+	if (unlikely(error)) {
+		putname(name);
+		return error;
+	}
 
-		error = empty ? -ENOENT : -EINVAL;
-		/*
-		 * AFS mountpoints allow readlink(2) but are not symlinks
-		 */
-		if (d_is_symlink(path.dentry) || inode->i_op->readlink) {
-			error = security_inode_readlink(path.dentry);
-			if (!error) {
-				touch_atime(&path);
-				error = vfs_readlink(path.dentry, buf, bufsiz);
-			}
+	/*
+	 * AFS mountpoints allow readlink(2) but are not symlinks
+	 */
+	if (d_is_symlink(path.dentry) ||
+	    d_backing_inode(path.dentry)->i_op->readlink) {
+		error = security_inode_readlink(path.dentry);
+		if (!error) {
+			touch_atime(&path);
+			error = vfs_readlink(path.dentry, buf, bufsiz);
 		}
-		path_put(&path);
-		if (retry_estale(error, lookup_flags)) {
-			lookup_flags |= LOOKUP_REVAL;
-			goto retry;
-		}
+	} else {
+		error = (name->name[0] == '\0') ? -ENOENT : -EINVAL;
+	}
+	path_put(&path);
+	putname(name);
+	if (retry_estale(error, lookup_flags)) {
+		lookup_flags |= LOOKUP_REVAL;
+		goto retry;
 	}
 	return error;
 }
@@ -705,7 +710,7 @@ SYSCALL_DEFINE5(statx,
 	int ret;
 	struct filename *name;
 
-	name = getname_flags(filename, getname_statx_lookup_flags(flags), NULL);
+	name = getname_flags(filename, getname_statx_lookup_flags(flags));
 	ret = do_statx(dfd, name, flags, mask, buffer);
 	putname(name);
 
