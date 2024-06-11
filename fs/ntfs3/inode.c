@@ -18,7 +18,7 @@
 #include "ntfs_fs.h"
 
 /*
- * ntfs_read_mft - Read record and parses MFT.
+ * ntfs_read_mft - Read record and parse MFT.
  */
 static struct inode *ntfs_read_mft(struct inode *inode,
 				   const struct cpu_str *name,
@@ -1093,33 +1093,31 @@ int ntfs_flush_inodes(struct super_block *sb, struct inode *i1,
 	if (!ret && i2)
 		ret = writeback_inode(i2);
 	if (!ret)
-		ret = sync_blockdev_nowait(sb->s_bdev);
+		ret = filemap_flush(sb->s_bdev_file->f_mapping);
 	return ret;
 }
 
-int inode_write_data(struct inode *inode, const void *data, size_t bytes)
+/*
+ * Helper function to read file.
+ */
+int inode_read_data(struct inode *inode, void *data, size_t bytes)
 {
 	pgoff_t idx;
+	struct address_space *mapping = inode->i_mapping;
 
-	/* Write non resident data. */
 	for (idx = 0; bytes; idx++) {
 		size_t op = bytes > PAGE_SIZE ? PAGE_SIZE : bytes;
-		struct page *page = ntfs_map_page(inode->i_mapping, idx);
+		struct page *page = read_mapping_page(mapping, idx, NULL);
+		void *kaddr;
 
 		if (IS_ERR(page))
 			return PTR_ERR(page);
 
-		lock_page(page);
-		WARN_ON(!PageUptodate(page));
-		ClearPageUptodate(page);
+		kaddr = kmap_atomic(page);
+		memcpy(data, kaddr, op);
+		kunmap_atomic(kaddr);
 
-		memcpy(page_address(page), data, op);
-
-		flush_dcache_page(page);
-		SetPageUptodate(page);
-		unlock_page(page);
-
-		ntfs_unmap_page(page);
+		put_page(page);
 
 		bytes -= op;
 		data = Add2Ptr(data, PAGE_SIZE);
@@ -1508,7 +1506,7 @@ int ntfs_create_inode(struct mnt_idmap *idmap, struct inode *dir,
 			attr->size = cpu_to_le32(SIZEOF_NONRESIDENT_EX + 8);
 			attr->name_off = SIZEOF_NONRESIDENT_EX_LE;
 			attr->flags = ATTR_FLAG_COMPRESSED;
-			attr->nres.c_unit = COMPRESSION_UNIT;
+			attr->nres.c_unit = NTFS_LZNT_CUNIT;
 			asize = SIZEOF_NONRESIDENT_EX + 8;
 		} else {
 			attr->size = cpu_to_le32(SIZEOF_NONRESIDENT + 8);
@@ -1559,7 +1557,7 @@ int ntfs_create_inode(struct mnt_idmap *idmap, struct inode *dir,
 
 		/*
 		 * Below function 'ntfs_save_wsl_perm' requires 0x78 bytes.
-		 * It is good idea to keep extened attributes resident.
+		 * It is good idea to keep extended attributes resident.
 		 */
 		if (asize + t16 + 0x78 + 8 > sbi->record_size) {
 			CLST alen;
@@ -1668,7 +1666,9 @@ int ntfs_create_inode(struct mnt_idmap *idmap, struct inode *dir,
 	 * The packed size of extended attribute is stored in direntry too.
 	 * 'fname' here points to inside new_de.
 	 */
-	ntfs_save_wsl_perm(inode, &fname->dup.ea_size);
+	err = ntfs_save_wsl_perm(inode, &fname->dup.ea_size);
+	if (err)
+		goto out6;
 
 	/*
 	 * update ea_size in file_name attribute too.
@@ -1712,6 +1712,12 @@ int ntfs_create_inode(struct mnt_idmap *idmap, struct inode *dir,
 	goto out2;
 
 out6:
+	attr = ni_find_attr(ni, NULL, NULL, ATTR_EA, NULL, 0, NULL, NULL);
+	if (attr && attr->non_res) {
+		/* Delete ATTR_EA, if non-resident. */
+		attr_set_size(ni, ATTR_EA, NULL, 0, NULL, 0, NULL, false, NULL);
+	}
+
 	if (rp_inserted)
 		ntfs_remove_reparse(sbi, IO_REPARSE_TAG_SYMLINK, &new_de->ref);
 
@@ -2133,5 +2139,6 @@ const struct address_space_operations ntfs_aops = {
 const struct address_space_operations ntfs_aops_cmpr = {
 	.read_folio	= ntfs_read_folio,
 	.readahead	= ntfs_readahead,
+	.dirty_folio	= block_dirty_folio,
 };
 // clang-format on
