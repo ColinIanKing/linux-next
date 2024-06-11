@@ -1448,6 +1448,30 @@ static struct mount *mnt_find_id_at(struct mnt_namespace *ns, u64 mnt_id)
 	return ret;
 }
 
+/*
+ * Returns the mount which either has the specified mnt_id, or has the next
+ * greater id before the specified one.
+ */
+static struct mount *mnt_find_id_at_reverse(struct mnt_namespace *ns, u64 mnt_id)
+{
+	struct rb_node *node = ns->mounts.rb_node;
+	struct mount *ret = NULL;
+
+	while (node) {
+		struct mount *m = node_to_mount(node);
+
+		if (mnt_id >= m->mnt_id_unique) {
+			ret = node_to_mount(node);
+			if (mnt_id == m->mnt_id_unique)
+				break;
+			node = node->rb_right;
+		} else {
+			node = node->rb_left;
+		}
+	}
+	return ret;
+}
+
 #ifdef CONFIG_PROC_FS
 
 /* iterator; we want it to have access to namespace_sem, thus here... */
@@ -1966,69 +1990,72 @@ static bool mnt_ns_loop(struct dentry *dentry)
 	return current->nsproxy->mnt_ns->seq >= mnt_ns->seq;
 }
 
-struct mount *copy_tree(struct mount *mnt, struct dentry *dentry,
+struct mount *copy_tree(struct mount *src_root, struct dentry *dentry,
 					int flag)
 {
-	struct mount *res, *p, *q, *r, *parent;
+	struct mount *res, *src_parent, *src_root_child, *src_mnt,
+		*dst_parent, *dst_mnt;
 
-	if (!(flag & CL_COPY_UNBINDABLE) && IS_MNT_UNBINDABLE(mnt))
+	if (!(flag & CL_COPY_UNBINDABLE) && IS_MNT_UNBINDABLE(src_root))
 		return ERR_PTR(-EINVAL);
 
 	if (!(flag & CL_COPY_MNT_NS_FILE) && is_mnt_ns_file(dentry))
 		return ERR_PTR(-EINVAL);
 
-	res = q = clone_mnt(mnt, dentry, flag);
-	if (IS_ERR(q))
-		return q;
+	res = dst_mnt = clone_mnt(src_root, dentry, flag);
+	if (IS_ERR(dst_mnt))
+		return dst_mnt;
 
-	q->mnt_mountpoint = mnt->mnt_mountpoint;
+	src_parent = src_root;
+	dst_mnt->mnt_mountpoint = src_root->mnt_mountpoint;
 
-	p = mnt;
-	list_for_each_entry(r, &mnt->mnt_mounts, mnt_child) {
-		struct mount *s;
-		if (!is_subdir(r->mnt_mountpoint, dentry))
+	list_for_each_entry(src_root_child, &src_root->mnt_mounts, mnt_child) {
+		if (!is_subdir(src_root_child->mnt_mountpoint, dentry))
 			continue;
 
-		for (s = r; s; s = next_mnt(s, r)) {
+		for (src_mnt = src_root_child; src_mnt;
+		    src_mnt = next_mnt(src_mnt, src_root_child)) {
 			if (!(flag & CL_COPY_UNBINDABLE) &&
-			    IS_MNT_UNBINDABLE(s)) {
-				if (s->mnt.mnt_flags & MNT_LOCKED) {
+			    IS_MNT_UNBINDABLE(src_mnt)) {
+				if (src_mnt->mnt.mnt_flags & MNT_LOCKED) {
 					/* Both unbindable and locked. */
-					q = ERR_PTR(-EPERM);
+					dst_mnt = ERR_PTR(-EPERM);
 					goto out;
 				} else {
-					s = skip_mnt_tree(s);
+					src_mnt = skip_mnt_tree(src_mnt);
 					continue;
 				}
 			}
 			if (!(flag & CL_COPY_MNT_NS_FILE) &&
-			    is_mnt_ns_file(s->mnt.mnt_root)) {
-				s = skip_mnt_tree(s);
+			    is_mnt_ns_file(src_mnt->mnt.mnt_root)) {
+				src_mnt = skip_mnt_tree(src_mnt);
 				continue;
 			}
-			while (p != s->mnt_parent) {
-				p = p->mnt_parent;
-				q = q->mnt_parent;
+			while (src_parent != src_mnt->mnt_parent) {
+				src_parent = src_parent->mnt_parent;
+				dst_mnt = dst_mnt->mnt_parent;
 			}
-			p = s;
-			parent = q;
-			q = clone_mnt(p, p->mnt.mnt_root, flag);
-			if (IS_ERR(q))
+
+			src_parent = src_mnt;
+			dst_parent = dst_mnt;
+			dst_mnt = clone_mnt(src_mnt, src_mnt->mnt.mnt_root, flag);
+			if (IS_ERR(dst_mnt))
 				goto out;
 			lock_mount_hash();
-			list_add_tail(&q->mnt_list, &res->mnt_list);
-			attach_mnt(q, parent, p->mnt_mp, false);
+			list_add_tail(&dst_mnt->mnt_list, &res->mnt_list);
+			attach_mnt(dst_mnt, dst_parent, src_parent->mnt_mp, false);
 			unlock_mount_hash();
 		}
 	}
 	return res;
+
 out:
 	if (res) {
 		lock_mount_hash();
 		umount_tree(res, UMOUNT_SYNC);
 		unlock_mount_hash();
 	}
-	return q;
+	return dst_mnt;
 }
 
 /* Caller should check returned pointer for errors */
@@ -2078,7 +2105,7 @@ void drop_collected_mounts(struct vfsmount *mnt)
 	namespace_unlock();
 }
 
-static bool has_locked_children(struct mount *mnt, struct dentry *dentry)
+bool has_locked_children(struct mount *mnt, struct dentry *dentry)
 {
 	struct mount *child;
 
@@ -5042,37 +5069,69 @@ retry:
 	return ret;
 }
 
-static struct mount *listmnt_next(struct mount *curr)
+static struct mount *listmnt_next(struct mount *curr, bool reverse)
 {
-	return node_to_mount(rb_next(&curr->mnt_node));
+	struct rb_node *node;
+
+	if (reverse)
+		node = rb_prev(&curr->mnt_node);
+	else
+		node = rb_next(&curr->mnt_node);
+
+	return node_to_mount(node);
 }
 
-static ssize_t do_listmount(struct mount *first, struct path *orig,
-			    u64 mnt_parent_id, u64 __user *mnt_ids,
-			    size_t nr_mnt_ids, const struct path *root)
+static ssize_t do_listmount(u64 mnt_parent_id, u64 last_mnt_id, u64 *mnt_ids,
+			    size_t nr_mnt_ids, bool reverse)
 {
-	struct mount *r;
+	struct path root __free(path_put) = {};
+	struct mnt_namespace *ns = current->nsproxy->mnt_ns;
+	struct path orig;
+	struct mount *r, *first;
 	ssize_t ret;
+
+	rwsem_assert_held(&namespace_sem);
+
+	get_fs_root(current->fs, &root);
+	if (mnt_parent_id == LSMT_ROOT) {
+		orig = root;
+	} else {
+		orig.mnt = lookup_mnt_in_ns(mnt_parent_id, ns);
+		if (!orig.mnt)
+			return -ENOENT;
+		orig.dentry = orig.mnt->mnt_root;
+	}
 
 	/*
 	 * Don't trigger audit denials. We just want to determine what
 	 * mounts to show users.
 	 */
-	if (!is_path_reachable(real_mount(orig->mnt), orig->dentry, root) &&
+	if (!is_path_reachable(real_mount(orig.mnt), orig.dentry, &root) &&
 	    !ns_capable_noaudit(&init_user_ns, CAP_SYS_ADMIN))
 		return -EPERM;
 
-	ret = security_sb_statfs(orig->dentry);
+	ret = security_sb_statfs(orig.dentry);
 	if (ret)
 		return ret;
 
-	for (ret = 0, r = first; r && nr_mnt_ids; r = listmnt_next(r)) {
+	if (!last_mnt_id) {
+		if (reverse)
+			first = node_to_mount(rb_last(&ns->mounts));
+		else
+			first = node_to_mount(rb_first(&ns->mounts));
+	} else {
+		if (reverse)
+			first = mnt_find_id_at_reverse(ns, last_mnt_id - 1);
+		else
+			first = mnt_find_id_at(ns, last_mnt_id + 1);
+	}
+
+	for (ret = 0, r = first; r && nr_mnt_ids; r = listmnt_next(r, reverse)) {
 		if (r->mnt_id_unique == mnt_parent_id)
 			continue;
-		if (!is_path_reachable(r, r->mnt.mnt_root, orig))
+		if (!is_path_reachable(r, r->mnt.mnt_root, &orig))
 			continue;
-		if (put_user(r->mnt_id_unique, mnt_ids))
-			return -EFAULT;
+		*mnt_ids = r->mnt_id_unique;
 		mnt_ids++;
 		nr_mnt_ids--;
 		ret++;
@@ -5080,22 +5139,24 @@ static ssize_t do_listmount(struct mount *first, struct path *orig,
 	return ret;
 }
 
-SYSCALL_DEFINE4(listmount, const struct mnt_id_req __user *, req, u64 __user *,
-		mnt_ids, size_t, nr_mnt_ids, unsigned int, flags)
+SYSCALL_DEFINE4(listmount, const struct mnt_id_req __user *, req,
+		u64 __user *, mnt_ids, size_t, nr_mnt_ids, unsigned int, flags)
 {
-	struct mnt_namespace *ns = current->nsproxy->mnt_ns;
+	u64 *kmnt_ids __free(kvfree) = NULL;
+	const size_t maxcount = 1000000;
 	struct mnt_id_req kreq;
-	struct mount *first;
-	struct path root, orig;
-	u64 mnt_parent_id, last_mnt_id;
-	const size_t maxcount = (size_t)-1 >> 3;
 	ssize_t ret;
 
-	if (flags)
+	if (flags & ~LISTMOUNT_REVERSE)
 		return -EINVAL;
 
+	/*
+	 * If the mount namespace really has more than 1 million mounts the
+	 * caller must iterate over the mount namespace (and reconsider their
+	 * system design...).
+	 */
 	if (unlikely(nr_mnt_ids > maxcount))
-		return -EFAULT;
+		return -EOVERFLOW;
 
 	if (!access_ok(mnt_ids, nr_mnt_ids * sizeof(*mnt_ids)))
 		return -EFAULT;
@@ -5103,32 +5164,21 @@ SYSCALL_DEFINE4(listmount, const struct mnt_id_req __user *, req, u64 __user *,
 	ret = copy_mnt_id_req(req, &kreq);
 	if (ret)
 		return ret;
-	mnt_parent_id = kreq.mnt_id;
-	last_mnt_id = kreq.param;
 
-	down_read(&namespace_sem);
-	get_fs_root(current->fs, &root);
-	if (mnt_parent_id == LSMT_ROOT) {
-		orig = root;
-	} else {
-		ret = -ENOENT;
-		orig.mnt = lookup_mnt_in_ns(mnt_parent_id, ns);
-		if (!orig.mnt)
-			goto err;
-		orig.dentry = orig.mnt->mnt_root;
-	}
-	if (!last_mnt_id)
-		first = node_to_mount(rb_first(&ns->mounts));
-	else
-		first = mnt_find_id_at(ns, last_mnt_id + 1);
+	kmnt_ids = kvmalloc_array(nr_mnt_ids, sizeof(*kmnt_ids),
+				  GFP_KERNEL_ACCOUNT);
+	if (!kmnt_ids)
+		return -ENOMEM;
 
-	ret = do_listmount(first, &orig, mnt_parent_id, mnt_ids, nr_mnt_ids, &root);
-err:
-	path_put(&root);
-	up_read(&namespace_sem);
+	scoped_guard(rwsem_read, &namespace_sem)
+		ret = do_listmount(kreq.mnt_id, kreq.param, kmnt_ids,
+				   nr_mnt_ids, (flags & LISTMOUNT_REVERSE));
+
+	if (copy_to_user(mnt_ids, kmnt_ids, ret * sizeof(*mnt_ids)))
+		return -EFAULT;
+
 	return ret;
 }
-
 
 static void __init init_mount_tree(void)
 {
