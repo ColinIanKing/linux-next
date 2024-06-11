@@ -82,9 +82,6 @@ typedef u32 CLST;
 #define RESIDENT_LCN   ((CLST)-2)
 #define COMPRESSED_LCN ((CLST)-3)
 
-#define COMPRESSION_UNIT     4
-#define COMPRESS_MAX_CLUSTER 0x1000
-
 enum RECORD_NUM {
 	MFT_REC_MFT		= 0,
 	MFT_REC_MIRR		= 1,
@@ -1001,9 +998,6 @@ struct REPARSE_POINT {
 };
 
 static_assert(sizeof(struct REPARSE_POINT) == 0x18);
-
-/* Maximum allowed size of the reparse data. */
-#define MAXIMUM_REPARSE_DATA_BUFFER_SIZE	(16 * 1024)
 
 /*
  * The value of the following constant needs to satisfy the following

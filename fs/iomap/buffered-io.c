@@ -307,8 +307,6 @@ static void iomap_finish_folio_read(struct folio *folio, size_t off,
 		spin_unlock_irqrestore(&ifs->state_lock, flags);
 	}
 
-	if (error)
-		folio_set_error(folio);
 	if (finished)
 		folio_end_read(folio, uptodate);
 }
@@ -444,6 +442,24 @@ done:
 	return pos - orig_pos + plen;
 }
 
+static loff_t iomap_read_folio_iter(const struct iomap_iter *iter,
+		struct iomap_readpage_ctx *ctx)
+{
+	struct folio *folio = ctx->cur_folio;
+	size_t offset = offset_in_folio(folio, iter->pos);
+	loff_t length = min_t(loff_t, folio_size(folio) - offset,
+			      iomap_length(iter));
+	loff_t done, ret;
+
+	for (done = 0; done < length; done += ret) {
+		ret = iomap_readpage_iter(iter, ctx, done);
+		if (ret <= 0)
+			return ret;
+	}
+
+	return done;
+}
+
 int iomap_read_folio(struct folio *folio, const struct iomap_ops *ops)
 {
 	struct iomap_iter iter = {
@@ -459,10 +475,7 @@ int iomap_read_folio(struct folio *folio, const struct iomap_ops *ops)
 	trace_iomap_readpage(iter.inode, 1);
 
 	while ((ret = iomap_iter(&iter, ops)) > 0)
-		iter.processed = iomap_readpage_iter(&iter, &ctx, 0);
-
-	if (ret < 0)
-		folio_set_error(folio);
+		iter.processed = iomap_read_folio_iter(&iter, &ctx);
 
 	if (ctx.bio) {
 		submit_bio(ctx.bio);
@@ -698,7 +711,6 @@ static int __iomap_write_begin(const struct iomap_iter *iter, loff_t pos,
 
 	if (folio_test_uptodate(folio))
 		return 0;
-	folio_clear_error(folio);
 
 	do {
 		iomap_adjust_read_range(iter->inode, folio, &block_start,
@@ -1539,8 +1551,6 @@ iomap_finish_ioend(struct iomap_ioend *ioend, int error)
 
 	/* walk all folios in bio, ending page IO on them */
 	bio_for_each_folio_all(fi, bio) {
-		if (error)
-			folio_set_error(fi.folio);
 		iomap_finish_folio_write(inode, fi.folio, fi.length);
 		folio_count++;
 	}

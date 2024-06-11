@@ -866,6 +866,14 @@ __bch2_btree_iter_peek_and_restart(struct btree_trans *trans,
 	_p;								\
 })
 
+#define bch2_trans_run(_c, _do)						\
+({									\
+	struct btree_trans *trans = bch2_trans_get(_c);			\
+	int _ret = (_do);						\
+	bch2_trans_put(trans);						\
+	_ret;								\
+})
+
 void bch2_trans_updates_to_text(struct printbuf *, struct btree_trans *);
 void bch2_btree_path_to_text(struct printbuf *, struct btree_trans *, btree_path_idx_t);
 void bch2_trans_paths_to_text(struct printbuf *, struct btree_trans *);
@@ -874,6 +882,8 @@ void bch2_dump_trans_paths_updates(struct btree_trans *);
 
 struct btree_trans *__bch2_trans_get(struct bch_fs *, unsigned);
 void bch2_trans_put(struct btree_trans *);
+
+bool bch2_current_has_btree_trans(struct bch_fs *);
 
 extern const char *bch2_btree_transaction_fns[BCH_TRANSACTIONS_NR];
 unsigned bch2_trans_get_fn_idx(const char *);

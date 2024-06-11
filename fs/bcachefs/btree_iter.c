@@ -1002,6 +1002,7 @@ retry_all:
 	bch2_trans_unlock(trans);
 	cond_resched();
 	trans->locked = true;
+	trans->last_unlock_ip = 0;
 
 	if (unlikely(trans->memory_allocation_failure)) {
 		struct closure cl;
@@ -1470,7 +1471,7 @@ void bch2_dump_trans_updates(struct btree_trans *trans)
 	struct printbuf buf = PRINTBUF;
 
 	bch2_trans_updates_to_text(&buf, trans);
-	bch2_print_string_as_lines(KERN_ERR, buf.buf);
+	bch2_print_str(trans->c, buf.buf);
 	printbuf_exit(&buf);
 }
 
@@ -1562,7 +1563,7 @@ void __bch2_dump_trans_paths_updates(struct btree_trans *trans, bool nosort)
 	__bch2_trans_paths_to_text(&buf, trans, nosort);
 	bch2_trans_updates_to_text(&buf, trans);
 
-	bch2_print_string_as_lines(KERN_ERR, buf.buf);
+	bch2_print_str(trans->c, buf.buf);
 	printbuf_exit(&buf);
 }
 
@@ -3095,6 +3096,7 @@ u32 bch2_trans_begin(struct btree_trans *trans)
 
 	trans->last_begin_ip = _RET_IP_;
 	trans->locked  = true;
+	trans->last_unlock_ip = 0;
 
 	if (trans->restarted) {
 		bch2_btree_path_traverse_all(trans);
@@ -3249,15 +3251,6 @@ void bch2_trans_put(struct btree_trans *trans)
 		srcu_read_unlock(&c->btree_trans_barrier, trans->srcu_idx);
 	}
 
-	if (trans->fs_usage_deltas) {
-		if (trans->fs_usage_deltas->size + sizeof(trans->fs_usage_deltas) ==
-		    REPLICAS_DELTA_LIST_MAX)
-			mempool_free(trans->fs_usage_deltas,
-				     &c->replicas_delta_pool);
-		else
-			kfree(trans->fs_usage_deltas);
-	}
-
 	if (unlikely(trans->journal_replay_not_finished))
 		bch2_journal_keys_put(c);
 
@@ -3286,6 +3279,20 @@ void bch2_trans_put(struct btree_trans *trans)
 
 		mempool_free(trans, &c->btree_trans_pool);
 	}
+}
+
+bool bch2_current_has_btree_trans(struct bch_fs *c)
+{
+	seqmutex_lock(&c->btree_trans_lock);
+	struct btree_trans *trans;
+	bool ret = false;
+	list_for_each_entry(trans, &c->btree_trans_list, list)
+		if (trans->locking_wait.task == current) {
+			ret = true;
+			break;
+		}
+	seqmutex_unlock(&c->btree_trans_lock);
+	return ret;
 }
 
 static void __maybe_unused
