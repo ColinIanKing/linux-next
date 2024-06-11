@@ -25,6 +25,9 @@ cleanup()
 }
 
 checktool "nft --version" "test without nft tool"
+checktool "socat -h" "run test without socat"
+
+modprobe -q sctp
 
 trap cleanup EXIT
 
@@ -375,6 +378,77 @@ EOF
 	wait 2>/dev/null
 }
 
+sctp_listener_ready()
+{
+	ss -S -N "$1" -lnt -o "sport = :12345" | grep -q 12345
+}
+
+test_sctp_forward()
+{
+	ip netns exec "$nsrouter" nft -f /dev/stdin <<EOF
+table inet sctpq {
+        chain forward {
+        type filter hook forward priority 0; policy accept;
+                sctp dport 12345 queue num 10
+        }
+}
+EOF
+	ip netns exec "$nsrouter" ./nf_queue -q 10 -G -t "$timeout" &
+	local nfqpid=$!
+
+	timeout 60 ip netns exec "$ns2" socat -u SCTP-LISTEN:12345 STDOUT > "$TMPFILE1" &
+	local rpid=$!
+
+	busywait "$BUSYWAIT_TIMEOUT" sctp_listener_ready "$ns2"
+
+	ip netns exec "$ns1" socat -u STDIN SCTP:10.0.2.99:12345 <"$TMPINPUT" >/dev/null
+
+	if ! ip netns exec "$nsrouter" nft delete table inet sctpq; then
+		echo "FAIL:  Could not delete sctpq table"
+		exit 1
+	fi
+
+	if ! diff -u "$TMPINPUT" "$TMPFILE1" ; then
+		echo "FAIL: lost packets?!" 1>&2
+		return
+	fi
+
+	wait "$rpid" && echo "PASS: sctp and nfqueue in forward chain"
+}
+
+test_sctp_output()
+{
+        ip netns exec "$ns1" nft -f /dev/stdin <<EOF
+table inet sctpq {
+        chain output {
+        type filter hook output priority 0; policy accept;
+                sctp dport 12345 queue num 11
+        }
+}
+EOF
+	ip netns exec "$ns1" ./nf_queue -q 11 -t "$timeout" &
+	local nfqpid=$!
+
+	timeout 60 ip netns exec "$ns2" socat -u SCTP-LISTEN:12345 STDOUT > "$TMPFILE1" &
+	local rpid=$!
+
+	busywait "$BUSYWAIT_TIMEOUT" sctp_listener_ready "$ns2"
+
+	ip netns exec "$ns1" socat -u STDIN SCTP:10.0.2.99:12345 <"$TMPINPUT" >/dev/null
+
+	if ! ip netns exec "$ns1" nft delete table inet sctpq; then
+		echo "FAIL:  Could not delete sctpq table"
+		exit 1
+	fi
+
+	if ! diff -u "$TMPINPUT" "$TMPFILE1" ; then
+		echo "FAIL: lost packets?!" 1>&2
+		return
+	fi
+
+	wait "$rpid" && echo "PASS: sctp and nfqueue in output chain with GSO"
+}
+
 ip netns exec "$nsrouter" sysctl net.ipv6.conf.all.forwarding=1 > /dev/null
 ip netns exec "$nsrouter" sysctl net.ipv4.conf.veth0.forwarding=1 > /dev/null
 ip netns exec "$nsrouter" sysctl net.ipv4.conf.veth1.forwarding=1 > /dev/null
@@ -413,5 +487,7 @@ test_tcp_localhost
 test_tcp_localhost_connectclose
 test_tcp_localhost_requeue
 test_icmp_vrf
+test_sctp_forward
+test_sctp_output
 
 exit $ret
