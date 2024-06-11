@@ -1250,7 +1250,7 @@ void __free_pages_core(struct page *page, unsigned int order,
 		debug_pagealloc_map_pages(page, nr_pages);
 		adjust_managed_page_count(page, nr_pages);
 	} else {
-		/* memblock adjusts totalram_pages() ahead of time. */
+		/* memblock adjusts totalram_pages() manually. */
 		atomic_long_add(nr_pages, &page_zone(page)->managed_pages);
 	}
 
