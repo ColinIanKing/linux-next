@@ -15,6 +15,7 @@
 #include <unistd.h>
 
 #include "../kselftest_harness.h"
+#include "vm_util.h"
 
 #ifndef __aarch64__
 # define PROT_BTI	0
