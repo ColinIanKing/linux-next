@@ -27,6 +27,11 @@
  */
 #define MANA_IB_MAX_MR		0xFFFFFFu
 
+/*
+ * The CA timeout is approx. 260ms (4us * 2^(DELAY))
+ */
+#define MANA_CA_ACK_DELAY	16
+
 struct mana_ib_adapter_caps {
 	u32 max_sq_id;
 	u32 max_rq_id;
@@ -95,11 +100,27 @@ struct mana_ib_cq {
 	mana_handle_t  cq_handle;
 };
 
+enum mana_rc_queue_type {
+	MANA_RC_SEND_QUEUE_REQUESTER = 0,
+	MANA_RC_SEND_QUEUE_RESPONDER,
+	MANA_RC_SEND_QUEUE_FMR,
+	MANA_RC_RECV_QUEUE_REQUESTER,
+	MANA_RC_RECV_QUEUE_RESPONDER,
+	MANA_RC_QUEUE_TYPE_MAX,
+};
+
+struct mana_ib_rc_qp {
+	struct mana_ib_queue queues[MANA_RC_QUEUE_TYPE_MAX];
+};
+
 struct mana_ib_qp {
 	struct ib_qp ibqp;
 
 	mana_handle_t qp_handle;
-	struct mana_ib_queue raw_sq;
+	union {
+		struct mana_ib_queue raw_sq;
+		struct mana_ib_rc_qp rc_qp;
+	};
 
 	/* The port on the IB device, starting with 1 */
 	u32 port;
@@ -122,6 +143,9 @@ enum mana_ib_command_code {
 	MANA_IB_CONFIG_MAC_ADDR	= 0x30005,
 	MANA_IB_CREATE_CQ       = 0x30008,
 	MANA_IB_DESTROY_CQ      = 0x30009,
+	MANA_IB_CREATE_RC_QP    = 0x3000a,
+	MANA_IB_DESTROY_RC_QP   = 0x3000b,
+	MANA_IB_SET_QP_STATE	= 0x3000d,
 };
 
 struct mana_ib_query_adapter_caps_req {
@@ -227,6 +251,80 @@ struct mana_rnic_destroy_cq_req {
 }; /* HW Data */
 
 struct mana_rnic_destroy_cq_resp {
+	struct gdma_resp_hdr hdr;
+}; /* HW Data */
+
+enum mana_rnic_create_rc_flags {
+	MANA_RC_FLAG_NO_FMR = 2,
+};
+
+struct mana_rnic_create_qp_req {
+	struct gdma_req_hdr hdr;
+	mana_handle_t adapter;
+	mana_handle_t pd_handle;
+	mana_handle_t send_cq_handle;
+	mana_handle_t recv_cq_handle;
+	u64 dma_region[MANA_RC_QUEUE_TYPE_MAX];
+	u64 deprecated[2];
+	u64 flags;
+	u32 doorbell_page;
+	u32 max_send_wr;
+	u32 max_recv_wr;
+	u32 max_send_sge;
+	u32 max_recv_sge;
+	u32 reserved;
+}; /* HW Data */
+
+struct mana_rnic_create_qp_resp {
+	struct gdma_resp_hdr hdr;
+	mana_handle_t rc_qp_handle;
+	u32 queue_ids[MANA_RC_QUEUE_TYPE_MAX];
+	u32 reserved;
+}; /* HW Data*/
+
+struct mana_rnic_destroy_rc_qp_req {
+	struct gdma_req_hdr hdr;
+	mana_handle_t adapter;
+	mana_handle_t rc_qp_handle;
+}; /* HW Data */
+
+struct mana_rnic_destroy_rc_qp_resp {
+	struct gdma_resp_hdr hdr;
+}; /* HW Data */
+
+struct mana_ib_ah_attr {
+	u8 src_addr[16];
+	u8 dest_addr[16];
+	u8 src_mac[ETH_ALEN];
+	u8 dest_mac[ETH_ALEN];
+	u8 src_addr_type;
+	u8 dest_addr_type;
+	u8 hop_limit;
+	u8 traffic_class;
+	u16 src_port;
+	u16 dest_port;
+	u32 reserved;
+};
+
+struct mana_rnic_set_qp_state_req {
+	struct gdma_req_hdr hdr;
+	mana_handle_t adapter;
+	mana_handle_t qp_handle;
+	u64 attr_mask;
+	u32 qp_state;
+	u32 path_mtu;
+	u32 rq_psn;
+	u32 sq_psn;
+	u32 dest_qpn;
+	u32 max_dest_rd_atomic;
+	u32 retry_cnt;
+	u32 rnr_retry;
+	u32 min_rnr_timer;
+	u32 reserved;
+	struct mana_ib_ah_attr ah_attr;
+}; /* HW Data */
+
+struct mana_rnic_set_qp_state_resp {
 	struct gdma_resp_hdr hdr;
 }; /* HW Data */
 
@@ -354,4 +452,8 @@ int mana_ib_gd_config_mac(struct mana_ib_dev *mdev, enum mana_ib_addr_op op, u8 
 int mana_ib_gd_create_cq(struct mana_ib_dev *mdev, struct mana_ib_cq *cq, u32 doorbell);
 
 int mana_ib_gd_destroy_cq(struct mana_ib_dev *mdev, struct mana_ib_cq *cq);
+
+int mana_ib_gd_create_rc_qp(struct mana_ib_dev *mdev, struct mana_ib_qp *qp,
+			    struct ib_qp_init_attr *attr, u32 doorbell, u64 flags);
+int mana_ib_gd_destroy_rc_qp(struct mana_ib_dev *mdev, struct mana_ib_qp *qp);
 #endif
