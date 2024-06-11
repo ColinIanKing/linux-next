@@ -195,7 +195,7 @@
 
 		smd-edge {
 			interrupts = <GIC_SPI 168 IRQ_TYPE_EDGE_RISING>;
-			qcom,ipc = <&apcs 8 0>;
+			mboxes = <&apcs 0>;
 			qcom,smd-edge = <15>;
 
 			rpm_requests: rpm-requests {
@@ -361,7 +361,7 @@
 
 		interrupts = <GIC_SPI 27 IRQ_TYPE_EDGE_RISING>;
 
-		qcom,ipc = <&apcs 8 14>;
+		mboxes = <&apcs 14>;
 
 		qcom,local-pid = <0>;
 		qcom,remote-pid = <1>;
@@ -386,7 +386,7 @@
 
 		interrupts = <GIC_SPI 143 IRQ_TYPE_EDGE_RISING>;
 
-		qcom,ipc = <&apcs 8 18>;
+		mboxes = <&apcs 18>;
 
 		qcom,local-pid = <0>;
 		qcom,remote-pid = <4>;
@@ -1267,7 +1267,7 @@
 				interrupts = <GIC_SPI 25 IRQ_TYPE_EDGE_RISING>;
 
 				qcom,smd-edge = <0>;
-				qcom,ipc = <&apcs 8 12>;
+				mboxes = <&apcs 12>;
 				qcom,remote-pid = <1>;
 
 				label = "modem";
@@ -1748,7 +1748,7 @@
 			smd-edge {
 				interrupts = <GIC_SPI 142 IRQ_TYPE_EDGE_RISING>;
 
-				qcom,ipc = <&apcs 8 17>;
+				mboxes = <&apcs 17>;
 				qcom,smd-edge = <6>;
 				qcom,remote-pid = <4>;
 
@@ -1968,8 +1968,9 @@
 	thermal-zones {
 		cpu0-thermal {
 			polling-delay-passive = <250>;
-			polling-delay = <1000>;
+
 			thermal-sensors = <&tsens0 9>;
+
 			trips {
 				cpu0_alert: trip-point0 {
 					temperature = <80000>;
@@ -1991,8 +1992,9 @@
 		};
 		cpu1-thermal {
 			polling-delay-passive = <250>;
-			polling-delay = <1000>;
+
 			thermal-sensors = <&tsens0 10>;
+
 			trips {
 				cpu1_alert: trip-point0 {
 					temperature = <80000>;
@@ -2014,8 +2016,9 @@
 		};
 		cpu2-thermal {
 			polling-delay-passive = <250>;
-			polling-delay = <1000>;
+
 			thermal-sensors = <&tsens0 11>;
+
 			trips {
 				cpu2_alert: trip-point0 {
 					temperature = <80000>;
@@ -2037,8 +2040,9 @@
 		};
 		cpu3-thermal {
 			polling-delay-passive = <250>;
-			polling-delay = <1000>;
+
 			thermal-sensors = <&tsens0 12>;
+
 			trips {
 				cpu3_alert: trip-point0 {
 					temperature = <80000>;
@@ -2060,7 +2064,6 @@
 		};
 		cpu4-thermal {
 			polling-delay-passive = <250>;
-			polling-delay = <1000>;
 			thermal-sensors = <&tsens0 4>;
 			trips {
 				cpu4_alert: trip-point0 {
@@ -2083,7 +2086,6 @@
 		};
 		cpu5-thermal {
 			polling-delay-passive = <250>;
-			polling-delay = <1000>;
 			thermal-sensors = <&tsens0 5>;
 			trips {
 				cpu5_alert: trip-point0 {
@@ -2106,7 +2108,6 @@
 		};
 		cpu6-thermal {
 			polling-delay-passive = <250>;
-			polling-delay = <1000>;
 			thermal-sensors = <&tsens0 6>;
 			trips {
 				cpu6_alert: trip-point0 {
@@ -2129,7 +2130,6 @@
 		};
 		cpu7-thermal {
 			polling-delay-passive = <250>;
-			polling-delay = <1000>;
 			thermal-sensors = <&tsens0 7>;
 			trips {
 				cpu7_alert: trip-point0 {
@@ -2153,7 +2153,6 @@
 
 		gpu-thermal {
 			polling-delay-passive = <250>;
-			polling-delay = <1000>;
 			thermal-sensors = <&tsens0 15>;
 
 			trips {
