@@ -152,16 +152,6 @@ SYM_FUNC_START(efi32_stub_entry)
 	call	1f
 1:	popl	%ecx
 	leal	(efi32_boot_args - 1b)(%ecx), %ebx
-
-	/* Clear BSS */
-	xorl	%eax, %eax
-	leal	(_bss - 1b)(%ecx), %edi
-	leal	(_ebss - 1b)(%ecx), %ecx
-	subl	%edi, %ecx
-	shrl	$2, %ecx
-	cld
-	rep	stosl
-
 	add	$0x4, %esp		/* Discard return address */
 	popl	%ecx
 	popl	%edx
@@ -264,11 +254,23 @@ SYM_FUNC_START_LOCAL(efi32_entry)
 	/* Store firmware stack pointer */
 	movl	%esp, (efi32_boot_sp - 1b)(%ebx)
 
+	/* Take the address of _bss in %edi */
+	movl	$_bss - 1b, %esi
+	leal	(%ebx, %esi), %edi
+
 	/* Store boot arguments */
 	leal	(efi32_boot_args - 1b)(%ebx), %ebx
 	movl	%ecx, 0(%ebx)
 	movl	%edx, 4(%ebx)
 	movb	$0x0, 12(%ebx)          // efi_is64
+
+	/* Clear BSS */
+	xorl	%eax, %eax
+	movl	$_ebss - 1b, %ecx
+	subl	%esi, %ecx
+	shrl	$2, %ecx
+	cld
+	rep	stosl
 
 	/*
 	 * Allocate some memory for a temporary struct boot_params, which only
