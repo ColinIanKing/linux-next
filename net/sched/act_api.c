@@ -839,6 +839,8 @@ again:
 			 * index but did not assign the pointer yet.
 			 */
 			rcu_read_unlock();
+			/* Give that process time to assign the pointer. */
+			schedule_timeout_uninterruptible(HZ / 10);
 			goto again;
 		}
 
