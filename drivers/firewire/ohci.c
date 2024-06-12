@@ -41,6 +41,7 @@
 #include "core.h"
 #include "ohci.h"
 #include "packet-header-definitions.h"
+#include "phy-packet-definitions.h"
 
 #define ohci_info(ohci, f, args...)	dev_info(ohci->card.device, f, ##args)
 #define ohci_notice(ohci, f, args...)	dev_notice(ohci->card.device, f, ##args)
@@ -437,23 +438,25 @@ static void log_irqs(struct fw_ohci *ohci, u32 evt)
 						? " ?"			: "");
 }
 
-static const char *speed[] = {
-	[0] = "S100", [1] = "S200", [2] = "S400",    [3] = "beta",
-};
-static const char *power[] = {
-	[0] = "+0W",  [1] = "+15W", [2] = "+30W",    [3] = "+45W",
-	[4] = "-3W",  [5] = " ?W",  [6] = "-3..-6W", [7] = "-3..-10W",
-};
-static const char port[] = { '.', '-', 'p', 'c', };
-
-static char _p(u32 *s, int shift)
-{
-	return port[*s >> shift & 3];
-}
-
 static void log_selfids(struct fw_ohci *ohci, int generation, int self_id_count)
 {
-	u32 *s;
+	static const char *const speed[] = {
+		[0] = "S100", [1] = "S200", [2] = "S400",    [3] = "beta",
+	};
+	static const char *const power[] = {
+		[0] = "+0W",  [1] = "+15W", [2] = "+30W",    [3] = "+45W",
+		[4] = "-3W",  [5] = " ?W",  [6] = "-3..-6W", [7] = "-3..-10W",
+	};
+	static const char port[] = {
+		[PHY_PACKET_SELF_ID_PORT_STATUS_NONE] = '.',
+		[PHY_PACKET_SELF_ID_PORT_STATUS_NCONN] = '-',
+		[PHY_PACKET_SELF_ID_PORT_STATUS_PARENT] = 'p',
+		[PHY_PACKET_SELF_ID_PORT_STATUS_CHILD] = 'c',
+	};
+	struct self_id_sequence_enumerator enumerator = {
+		.cursor = ohci->self_id_buffer,
+		.quadlet_count = self_id_count,
+	};
 
 	if (likely(!(param_debug & OHCI_PARAM_DEBUG_SELFIDS)))
 		return;
@@ -461,20 +464,46 @@ static void log_selfids(struct fw_ohci *ohci, int generation, int self_id_count)
 	ohci_notice(ohci, "%d selfIDs, generation %d, local node ID %04x\n",
 		    self_id_count, generation, ohci->node_id);
 
-	for (s = ohci->self_id_buffer; self_id_count--; ++s)
-		if ((*s & 1 << 23) == 0)
-			ohci_notice(ohci,
-			    "selfID 0: %08x, phy %d [%c%c%c] %s gc=%d %s %s%s%s\n",
-			    *s, *s >> 24 & 63, _p(s, 6), _p(s, 4), _p(s, 2),
-			    speed[*s >> 14 & 3], *s >> 16 & 63,
-			    power[*s >> 8 & 7], *s >> 22 & 1 ? "L" : "",
-			    *s >> 11 & 1 ? "c" : "", *s & 2 ? "i" : "");
-		else
+	while (enumerator.quadlet_count > 0) {
+		unsigned int quadlet_count;
+		unsigned int port_index;
+		const u32 *s;
+		int i;
+
+		s = self_id_sequence_enumerator_next(&enumerator, &quadlet_count);
+		if (IS_ERR(s))
+			break;
+
+		ohci_notice(ohci,
+		    "selfID 0: %08x, phy %d [%c%c%c] %s gc=%d %s %s%s%s\n",
+		    *s,
+		    phy_packet_self_id_get_phy_id(*s),
+		    port[self_id_sequence_get_port_status(s, quadlet_count, 0)],
+		    port[self_id_sequence_get_port_status(s, quadlet_count, 1)],
+		    port[self_id_sequence_get_port_status(s, quadlet_count, 2)],
+		    speed[*s >> 14 & 3], *s >> 16 & 63,
+		    power[*s >> 8 & 7], *s >> 22 & 1 ? "L" : "",
+		    *s >> 11 & 1 ? "c" : "", *s & 2 ? "i" : "");
+
+		port_index = 3;
+		for (i = 1; i < quadlet_count; ++i) {
 			ohci_notice(ohci,
 			    "selfID n: %08x, phy %d [%c%c%c%c%c%c%c%c]\n",
-			    *s, *s >> 24 & 63,
-			    _p(s, 16), _p(s, 14), _p(s, 12), _p(s, 10),
-			    _p(s,  8), _p(s,  6), _p(s,  4), _p(s,  2));
+			    s[i],
+			    phy_packet_self_id_get_phy_id(s[i]),
+			    port[self_id_sequence_get_port_status(s, quadlet_count, port_index)],
+			    port[self_id_sequence_get_port_status(s, quadlet_count, port_index + 1)],
+			    port[self_id_sequence_get_port_status(s, quadlet_count, port_index + 2)],
+			    port[self_id_sequence_get_port_status(s, quadlet_count, port_index + 3)],
+			    port[self_id_sequence_get_port_status(s, quadlet_count, port_index + 4)],
+			    port[self_id_sequence_get_port_status(s, quadlet_count, port_index + 5)],
+			    port[self_id_sequence_get_port_status(s, quadlet_count, port_index + 6)],
+			    port[self_id_sequence_get_port_status(s, quadlet_count, port_index + 7)]
+			);
+
+			port_index += 8;
+		}
+	}
 }
 
 static const char *evts[] = {
@@ -1817,7 +1846,8 @@ static u32 update_bus_time(struct fw_ohci *ohci)
 	return ohci->bus_time | cycle_time_seconds;
 }
 
-static int get_status_for_port(struct fw_ohci *ohci, int port_index)
+static int get_status_for_port(struct fw_ohci *ohci, int port_index,
+			       enum phy_packet_self_id_port_status *status)
 {
 	int reg;
 
@@ -1831,33 +1861,44 @@ static int get_status_for_port(struct fw_ohci *ohci, int port_index)
 
 	switch (reg & 0x0f) {
 	case 0x06:
-		return 2;	/* is child node (connected to parent node) */
+		// is child node (connected to parent node)
+		*status = PHY_PACKET_SELF_ID_PORT_STATUS_PARENT;
+		break;
 	case 0x0e:
-		return 3;	/* is parent node (connected to child node) */
+		// is parent node (connected to child node)
+		*status = PHY_PACKET_SELF_ID_PORT_STATUS_CHILD;
+		break;
+	default:
+		// not connected
+		*status = PHY_PACKET_SELF_ID_PORT_STATUS_NCONN;
+		break;
 	}
-	return 1;		/* not connected */
+
+	return 0;
 }
 
 static int get_self_id_pos(struct fw_ohci *ohci, u32 self_id,
 	int self_id_count)
 {
+	unsigned int left_phy_id = phy_packet_self_id_get_phy_id(self_id);
 	int i;
-	u32 entry;
 
 	for (i = 0; i < self_id_count; i++) {
-		entry = ohci->self_id_buffer[i];
-		if ((self_id & 0xff000000) == (entry & 0xff000000))
+		u32 entry = ohci->self_id_buffer[i];
+		unsigned int right_phy_id = phy_packet_self_id_get_phy_id(entry);
+
+		if (left_phy_id == right_phy_id)
 			return -1;
-		if ((self_id & 0xff000000) < (entry & 0xff000000))
+		if (left_phy_id < right_phy_id)
 			return i;
 	}
 	return i;
 }
 
-static int initiated_reset(struct fw_ohci *ohci)
+static bool initiated_reset(struct fw_ohci *ohci)
 {
 	int reg;
-	int ret = 0;
+	int ret = false;
 
 	mutex_lock(&ohci->phy_reg_mutex);
 	reg = write_phy_reg(ohci, 7, 0xe0); /* Select page 7 */
@@ -1870,7 +1911,7 @@ static int initiated_reset(struct fw_ohci *ohci)
 			if (reg >= 0) {
 				if ((reg & 0x08) == 0x08) {
 					/* bit 3 indicates "initiated reset" */
-					ret = 0x2;
+					ret = true;
 				}
 			}
 		}
@@ -1886,9 +1927,14 @@ static int initiated_reset(struct fw_ohci *ohci)
  */
 static int find_and_insert_self_id(struct fw_ohci *ohci, int self_id_count)
 {
-	int reg, i, pos, status;
-	/* link active 1, speed 3, bridge 0, contender 1, more packets 0 */
-	u32 self_id = 0x8040c800;
+	int reg, i, pos;
+	u32 self_id = 0;
+
+	// link active 1, speed 3, bridge 0, contender 1, more packets 0.
+	phy_packet_set_packet_identifier(&self_id, PHY_PACKET_PACKET_IDENTIFIER_SELF_ID);
+	phy_packet_self_id_zero_set_link_active(&self_id, true);
+	phy_packet_self_id_zero_set_scode(&self_id, SCODE_800);
+	phy_packet_self_id_zero_set_contender(&self_id, true);
 
 	reg = reg_read(ohci, OHCI1394_NodeID);
 	if (!(reg & OHCI1394_NodeID_idValid)) {
@@ -1896,26 +1942,30 @@ static int find_and_insert_self_id(struct fw_ohci *ohci, int self_id_count)
 			    "node ID not valid, new bus reset in progress\n");
 		return -EBUSY;
 	}
-	self_id |= ((reg & 0x3f) << 24); /* phy ID */
+	phy_packet_self_id_set_phy_id(&self_id, reg & 0x3f);
 
 	reg = ohci_read_phy_reg(&ohci->card, 4);
 	if (reg < 0)
 		return reg;
-	self_id |= ((reg & 0x07) << 8); /* power class */
+	phy_packet_self_id_zero_set_power_class(&self_id, reg & 0x07);
 
 	reg = ohci_read_phy_reg(&ohci->card, 1);
 	if (reg < 0)
 		return reg;
-	self_id |= ((reg & 0x3f) << 16); /* gap count */
+	phy_packet_self_id_zero_set_gap_count(&self_id, reg & 0x3f);
 
 	for (i = 0; i < 3; i++) {
-		status = get_status_for_port(ohci, i);
-		if (status < 0)
-			return status;
-		self_id |= ((status & 0x3) << (6 - (i * 2)));
+		enum phy_packet_self_id_port_status status;
+		int err;
+
+		err = get_status_for_port(ohci, i, &status);
+		if (err < 0)
+			return err;
+
+		self_id_sequence_set_port_status(&self_id, 1, i, status);
 	}
 
-	self_id |= initiated_reset(ohci);
+	phy_packet_self_id_zero_set_initiated_reset(&self_id, initiated_reset(ohci));
 
 	pos = get_self_id_pos(ohci, self_id, self_id_count);
 	if (pos >= 0) {
