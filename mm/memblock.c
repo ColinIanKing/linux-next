@@ -114,12 +114,10 @@ static struct memblock_region memblock_physmem_init_regions[INIT_PHYSMEM_REGIONS
 
 struct memblock memblock __initdata_memblock = {
 	.memory.regions		= memblock_memory_init_regions,
-	.memory.cnt		= 1,	/* empty dummy entry */
 	.memory.max		= INIT_MEMBLOCK_MEMORY_REGIONS,
 	.memory.name		= "memory",
 
 	.reserved.regions	= memblock_reserved_init_regions,
-	.reserved.cnt		= 1,	/* empty dummy entry */
 	.reserved.max		= INIT_MEMBLOCK_RESERVED_REGIONS,
 	.reserved.name		= "reserved",
 
@@ -130,7 +128,6 @@ struct memblock memblock __initdata_memblock = {
 #ifdef CONFIG_HAVE_MEMBLOCK_PHYS_MAP
 struct memblock_type physmem = {
 	.regions		= memblock_physmem_init_regions,
-	.cnt			= 1,	/* empty dummy entry */
 	.max			= INIT_PHYSMEM_REGIONS,
 	.name			= "physmem",
 };
@@ -197,8 +194,8 @@ bool __init_memblock memblock_overlaps_region(struct memblock_type *type,
 	for (i = 0; i < type->cnt; i++)
 		if (memblock_addrs_overlap(base, size, type->regions[i].base,
 					   type->regions[i].size))
-			break;
-	return i < type->cnt;
+			return true;
+	return false;
 }
 
 /**
@@ -356,7 +353,6 @@ static void __init_memblock memblock_remove_region(struct memblock_type *type, u
 	/* Special case for empty arrays */
 	if (type->cnt == 0) {
 		WARN_ON(type->total_size != 0);
-		type->cnt = 1;
 		type->regions[0].base = 0;
 		type->regions[0].size = 0;
 		type->regions[0].flags = 0;
@@ -600,12 +596,13 @@ static int __init_memblock memblock_add_range(struct memblock_type *type,
 
 	/* special case for empty array */
 	if (type->regions[0].size == 0) {
-		WARN_ON(type->cnt != 1 || type->total_size);
+		WARN_ON(type->cnt != 0 || type->total_size);
 		type->regions[0].base = base;
 		type->regions[0].size = size;
 		type->regions[0].flags = flags;
 		memblock_set_region_node(&type->regions[0], nid);
 		type->total_size = size;
+		type->cnt = 1;
 		return 0;
 	}
 
@@ -780,7 +777,8 @@ bool __init_memblock memblock_validate_numa_coverage(unsigned long threshold_byt
  * Walk @type and ensure that regions don't cross the boundaries defined by
  * [@base, @base + @size).  Crossing regions are split at the boundaries,
  * which may create at most two more regions.  The index of the first
- * region inside the range is returned in *@start_rgn and end in *@end_rgn.
+ * region inside the range is returned in *@start_rgn and the index of the
+ * first region after the range is returned in *@end_rgn.
  *
  * Return:
  * 0 on success, -errno on failure.
@@ -2045,7 +2043,7 @@ static void __init free_memmap(unsigned long start_pfn, unsigned long end_pfn)
 	 * downwards.
 	 */
 	pg = PAGE_ALIGN(__pa(start_pg));
-	pgend = __pa(end_pg) & PAGE_MASK;
+	pgend = PAGE_ALIGN_DOWN(__pa(end_pg));
 
 	/*
 	 * If there are free pages between these, free the section of the
