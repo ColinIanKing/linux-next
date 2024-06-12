@@ -7,6 +7,7 @@
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
+#include <linux/array_size.h>
 #include <linux/bitmap.h>
 #include <linux/cleanup.h>
 #include <linux/completion.h>
@@ -20,7 +21,6 @@
 #include <linux/interrupt.h>
 #include <linux/irq.h>
 #include <linux/irq_sim.h>
-#include <linux/kernel.h>
 #include <linux/list.h>
 #include <linux/lockdep.h>
 #include <linux/minmax.h>
@@ -308,13 +308,6 @@ static ssize_t gpio_sim_sysfs_pull_store(struct device *dev,
 	return len;
 }
 
-static void gpio_sim_mutex_destroy(void *data)
-{
-	struct mutex *lock = data;
-
-	mutex_destroy(lock);
-}
-
 static void gpio_sim_put_device(void *data)
 {
 	struct device *dev = data;
@@ -458,9 +451,7 @@ static int gpio_sim_add_bank(struct fwnode_handle *swnode, struct device *dev)
 	if (ret)
 		return ret;
 
-	mutex_init(&chip->lock);
-	ret = devm_add_action_or_reset(dev, gpio_sim_mutex_destroy,
-				       &chip->lock);
+	ret = devm_mutex_init(dev, &chip->lock);
 	if (ret)
 		return ret;
 
@@ -581,19 +572,19 @@ static int gpio_sim_bus_notifier_call(struct notifier_block *nb,
 
 	snprintf(devname, sizeof(devname), "gpio-sim.%u", simdev->id);
 
-	if (strcmp(dev_name(dev), devname) == 0) {
-		if (action == BUS_NOTIFY_BOUND_DRIVER)
-			simdev->driver_bound = true;
-		else if (action == BUS_NOTIFY_DRIVER_NOT_BOUND)
-			simdev->driver_bound = false;
-		else
-			return NOTIFY_DONE;
+	if (!device_match_name(dev, devname))
+		return NOTIFY_DONE;
 
-		complete(&simdev->probe_completion);
-		return NOTIFY_OK;
-	}
+	if (action == BUS_NOTIFY_BOUND_DRIVER)
+		simdev->driver_bound = true;
+	else if (action == BUS_NOTIFY_DRIVER_NOT_BOUND)
+		simdev->driver_bound = false;
+	else
+		return NOTIFY_DONE;
 
-	return NOTIFY_DONE;
+	complete(&simdev->probe_completion);
+
+	return NOTIFY_OK;
 }
 
 static struct gpio_sim_device *to_gpio_sim_device(struct config_item *item)

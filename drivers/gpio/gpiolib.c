@@ -17,6 +17,7 @@
 #include <linux/list.h>
 #include <linux/lockdep.h>
 #include <linux/module.h>
+#include <linux/nospec.h>
 #include <linux/of.h>
 #include <linux/pinctrl/consumer.h>
 #include <linux/seq_file.h>
@@ -105,15 +106,15 @@ const char *gpiod_get_label(struct gpio_desc *desc)
 	unsigned long flags;
 
 	flags = READ_ONCE(desc->flags);
-	if (test_bit(FLAG_USED_AS_IRQ, &flags) &&
-	    !test_bit(FLAG_REQUESTED, &flags))
-		return "interrupt";
-
-	if (!test_bit(FLAG_REQUESTED, &flags))
-		return NULL;
 
 	label = srcu_dereference_check(desc->label, &desc->gdev->desc_srcu,
 				srcu_read_lock_held(&desc->gdev->desc_srcu));
+
+	if (test_bit(FLAG_USED_AS_IRQ, &flags))
+		return label->str ?: "interrupt";
+
+	if (!test_bit(FLAG_REQUESTED, &flags))
+		return NULL;
 
 	return label->str;
 }
@@ -198,7 +199,7 @@ gpio_device_get_desc(struct gpio_device *gdev, unsigned int hwnum)
 	if (hwnum >= gdev->ngpio)
 		return ERR_PTR(-EINVAL);
 
-	return &gdev->descs[hwnum];
+	return &gdev->descs[array_index_nospec(hwnum, gdev->ngpio)];
 }
 EXPORT_SYMBOL_GPL(gpio_device_get_desc);
 
@@ -485,7 +486,7 @@ static struct gpio_desc *gpio_name_to_desc(const char * const name)
  *   1. Non-unique names are still accepted,
  *   2. Name collisions within the same GPIO chip are not reported.
  */
-static int gpiochip_set_desc_names(struct gpio_chip *gc)
+static void gpiochip_set_desc_names(struct gpio_chip *gc)
 {
 	struct gpio_device *gdev = gc->gpiodev;
 	int i;
@@ -504,8 +505,6 @@ static int gpiochip_set_desc_names(struct gpio_chip *gc)
 	/* Then add all names to the GPIO descriptors */
 	for (i = 0; i != gc->ngpio; ++i)
 		gdev->descs[i].name = gc->names[i];
-
-	return 0;
 }
 
 /*
@@ -999,11 +998,9 @@ int gpiochip_add_data_with_key(struct gpio_chip *gc, void *data,
 	INIT_LIST_HEAD(&gdev->pin_ranges);
 #endif
 
-	if (gc->names) {
-		ret = gpiochip_set_desc_names(gc);
-		if (ret)
-			goto err_cleanup_desc_srcu;
-	}
+	if (gc->names)
+		gpiochip_set_desc_names(gc);
+
 	ret = gpiochip_set_names(gc);
 	if (ret)
 		goto err_cleanup_desc_srcu;
@@ -4798,11 +4795,11 @@ static void gpiolib_dbg_show(struct seq_file *s, struct gpio_device *gdev)
 
 	for_each_gpio_desc(gc, desc) {
 		guard(srcu)(&desc->gdev->desc_srcu);
-		if (test_bit(FLAG_REQUESTED, &desc->flags)) {
+		is_irq = test_bit(FLAG_USED_AS_IRQ, &desc->flags);
+		if (is_irq || test_bit(FLAG_REQUESTED, &desc->flags)) {
 			gpiod_get_direction(desc);
 			is_out = test_bit(FLAG_IS_OUT, &desc->flags);
 			value = gpio_chip_get_value(gc, desc);
-			is_irq = test_bit(FLAG_USED_AS_IRQ, &desc->flags);
 			active_low = test_bit(FLAG_ACTIVE_LOW, &desc->flags);
 			seq_printf(s, " gpio-%-3u (%-20.20s|%-20.20s) %s %s %s%s\n",
 				   gpio, desc->name ?: "", gpiod_get_label(desc),
