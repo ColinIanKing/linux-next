@@ -1220,11 +1220,6 @@ void spi_unmap_buf(struct spi_controller *ctlr, struct device *dev,
 	spi_unmap_buf_attrs(ctlr, dev, sgt, dir, 0);
 }
 
-/* Dummy SG for unidirect transfers */
-static struct scatterlist dummy_sg = {
-	.page_link = SG_END,
-};
-
 static int __spi_map_msg(struct spi_controller *ctlr, struct spi_message *msg)
 {
 	struct device *tx_dev, *rx_dev;
@@ -1263,8 +1258,8 @@ static int __spi_map_msg(struct spi_controller *ctlr, struct spi_message *msg)
 						attrs);
 			if (ret != 0)
 				return ret;
-		} else {
-			xfer->tx_sg.sgl = &dummy_sg;
+
+			xfer->tx_sg_mapped = true;
 		}
 
 		if (xfer->rx_buf != NULL) {
@@ -1278,8 +1273,8 @@ static int __spi_map_msg(struct spi_controller *ctlr, struct spi_message *msg)
 
 				return ret;
 			}
-		} else {
-			xfer->rx_sg.sgl = &dummy_sg;
+
+			xfer->rx_sg_mapped = true;
 		}
 	}
 	/* No transfer has been mapped, bail out with success */
@@ -1288,7 +1283,6 @@ static int __spi_map_msg(struct spi_controller *ctlr, struct spi_message *msg)
 
 	ctlr->cur_rx_dma_dev = rx_dev;
 	ctlr->cur_tx_dma_dev = tx_dev;
-	ctlr->cur_msg_mapped = true;
 
 	return 0;
 }
@@ -1299,57 +1293,46 @@ static int __spi_unmap_msg(struct spi_controller *ctlr, struct spi_message *msg)
 	struct device *tx_dev = ctlr->cur_tx_dma_dev;
 	struct spi_transfer *xfer;
 
-	if (!ctlr->cur_msg_mapped || !ctlr->can_dma)
-		return 0;
-
 	list_for_each_entry(xfer, &msg->transfers, transfer_list) {
 		/* The sync has already been done after each transfer. */
 		unsigned long attrs = DMA_ATTR_SKIP_CPU_SYNC;
 
-		if (!ctlr->can_dma(ctlr, msg->spi, xfer))
-			continue;
+		if (xfer->rx_sg_mapped)
+			spi_unmap_buf_attrs(ctlr, rx_dev, &xfer->rx_sg,
+					    DMA_FROM_DEVICE, attrs);
+		xfer->rx_sg_mapped = false;
 
-		spi_unmap_buf_attrs(ctlr, rx_dev, &xfer->rx_sg,
-				    DMA_FROM_DEVICE, attrs);
-		spi_unmap_buf_attrs(ctlr, tx_dev, &xfer->tx_sg,
-				    DMA_TO_DEVICE, attrs);
+		if (xfer->tx_sg_mapped)
+			spi_unmap_buf_attrs(ctlr, tx_dev, &xfer->tx_sg,
+					    DMA_TO_DEVICE, attrs);
+		xfer->tx_sg_mapped = false;
 	}
-
-	ctlr->cur_msg_mapped = false;
 
 	return 0;
 }
 
-static void spi_dma_sync_for_device(struct spi_controller *ctlr, struct spi_message *msg,
+static void spi_dma_sync_for_device(struct spi_controller *ctlr,
 				    struct spi_transfer *xfer)
 {
 	struct device *rx_dev = ctlr->cur_rx_dma_dev;
 	struct device *tx_dev = ctlr->cur_tx_dma_dev;
 
-	if (!ctlr->cur_msg_mapped)
-		return;
-
-	if (!ctlr->can_dma(ctlr, msg->spi, xfer))
-		return;
-
-	dma_sync_sgtable_for_device(tx_dev, &xfer->tx_sg, DMA_TO_DEVICE);
-	dma_sync_sgtable_for_device(rx_dev, &xfer->rx_sg, DMA_FROM_DEVICE);
+	if (xfer->tx_sg_mapped)
+		dma_sync_sgtable_for_device(tx_dev, &xfer->tx_sg, DMA_TO_DEVICE);
+	if (xfer->rx_sg_mapped)
+		dma_sync_sgtable_for_device(rx_dev, &xfer->rx_sg, DMA_FROM_DEVICE);
 }
 
-static void spi_dma_sync_for_cpu(struct spi_controller *ctlr, struct spi_message *msg,
+static void spi_dma_sync_for_cpu(struct spi_controller *ctlr,
 				 struct spi_transfer *xfer)
 {
 	struct device *rx_dev = ctlr->cur_rx_dma_dev;
 	struct device *tx_dev = ctlr->cur_tx_dma_dev;
 
-	if (!ctlr->cur_msg_mapped)
-		return;
-
-	if (!ctlr->can_dma(ctlr, msg->spi, xfer))
-		return;
-
-	dma_sync_sgtable_for_cpu(rx_dev, &xfer->rx_sg, DMA_FROM_DEVICE);
-	dma_sync_sgtable_for_cpu(tx_dev, &xfer->tx_sg, DMA_TO_DEVICE);
+	if (xfer->rx_sg_mapped)
+		dma_sync_sgtable_for_cpu(rx_dev, &xfer->rx_sg, DMA_FROM_DEVICE);
+	if (xfer->tx_sg_mapped)
+		dma_sync_sgtable_for_cpu(tx_dev, &xfer->tx_sg, DMA_TO_DEVICE);
 }
 #else /* !CONFIG_HAS_DMA */
 static inline int __spi_map_msg(struct spi_controller *ctlr,
@@ -1365,13 +1348,11 @@ static inline int __spi_unmap_msg(struct spi_controller *ctlr,
 }
 
 static void spi_dma_sync_for_device(struct spi_controller *ctrl,
-				    struct spi_message *msg,
 				    struct spi_transfer *xfer)
 {
 }
 
 static void spi_dma_sync_for_cpu(struct spi_controller *ctrl,
-				 struct spi_message *msg,
 				 struct spi_transfer *xfer)
 {
 }
@@ -1643,13 +1624,13 @@ static int spi_transfer_one_message(struct spi_controller *ctlr,
 			reinit_completion(&ctlr->xfer_completion);
 
 fallback_pio:
-			spi_dma_sync_for_device(ctlr, msg, xfer);
+			spi_dma_sync_for_device(ctlr, xfer);
 			ret = ctlr->transfer_one(ctlr, msg->spi, xfer);
 			if (ret < 0) {
-				spi_dma_sync_for_cpu(ctlr, msg, xfer);
+				spi_dma_sync_for_cpu(ctlr, xfer);
 
-				if (ctlr->cur_msg_mapped &&
-				   (xfer->error & SPI_TRANS_FAIL_NO_START)) {
+				if ((xfer->tx_sg_mapped || xfer->rx_sg_mapped) &&
+				    (xfer->error & SPI_TRANS_FAIL_NO_START)) {
 					__spi_unmap_msg(ctlr, msg);
 					ctlr->fallback = true;
 					xfer->error &= ~SPI_TRANS_FAIL_NO_START;
@@ -1671,7 +1652,7 @@ fallback_pio:
 					msg->status = ret;
 			}
 
-			spi_dma_sync_for_cpu(ctlr, msg, xfer);
+			spi_dma_sync_for_cpu(ctlr, xfer);
 		} else {
 			if (xfer->len)
 				dev_err(&msg->spi->dev,
@@ -2228,11 +2209,8 @@ static int spi_start_queue(struct spi_controller *ctlr)
 
 static int spi_stop_queue(struct spi_controller *ctlr)
 {
+	unsigned int limit = 500;
 	unsigned long flags;
-	unsigned limit = 500;
-	int ret = 0;
-
-	spin_lock_irqsave(&ctlr->queue_lock, flags);
 
 	/*
 	 * This is a bit lame, but is optimized for the common execution path.
@@ -2240,20 +2218,18 @@ static int spi_stop_queue(struct spi_controller *ctlr)
 	 * execution path (pump_messages) would be required to call wake_up or
 	 * friends on every SPI message. Do this instead.
 	 */
-	while ((!list_empty(&ctlr->queue) || ctlr->busy) && limit--) {
+	do {
+		spin_lock_irqsave(&ctlr->queue_lock, flags);
+		if (list_empty(&ctlr->queue) && !ctlr->busy) {
+			ctlr->running = false;
+			spin_unlock_irqrestore(&ctlr->queue_lock, flags);
+			return 0;
+		}
 		spin_unlock_irqrestore(&ctlr->queue_lock, flags);
 		usleep_range(10000, 11000);
-		spin_lock_irqsave(&ctlr->queue_lock, flags);
-	}
+	} while (--limit);
 
-	if (!list_empty(&ctlr->queue) || ctlr->busy)
-		ret = -EBUSY;
-	else
-		ctlr->running = false;
-
-	spin_unlock_irqrestore(&ctlr->queue_lock, flags);
-
-	return ret;
+	return -EBUSY;
 }
 
 static int spi_destroy_queue(struct spi_controller *ctlr)
@@ -2738,7 +2714,7 @@ static int acpi_spi_add_resource(struct acpi_resource *ares, void *data)
 				return -ENODEV;
 
 			if (ctlr) {
-				if (ACPI_HANDLE(ctlr->dev.parent) != parent_handle)
+				if (!device_match_acpi_handle(ctlr->dev.parent, parent_handle))
 					return -ENODEV;
 			} else {
 				struct acpi_device *adev;
@@ -2837,7 +2813,7 @@ struct spi_device *acpi_spi_device_alloc(struct spi_controller *ctlr,
 
 	if (!lookup.max_speed_hz &&
 	    ACPI_SUCCESS(acpi_get_parent(adev->handle, &parent_handle)) &&
-	    ACPI_HANDLE(lookup.ctlr->dev.parent) == parent_handle) {
+	    device_match_acpi_handle(lookup.ctlr->dev.parent, parent_handle)) {
 		/* Apple does not use _CRS but nested devices for SPI slaves */
 		acpi_spi_parse_apple_properties(adev, &lookup);
 	}
