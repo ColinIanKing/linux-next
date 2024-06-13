@@ -494,7 +494,7 @@ static ssize_t status_show(struct device *dev, struct device_attribute *attr,
 }
 static DEVICE_ATTR_RO(status);
 
-static const char *acpi_device_str(struct acpi_device *dev)
+static const char *devm_acpi_device_str(struct acpi_device *dev)
 {
 	struct acpi_buffer buffer = {ACPI_ALLOCATE_BUFFER, NULL};
 	union acpi_object *str_obj;
@@ -522,7 +522,7 @@ static const char *acpi_device_str(struct acpi_device *dev)
 				 buf, sizeof(buf) - 1);
 	buf[result++] = '\0';
 
-	ret = kstrdup(buf, GFP_KERNEL);
+	ret = devm_kstrdup(&dev->dev, buf, GFP_KERNEL);
 	kfree(buffer.pointer);
 
 	return ret;
@@ -558,7 +558,7 @@ int acpi_device_setup_files(struct acpi_device *dev)
 	/*
 	 * If device has _STR, 'description' file is created
 	 */
-	dev->pnp.str = acpi_device_str(dev);
+	dev->pnp.str = devm_acpi_device_str(dev);
 	if (dev->pnp.str) {
 		result = device_create_file(&dev->dev, &dev_attr_description);
 		if (result)
@@ -632,10 +632,8 @@ void acpi_device_remove_files(struct acpi_device *dev)
 	/*
 	 * If device has _STR, remove 'description' file
 	 */
-	if (acpi_has_method(dev->handle, "_STR")) {
-		kfree(dev->pnp.str);
+	if (acpi_has_method(dev->handle, "_STR"))
 		device_remove_file(&dev->dev, &dev_attr_description);
-	}
 	/*
 	 * If device has _EJ0, remove 'eject' file.
 	 */
