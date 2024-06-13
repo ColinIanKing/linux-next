@@ -710,6 +710,19 @@ int nfsd_get_nrthreads(int n, int *nthreads, struct net *net)
 	return 0;
 }
 
+/**
+ * nfsd_set_nrthreads - set the number of running threads in the net's service
+ * @n: number of array members in @nthreads
+ * @nthreads: array of thread counts for each pool
+ * @net: network namespace to operate within
+ *
+ * This function alters the number of running threads for the given network
+ * namespace in each pool. If passed an array longer then the number of pools
+ * the extra pool settings are ignored. If passed an array shorter than the
+ * number of pools, the missing values are interpreted as 0's.
+ *
+ * Returns 0 on success or a negative errno on error.
+ */
 int nfsd_set_nrthreads(int n, int *nthreads, struct net *net)
 {
 	int i = 0;
@@ -717,7 +730,7 @@ int nfsd_set_nrthreads(int n, int *nthreads, struct net *net)
 	int err = 0;
 	struct nfsd_net *nn = net_generic(net, nfsd_net_id);
 
-	WARN_ON(!mutex_is_locked(&nfsd_mutex));
+	lockdep_assert_held(&nfsd_mutex);
 
 	if (nn->nfsd_serv == NULL || n <= 0)
 		return 0;
@@ -744,13 +757,6 @@ int nfsd_set_nrthreads(int n, int *nthreads, struct net *net)
 		}
 	}
 
-	/*
-	 * There must always be a thread in pool 0; the admin
-	 * can't shut down NFS completely using pool_threads.
-	 */
-	if (nthreads[0] == 0)
-		nthreads[0] = 1;
-
 	/* apply the new numbers */
 	for (i = 0; i < n; i++) {
 		err = svc_set_num_threads(nn->nfsd_serv,
@@ -762,13 +768,19 @@ int nfsd_set_nrthreads(int n, int *nthreads, struct net *net)
 	return err;
 }
 
-/*
- * Adjust the number of threads and return the new number of threads.
- * This is also the function that starts the server if necessary, if
- * this is the first time nrservs is nonzero.
+/**
+ * nfsd_svc: start up or shut down the nfsd server
+ * @n: number of array members in @nthreads
+ * @nthreads: array of thread counts for each pool
+ * @net: network namespace to operate within
+ * @cred: credentials to use for xprt creation
+ * @scope: server scope value (defaults to nodename)
+ *
+ * Adjust the number of threads in each pool and return the new
+ * total number of threads in the service.
  */
 int
-nfsd_svc(int nrservs, struct net *net, const struct cred *cred, const char *scope)
+nfsd_svc(int n, int *nthreads, struct net *net, const struct cred *cred, const char *scope)
 {
 	int	error;
 	struct nfsd_net *nn = net_generic(net, nfsd_net_id);
@@ -777,13 +789,6 @@ nfsd_svc(int nrservs, struct net *net, const struct cred *cred, const char *scop
 	lockdep_assert_held(&nfsd_mutex);
 
 	dprintk("nfsd: creating service\n");
-
-	nrservs = max(nrservs, 0);
-	nrservs = min(nrservs, NFSD_MAXSERVS);
-	error = 0;
-
-	if (nrservs == 0 && nn->nfsd_serv == NULL)
-		goto out;
 
 	strscpy(nn->nfsd_name, scope ? scope : utsname()->nodename,
 		sizeof(nn->nfsd_name));
@@ -796,7 +801,7 @@ nfsd_svc(int nrservs, struct net *net, const struct cred *cred, const char *scop
 	error = nfsd_startup_net(net, cred);
 	if (error)
 		goto out_put;
-	error = svc_set_num_threads(serv, NULL, nrservs);
+	error = nfsd_set_nrthreads(n, nthreads, net);
 	if (error)
 		goto out_put;
 	error = serv->sv_nrthreads;
