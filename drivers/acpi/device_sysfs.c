@@ -619,14 +619,10 @@ static const char *devm_acpi_device_str(struct acpi_device *dev)
  * acpi_device_setup_files - Create sysfs attributes of an ACPI device.
  * @dev: ACPI device object.
  */
-int acpi_device_setup_files(struct acpi_device *dev)
+void acpi_device_setup_files(struct acpi_device *dev)
 {
-	int result = 0;
-
 	dev->pnp.str = devm_acpi_device_str(dev);
 	acpi_expose_nondev_subnodes(&dev->dev.kobj, &dev->data);
-
-	return result;
 }
 
 /**
