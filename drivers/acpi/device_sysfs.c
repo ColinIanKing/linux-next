@@ -576,6 +576,11 @@ static const struct attribute_group acpi_group = {
 	.is_visible = acpi_attr_is_visible,
 };
 
+const struct attribute_group *acpi_groups[] = {
+	&acpi_group,
+	NULL
+};
+
 static const char *devm_acpi_device_str(struct acpi_device *dev)
 {
 	struct acpi_buffer buffer = {ACPI_ALLOCATE_BUFFER, NULL};
@@ -619,8 +624,6 @@ int acpi_device_setup_files(struct acpi_device *dev)
 	int result = 0;
 
 	dev->pnp.str = devm_acpi_device_str(dev);
-	result = device_add_group(&dev->dev, &acpi_group);
-
 	acpi_expose_nondev_subnodes(&dev->dev.kobj, &dev->data);
 
 	return result;
@@ -633,5 +636,4 @@ int acpi_device_setup_files(struct acpi_device *dev)
 void acpi_device_remove_files(struct acpi_device *dev)
 {
 	acpi_hide_nondev_subnodes(&dev->data);
-	device_remove_group(&dev->dev, &acpi_group);
 }
