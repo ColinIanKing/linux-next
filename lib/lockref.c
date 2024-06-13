@@ -4,6 +4,9 @@
 
 #if USE_CMPXCHG_LOCKREF
 
+#define lockref_locked(l) \
+	unlikely(!arch_spin_value_unlocked((l).lock.rlock.raw_lock))
+
 /*
  * Note that the "cmpxchg()" reloads the "old" value for the
  * failure case.
@@ -13,7 +16,12 @@
 	struct lockref old;							\
 	BUILD_BUG_ON(sizeof(old) != 8);						\
 	old.lock_count = READ_ONCE(lockref->lock_count);			\
-	while (likely(arch_spin_value_unlocked(old.lock.rlock.raw_lock))) {  	\
+	do {									\
+		if (lockref_locked(old)) {					\
+			cpu_relax();						\
+			old.lock_count = READ_ONCE(lockref->lock_count);	\
+			continue;						\
+		}								\
 		struct lockref new = old;					\
 		CODE								\
 		if (likely(try_cmpxchg64_relaxed(&lockref->lock_count,		\
@@ -21,9 +29,7 @@
 						 new.lock_count))) {		\
 			SUCCESS;						\
 		}								\
-		if (!--retry)							\
-			break;							\
-	}									\
+	} while (--retry);							\
 } while (0)
 
 #else
