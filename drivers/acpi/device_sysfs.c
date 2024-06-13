@@ -439,24 +439,11 @@ static ssize_t description_show(struct device *dev,
 				char *buf)
 {
 	struct acpi_device *acpi_dev = to_acpi_device(dev);
-	int result;
 
-	if (acpi_dev->pnp.str_obj == NULL)
+	if (acpi_dev->pnp.str == NULL)
 		return 0;
 
-	/*
-	 * The _STR object contains a Unicode identifier for a device.
-	 * We need to convert to utf-8 so it can be displayed.
-	 */
-	result = utf16s_to_utf8s(
-		(wchar_t *)acpi_dev->pnp.str_obj->buffer.pointer,
-		acpi_dev->pnp.str_obj->buffer.length,
-		UTF16_LITTLE_ENDIAN, buf,
-		PAGE_SIZE - 1);
-
-	buf[result++] = '\n';
-
-	return result;
+	return sysfs_emit("%s\n", acpi_dev->pnp.str);
 }
 static DEVICE_ATTR_RO(description);
 
@@ -507,14 +494,46 @@ static ssize_t status_show(struct device *dev, struct device_attribute *attr,
 }
 static DEVICE_ATTR_RO(status);
 
+static const char *acpi_device_str(struct acpi_device *dev)
+{
+	struct acpi_buffer buffer = {ACPI_ALLOCATE_BUFFER, NULL};
+	union acpi_object *str_obj;
+	acpi_status status;
+	const char *ret;
+	char buf[512];
+	int result;
+
+	if (!acpi_has_method(dev->handle, "_STR"))
+		return NULL;
+
+	status = acpi_evaluate_object(dev->handle, "_STR",
+				      NULL, &buffer);
+	if (ACPI_FAILURE(status))
+		return NULL;
+
+	str_obj = buffer.pointer;
+	/*
+	 * The _STR object contains a Unicode identifier for a device.
+	 * We need to convert to utf-8 so it can be displayed.
+	 */
+	result = utf16s_to_utf8s((wchar_t *)str_obj->buffer.pointer,
+				 str_obj->buffer.length,
+				 UTF16_LITTLE_ENDIAN,
+				 buf, sizeof(buf) - 1);
+	buf[result++] = '\0';
+
+	ret = kstrdup(buf, GFP_KERNEL);
+	kfree(buffer.pointer);
+
+	return ret;
+}
+
 /**
  * acpi_device_setup_files - Create sysfs attributes of an ACPI device.
  * @dev: ACPI device object.
  */
 int acpi_device_setup_files(struct acpi_device *dev)
 {
-	struct acpi_buffer buffer = {ACPI_ALLOCATE_BUFFER, NULL};
-	acpi_status status;
 	int result = 0;
 
 	/*
@@ -539,12 +558,8 @@ int acpi_device_setup_files(struct acpi_device *dev)
 	/*
 	 * If device has _STR, 'description' file is created
 	 */
-	if (acpi_has_method(dev->handle, "_STR")) {
-		status = acpi_evaluate_object(dev->handle, "_STR",
-					NULL, &buffer);
-		if (ACPI_FAILURE(status))
-			buffer.pointer = NULL;
-		dev->pnp.str_obj = buffer.pointer;
+	dev->pnp.str = acpi_device_str(dev);
+	if (dev->pnp.str) {
 		result = device_create_file(&dev->dev, &dev_attr_description);
 		if (result)
 			goto end;
@@ -618,7 +633,7 @@ void acpi_device_remove_files(struct acpi_device *dev)
 	 * If device has _STR, remove 'description' file
 	 */
 	if (acpi_has_method(dev->handle, "_STR")) {
-		kfree(dev->pnp.str_obj);
+		kfree(dev->pnp.str);
 		device_remove_file(&dev->dev, &dev_attr_description);
 	}
 	/*
