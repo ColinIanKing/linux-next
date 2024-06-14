@@ -255,24 +255,11 @@ static inline int get_frame_offset(struct task_struct *t, int offset)
 	return __get_offset(t->ret_stack[offset]);
 }
 
-/* Get FGRAPH_TYPE from the word from the @offset at ret_stack */
-static inline int get_fgraph_type(struct task_struct *t, int offset)
-{
-	return __get_type(t->ret_stack[offset]);
-}
-
 /* For BITMAP type: get the bitmask from the @offset at ret_stack */
 static inline unsigned long
 get_bitmap_bits(struct task_struct *t, int offset)
 {
 	return (t->ret_stack[offset] >> FGRAPH_INDEX_SHIFT) & FGRAPH_INDEX_MASK;
-}
-
-/* For BITMAP type: set the bits in the bitmap bitmask at @offset on ret_stack */
-static inline void
-set_bitmap_bits(struct task_struct *t, int offset, unsigned long bitmap)
-{
-	t->ret_stack[offset] |= (bitmap << FGRAPH_INDEX_SHIFT);
 }
 
 /* Write the bitmap to the ret_stack at @offset (does index, offset and bitmask) */
@@ -515,7 +502,7 @@ static struct fgraph_ops fgraph_stub = {
 static struct fgraph_ops *fgraph_direct_gops = &fgraph_stub;
 DEFINE_STATIC_CALL(fgraph_func, ftrace_graph_entry_stub);
 DEFINE_STATIC_CALL(fgraph_retfunc, ftrace_graph_ret_stub);
-DEFINE_STATIC_KEY_TRUE(fgraph_do_direct);
+static DEFINE_STATIC_KEY_TRUE(fgraph_do_direct);
 
 /**
  * ftrace_graph_stop - set to permanently disable function graph tracing
@@ -606,9 +593,7 @@ ftrace_push_return_trace(unsigned long ret, unsigned long func,
 #ifdef HAVE_FUNCTION_GRAPH_FP_TEST
 	ret_stack->fp = frame_pointer;
 #endif
-#ifdef HAVE_FUNCTION_GRAPH_RET_ADDR_PTR
 	ret_stack->retp = retp;
-#endif
 	return offset;
 }
 
@@ -883,21 +868,25 @@ ftrace_graph_get_ret_stack(struct task_struct *task, int idx)
 }
 
 /**
- * ftrace_graph_ret_addr - convert a potentially modified stack return address
- *			   to its original value
+ * ftrace_graph_ret_addr - return the original value of the return address
+ * @task: The task the unwinder is being executed on
+ * @idx: An initialized pointer to the next stack index to use
+ * @ret: The current return address (likely pointing to return_handler)
+ * @retp: The address on the stack of the current return location
  *
  * This function can be called by stack unwinding code to convert a found stack
- * return address ('ret') to its original value, in case the function graph
+ * return address (@ret) to its original value, in case the function graph
  * tracer has modified it to be 'return_to_handler'.  If the address hasn't
- * been modified, the unchanged value of 'ret' is returned.
+ * been modified, the unchanged value of @ret is returned.
  *
- * 'idx' is a state variable which should be initialized by the caller to zero
- * before the first call.
+ * @idx holds the last index used to know where to start from. It should be
+ * initialized to zero for the first iteration as that will mean to start
+ * at the top of the shadow stack. If the location is found, this pointer
+ * will be assigned that location so that if called again, it will continue
+ * where it left off.
  *
- * 'retp' is a pointer to the return address on the stack.  It's ignored if
- * the arch doesn't have HAVE_FUNCTION_GRAPH_RET_ADDR_PTR defined.
+ * @retp is a pointer to the return address on the stack.
  */
-#ifdef HAVE_FUNCTION_GRAPH_RET_ADDR_PTR
 unsigned long ftrace_graph_ret_addr(struct task_struct *task, int *idx,
 				    unsigned long ret, unsigned long *retp)
 {
@@ -908,6 +897,10 @@ unsigned long ftrace_graph_ret_addr(struct task_struct *task, int *idx,
 	if (ret != return_handler)
 		return ret;
 
+	if (!idx)
+		return ret;
+
+	i = *idx ? : task->curr_ret_stack;
 	while (i > 0) {
 		ret_stack = get_ret_stack(current, i, &i);
 		if (!ret_stack)
@@ -921,41 +914,14 @@ unsigned long ftrace_graph_ret_addr(struct task_struct *task, int *idx,
 		 * Thus we will continue to find real return address.
 		 */
 		if (ret_stack->retp == retp &&
-		    ret_stack->ret != return_handler)
+		    ret_stack->ret != return_handler) {
+			*idx = i;
 			return ret_stack->ret;
+		}
 	}
 
 	return ret;
 }
-#else /* !HAVE_FUNCTION_GRAPH_RET_ADDR_PTR */
-unsigned long ftrace_graph_ret_addr(struct task_struct *task, int *idx,
-				    unsigned long ret, unsigned long *retp)
-{
-	struct ftrace_ret_stack *ret_stack;
-	unsigned long return_handler = (unsigned long)dereference_kernel_function_descriptor(return_to_handler);
-	int offset = task->curr_ret_stack;
-	int i;
-
-	if (ret != return_handler)
-		return ret;
-
-	if (!idx)
-		return ret;
-
-	i = *idx;
-	do {
-		ret_stack = get_ret_stack(task, offset, &offset);
-		if (ret_stack && ret_stack->ret == return_handler)
-			continue;
-		i--;
-	} while (i >= 0 && ret_stack);
-
-	if (ret_stack)
-		return ret_stack->ret;
-
-	return ret;
-}
-#endif /* HAVE_FUNCTION_GRAPH_RET_ADDR_PTR */
 
 static struct ftrace_ops graph_ops = {
 	.func			= ftrace_graph_func,
@@ -1151,6 +1117,7 @@ void ftrace_graph_exit_task(struct task_struct *t)
 	kfree(ret_stack);
 }
 
+#ifdef CONFIG_DYNAMIC_FTRACE
 static int fgraph_pid_func(struct ftrace_graph_ent *trace,
 			   struct fgraph_ops *gops)
 {
@@ -1187,6 +1154,7 @@ void fgraph_update_pid_func(void)
 		}
 	}
 }
+#endif
 
 /* Allocate a return stack for each task */
 static int start_graph_tracing(void)
