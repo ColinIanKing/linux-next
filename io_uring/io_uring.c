@@ -101,6 +101,7 @@
 #include "poll.h"
 #include "rw.h"
 #include "alloc_cache.h"
+#include "eventfd.h"
 
 #define IORING_MAX_ENTRIES	32768
 #define IORING_MAX_CQ_ENTRIES	(2 * IORING_MAX_ENTRIES)
@@ -461,9 +462,9 @@ static void io_prep_async_work(struct io_kiocb *req)
 	}
 
 	req->work.list.next = NULL;
-	req->work.flags = 0;
+	atomic_set(&req->work.flags, 0);
 	if (req->flags & REQ_F_FORCE_ASYNC)
-		req->work.flags |= IO_WQ_WORK_CONCURRENT;
+		atomic_or(IO_WQ_WORK_CONCURRENT, &req->work.flags);
 
 	if (req->file && !(req->flags & REQ_F_FIXED_FILE))
 		req->flags |= io_file_get_flags(req->file);
@@ -479,7 +480,7 @@ static void io_prep_async_work(struct io_kiocb *req)
 			io_wq_hash_work(&req->work, file_inode(req->file));
 	} else if (!req->file || !S_ISBLK(file_inode(req->file)->i_mode)) {
 		if (def->unbound_nonreg_file)
-			req->work.flags |= IO_WQ_WORK_UNBOUND;
+			atomic_or(IO_WQ_WORK_UNBOUND, &req->work.flags);
 	}
 }
 
@@ -519,7 +520,7 @@ static void io_queue_iowq(struct io_kiocb *req)
 	 * worker for it).
 	 */
 	if (WARN_ON_ONCE(!same_thread_group(req->task, current)))
-		req->work.flags |= IO_WQ_WORK_CANCEL;
+		atomic_or(IO_WQ_WORK_CANCEL, &req->work.flags);
 
 	trace_io_uring_queue_async_work(req, io_wq_is_hashed(&req->work));
 	io_wq_enqueue(tctx->io_wq, &req->work);
@@ -539,84 +540,6 @@ static __cold void io_queue_deferred(struct io_ring_ctx *ctx)
 		io_req_task_queue(de->req);
 		kfree(de);
 	}
-}
-
-void io_eventfd_ops(struct rcu_head *rcu)
-{
-	struct io_ev_fd *ev_fd = container_of(rcu, struct io_ev_fd, rcu);
-	int ops = atomic_xchg(&ev_fd->ops, 0);
-
-	if (ops & BIT(IO_EVENTFD_OP_SIGNAL_BIT))
-		eventfd_signal_mask(ev_fd->cq_ev_fd, EPOLL_URING_WAKE);
-
-	/* IO_EVENTFD_OP_FREE_BIT may not be set here depending on callback
-	 * ordering in a race but if references are 0 we know we have to free
-	 * it regardless.
-	 */
-	if (atomic_dec_and_test(&ev_fd->refs)) {
-		eventfd_ctx_put(ev_fd->cq_ev_fd);
-		kfree(ev_fd);
-	}
-}
-
-static void io_eventfd_signal(struct io_ring_ctx *ctx)
-{
-	struct io_ev_fd *ev_fd = NULL;
-
-	rcu_read_lock();
-	/*
-	 * rcu_dereference ctx->io_ev_fd once and use it for both for checking
-	 * and eventfd_signal
-	 */
-	ev_fd = rcu_dereference(ctx->io_ev_fd);
-
-	/*
-	 * Check again if ev_fd exists incase an io_eventfd_unregister call
-	 * completed between the NULL check of ctx->io_ev_fd at the start of
-	 * the function and rcu_read_lock.
-	 */
-	if (unlikely(!ev_fd))
-		goto out;
-	if (READ_ONCE(ctx->rings->cq_flags) & IORING_CQ_EVENTFD_DISABLED)
-		goto out;
-	if (ev_fd->eventfd_async && !io_wq_current_is_worker())
-		goto out;
-
-	if (likely(eventfd_signal_allowed())) {
-		eventfd_signal_mask(ev_fd->cq_ev_fd, EPOLL_URING_WAKE);
-	} else {
-		atomic_inc(&ev_fd->refs);
-		if (!atomic_fetch_or(BIT(IO_EVENTFD_OP_SIGNAL_BIT), &ev_fd->ops))
-			call_rcu_hurry(&ev_fd->rcu, io_eventfd_ops);
-		else
-			atomic_dec(&ev_fd->refs);
-	}
-
-out:
-	rcu_read_unlock();
-}
-
-static void io_eventfd_flush_signal(struct io_ring_ctx *ctx)
-{
-	bool skip;
-
-	spin_lock(&ctx->completion_lock);
-
-	/*
-	 * Eventfd should only get triggered when at least one event has been
-	 * posted. Some applications rely on the eventfd notification count
-	 * only changing IFF a new CQE has been added to the CQ ring. There's
-	 * no depedency on 1:1 relationship between how many times this
-	 * function is called (and hence the eventfd count) and number of CQEs
-	 * posted to the CQ ring.
-	 */
-	skip = ctx->cached_cq_tail == ctx->evfd_last_cq_tail;
-	ctx->evfd_last_cq_tail = ctx->cached_cq_tail;
-	spin_unlock(&ctx->completion_lock);
-	if (skip)
-		return;
-
-	io_eventfd_signal(ctx);
 }
 
 void __io_commit_cqring_flush(struct io_ring_ctx *ctx)
@@ -1467,7 +1390,7 @@ void __io_submit_flush_completions(struct io_ring_ctx *ctx)
 	}
 	__io_cq_unlock_post(ctx);
 
-	if (!wq_list_empty(&ctx->submit_state.compl_reqs)) {
+	if (!wq_list_empty(&state->compl_reqs)) {
 		io_free_batch_list(ctx, state->compl_reqs.first);
 		INIT_WQ_LIST(&state->compl_reqs);
 	}
@@ -1813,14 +1736,14 @@ void io_wq_submit_work(struct io_wq_work *work)
 	io_arm_ltimeout(req);
 
 	/* either cancelled or io-wq is dying, so don't touch tctx->iowq */
-	if (work->flags & IO_WQ_WORK_CANCEL) {
+	if (atomic_read(&work->flags) & IO_WQ_WORK_CANCEL) {
 fail:
 		io_req_task_queue_fail(req, err);
 		return;
 	}
 	if (!io_assign_file(req, def, issue_flags)) {
 		err = -EBADF;
-		work->flags |= IO_WQ_WORK_CANCEL;
+		atomic_or(IO_WQ_WORK_CANCEL, &work->flags);
 		goto fail;
 	}
 
