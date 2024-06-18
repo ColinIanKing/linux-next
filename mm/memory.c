@@ -4343,9 +4343,9 @@ check_folio:
 		folio_add_lru_vma(folio, vma);
 	} else if (!folio_test_anon(folio)) {
 		/*
-		 * We currently only expect small !anon folios, for which we now
-		 * that they are either fully exclusive or fully shared. If we
-		 * ever get large folios here, we have to be careful.
+		 * We currently only expect small !anon folios, which are either
+		 * fully exclusive or fully shared. If we ever get large folios
+		 * here, we have to be careful.
 		 */
 		VM_WARN_ON_ONCE(folio_test_large(folio));
 		folio_add_new_anon_rmap(folio, vma, address, rmap_flags);
