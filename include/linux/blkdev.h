@@ -377,6 +377,16 @@ struct queue_limits {
 	unsigned int		discard_alignment;
 	unsigned int		zone_write_granularity;
 
+	/* atomic write limits */
+	unsigned int		atomic_write_hw_max;
+	unsigned int		atomic_write_max_sectors;
+	unsigned int		atomic_write_hw_boundary;
+	unsigned int		atomic_write_boundary_sectors;
+	unsigned int		atomic_write_hw_unit_min;
+	unsigned int		atomic_write_unit_min;
+	unsigned int		atomic_write_hw_unit_max;
+	unsigned int		atomic_write_unit_max;
+
 	unsigned short		max_segments;
 	unsigned short		max_integrity_segments;
 	unsigned short		max_discard_segments;
@@ -907,14 +917,15 @@ static inline bool bio_straddles_zones(struct bio *bio)
 }
 
 /*
- * Return how much of the chunk is left to be used for I/O at a given offset.
+ * Return how much within the boundary is left to be used for I/O at a given
+ * offset.
  */
-static inline unsigned int blk_chunk_sectors_left(sector_t offset,
-		unsigned int chunk_sectors)
+static inline unsigned int blk_boundary_sectors_left(sector_t offset,
+		unsigned int boundary_sectors)
 {
-	if (unlikely(!is_power_of_2(chunk_sectors)))
-		return chunk_sectors - sector_div(offset, chunk_sectors);
-	return chunk_sectors - (offset & (chunk_sectors - 1));
+	if (unlikely(!is_power_of_2(boundary_sectors)))
+		return boundary_sectors - sector_div(offset, boundary_sectors);
+	return boundary_sectors - (offset & (boundary_sectors - 1));
 }
 
 /**
@@ -1402,6 +1413,30 @@ static inline int queue_dma_alignment(const struct request_queue *q)
 	return q ? q->limits.dma_alignment : 511;
 }
 
+static inline unsigned int
+queue_atomic_write_unit_max_bytes(const struct request_queue *q)
+{
+	return q->limits.atomic_write_unit_max;
+}
+
+static inline unsigned int
+queue_atomic_write_unit_min_bytes(const struct request_queue *q)
+{
+	return q->limits.atomic_write_unit_min;
+}
+
+static inline unsigned int
+queue_atomic_write_boundary_bytes(const struct request_queue *q)
+{
+	return q->limits.atomic_write_boundary_sectors << SECTOR_SHIFT;
+}
+
+static inline unsigned int
+queue_atomic_write_max_bytes(const struct request_queue *q)
+{
+	return q->limits.atomic_write_max_sectors << SECTOR_SHIFT;
+}
+
 static inline unsigned int bdev_dma_alignment(struct block_device *bdev)
 {
 	return queue_dma_alignment(bdev_get_queue(bdev));
@@ -1603,7 +1638,8 @@ int sync_blockdev(struct block_device *bdev);
 int sync_blockdev_range(struct block_device *bdev, loff_t lstart, loff_t lend);
 int sync_blockdev_nowait(struct block_device *bdev);
 void sync_bdevs(bool wait);
-void bdev_statx_dioalign(struct inode *inode, struct kstat *stat);
+void bdev_statx(struct inode *backing_inode, struct kstat *stat,
+		u32 request_mask);
 void printk_all_partitions(void);
 int __init early_lookup_bdev(const char *pathname, dev_t *dev);
 #else
@@ -1621,7 +1657,8 @@ static inline int sync_blockdev_nowait(struct block_device *bdev)
 static inline void sync_bdevs(bool wait)
 {
 }
-static inline void bdev_statx_dioalign(struct inode *inode, struct kstat *stat)
+static inline void bdev_statx(struct inode *backing_inode, struct kstat *stat,
+				u32 request_mask)
 {
 }
 static inline void printk_all_partitions(void)
@@ -1642,6 +1679,27 @@ struct io_comp_batch {
 	bool need_ts;
 	void (*complete)(struct io_comp_batch *);
 };
+
+static inline bool bdev_can_atomic_write(struct block_device *bdev)
+{
+	struct request_queue *bd_queue = bdev->bd_queue;
+	struct queue_limits *limits = &bd_queue->limits;
+
+	if (!limits->atomic_write_unit_min)
+		return false;
+
+	if (bdev_is_partition(bdev)) {
+		sector_t bd_start_sect = bdev->bd_start_sect;
+		unsigned int alignment =
+			max(limits->atomic_write_unit_min,
+			    limits->atomic_write_hw_boundary);
+
+		if (!IS_ALIGNED(bd_start_sect, alignment >> SECTOR_SHIFT))
+			return false;
+	}
+
+	return true;
+}
 
 #define DEFINE_IO_COMP_BATCH(name)	struct io_comp_batch name = { }
 
