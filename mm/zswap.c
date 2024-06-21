@@ -268,7 +268,7 @@ static struct zswap_pool *zswap_pool_create(char *type, char *compressor)
 	pool->zpool = zpool_create_pool(type, name, gfp);
 	if (!pool->zpool) {
 		pr_err("%s zpool not available\n", type);
-		goto error;
+		return NULL;
 	}
 	pr_debug("using %s zpool\n", zpool_get_type(pool->zpool));
 
