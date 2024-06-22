@@ -1923,6 +1923,7 @@ static int unuse_pte(struct vm_area_struct *vma, pmd_t *pmd,
 		 */
 		if (!folio_test_anon(folio)) {
 			VM_WARN_ON_ONCE(folio_test_large(folio));
+			VM_WARN_ON_FOLIO(!folio_test_locked(folio), folio);
 			folio_add_new_anon_rmap(folio, vma, addr, rmap_flags);
 		} else {
 			folio_add_anon_rmap_pte(folio, page, vma, addr, rmap_flags);
