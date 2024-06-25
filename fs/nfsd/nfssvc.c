@@ -735,6 +735,13 @@ int nfsd_set_nrthreads(int n, int *nthreads, struct net *net)
 	if (nn->nfsd_serv == NULL || n <= 0)
 		return 0;
 
+	/*
+	 * Special case: When n == 1, pass in NULL for the pool, so that the
+	 * change is distributed equally among them.
+	 */
+	if (n == 1)
+		return svc_set_num_threads(nn->nfsd_serv, NULL, nthreads[0]);
+
 	if (n > nn->nfsd_serv->sv_nrpools)
 		n = nn->nfsd_serv->sv_nrpools;
 
