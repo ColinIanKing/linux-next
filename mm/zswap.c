@@ -268,7 +268,7 @@ static struct zswap_pool *zswap_pool_create(char *type, char *compressor)
 	pool->zpool = zpool_create_pool(type, name, gfp);
 	if (!pool->zpool) {
 		pr_err("%s zpool not available\n", type);
-		return NULL;
+		goto error;
 	}
 	pr_debug("using %s zpool\n", zpool_get_type(pool->zpool));
 
@@ -303,7 +303,8 @@ ref_fail:
 error:
 	if (pool->acomp_ctx)
 		free_percpu(pool->acomp_ctx);
-	zpool_destroy_pool(pool->zpool);
+	if (pool->zpool)
+		zpool_destroy_pool(pool->zpool);
 	kfree(pool);
 	return NULL;
 }
