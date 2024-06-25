@@ -440,7 +440,7 @@ static void __add_to_kill(struct task_struct *tsk, struct page *p,
 {
 	struct to_kill *tk;
 
-	tk = kmalloc(sizeof(struct to_kill), GFP_ATOMIC);
+	tk = kmalloc(sizeof(struct to_kill), GFP_ATOMIC | __GFP_MEMALLOC);
 	if (!tk) {
 		pr_err("Out of memory while machine check handling\n");
 		return;
@@ -1920,7 +1920,7 @@ static int folio_set_hugetlb_hwpoison(struct folio *folio, struct page *page)
 			return -EHWPOISON;
 	}
 
-	raw_hwp = kmalloc(sizeof(struct raw_hwp_page), GFP_ATOMIC);
+	raw_hwp = kmalloc(sizeof(struct raw_hwp_page), GFP_ATOMIC | __GFP_MEMALLOC);
 	if (raw_hwp) {
 		raw_hwp->page = page;
 		llist_add(&raw_hwp->node, head);
