@@ -449,6 +449,42 @@ EOF
 	wait "$rpid" && echo "PASS: sctp and nfqueue in output chain with GSO"
 }
 
+test_queue_removal()
+{
+	read tainted_then < /proc/sys/kernel/tainted
+
+	ip netns exec "$ns1" nft -f - <<EOF
+flush ruleset
+table ip filter {
+	chain output {
+		type filter hook output priority 0; policy accept;
+		ip protocol icmp queue num 0
+	}
+}
+EOF
+	ip netns exec "$ns1" ./nf_queue -q 0 -d 30000 -t "$timeout" &
+	local nfqpid=$!
+
+	busywait "$BUSYWAIT_TIMEOUT" nf_queue_wait "$ns1" 0
+
+	ip netns exec "$ns1" ping -w 2 -f -c 10 127.0.0.1 -q >/dev/null
+	kill $nfqpid
+
+	ip netns exec "$ns1" nft flush ruleset
+
+	if [ "$tainted_then" -ne 0 ];then
+		return
+	fi
+
+	read tainted_now < /proc/sys/kernel/tainted
+	if [ "$tainted_now" -eq 0 ];then
+		echo "PASS: queue program exiting while packets queued"
+	else
+		echo "TAINT: queue program exiting while packets queued"
+		ret=1
+	fi
+}
+
 ip netns exec "$nsrouter" sysctl net.ipv6.conf.all.forwarding=1 > /dev/null
 ip netns exec "$nsrouter" sysctl net.ipv4.conf.veth0.forwarding=1 > /dev/null
 ip netns exec "$nsrouter" sysctl net.ipv4.conf.veth1.forwarding=1 > /dev/null
@@ -489,5 +525,6 @@ test_tcp_localhost_requeue
 test_icmp_vrf
 test_sctp_forward
 test_sctp_output
+test_queue_removal
 
 exit $ret
