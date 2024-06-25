@@ -969,6 +969,15 @@ config MEMCG
 	help
 	  Provides control over the memory footprint of tasks in a cgroup.
 
+config MEMCG_V1
+	bool "Legacy memory controller"
+	depends on MEMCG
+	default n
+	help
+	  Legacy cgroup v1 memory controller.
+
+	  San N is unsure.
+
 config MEMCG_KMEM
 	bool
 	depends on MEMCG
