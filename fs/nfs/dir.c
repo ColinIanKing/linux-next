@@ -41,7 +41,6 @@
 #include <linux/xattr.h>
 #include <linux/hash.h>
 
-#include "delegation.h"
 #include "iostat.h"
 #include "internal.h"
 #include "fscache.h"
