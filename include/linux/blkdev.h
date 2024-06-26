@@ -283,55 +283,56 @@ static inline bool blk_op_is_passthrough(blk_opf_t op)
 }
 
 /* flags set by the driver in queue_limits.features */
-enum {
-	/* supports a volatile write cache */
-	BLK_FEAT_WRITE_CACHE			= (1u << 0),
+typedef unsigned int __bitwise blk_features_t;
 
-	/* supports passing on the FUA bit */
-	BLK_FEAT_FUA				= (1u << 1),
+/* supports a volatile write cache */
+#define BLK_FEAT_WRITE_CACHE		((__force blk_features_t)(1u << 0))
 
-	/* rotational device (hard drive or floppy) */
-	BLK_FEAT_ROTATIONAL			= (1u << 2),
+/* supports passing on the FUA bit */
+#define BLK_FEAT_FUA			((__force blk_features_t)(1u << 1))
 
-	/* contributes to the random number pool */
-	BLK_FEAT_ADD_RANDOM			= (1u << 3),
+/* rotational device (hard drive or floppy) */
+#define BLK_FEAT_ROTATIONAL		((__force blk_features_t)(1u << 2))
 
-	/* do disk/partitions IO accounting */
-	BLK_FEAT_IO_STAT			= (1u << 4),
+/* contributes to the random number pool */
+#define BLK_FEAT_ADD_RANDOM		((__force blk_features_t)(1u << 3))
 
-	/* don't modify data until writeback is done */
-	BLK_FEAT_STABLE_WRITES			= (1u << 5),
+/* do disk/partitions IO accounting */
+#define BLK_FEAT_IO_STAT		((__force blk_features_t)(1u << 4))
 
-	/* always completes in submit context */
-	BLK_FEAT_SYNCHRONOUS			= (1u << 6),
+/* don't modify data until writeback is done */
+#define BLK_FEAT_STABLE_WRITES		((__force blk_features_t)(1u << 5))
 
-	/* supports REQ_NOWAIT */
-	BLK_FEAT_NOWAIT				= (1u << 7),
+/* always completes in submit context */
+#define BLK_FEAT_SYNCHRONOUS		((__force blk_features_t)(1u << 6))
 
-	/* supports DAX */
-	BLK_FEAT_DAX				= (1u << 8),
+/* supports REQ_NOWAIT */
+#define BLK_FEAT_NOWAIT			((__force blk_features_t)(1u << 7))
 
-	/* supports I/O polling */
-	BLK_FEAT_POLL				= (1u << 9),
+/* supports DAX */
+#define BLK_FEAT_DAX			((__force blk_features_t)(1u << 8))
 
-	/* is a zoned device */
-	BLK_FEAT_ZONED				= (1u << 10),
+/* supports I/O polling */
+#define BLK_FEAT_POLL			((__force blk_features_t)(1u << 9))
 
-	/* supports Zone Reset All */
-	BLK_FEAT_ZONE_RESETALL			= (1u << 11),
+/* is a zoned device */
+#define BLK_FEAT_ZONED			((__force blk_features_t)(1u << 10))
 
-	/* supports PCI(e) p2p requests */
-	BLK_FEAT_PCI_P2PDMA			= (1u << 12),
+/* supports Zone Reset All */
+#define BLK_FEAT_ZONE_RESETALL		((__force blk_features_t)(1u << 11))
 
-	/* skip this queue in blk_mq_(un)quiesce_tagset */
-	BLK_FEAT_SKIP_TAGSET_QUIESCE		= (1u << 13),
+/* supports PCI(e) p2p requests */
+#define BLK_FEAT_PCI_P2PDMA		((__force blk_features_t)(1u << 12))
 
-	/* bounce all highmem pages */
-	BLK_FEAT_BOUNCE_HIGH			= (1u << 14),
+/* skip this queue in blk_mq_(un)quiesce_tagset */
+#define BLK_FEAT_SKIP_TAGSET_QUIESCE	((__force blk_features_t)(1u << 13))
 
-	/* undocumented magic for bcache */
-	BLK_FEAT_RAID_PARTIAL_STRIPES_EXPENSIVE	= (1u << 15),
-};
+/* bounce all highmem pages */
+#define BLK_FEAT_BOUNCE_HIGH		((__force blk_features_t)(1u << 14))
+
+/* undocumented magic for bcache */
+#define BLK_FEAT_RAID_PARTIAL_STRIPES_EXPENSIVE \
+	((__force blk_features_t)(1u << 15))
 
 /*
  * Flags automatically inherited when stacking limits.
@@ -342,17 +343,17 @@ enum {
 	 BLK_FEAT_RAID_PARTIAL_STRIPES_EXPENSIVE)
 
 /* internal flags in queue_limits.flags */
-enum {
-	/* do not send FLUSH/FUA commands despite advertising a write cache */
-	BLK_FLAG_WRITE_CACHE_DISABLED		= (1u << 0),
+typedef unsigned int __bitwise blk_flags_t;
 
-	/* I/O topology is misaligned */
-	BLK_FEAT_MISALIGNED			= (1u << 1),
-};
+/* do not send FLUSH/FUA commands despite advertising a write cache */
+#define BLK_FLAG_WRITE_CACHE_DISABLED	((__force blk_flags_t)(1u << 0))
+
+/* I/O topology is misaligned */
+#define BLK_FLAG_MISALIGNED		((__force blk_flags_t)(1u << 1))
 
 struct queue_limits {
-	unsigned int		features;
-	unsigned int		flags;
+	blk_features_t		features;
+	blk_flags_t		flags;
 	unsigned long		seg_boundary_mask;
 	unsigned long		virt_boundary_mask;
 
@@ -400,6 +401,7 @@ struct queue_limits {
 	 * due to possible offsets.
 	 */
 	unsigned int		dma_alignment;
+	unsigned int		dma_pad_mask;
 
 	struct blk_integrity	integrity;
 };
@@ -507,8 +509,6 @@ struct request_queue {
 	 * ioctx.
 	 */
 	int			id;
-
-	unsigned int		dma_pad_mask;
 
 	/*
 	 * queue settings
@@ -972,7 +972,6 @@ static inline void blk_queue_disable_write_zeroes(struct request_queue *q)
 /*
  * Access functions for manipulating queue properties
  */
-void disk_update_readahead(struct gendisk *disk);
 extern void blk_limits_io_min(struct queue_limits *limits, unsigned int min);
 extern void blk_limits_io_opt(struct queue_limits *limits, unsigned int opt);
 extern void blk_set_queue_depth(struct request_queue *q, unsigned int depth);
@@ -981,7 +980,6 @@ extern int blk_stack_limits(struct queue_limits *t, struct queue_limits *b,
 			    sector_t offset);
 void queue_limits_stack_bdev(struct queue_limits *t, struct block_device *bdev,
 		sector_t offset, const char *pfx);
-extern void blk_queue_update_dma_pad(struct request_queue *, unsigned int);
 extern void blk_queue_rq_timeout(struct request_queue *, unsigned int);
 
 struct blk_independent_access_ranges *
@@ -1394,7 +1392,7 @@ static inline bool bdev_is_zone_start(struct block_device *bdev,
 
 static inline int queue_dma_alignment(const struct request_queue *q)
 {
-	return q ? q->limits.dma_alignment : 511;
+	return q->limits.dma_alignment;
 }
 
 static inline unsigned int
@@ -1433,10 +1431,16 @@ static inline bool bdev_iter_is_aligned(struct block_device *bdev,
 				   bdev_logical_block_size(bdev) - 1);
 }
 
+static inline int blk_lim_dma_alignment_and_pad(struct queue_limits *lim)
+{
+	return lim->dma_alignment | lim->dma_pad_mask;
+}
+
 static inline int blk_rq_aligned(struct request_queue *q, unsigned long addr,
 				 unsigned int len)
 {
-	unsigned int alignment = queue_dma_alignment(q) | q->dma_pad_mask;
+	unsigned int alignment = blk_lim_dma_alignment_and_pad(&q->limits);
+
 	return !(addr & alignment) && !(len & alignment);
 }
 
