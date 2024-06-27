@@ -3856,13 +3856,14 @@ long memfd_pin_folios(struct file *memfd, loff_t start, loff_t end,
 				    next_idx != folio_index(fbatch.folios[i]))
 					continue;
 
-				folio = try_grab_folio(&fbatch.folios[i]->page,
-						       1, FOLL_PIN);
-				if (!folio) {
+				if (try_grab_folio(fbatch.folios[i],
+						       1, FOLL_PIN)) {
 					folio_batch_release(&fbatch);
 					ret = -EINVAL;
 					goto err;
 				}
+
+				folio = fbatch.folios[i];
 
 				if (nr_folios == 0)
 					*offset = offset_in_folio(folio, start);
