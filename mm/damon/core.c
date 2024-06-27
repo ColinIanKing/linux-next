@@ -1382,7 +1382,7 @@ static void kdamond_merge_regions(struct damon_ctx *c, unsigned int threshold,
 		}
 		threshold = max(1, threshold * 2);
 	} while (nr_regions > c->attrs.max_nr_regions &&
-			threshold <= max_thres);
+			threshold / 2 < max_thres);
 }
 
 /*
