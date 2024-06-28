@@ -203,18 +203,11 @@ static ssize_t bin_attr_nvmem_read(struct file *filp, struct kobject *kobj,
 		dev = kobj_to_dev(kobj);
 	nvmem = to_nvmem_device(dev);
 
-	/* Stop the user from reading */
-	if (pos >= nvmem->size)
-		return 0;
-
 	if (!IS_ALIGNED(pos, nvmem->stride))
 		return -EINVAL;
 
 	if (count < nvmem->word_size)
 		return -EINVAL;
-
-	if (pos + count > nvmem->size)
-		count = nvmem->size - pos;
 
 	count = round_down(count, nvmem->word_size);
 
@@ -243,18 +236,11 @@ static ssize_t bin_attr_nvmem_write(struct file *filp, struct kobject *kobj,
 		dev = kobj_to_dev(kobj);
 	nvmem = to_nvmem_device(dev);
 
-	/* Stop the user from writing */
-	if (pos >= nvmem->size)
-		return -EFBIG;
-
 	if (!IS_ALIGNED(pos, nvmem->stride))
 		return -EINVAL;
 
 	if (count < nvmem->word_size)
 		return -EINVAL;
-
-	if (pos + count > nvmem->size)
-		count = nvmem->size - pos;
 
 	count = round_down(count, nvmem->word_size);
 
@@ -357,22 +343,12 @@ static const struct attribute_group nvmem_bin_group = {
 	.is_bin_visible = nvmem_bin_attr_is_visible,
 };
 
-/* Cell attributes will be dynamically allocated */
-static struct attribute_group nvmem_cells_group = {
-	.name		= "cells",
-};
-
 static const struct attribute_group *nvmem_dev_groups[] = {
 	&nvmem_bin_group,
 	NULL,
 };
 
-static const struct attribute_group *nvmem_cells_groups[] = {
-	&nvmem_cells_group,
-	NULL,
-};
-
-static struct bin_attribute bin_attr_nvmem_eeprom_compat = {
+static const struct bin_attribute bin_attr_nvmem_eeprom_compat = {
 	.attr	= {
 		.name	= "eeprom",
 	},
@@ -396,10 +372,9 @@ static int nvmem_sysfs_setup_compat(struct nvmem_device *nvmem,
 	if (!config->base_dev)
 		return -EINVAL;
 
-	if (config->type == NVMEM_TYPE_FRAM)
-		bin_attr_nvmem_eeprom_compat.attr.name = "fram";
-
 	nvmem->eeprom = bin_attr_nvmem_eeprom_compat;
+	if (config->type == NVMEM_TYPE_FRAM)
+		nvmem->eeprom.attr.name = "fram";
 	nvmem->eeprom.attr.mode = nvmem_bin_attr_get_umode(nvmem);
 	nvmem->eeprom.size = nvmem->size;
 #ifdef CONFIG_DEBUG_LOCK_ALLOC
@@ -429,23 +404,24 @@ static void nvmem_sysfs_remove_compat(struct nvmem_device *nvmem,
 
 static int nvmem_populate_sysfs_cells(struct nvmem_device *nvmem)
 {
-	struct bin_attribute **cells_attrs, *attrs;
+	struct attribute_group group = {
+		.name	= "cells",
+	};
 	struct nvmem_cell_entry *entry;
+	struct bin_attribute *attrs;
 	unsigned int ncells = 0, i = 0;
 	int ret = 0;
 
 	mutex_lock(&nvmem_mutex);
 
-	if (list_empty(&nvmem->cells) || nvmem->sysfs_cells_populated) {
-		nvmem_cells_group.bin_attrs = NULL;
+	if (list_empty(&nvmem->cells) || nvmem->sysfs_cells_populated)
 		goto unlock_mutex;
-	}
 
 	/* Allocate an array of attributes with a sentinel */
 	ncells = list_count_nodes(&nvmem->cells);
-	cells_attrs = devm_kcalloc(&nvmem->dev, ncells + 1,
-				   sizeof(struct bin_attribute *), GFP_KERNEL);
-	if (!cells_attrs) {
+	group.bin_attrs = devm_kcalloc(&nvmem->dev, ncells + 1,
+				       sizeof(struct bin_attribute *), GFP_KERNEL);
+	if (!group.bin_attrs) {
 		ret = -ENOMEM;
 		goto unlock_mutex;
 	}
@@ -463,7 +439,7 @@ static int nvmem_populate_sysfs_cells(struct nvmem_device *nvmem)
 						    "%s@%x,%x", entry->name,
 						    entry->offset,
 						    entry->bit_offset);
-		attrs[i].attr.mode = 0444;
+		attrs[i].attr.mode = 0444 & nvmem_bin_attr_get_umode(nvmem);
 		attrs[i].size = entry->bytes;
 		attrs[i].read = &nvmem_cell_attr_read;
 		attrs[i].private = entry;
@@ -472,13 +448,11 @@ static int nvmem_populate_sysfs_cells(struct nvmem_device *nvmem)
 			goto unlock_mutex;
 		}
 
-		cells_attrs[i] = &attrs[i];
+		group.bin_attrs[i] = &attrs[i];
 		i++;
 	}
 
-	nvmem_cells_group.bin_attrs = cells_attrs;
-
-	ret = device_add_groups(&nvmem->dev, nvmem_cells_groups);
+	ret = device_add_group(&nvmem->dev, &group);
 	if (ret)
 		goto unlock_mutex;
 
