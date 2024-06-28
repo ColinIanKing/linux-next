@@ -26,7 +26,7 @@ EXPORT_SYMBOL_GPL(leds_list_lock);
 LIST_HEAD(leds_list);
 EXPORT_SYMBOL_GPL(leds_list);
 
-const char * const led_colors[LED_COLOR_ID_MAX] = {
+static const char * const led_colors[LED_COLOR_ID_MAX] = {
 	[LED_COLOR_ID_WHITE] = "white",
 	[LED_COLOR_ID_RED] = "red",
 	[LED_COLOR_ID_GREEN] = "green",
@@ -43,7 +43,6 @@ const char * const led_colors[LED_COLOR_ID_MAX] = {
 	[LED_COLOR_ID_CYAN] = "cyan",
 	[LED_COLOR_ID_LIME] = "lime",
 };
-EXPORT_SYMBOL_GPL(led_colors);
 
 static int __led_set_brightness(struct led_classdev *led_cdev, unsigned int value)
 {
@@ -123,15 +122,22 @@ static void led_timer_function(struct timer_list *t)
 static void set_brightness_delayed_set_brightness(struct led_classdev *led_cdev,
 						  unsigned int value)
 {
-	int ret = 0;
+	int ret;
 
 	ret = __led_set_brightness(led_cdev, value);
-	if (ret == -ENOTSUPP)
+	if (ret == -ENOTSUPP) {
 		ret = __led_set_brightness_blocking(led_cdev, value);
-	if (ret < 0 &&
-	    /* LED HW might have been unplugged, therefore don't warn */
-	    !(ret == -ENODEV && (led_cdev->flags & LED_UNREGISTERING) &&
-	    (led_cdev->flags & LED_HW_PLUGGABLE)))
+		if (ret == -ENOTSUPP)
+			/* No back-end support to set a fixed brightness value */
+			return;
+	}
+
+	/* LED HW might have been unplugged, therefore don't warn */
+	if (ret == -ENODEV && led_cdev->flags & LED_UNREGISTERING &&
+	    led_cdev->flags & LED_HW_PLUGGABLE)
+		return;
+
+	if (ret < 0)
 		dev_err(led_cdev->dev,
 			"Setting an LED's brightness failed (%d)\n", ret);
 }
@@ -564,6 +570,15 @@ int led_compose_name(struct device *dev, struct led_init_data *init_data,
 	return 0;
 }
 EXPORT_SYMBOL_GPL(led_compose_name);
+
+const char *led_get_color_name(u8 color_id)
+{
+	if (color_id >= ARRAY_SIZE(led_colors))
+		return NULL;
+
+	return led_colors[color_id];
+}
+EXPORT_SYMBOL_GPL(led_get_color_name);
 
 enum led_default_state led_init_default_state_get(struct fwnode_handle *fwnode)
 {
