@@ -139,6 +139,7 @@ config VIDEO_IMX219
 
 config VIDEO_IMX258
 	tristate "Sony IMX258 sensor support"
+	select V4L2_CCI_I2C
 	help
 	  This is a Video4Linux2 sensor driver for the Sony
 	  IMX258 camera.
@@ -152,6 +153,16 @@ config VIDEO_IMX274
 	help
 	  This is a V4L2 sensor driver for the Sony IMX274
 	  CMOS image sensor.
+
+config VIDEO_IMX283
+	tristate "Sony IMX283 sensor support"
+	select V4L2_CCI_I2C
+	help
+	  This is a V4L2 sensor driver for the Sony IMX283
+	  CMOS image sensor.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called imx283.
 
 config VIDEO_IMX290
 	tristate "Sony IMX290 sensor support"
@@ -1574,6 +1585,40 @@ config VIDEO_DS90UB960
 	help
 	  Device driver for the Texas Instruments DS90UB960
 	  FPD-Link III Deserializer and DS90UB9702 FPD-Link IV Deserializer.
+
+config VIDEO_MAX96714
+	tristate "Maxim MAX96714 GMSL2 deserializer"
+	depends on OF && I2C && VIDEO_DEV
+	select I2C_MUX
+	select MEDIA_CONTROLLER
+	select GPIOLIB
+	select V4L2_CCI_I2C
+	select V4L2_FWNODE
+	select VIDEO_V4L2_SUBDEV_API
+	help
+	  Device driver for the Maxim MAX96714 GMSL2 Deserializer.
+	  MAX96714 deserializers convert a GMSL2 input to MIPI CSI-2
+	  output.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called max96714.
+
+config VIDEO_MAX96717
+	tristate "Maxim MAX96717 GMSL2 Serializer support"
+	depends on OF && I2C && VIDEO_DEV && COMMON_CLK
+	select I2C_MUX
+	select MEDIA_CONTROLLER
+	select GPIOLIB
+	select V4L2_CCI_I2C
+	select V4L2_FWNODE
+	select VIDEO_V4L2_SUBDEV_API
+	help
+	  Device driver for the Maxim MAX96717 GMSL2 Serializer.
+	  MAX96717 serializers convert video on a MIPI CSI-2
+	  input to a GMSL2 output.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called max96717.
 
 endmenu
 
