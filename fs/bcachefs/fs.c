@@ -227,7 +227,9 @@ static struct bch_inode_info *__bch2_new_inode(struct bch_fs *c)
 	mutex_init(&inode->ei_update_lock);
 	two_state_lock_init(&inode->ei_pagecache_lock);
 	INIT_LIST_HEAD(&inode->ei_vfs_inode_list);
+	inode->ei_flags = 0;
 	mutex_init(&inode->ei_quota_lock);
+	memset(&inode->ei_devs_need_flush, 0, sizeof(inode->ei_devs_need_flush));
 
 	if (unlikely(inode_init_always(c->vfs_sb, &inode->v))) {
 		kmem_cache_free(bch2_inode_cache, inode);
@@ -1966,6 +1968,7 @@ got_sb:
 	sb->s_time_min		= div_s64(S64_MIN, c->sb.time_units_per_sec) + 1;
 	sb->s_time_max		= div_s64(S64_MAX, c->sb.time_units_per_sec);
 	sb->s_uuid		= c->sb.user_uuid;
+	sb->s_shrink->seeks	= 0;
 	c->vfs_sb		= sb;
 	strscpy(sb->s_id, c->name, sizeof(sb->s_id));
 

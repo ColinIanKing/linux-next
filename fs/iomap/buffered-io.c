@@ -241,6 +241,7 @@ static void iomap_adjust_read_range(struct inode *inode, struct folio *folio,
 	unsigned block_size = (1 << block_bits);
 	size_t poff = offset_in_folio(folio, *pos);
 	size_t plen = min_t(loff_t, folio_size(folio) - poff, length);
+	size_t orig_plen = plen;
 	unsigned first = poff >> block_bits;
 	unsigned last = (poff + plen - 1) >> block_bits;
 
@@ -277,7 +278,7 @@ static void iomap_adjust_read_range(struct inode *inode, struct folio *folio,
 	 * handle both halves separately so that we properly zero data in the
 	 * page cache for blocks that are entirely outside of i_size.
 	 */
-	if (orig_pos <= isize && orig_pos + length > isize) {
+	if (orig_pos <= isize && orig_pos + orig_plen > isize) {
 		unsigned end = offset_in_folio(folio, isize - 1) >> block_bits;
 
 		if (first <= end && last > end)
@@ -441,6 +442,24 @@ done:
 	return pos - orig_pos + plen;
 }
 
+static loff_t iomap_read_folio_iter(const struct iomap_iter *iter,
+		struct iomap_readpage_ctx *ctx)
+{
+	struct folio *folio = ctx->cur_folio;
+	size_t offset = offset_in_folio(folio, iter->pos);
+	loff_t length = min_t(loff_t, folio_size(folio) - offset,
+			      iomap_length(iter));
+	loff_t done, ret;
+
+	for (done = 0; done < length; done += ret) {
+		ret = iomap_readpage_iter(iter, ctx, done);
+		if (ret <= 0)
+			return ret;
+	}
+
+	return done;
+}
+
 int iomap_read_folio(struct folio *folio, const struct iomap_ops *ops)
 {
 	struct iomap_iter iter = {
@@ -456,7 +475,7 @@ int iomap_read_folio(struct folio *folio, const struct iomap_ops *ops)
 	trace_iomap_readpage(iter.inode, 1);
 
 	while ((ret = iomap_iter(&iter, ops)) > 0)
-		iter.processed = iomap_readpage_iter(&iter, &ctx, 0);
+		iter.processed = iomap_read_folio_iter(&iter, &ctx);
 
 	if (ctx.bio) {
 		submit_bio(ctx.bio);
