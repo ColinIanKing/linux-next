@@ -18,6 +18,7 @@
 #include <linux/iopoll.h>
 
 #define MAX_QUEUE_SUP GENMASK(7, 0)
+#define QCFGPTR GENMASK(23, 16)
 #define UFS_MCQ_MIN_RW_QUEUES 2
 #define UFS_MCQ_MIN_READ_QUEUES 0
 #define UFS_MCQ_MIN_POLL_QUEUES 0
@@ -25,7 +26,6 @@
 #define QUEUE_ID_OFFSET 16
 
 #define MCQ_CFG_MAC_MASK	GENMASK(16, 8)
-#define MCQ_QCFG_SIZE		0x40
 #define MCQ_ENTRY_SIZE_IN_DWORD	8
 #define CQE_UCD_BA GENMASK_ULL(63, 7)
 
@@ -118,6 +118,19 @@ struct ufs_hw_queue *ufshcd_mcq_req_to_hwq(struct ufs_hba *hba,
 }
 
 /**
+ * ufshcd_mcq_queue_cfg_addr - get an start address of the MCQ Queue Config
+ * Registers.
+ * @hba: per adapter instance
+ *
+ * Return: Start address of MCQ Queue Config Registers in HCI
+ */
+unsigned int ufshcd_mcq_queue_cfg_addr(struct ufs_hba *hba)
+{
+	return FIELD_GET(QCFGPTR, hba->mcq_capabilities) * 0x200;
+}
+EXPORT_SYMBOL_GPL(ufshcd_mcq_queue_cfg_addr);
+
+/**
  * ufshcd_mcq_decide_queue_depth - decide the queue depth
  * @hba: per adapter instance
  *
@@ -163,6 +176,15 @@ static int ufshcd_mcq_config_nr_queues(struct ufs_hba *hba)
 	if (hba_maxq < tot_queues) {
 		dev_err(hba->dev, "Total queues (%d) exceeds HC capacity (%d)\n",
 			tot_queues, hba_maxq);
+		return -EOPNOTSUPP;
+	}
+
+	/*
+	 * Device should support at least one I/O queue to handle device
+	 * commands via hba->dev_cmd_queue.
+	 */
+	if (hba_maxq == poll_queues) {
+		dev_err(hba->dev, "At least one non-poll queue required\n");
 		return -EOPNOTSUPP;
 	}
 
@@ -227,12 +249,6 @@ int ufshcd_mcq_memory_alloc(struct ufs_hba *hba)
 
 	return 0;
 }
-
-
-/* Operation and runtime registers configuration */
-#define MCQ_CFG_n(r, i)	((r) + MCQ_QCFG_SIZE * (i))
-#define MCQ_OPR_OFFSET_n(p, i) \
-	(hba->mcq_opr[(p)].offset + hba->mcq_opr[(p)].stride * (i))
 
 static void __iomem *mcq_opr_base(struct ufs_hba *hba,
 					 enum ufshcd_mcq_opr n, int i)
@@ -338,29 +354,29 @@ void ufshcd_mcq_make_queues_operational(struct ufs_hba *hba)
 
 		/* Submission Queue Lower Base Address */
 		ufsmcq_writelx(hba, lower_32_bits(hwq->sqe_dma_addr),
-			      MCQ_CFG_n(REG_SQLBA, i));
+			      ufshcd_mcq_cfg_offset(REG_SQLBA, i));
 		/* Submission Queue Upper Base Address */
 		ufsmcq_writelx(hba, upper_32_bits(hwq->sqe_dma_addr),
-			      MCQ_CFG_n(REG_SQUBA, i));
+			      ufshcd_mcq_cfg_offset(REG_SQUBA, i));
 		/* Submission Queue Doorbell Address Offset */
-		ufsmcq_writelx(hba, MCQ_OPR_OFFSET_n(OPR_SQD, i),
-			      MCQ_CFG_n(REG_SQDAO, i));
+		ufsmcq_writelx(hba, ufshcd_mcq_opr_offset(hba, OPR_SQD, i),
+			      ufshcd_mcq_cfg_offset(REG_SQDAO, i));
 		/* Submission Queue Interrupt Status Address Offset */
-		ufsmcq_writelx(hba, MCQ_OPR_OFFSET_n(OPR_SQIS, i),
-			      MCQ_CFG_n(REG_SQISAO, i));
+		ufsmcq_writelx(hba, ufshcd_mcq_opr_offset(hba, OPR_SQIS, i),
+			      ufshcd_mcq_cfg_offset(REG_SQISAO, i));
 
 		/* Completion Queue Lower Base Address */
 		ufsmcq_writelx(hba, lower_32_bits(hwq->cqe_dma_addr),
-			      MCQ_CFG_n(REG_CQLBA, i));
+			      ufshcd_mcq_cfg_offset(REG_CQLBA, i));
 		/* Completion Queue Upper Base Address */
 		ufsmcq_writelx(hba, upper_32_bits(hwq->cqe_dma_addr),
-			      MCQ_CFG_n(REG_CQUBA, i));
+			      ufshcd_mcq_cfg_offset(REG_CQUBA, i));
 		/* Completion Queue Doorbell Address Offset */
-		ufsmcq_writelx(hba, MCQ_OPR_OFFSET_n(OPR_CQD, i),
-			      MCQ_CFG_n(REG_CQDAO, i));
+		ufsmcq_writelx(hba, ufshcd_mcq_opr_offset(hba, OPR_CQD, i),
+			      ufshcd_mcq_cfg_offset(REG_CQDAO, i));
 		/* Completion Queue Interrupt Status Address Offset */
-		ufsmcq_writelx(hba, MCQ_OPR_OFFSET_n(OPR_CQIS, i),
-			      MCQ_CFG_n(REG_CQISAO, i));
+		ufsmcq_writelx(hba, ufshcd_mcq_opr_offset(hba, OPR_CQIS, i),
+			      ufshcd_mcq_cfg_offset(REG_CQISAO, i));
 
 		/* Save the base addresses for quicker access */
 		hwq->mcq_sq_head = mcq_opr_base(hba, OPR_SQD, i) + REG_SQHP;
@@ -377,7 +393,7 @@ void ufshcd_mcq_make_queues_operational(struct ufs_hba *hba)
 
 		/* Completion Queue Enable|Size to Completion Queue Attribute */
 		ufsmcq_writel(hba, (1 << QUEUE_EN_OFFSET) | qsize,
-			      MCQ_CFG_n(REG_CQATTR, i));
+			      ufshcd_mcq_cfg_offset(REG_CQATTR, i));
 
 		/*
 		 * Submission Qeueue Enable|Size|Completion Queue ID to
@@ -385,7 +401,7 @@ void ufshcd_mcq_make_queues_operational(struct ufs_hba *hba)
 		 */
 		ufsmcq_writel(hba, (1 << QUEUE_EN_OFFSET) | qsize |
 			      (i << QUEUE_ID_OFFSET),
-			      MCQ_CFG_n(REG_SQATTR, i));
+			      ufshcd_mcq_cfg_offset(REG_SQATTR, i));
 	}
 }
 EXPORT_SYMBOL_GPL(ufshcd_mcq_make_queues_operational);
