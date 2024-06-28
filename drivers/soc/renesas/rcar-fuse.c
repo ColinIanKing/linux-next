@@ -121,7 +121,7 @@ static int rcar_fuse_probe(struct platform_device *pdev)
 
 		fuse->offset = data->offset;
 		fuse->nregs = data->nregs;
-	};
+	}
 
 	memset(&nvmem, 0, sizeof(nvmem));
 	nvmem.dev = dev;
