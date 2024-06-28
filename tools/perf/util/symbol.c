@@ -1799,7 +1799,8 @@ int dso__load(struct dso *dso, struct map *map)
 	const char *map_path = dso__long_name(dso);
 
 	mutex_lock(dso__lock(dso));
-	perfmap = strncmp(dso__name(dso), "/tmp/perf-", 10) == 0;
+	perfmap = is_perf_pid_map_name(map_path);
+
 	if (perfmap) {
 		if (dso__nsinfo(dso) &&
 		    (dso__find_perf_map(newmapname, sizeof(newmapname),
@@ -1816,10 +1817,7 @@ int dso__load(struct dso *dso, struct map *map)
 		goto out;
 	}
 
-	kmod = dso__symtab_type(dso) == DSO_BINARY_TYPE__SYSTEM_PATH_KMODULE ||
-		dso__symtab_type(dso) == DSO_BINARY_TYPE__SYSTEM_PATH_KMODULE_COMP ||
-		dso__symtab_type(dso) == DSO_BINARY_TYPE__GUEST_KMODULE ||
-		dso__symtab_type(dso) == DSO_BINARY_TYPE__GUEST_KMODULE_COMP;
+	kmod = dso__is_kmod(dso);
 
 	if (dso__kernel(dso) && !kmod) {
 		if (dso__kernel(dso) == DSO_SPACE__KERNEL)
