@@ -5,6 +5,7 @@
 
 #include "mana_ib.h"
 #include <net/mana/mana_auxiliary.h>
+#include <net/addrconf.h>
 
 MODULE_DESCRIPTION("Microsoft Azure Network Adapter IB driver");
 MODULE_LICENSE("GPL");
@@ -92,6 +93,7 @@ static int mana_ib_probe(struct auxiliary_device *adev,
 		goto free_ib_device;
 	}
 	ether_addr_copy(mac_addr, upper_ndev->dev_addr);
+	addrconf_addr_eui48((u8 *)&dev->ib_dev.node_guid, upper_ndev->dev_addr);
 	ret = ib_device_set_netdev(&dev->ib_dev, upper_ndev, 1);
 	rcu_read_unlock();
 	if (ret) {
@@ -124,6 +126,7 @@ static int mana_ib_probe(struct auxiliary_device *adev,
 	if (ret)
 		goto destroy_eqs;
 
+	xa_init_flags(&dev->qp_table_wq, XA_FLAGS_LOCK_IRQ);
 	ret = mana_ib_gd_config_mac(dev, ADDR_OP_ADD, mac_addr);
 	if (ret) {
 		ibdev_err(&dev->ib_dev, "Failed to add Mac address, ret %d",
@@ -141,6 +144,7 @@ static int mana_ib_probe(struct auxiliary_device *adev,
 	return 0;
 
 destroy_rnic:
+	xa_destroy(&dev->qp_table_wq);
 	mana_ib_gd_destroy_rnic_adapter(dev);
 destroy_eqs:
 	mana_ib_destroy_eqs(dev);
@@ -156,6 +160,7 @@ static void mana_ib_remove(struct auxiliary_device *adev)
 	struct mana_ib_dev *dev = dev_get_drvdata(&adev->dev);
 
 	ib_unregister_device(&dev->ib_dev);
+	xa_destroy(&dev->qp_table_wq);
 	mana_ib_gd_destroy_rnic_adapter(dev);
 	mana_ib_destroy_eqs(dev);
 	mana_gd_deregister_device(dev->gdma_dev);
