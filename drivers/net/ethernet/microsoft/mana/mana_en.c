@@ -1904,10 +1904,10 @@ static int mana_create_txq(struct mana_port_context *apc,
 	 *  to prevent overflow.
 	 */
 	txq_size = MAX_SEND_BUFFERS_PER_QUEUE * 32;
-	BUILD_BUG_ON(!PAGE_ALIGNED(txq_size));
+	BUILD_BUG_ON(!MANA_PAGE_ALIGNED(txq_size));
 
 	cq_size = MAX_SEND_BUFFERS_PER_QUEUE * COMP_ENTRY_SIZE;
-	cq_size = PAGE_ALIGN(cq_size);
+	cq_size = MANA_PAGE_ALIGN(cq_size);
 
 	gc = gd->gdma_context;
 
@@ -2204,8 +2204,8 @@ static struct mana_rxq *mana_create_rxq(struct mana_port_context *apc,
 	if (err)
 		goto out;
 
-	rq_size = PAGE_ALIGN(rq_size);
-	cq_size = PAGE_ALIGN(cq_size);
+	rq_size = MANA_PAGE_ALIGN(rq_size);
+	cq_size = MANA_PAGE_ALIGN(cq_size);
 
 	/* Create RQ */
 	memset(&spec, 0, sizeof(spec));
@@ -2529,8 +2529,7 @@ static int mana_init_port(struct net_device *ndev)
 	return 0;
 
 reset_apc:
-	kfree(apc->rxqs);
-	apc->rxqs = NULL;
+	mana_cleanup_port_context(apc);
 	return err;
 }
 
@@ -2787,8 +2786,7 @@ static int mana_probe_port(struct mana_context *ac, int port_idx,
 free_indir:
 	mana_cleanup_indir_table(apc);
 reset_apc:
-	kfree(apc->rxqs);
-	apc->rxqs = NULL;
+	mana_cleanup_port_context(apc);
 free_net:
 	*ndev_storage = NULL;
 	netdev_err(ndev, "Failed to probe vPort %d: %d\n", port_idx, err);
