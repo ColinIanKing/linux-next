@@ -20,12 +20,15 @@
 #include <linux/math.h>
 #include <linux/of.h>
 #include <linux/pinctrl/machine.h>
+#include <linux/platform_data/rcar_fuse.h>
 #include <linux/platform_device.h>
 #include <linux/psci.h>
 #include <linux/slab.h>
 #include <linux/sys_soc.h>
 
 #include "core.h"
+
+#define FUSE_MON0	0x3e4		/* R-Car Gen3 */
 
 static int sh_pfc_map_resources(struct sh_pfc *pfc,
 				struct platform_device *pdev)
@@ -1371,6 +1374,21 @@ static int sh_pfc_probe(struct platform_device *pdev)
 		dev_notice(pfc->dev, "failed to init GPIO chip, ignoring...\n");
 	}
 #endif
+
+	if (pfc->info->nr_fuse_regs) {
+		struct rcar_fuse_platform_data pdata = {
+			.base = pfc->windows[0].virt,
+			.offset = FUSE_MON0,
+			.nregs = pfc->info->nr_fuse_regs,
+		};
+		struct platform_device *fdev;
+
+		fdev = platform_device_register_data(pfc->dev, "rcar_fuse", -1,
+						     &pdata, sizeof(pdata));
+		if (IS_ERR(fdev))
+			dev_err_probe(pfc->dev, PTR_ERR(fdev),
+				      "failed to register fuses, ignoring\n");
+	}
 
 	platform_set_drvdata(pdev, pfc);
 
