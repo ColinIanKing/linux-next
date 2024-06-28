@@ -9,6 +9,7 @@
 #include <xen/xen.h>
 #include "blk-crypto-internal.h"
 
+struct blk_integrity_iter;
 struct elevator_type;
 
 /* Max future timer expiry for timeouts */
@@ -181,15 +182,20 @@ static inline unsigned int blk_rq_get_max_segments(struct request *rq)
 	return queue_max_segments(rq->q);
 }
 
-static inline unsigned int blk_queue_get_max_sectors(struct request_queue *q,
-						     enum req_op op)
+static inline unsigned int blk_queue_get_max_sectors(struct request *rq)
 {
+	struct request_queue *q = rq->q;
+	enum req_op op = req_op(rq);
+
 	if (unlikely(op == REQ_OP_DISCARD || op == REQ_OP_SECURE_ERASE))
 		return min(q->limits.max_discard_sectors,
 			   UINT_MAX >> SECTOR_SHIFT);
 
 	if (unlikely(op == REQ_OP_WRITE_ZEROES))
 		return q->limits.max_write_zeroes_sectors;
+
+	if (rq->cmd_flags & REQ_ATOMIC)
+		return q->limits.atomic_write_max_sectors;
 
 	return q->limits.max_sectors;
 }
@@ -352,6 +358,8 @@ bool blk_rq_merge_ok(struct request *rq, struct bio *bio);
 enum elv_merge blk_try_merge(struct request *rq, struct bio *bio);
 
 int blk_set_default_limits(struct queue_limits *lim);
+void blk_apply_bdi_limits(struct backing_dev_info *bdi,
+		struct queue_limits *lim);
 int blk_dev_init(void);
 
 /*
@@ -393,7 +401,7 @@ struct bio *__blk_queue_bounce(struct bio *bio, struct request_queue *q);
 static inline bool blk_queue_may_bounce(struct request_queue *q)
 {
 	return IS_ENABLED(CONFIG_BOUNCE) &&
-		q->limits.bounce == BLK_BOUNCE_HIGH &&
+		(q->limits.features & BLK_FEAT_BOUNCE_HIGH) &&
 		max_low_pfn >= max_pfn;
 }
 
@@ -672,5 +680,12 @@ void bdev_release(struct file *bdev_file);
 int bdev_open(struct block_device *bdev, blk_mode_t mode, void *holder,
 	      const struct blk_holder_ops *hops, struct file *bdev_file);
 int bdev_permission(dev_t dev, blk_mode_t mode, void *holder);
+
+void blk_integrity_generate(struct blk_integrity_iter *iter,
+		struct blk_integrity *bi);
+blk_status_t blk_integrity_verify(struct blk_integrity_iter *iter,
+		struct blk_integrity *bi);
+void blk_integrity_prepare(struct request *rq);
+void blk_integrity_complete(struct request *rq, unsigned int nr_bytes);
 
 #endif /* BLK_INTERNAL_H */
