@@ -79,9 +79,6 @@ static void rcu_sr_normal_gp_cleanup_work(struct work_struct *);
 
 static DEFINE_PER_CPU_SHARED_ALIGNED(struct rcu_data, rcu_data) = {
 	.gpwrap = true,
-#ifdef CONFIG_RCU_NOCB_CPU
-	.cblist.flags = SEGCBLIST_RCU_CORE,
-#endif
 };
 static struct rcu_state rcu_state = {
 	.level = { &rcu_state.node[0] },
@@ -97,6 +94,9 @@ static struct rcu_state rcu_state = {
 	.srs_cleanup_work = __WORK_INITIALIZER(rcu_state.srs_cleanup_work,
 		rcu_sr_normal_gp_cleanup_work),
 	.srs_cleanups_pending = ATOMIC_INIT(0),
+#ifdef CONFIG_RCU_NOCB_CPU
+	.nocb_mutex = __MUTEX_INITIALIZER(rcu_state.nocb_mutex),
+#endif
 };
 
 /* Dump rcu_node combining tree at boot to verify correct setup. */
@@ -1635,7 +1635,7 @@ static void rcu_sr_normal_gp_cleanup_work(struct work_struct *work)
 	 * the done tail list manipulations are protected here.
 	 */
 	done = smp_load_acquire(&rcu_state.srs_done_tail);
-	if (!done)
+	if (WARN_ON_ONCE(!done))
 		return;
 
 	WARN_ON_ONCE(!rcu_sr_is_wait_head(done));
@@ -2369,7 +2369,6 @@ rcu_report_qs_rdp(struct rcu_data *rdp)
 {
 	unsigned long flags;
 	unsigned long mask;
-	bool needacc = false;
 	struct rcu_node *rnp;
 
 	WARN_ON_ONCE(rdp->cpu != smp_processor_id());
@@ -2406,23 +2405,11 @@ rcu_report_qs_rdp(struct rcu_data *rdp)
 			 * to return true.  So complain, but don't awaken.
 			 */
 			WARN_ON_ONCE(rcu_accelerate_cbs(rnp, rdp));
-		} else if (!rcu_segcblist_completely_offloaded(&rdp->cblist)) {
-			/*
-			 * ...but NOCB kthreads may miss or delay callbacks acceleration
-			 * if in the middle of a (de-)offloading process.
-			 */
-			needacc = true;
 		}
 
 		rcu_disable_urgency_upon_qs(rdp);
 		rcu_report_qs_rnp(mask, rnp, rnp->gp_seq, flags);
 		/* ^^^ Released rnp->lock */
-
-		if (needacc) {
-			rcu_nocb_lock_irqsave(rdp, flags);
-			rcu_accelerate_cbs_unlocked(rnp, rdp);
-			rcu_nocb_unlock_irqrestore(rdp, flags);
-		}
 	}
 }
 
@@ -2777,24 +2764,6 @@ static __latent_entropy void rcu_core(void)
 	unsigned long flags;
 	struct rcu_data *rdp = raw_cpu_ptr(&rcu_data);
 	struct rcu_node *rnp = rdp->mynode;
-	/*
-	 * On RT rcu_core() can be preempted when IRQs aren't disabled.
-	 * Therefore this function can race with concurrent NOCB (de-)offloading
-	 * on this CPU and the below condition must be considered volatile.
-	 * However if we race with:
-	 *
-	 * _ Offloading:   In the worst case we accelerate or process callbacks
-	 *                 concurrently with NOCB kthreads. We are guaranteed to
-	 *                 call rcu_nocb_lock() if that happens.
-	 *
-	 * _ Deoffloading: In the worst case we miss callbacks acceleration or
-	 *                 processing. This is fine because the early stage
-	 *                 of deoffloading invokes rcu_core() after setting
-	 *                 SEGCBLIST_RCU_CORE. So we guarantee that we'll process
-	 *                 what could have been dismissed without the need to wait
-	 *                 for the next rcu_pending() check in the next jiffy.
-	 */
-	const bool do_batch = !rcu_segcblist_completely_offloaded(&rdp->cblist);
 
 	if (cpu_is_offline(smp_processor_id()))
 		return;
@@ -2814,17 +2783,17 @@ static __latent_entropy void rcu_core(void)
 
 	/* No grace period and unregistered callbacks? */
 	if (!rcu_gp_in_progress() &&
-	    rcu_segcblist_is_enabled(&rdp->cblist) && do_batch) {
-		rcu_nocb_lock_irqsave(rdp, flags);
+	    rcu_segcblist_is_enabled(&rdp->cblist) && !rcu_rdp_is_offloaded(rdp)) {
+		local_irq_save(flags);
 		if (!rcu_segcblist_restempty(&rdp->cblist, RCU_NEXT_READY_TAIL))
 			rcu_accelerate_cbs_unlocked(rnp, rdp);
-		rcu_nocb_unlock_irqrestore(rdp, flags);
+		local_irq_restore(flags);
 	}
 
 	rcu_check_gp_start_stall(rnp, rdp, rcu_jiffies_till_stall_check());
 
 	/* If there are callbacks ready, invoke them. */
-	if (do_batch && rcu_segcblist_ready_cbs(&rdp->cblist) &&
+	if (!rcu_rdp_is_offloaded(rdp) && rcu_segcblist_ready_cbs(&rdp->cblist) &&
 	    likely(READ_ONCE(rcu_scheduler_fully_active))) {
 		rcu_do_batch(rdp);
 		/* Re-invoke RCU core processing if there are callbacks remaining. */
