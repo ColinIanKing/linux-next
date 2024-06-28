@@ -83,6 +83,7 @@ static bool zswap_pool_reached_full;
 static int zswap_setup(void);
 
 /* Enable/disable zswap */
+static DEFINE_STATIC_KEY_MAYBE(CONFIG_ZSWAP_DEFAULT_ON, zswap_ever_enabled);
 static bool zswap_enabled = IS_ENABLED(CONFIG_ZSWAP_DEFAULT_ON);
 static int zswap_enabled_param_set(const char *,
 				   const struct kernel_param *);
@@ -131,9 +132,14 @@ static bool zswap_shrinker_enabled = IS_ENABLED(
 		CONFIG_ZSWAP_SHRINKER_DEFAULT_ON);
 module_param_named(shrinker_enabled, zswap_shrinker_enabled, bool, 0644);
 
-bool is_zswap_enabled(void)
+bool zswap_is_enabled(void)
 {
 	return zswap_enabled;
+}
+
+bool zswap_never_enabled(void)
+{
+	return !static_branch_maybe(CONFIG_ZSWAP_DEFAULT_ON, &zswap_ever_enabled);
 }
 
 /*********************************
@@ -917,7 +923,7 @@ static bool zswap_compress(struct folio *folio, struct zswap_entry *entry)
 
 	dst = acomp_ctx->buffer;
 	sg_init_table(&input, 1);
-	sg_set_page(&input, &folio->page, PAGE_SIZE, 0);
+	sg_set_folio(&input, folio, PAGE_SIZE, 0);
 
 	/*
 	 * We need PAGE_SIZE * 2 here since there maybe over-compression case,
@@ -971,7 +977,7 @@ unlock:
 	return comp_ret == 0 && alloc_ret == 0;
 }
 
-static void zswap_decompress(struct zswap_entry *entry, struct page *page)
+static void zswap_decompress(struct zswap_entry *entry, struct folio *folio)
 {
 	struct zpool *zpool = zswap_find_zpool(entry);
 	struct scatterlist input, output;
@@ -1000,7 +1006,7 @@ static void zswap_decompress(struct zswap_entry *entry, struct page *page)
 
 	sg_init_one(&input, src, entry->length);
 	sg_init_table(&output, 1);
-	sg_set_page(&output, page, PAGE_SIZE, 0);
+	sg_set_folio(&output, folio, PAGE_SIZE, 0);
 	acomp_request_set_params(acomp_ctx->req, &input, &output, entry->length, PAGE_SIZE);
 	BUG_ON(crypto_wait_req(crypto_acomp_decompress(acomp_ctx->req), &acomp_ctx->wait));
 	BUG_ON(acomp_ctx->req->dlen != PAGE_SIZE);
@@ -1073,7 +1079,7 @@ static int zswap_writeback_entry(struct zswap_entry *entry,
 		return -ENOMEM;
 	}
 
-	zswap_decompress(entry, &folio->page);
+	zswap_decompress(entry, folio);
 
 	count_vm_event(ZSWPWB);
 	if (entry->objcg)
@@ -1375,35 +1381,35 @@ resched:
 **********************************/
 static bool zswap_is_folio_same_filled(struct folio *folio, unsigned long *value)
 {
-	unsigned long *page;
+	unsigned long *data;
 	unsigned long val;
-	unsigned int pos, last_pos = PAGE_SIZE / sizeof(*page) - 1;
+	unsigned int pos, last_pos = PAGE_SIZE / sizeof(*data) - 1;
 	bool ret = false;
 
-	page = kmap_local_folio(folio, 0);
-	val = page[0];
+	data = kmap_local_folio(folio, 0);
+	val = data[0];
 
-	if (val != page[last_pos])
+	if (val != data[last_pos])
 		goto out;
 
 	for (pos = 1; pos < last_pos; pos++) {
-		if (val != page[pos])
+		if (val != data[pos])
 			goto out;
 	}
 
 	*value = val;
 	ret = true;
 out:
-	kunmap_local(page);
+	kunmap_local(data);
 	return ret;
 }
 
-static void zswap_fill_page(void *ptr, unsigned long value)
+static void zswap_fill_folio(struct folio *folio, unsigned long value)
 {
-	unsigned long *page;
+	unsigned long *data = kmap_local_folio(folio, 0);
 
-	page = (unsigned long *)ptr;
-	memset_l(page, value, PAGE_SIZE / sizeof(unsigned long));
+	memset_l(data, value, PAGE_SIZE / sizeof(unsigned long));
+	kunmap_local(data);
 }
 
 /*********************************
@@ -1551,13 +1557,25 @@ bool zswap_load(struct folio *folio)
 {
 	swp_entry_t swp = folio->swap;
 	pgoff_t offset = swp_offset(swp);
-	struct page *page = &folio->page;
 	bool swapcache = folio_test_swapcache(folio);
 	struct xarray *tree = swap_zswap_tree(swp);
 	struct zswap_entry *entry;
-	u8 *dst;
 
 	VM_WARN_ON_ONCE(!folio_test_locked(folio));
+
+	if (zswap_never_enabled())
+		return false;
+
+	/*
+	 * Large folios should not be swapped in while zswap is being used, as
+	 * they are not properly handled. Zswap does not properly load large
+	 * folios, and a large folio may only be partially in zswap.
+	 *
+	 * Return true without marking the folio uptodate so that an IO error is
+	 * emitted (e.g. do_swap_page() will sigbus).
+	 */
+	if (WARN_ON_ONCE(folio_test_large(folio)))
+		return true;
 
 	/*
 	 * When reading into the swapcache, invalidate our entry. The
@@ -1580,12 +1598,9 @@ bool zswap_load(struct folio *folio)
 		return false;
 
 	if (entry->length)
-		zswap_decompress(entry, page);
-	else {
-		dst = kmap_local_page(page);
-		zswap_fill_page(dst, entry->value);
-		kunmap_local(dst);
-	}
+		zswap_decompress(entry, folio);
+	else
+		zswap_fill_folio(folio, entry->value);
 
 	count_vm_event(ZSWPIN);
 	if (entry->objcg)
@@ -1596,6 +1611,7 @@ bool zswap_load(struct folio *folio)
 		folio_mark_dirty(folio);
 	}
 
+	folio_mark_uptodate(folio);
 	return true;
 }
 
@@ -1740,6 +1756,7 @@ static int zswap_setup(void)
 			zpool_get_type(pool->zpools[0]));
 		list_add(&pool->list, &zswap_pools);
 		zswap_has_pool = true;
+		static_branch_enable(&zswap_ever_enabled);
 	} else {
 		pr_err("pool creation failed\n");
 		zswap_enabled = false;
