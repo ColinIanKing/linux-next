@@ -5582,7 +5582,7 @@ static struct inode *btrfs_iget_locked(u64 ino, struct btrfs_root *root)
 	args.ino = ino;
 	args.root = root;
 
-	inode = iget5_locked(root->fs_info->sb, hashval, btrfs_find_actor,
+	inode = iget5_locked_rcu(root->fs_info->sb, hashval, btrfs_find_actor,
 			     btrfs_init_locked_inode,
 			     (void *)&args);
 	return inode;
