@@ -192,7 +192,9 @@ int bch2_fsync(struct file *file, loff_t start, loff_t end, int datasync)
 {
 	struct bch_inode_info *inode = file_bch_inode(file);
 	struct bch_fs *c = inode->v.i_sb->s_fs_info;
-	int ret;
+	int ret, err;
+
+	trace_bch2_fsync(file, datasync);
 
 	ret = file_write_and_wait_range(file, start, end);
 	if (ret)
@@ -205,6 +207,11 @@ out:
 	ret = bch2_err_class(ret);
 	if (ret == -EROFS)
 		ret = -EIO;
+
+	err = file_check_and_advance_wb_err(file);
+	if (!ret)
+		ret = err;
+
 	return ret;
 }
 
@@ -860,9 +867,6 @@ loff_t bch2_remap_file_range(struct file *file_src, loff_t pos_src,
 	if (remap_flags & ~(REMAP_FILE_DEDUP|REMAP_FILE_ADVISORY))
 		return -EINVAL;
 
-	if (remap_flags & REMAP_FILE_DEDUP)
-		return -EOPNOTSUPP;
-
 	if ((pos_src & (block_bytes(c) - 1)) ||
 	    (pos_dst & (block_bytes(c) - 1)))
 		return -EINVAL;
@@ -895,7 +899,8 @@ loff_t bch2_remap_file_range(struct file *file_src, loff_t pos_src,
 	if (ret)
 		goto err;
 
-	file_update_time(file_dst);
+	if (!(remap_flags & REMAP_FILE_DEDUP))
+		file_update_time(file_dst);
 
 	bch2_mark_pagecache_unallocated(src, pos_src >> 9,
 				   (pos_src + aligned_len) >> 9);

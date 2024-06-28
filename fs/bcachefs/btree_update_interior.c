@@ -61,7 +61,7 @@ int bch2_btree_node_check_topology(struct btree_trans *trans, struct btree *b)
 		if (!bpos_eq(b->data->min_key, POS_MIN)) {
 			printbuf_reset(&buf);
 			bch2_bpos_to_text(&buf, b->data->min_key);
-			need_fsck_err(c, btree_root_bad_min_key,
+			need_fsck_err(trans, btree_root_bad_min_key,
 				      "btree root with incorrect min_key: %s", buf.buf);
 			goto topology_repair;
 		}
@@ -69,7 +69,7 @@ int bch2_btree_node_check_topology(struct btree_trans *trans, struct btree *b)
 		if (!bpos_eq(b->data->max_key, SPOS_MAX)) {
 			printbuf_reset(&buf);
 			bch2_bpos_to_text(&buf, b->data->max_key);
-			need_fsck_err(c, btree_root_bad_max_key,
+			need_fsck_err(trans, btree_root_bad_max_key,
 				      "btree root with incorrect max_key: %s", buf.buf);
 			goto topology_repair;
 		}
@@ -105,7 +105,7 @@ int bch2_btree_node_check_topology(struct btree_trans *trans, struct btree *b)
 			prt_str(&buf, "\n  next ");
 			bch2_bkey_val_to_text(&buf, c, k);
 
-			need_fsck_err(c, btree_node_topology_bad_min_key, "%s", buf.buf);
+			need_fsck_err(trans, btree_node_topology_bad_min_key, "%s", buf.buf);
 			goto topology_repair;
 		}
 
@@ -122,7 +122,7 @@ int bch2_btree_node_check_topology(struct btree_trans *trans, struct btree *b)
 			   bch2_btree_id_str(b->c.btree_id), b->c.level);
 		bch2_bkey_val_to_text(&buf, c, bkey_i_to_s_c(&b->key));
 
-		need_fsck_err(c, btree_node_topology_empty_interior_node, "%s", buf.buf);
+		need_fsck_err(trans, btree_node_topology_empty_interior_node, "%s", buf.buf);
 		goto topology_repair;
 	} else if (!bpos_eq(prev.k->k.p, b->key.k.p)) {
 		bch2_topology_error(c);
@@ -135,7 +135,7 @@ int bch2_btree_node_check_topology(struct btree_trans *trans, struct btree *b)
 		prt_str(&buf, "\n  last key ");
 		bch2_bkey_val_to_text(&buf, c, bkey_i_to_s_c(prev.k));
 
-		need_fsck_err(c, btree_node_topology_bad_max_key, "%s", buf.buf);
+		need_fsck_err(trans, btree_node_topology_bad_max_key, "%s", buf.buf);
 		goto topology_repair;
 	}
 out:
@@ -1356,10 +1356,10 @@ static void bch2_insert_fixup_btree_ptr(struct btree_update *as,
 	struct bch_fs *c = as->c;
 	struct bkey_packed *k;
 	struct printbuf buf = PRINTBUF;
-	unsigned long old, new, v;
+	unsigned long old, new;
 
 	BUG_ON(insert->k.type == KEY_TYPE_btree_ptr_v2 &&
-	       !btree_ptr_sectors_written(insert));
+	       !btree_ptr_sectors_written(bkey_i_to_s_c(insert)));
 
 	if (unlikely(!test_bit(JOURNAL_replay_done, &c->journal.flags)))
 		bch2_journal_key_overwritten(c, b->c.btree_id, b->c.level, insert->k.p);
@@ -1395,14 +1395,14 @@ static void bch2_insert_fixup_btree_ptr(struct btree_update *as,
 	bch2_btree_bset_insert_key(trans, path, b, node_iter, insert);
 	set_btree_node_dirty_acct(c, b);
 
-	v = READ_ONCE(b->flags);
+	old = READ_ONCE(b->flags);
 	do {
-		old = new = v;
+		new = old;
 
 		new &= ~BTREE_WRITE_TYPE_MASK;
 		new |= BTREE_WRITE_interior;
 		new |= 1 << BTREE_NODE_need_write;
-	} while ((v = cmpxchg(&b->flags, old, new)) != old);
+	} while (!try_cmpxchg(&b->flags, &old, new));
 
 	printbuf_exit(&buf);
 }
