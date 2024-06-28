@@ -2163,14 +2163,12 @@ vchiq_init_state(struct vchiq_state *state, struct vchiq_slot_zero *slot_zero, s
 	mutex_init(&state->slot_mutex);
 	mutex_init(&state->recycle_mutex);
 	mutex_init(&state->sync_mutex);
-	mutex_init(&state->bulk_transfer_mutex);
 
 	spin_lock_init(&state->msg_queue_spinlock);
 	spin_lock_init(&state->bulk_waiter_spinlock);
 	spin_lock_init(&state->quota_spinlock);
 
 	init_completion(&state->slot_available_event);
-	init_completion(&state->slot_remove_event);
 	init_completion(&state->data_quota_event);
 
 	state->slot_queue_available = 0;
@@ -3372,7 +3370,7 @@ vchiq_dump_shared_state(struct seq_file *f, struct vchiq_state *state,
 	};
 	int i;
 
-	seq_printf(f, "  %s: slots %d-%d tx_pos=%x recycle=%x\n",
+	seq_printf(f, "  %s: slots %d-%d tx_pos=0x%x recycle=0x%x\n",
 		   label, shared->slot_first, shared->slot_last,
 		   shared->tx_pos, shared->slot_queue_recycle);
 
@@ -3388,7 +3386,7 @@ vchiq_dump_shared_state(struct seq_file *f, struct vchiq_state *state,
 	}
 
 	for (i = 1; i < shared->debug[DEBUG_ENTRIES]; i++) {
-		seq_printf(f, "    DEBUG: %s = %d(%x)\n",
+		seq_printf(f, "    DEBUG: %s = %d(0x%x)\n",
 			   debug_names[i], shared->debug[i], shared->debug[i]);
 	}
 }
@@ -3416,7 +3414,7 @@ vchiq_dump_service_state(struct seq_file *f, struct vchiq_service *service)
 
 			if (service->public_fourcc != VCHIQ_FOURCC_INVALID)
 				scnprintf(remoteport + len2, sizeof(remoteport) - len2,
-					  " (client %x)", service->client_id);
+					  " (client 0x%x)", service->client_id);
 		} else {
 			strscpy(remoteport, "n/a", sizeof(remoteport));
 		}
@@ -3477,7 +3475,7 @@ void vchiq_dump_state(struct seq_file *f, struct vchiq_state *state)
 	seq_printf(f, "State %d: %s\n", state->id,
 		   conn_state_names[state->conn_state]);
 
-	seq_printf(f, "  tx_pos=%x(@%pK), rx_pos=%x(@%pK)\n",
+	seq_printf(f, "  tx_pos=0x%x(@%pK), rx_pos=0x%x(@%pK)\n",
 		   state->local->tx_pos,
 		   state->tx_data + (state->local_tx_pos & VCHIQ_SLOT_MASK),
 		   state->rx_pos,
