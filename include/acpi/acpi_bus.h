@@ -254,7 +254,7 @@ struct acpi_device_pnp {
 	struct list_head ids;		/* _HID and _CIDs */
 	acpi_device_name device_name;	/* Driver-determined */
 	acpi_device_class device_class;	/*        "          */
-	union acpi_object *str_obj;	/* unicode string for _STR method */
+	const char *str;		/* _STR */
 };
 
 #define acpi_device_bid(d)	((d)->pnp.bus_id)
