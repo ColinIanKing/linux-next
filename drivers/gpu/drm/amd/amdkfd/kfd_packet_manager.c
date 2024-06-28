@@ -239,7 +239,8 @@ int pm_init(struct packet_manager *pm, struct device_queue_manager *dqm)
 		break;
 	default:
 		if (KFD_GC_VERSION(dqm->dev) == IP_VERSION(9, 4, 2) ||
-		    KFD_GC_VERSION(dqm->dev) == IP_VERSION(9, 4, 3))
+		    KFD_GC_VERSION(dqm->dev) == IP_VERSION(9, 4, 3) ||
+		    KFD_GC_VERSION(dqm->dev) == IP_VERSION(9, 4, 4))
 			pm->pmf = &kfd_aldebaran_pm_funcs;
 		else if (KFD_GC_VERSION(dqm->dev) >= IP_VERSION(9, 0, 1))
 			pm->pmf = &kfd_v9_pm_funcs;
@@ -262,10 +263,10 @@ int pm_init(struct packet_manager *pm, struct device_queue_manager *dqm)
 	return 0;
 }
 
-void pm_uninit(struct packet_manager *pm, bool hanging)
+void pm_uninit(struct packet_manager *pm)
 {
 	mutex_destroy(&pm->lock);
-	kernel_queue_uninit(pm->priv_queue, hanging);
+	kernel_queue_uninit(pm->priv_queue);
 	pm->priv_queue = NULL;
 }
 

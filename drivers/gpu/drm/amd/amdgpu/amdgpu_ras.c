@@ -1299,7 +1299,7 @@ ssize_t amdgpu_ras_aca_sysfs_read(struct device *dev, struct device_attribute *a
 		return -EINVAL;
 
 	return sysfs_emit(buf, "%s: %lu\n%s: %lu\n%s: %lu\n", "ue", info.ue_count,
-			  "ce", info.ce_count, "de", info.ue_count);
+			  "ce", info.ce_count, "de", info.de_count);
 }
 
 static int amdgpu_ras_query_error_status_helper(struct amdgpu_device *adev,
@@ -1409,11 +1409,8 @@ int amdgpu_ras_reset_error_count(struct amdgpu_device *adev,
 		enum amdgpu_ras_block block)
 {
 	struct amdgpu_ras_block_object *block_obj = amdgpu_ras_get_ras_block(adev, block, 0);
-	struct amdgpu_ras *ras = amdgpu_ras_get_context(adev);
 	const struct amdgpu_mca_smu_funcs *mca_funcs = adev->mca.mca_funcs;
 	const struct aca_smu_funcs *smu_funcs = adev->aca.smu_funcs;
-	struct amdgpu_hive_info *hive;
-	int hive_ras_recovery = 0;
 
 	if (!block_obj || !block_obj->hw_ops) {
 		dev_dbg_once(adev->dev, "%s doesn't config RAS function\n",
@@ -1425,15 +1422,8 @@ int amdgpu_ras_reset_error_count(struct amdgpu_device *adev,
 	    !amdgpu_ras_get_aca_debug_mode(adev))
 		return -EOPNOTSUPP;
 
-	hive = amdgpu_get_xgmi_hive(adev);
-	if (hive) {
-		hive_ras_recovery = atomic_read(&hive->ras_recovery);
-		amdgpu_put_xgmi_hive(hive);
-	}
-
 	/* skip ras error reset in gpu reset */
-	if ((amdgpu_in_reset(adev) || atomic_read(&ras->in_recovery) ||
-	    hive_ras_recovery) &&
+	if ((amdgpu_in_reset(adev) || amdgpu_ras_in_recovery(adev)) &&
 	    ((smu_funcs && smu_funcs->set_debug_mode) ||
 	     (mca_funcs && mca_funcs->mca_set_debug_mode)))
 		return -EOPNOTSUPP;
@@ -1759,6 +1749,9 @@ int amdgpu_ras_sysfs_create(struct amdgpu_device *adev,
 {
 	struct ras_manager *obj = amdgpu_ras_find_obj(adev, head);
 
+	if (amdgpu_aca_is_enabled(adev))
+		return 0;
+
 	if (!obj || obj->attr_inuse)
 		return -EINVAL;
 
@@ -1792,6 +1785,9 @@ int amdgpu_ras_sysfs_remove(struct amdgpu_device *adev,
 		struct ras_common_if *head)
 {
 	struct ras_manager *obj = amdgpu_ras_find_obj(adev, head);
+
+	if (amdgpu_aca_is_enabled(adev))
+		return 0;
 
 	if (!obj || !obj->attr_inuse)
 		return -EINVAL;
@@ -1905,6 +1901,23 @@ static void amdgpu_ras_debugfs_create(struct amdgpu_device *adev,
 			    obj, &amdgpu_ras_debugfs_ops);
 }
 
+static bool amdgpu_ras_aca_is_supported(struct amdgpu_device *adev)
+{
+	bool ret;
+
+	switch (amdgpu_ip_version(adev, MP0_HWIP, 0)) {
+	case IP_VERSION(13, 0, 6):
+	case IP_VERSION(13, 0, 14):
+		ret = true;
+		break;
+	default:
+		ret = false;
+		break;
+	}
+
+	return ret;
+}
+
 void amdgpu_ras_debugfs_create_all(struct amdgpu_device *adev)
 {
 	struct amdgpu_ras *con = amdgpu_ras_get_context(adev);
@@ -1931,10 +1944,12 @@ void amdgpu_ras_debugfs_create_all(struct amdgpu_device *adev)
 		}
 	}
 
-	if (amdgpu_aca_is_enabled(adev))
-		amdgpu_aca_smu_debugfs_init(adev, dir);
-	else
-		amdgpu_mca_smu_debugfs_init(adev, dir);
+	if (amdgpu_ras_aca_is_supported(adev)) {
+		if (amdgpu_aca_is_enabled(adev))
+			amdgpu_aca_smu_debugfs_init(adev, dir);
+		else
+			amdgpu_mca_smu_debugfs_init(adev, dir);
+	}
 }
 
 /* debugfs end */
@@ -2043,8 +2058,9 @@ static void amdgpu_ras_interrupt_poison_consumption_handler(struct ras_manager *
 	struct amdgpu_device *adev = obj->adev;
 	struct amdgpu_ras_block_object *block_obj =
 		amdgpu_ras_get_ras_block(adev, obj->head.block, 0);
+	struct amdgpu_ras *con = amdgpu_ras_get_context(adev);
 
-	if (!block_obj)
+	if (!block_obj || !con)
 		return;
 
 	/* both query_poison_status and handle_poison_consumption are optional,
@@ -2067,14 +2083,17 @@ static void amdgpu_ras_interrupt_poison_consumption_handler(struct ras_manager *
 	if (block_obj->hw_ops && block_obj->hw_ops->handle_poison_consumption)
 		poison_stat = block_obj->hw_ops->handle_poison_consumption(adev);
 
-	/* gpu reset is fallback for failed and default cases */
-	if (poison_stat) {
+	/* gpu reset is fallback for failed and default cases.
+	 * For RMA case, amdgpu_umc_poison_handler will handle gpu reset.
+	 */
+	if (poison_stat && !con->is_rma) {
 		dev_info(adev->dev, "GPU reset for %s RAS poison consumption is issued!\n",
 				block_obj->ras_comm.name);
 		amdgpu_ras_reset_gpu(adev);
-	} else {
-		amdgpu_gfx_poison_consumption_handler(adev, entry);
 	}
+
+	if (!poison_stat)
+		amdgpu_gfx_poison_consumption_handler(adev, entry);
 }
 
 static void amdgpu_ras_interrupt_poison_creation_handler(struct ras_manager *obj,
@@ -2112,6 +2131,7 @@ static void amdgpu_ras_interrupt_umc_handler(struct ras_manager *obj,
 	/* Let IP handle its data, maybe we need get the output
 	 * from the callback to update the error type/count, etc
 	 */
+	amdgpu_ras_set_fed(obj->adev, true);
 	ret = data->cb(obj->adev, &err_data, entry);
 	/* ue will trigger an interrupt, and in that case
 	 * we need do a reset to recovery the whole system.
@@ -2172,11 +2192,14 @@ static void amdgpu_ras_interrupt_process_handler(struct work_struct *work)
 int amdgpu_ras_interrupt_dispatch(struct amdgpu_device *adev,
 		struct ras_dispatch_if *info)
 {
-	struct ras_manager *obj = amdgpu_ras_find_obj(adev, &info->head);
-	struct ras_ih_data *data = &obj->ih_data;
+	struct ras_manager *obj;
+	struct ras_ih_data *data;
 
+	obj = amdgpu_ras_find_obj(adev, &info->head);
 	if (!obj)
 		return -EINVAL;
+
+	data = &obj->ih_data;
 
 	if (data->inuse == 0)
 		return 0;
@@ -2429,6 +2452,23 @@ static void amdgpu_ras_set_fed_all(struct amdgpu_device *adev,
 	}
 }
 
+bool amdgpu_ras_in_recovery(struct amdgpu_device *adev)
+{
+	struct amdgpu_hive_info *hive = amdgpu_get_xgmi_hive(adev);
+	struct amdgpu_ras *ras = amdgpu_ras_get_context(adev);
+	int hive_ras_recovery = 0;
+
+	if (hive) {
+		hive_ras_recovery = atomic_read(&hive->ras_recovery);
+		amdgpu_put_xgmi_hive(hive);
+	}
+
+	if (ras && (atomic_read(&ras->in_recovery) || hive_ras_recovery))
+		return true;
+
+	return false;
+}
+
 static void amdgpu_ras_do_recovery(struct work_struct *work)
 {
 	struct amdgpu_ras *ras =
@@ -2478,6 +2518,7 @@ static void amdgpu_ras_do_recovery(struct work_struct *work)
 
 		reset_context.method = AMD_RESET_METHOD_NONE;
 		reset_context.reset_req_dev = adev;
+		reset_context.src = AMDGPU_RESET_SRC_RAS;
 
 		/* Perform full reset in fatal error mode */
 		if (!amdgpu_ras_is_poison_mode_supported(ras->adev))
@@ -2786,15 +2827,20 @@ static void amdgpu_ras_do_page_retirement(struct work_struct *work)
 					      page_retirement_dwork.work);
 	struct amdgpu_device *adev = con->adev;
 	struct ras_err_data err_data;
+	unsigned long err_cnt;
 
-	if (amdgpu_in_reset(adev) || atomic_read(&con->in_recovery))
+	if (amdgpu_in_reset(adev) || amdgpu_ras_in_recovery(adev))
 		return;
 
 	amdgpu_ras_error_data_init(&err_data);
 
 	amdgpu_umc_handle_bad_pages(adev, &err_data);
+	err_cnt = err_data.err_addr_cnt;
 
 	amdgpu_ras_error_data_fini(&err_data);
+
+	if (err_cnt && con->is_rma)
+		amdgpu_ras_reset_gpu(adev);
 
 	mutex_lock(&con->umc_ecc_log.lock);
 	if (radix_tree_tagged(&con->umc_ecc_log.de_page_tree,
@@ -2804,8 +2850,8 @@ static void amdgpu_ras_do_page_retirement(struct work_struct *work)
 	mutex_unlock(&con->umc_ecc_log.lock);
 }
 
-static int amdgpu_ras_query_ecc_status(struct amdgpu_device *adev,
-			enum amdgpu_ras_block ras_block, uint32_t timeout_ms)
+static void amdgpu_ras_poison_creation_handler(struct amdgpu_device *adev,
+				uint32_t timeout_ms)
 {
 	int ret = 0;
 	struct ras_ecc_log_info *ecc_log;
@@ -2814,7 +2860,7 @@ static int amdgpu_ras_query_ecc_status(struct amdgpu_device *adev,
 	struct amdgpu_ras *ras = amdgpu_ras_get_context(adev);
 
 	memset(&info, 0, sizeof(info));
-	info.head.block = ras_block;
+	info.head.block = AMDGPU_RAS_BLOCK__UMC;
 
 	ecc_log = &ras->umc_ecc_log;
 	ecc_log->de_updated = false;
@@ -2822,7 +2868,7 @@ static int amdgpu_ras_query_ecc_status(struct amdgpu_device *adev,
 		ret = amdgpu_ras_query_error_status(adev, &info);
 		if (ret) {
 			dev_err(adev->dev, "Failed to query ras error! ret:%d\n", ret);
-			return ret;
+			return;
 		}
 
 		if (timeout && !ecc_log->de_updated) {
@@ -2833,21 +2879,11 @@ static int amdgpu_ras_query_ecc_status(struct amdgpu_device *adev,
 
 	if (timeout_ms && !timeout) {
 		dev_warn(adev->dev, "Can't find deferred error\n");
-		return -ETIMEDOUT;
+		return;
 	}
 
-	return 0;
-}
-
-static void amdgpu_ras_poison_creation_handler(struct amdgpu_device *adev,
-					uint32_t timeout)
-{
-	struct amdgpu_ras *con = amdgpu_ras_get_context(adev);
-	int ret;
-
-	ret = amdgpu_ras_query_ecc_status(adev, AMDGPU_RAS_BLOCK__UMC, timeout);
 	if (!ret)
-		schedule_delayed_work(&con->page_retirement_dwork, 0);
+		schedule_delayed_work(&ras->page_retirement_dwork, 0);
 }
 
 static int amdgpu_ras_poison_consumption_handler(struct amdgpu_device *adev,
@@ -2862,7 +2898,8 @@ static int amdgpu_ras_poison_consumption_handler(struct amdgpu_device *adev,
 	if (poison_msg->pasid_fn)
 		poison_msg->pasid_fn(adev, pasid, poison_msg->data);
 
-	if (reset) {
+	/* for RMA, amdgpu_ras_poison_creation_handler will trigger gpu reset */
+	if (reset && !con->is_rma) {
 		flush_delayed_work(&con->page_retirement_dwork);
 
 		con->gpu_reset_flags |= reset;
@@ -2896,7 +2933,7 @@ static int amdgpu_ras_page_retirement_thread(void *param)
 
 		ras_block = poison_msg.block;
 
-		dev_info(adev->dev, "Start processing ras block %s(%d)\n",
+		dev_dbg(adev->dev, "Start processing ras block %s(%d)\n",
 				ras_block_str(ras_block), ras_block);
 
 		if (ras_block == AMDGPU_RAS_BLOCK__UMC) {
@@ -2927,7 +2964,6 @@ int amdgpu_ras_recovery_init(struct amdgpu_device *adev)
 	struct amdgpu_ras *con = amdgpu_ras_get_context(adev);
 	struct ras_err_handler_data **data;
 	u32  max_eeprom_records_count = 0;
-	bool exc_err_limit = false;
 	int ret;
 
 	if (!con || amdgpu_sriov_vf(adev))
@@ -2964,12 +3000,12 @@ int amdgpu_ras_recovery_init(struct amdgpu_device *adev)
 	 */
 	if (adev->gmc.xgmi.pending_reset)
 		return 0;
-	ret = amdgpu_ras_eeprom_init(&con->eeprom_control, &exc_err_limit);
+	ret = amdgpu_ras_eeprom_init(&con->eeprom_control);
 	/*
-	 * This calling fails when exc_err_limit is true or
+	 * This calling fails when is_rma is true or
 	 * ret != 0.
 	 */
-	if (exc_err_limit || ret)
+	if (con->is_rma || ret)
 		goto free;
 
 	if (con->eeprom_control.ras_num_recs) {
@@ -3017,7 +3053,7 @@ out:
 	 * Except error threshold exceeding case, other failure cases in this
 	 * function would not fail amdgpu driver init.
 	 */
-	if (!exc_err_limit)
+	if (!con->is_rma)
 		ret = 0;
 	else
 		ret = -EINVAL;
@@ -3063,6 +3099,7 @@ static bool amdgpu_ras_asic_supported(struct amdgpu_device *adev)
 		switch (amdgpu_ip_version(adev, MP0_HWIP, 0)) {
 		case IP_VERSION(13, 0, 2):
 		case IP_VERSION(13, 0, 6):
+		case IP_VERSION(13, 0, 14):
 			return true;
 		default:
 			return false;
@@ -3074,6 +3111,7 @@ static bool amdgpu_ras_asic_supported(struct amdgpu_device *adev)
 		case IP_VERSION(13, 0, 0):
 		case IP_VERSION(13, 0, 6):
 		case IP_VERSION(13, 0, 10):
+		case IP_VERSION(13, 0, 14):
 			return true;
 		default:
 			return false;
@@ -3297,6 +3335,24 @@ static void amdgpu_ras_event_mgr_init(struct amdgpu_device *adev)
 		amdgpu_put_xgmi_hive(hive);
 }
 
+static void amdgpu_ras_init_reserved_vram_size(struct amdgpu_device *adev)
+{
+	struct amdgpu_ras *con = amdgpu_ras_get_context(adev);
+
+	if (!con || (adev->flags & AMD_IS_APU))
+		return;
+
+	switch (amdgpu_ip_version(adev, MP0_HWIP, 0)) {
+	case IP_VERSION(13, 0, 2):
+	case IP_VERSION(13, 0, 6):
+	case IP_VERSION(13, 0, 14):
+		con->reserved_pages_in_bytes = AMDGPU_RAS_RESERVED_VRAM_SIZE;
+		break;
+	default:
+		break;
+	}
+}
+
 int amdgpu_ras_init(struct amdgpu_device *adev)
 {
 	struct amdgpu_ras *con = amdgpu_ras_get_context(adev);
@@ -3402,9 +3458,20 @@ int amdgpu_ras_init(struct amdgpu_device *adev)
 	/* Get RAS schema for particular SOC */
 	con->schema = amdgpu_get_ras_schema(adev);
 
+	amdgpu_ras_init_reserved_vram_size(adev);
+
 	if (amdgpu_ras_fs_init(adev)) {
 		r = -EINVAL;
 		goto release_con;
+	}
+
+	if (amdgpu_ras_aca_is_supported(adev)) {
+		if (amdgpu_aca_is_enabled(adev))
+			r = amdgpu_aca_init(adev);
+		else
+			r = amdgpu_mca_init(adev);
+		if (r)
+			goto release_con;
 	}
 
 	dev_info(adev->dev, "RAS INFO: ras initialized successfully, "
@@ -3613,24 +3680,29 @@ int amdgpu_ras_late_init(struct amdgpu_device *adev)
 	struct amdgpu_ras_block_object *obj;
 	int r;
 
+	amdgpu_ras_event_mgr_init(adev);
+
+	if (amdgpu_ras_aca_is_supported(adev)) {
+		if (amdgpu_in_reset(adev)) {
+			if (amdgpu_aca_is_enabled(adev))
+				r = amdgpu_aca_reset(adev);
+			else
+				r = amdgpu_mca_reset(adev);
+			if (r)
+				return r;
+		}
+
+		if (!amdgpu_sriov_vf(adev)) {
+			if (amdgpu_aca_is_enabled(adev))
+				amdgpu_ras_set_aca_debug_mode(adev, false);
+			else
+				amdgpu_ras_set_mca_debug_mode(adev, false);
+		}
+	}
+
 	/* Guest side doesn't need init ras feature */
 	if (amdgpu_sriov_vf(adev))
 		return 0;
-
-	amdgpu_ras_event_mgr_init(adev);
-
-	if (amdgpu_aca_is_enabled(adev)) {
-		if (amdgpu_in_reset(adev))
-			r = amdgpu_aca_reset(adev);
-		 else
-			r = amdgpu_aca_init(adev);
-		if (r)
-			return r;
-
-		amdgpu_ras_set_aca_debug_mode(adev, false);
-	} else {
-		amdgpu_ras_set_mca_debug_mode(adev, false);
-	}
 
 	list_for_each_entry_safe(node, tmp, &adev->ras_list, node) {
 		obj = node->ras_obj;
@@ -3699,8 +3771,12 @@ int amdgpu_ras_fini(struct amdgpu_device *adev)
 	amdgpu_ras_fs_fini(adev);
 	amdgpu_ras_interrupt_remove_all(adev);
 
-	if (amdgpu_aca_is_enabled(adev))
-		amdgpu_aca_fini(adev);
+	if (amdgpu_ras_aca_is_supported(adev)) {
+		if (amdgpu_aca_is_enabled(adev))
+			amdgpu_aca_fini(adev);
+		else
+			amdgpu_mca_fini(adev);
+	}
 
 	WARN(AMDGPU_RAS_GET_FEATURES(con->features), "Feature mask is not cleared");
 
@@ -3951,6 +4027,12 @@ int amdgpu_ras_is_supported(struct amdgpu_device *adev,
 int amdgpu_ras_reset_gpu(struct amdgpu_device *adev)
 {
 	struct amdgpu_ras *ras = amdgpu_ras_get_context(adev);
+
+	/* mode1 is the only selection for RMA status */
+	if (ras->is_rma) {
+		ras->gpu_reset_flags = 0;
+		ras->gpu_reset_flags |= AMDGPU_RAS_GPU_RESET_MODE1_RESET;
+	}
 
 	if (atomic_cmpxchg(&ras->in_recovery, 0, 1) == 0)
 		amdgpu_reset_domain_schedule(ras->adev->reset_domain, &ras->recovery_work);
@@ -4284,21 +4366,8 @@ static struct ras_err_info *amdgpu_ras_error_get_info(struct ras_err_data *err_d
 
 void amdgpu_ras_add_mca_err_addr(struct ras_err_info *err_info, struct ras_err_addr *err_addr)
 {
-	struct ras_err_addr *mca_err_addr;
-
 	/* This function will be retired. */
 	return;
-	mca_err_addr = kzalloc(sizeof(*mca_err_addr), GFP_KERNEL);
-	if (!mca_err_addr)
-		return;
-
-	INIT_LIST_HEAD(&mca_err_addr->node);
-
-	mca_err_addr->err_status = err_addr->err_status;
-	mca_err_addr->err_ipid = err_addr->err_ipid;
-	mca_err_addr->err_addr = err_addr->err_addr;
-
-	list_add_tail(&mca_err_addr->node, &err_info->err_addr_list);
 }
 
 void amdgpu_ras_del_mca_err_addr(struct ras_err_info *err_info, struct ras_err_addr *mca_err_addr)
@@ -4382,15 +4451,12 @@ int amdgpu_ras_error_statistic_de_count(struct ras_err_data *err_data,
 #define mmMP0_SMN_C2PMSG_92	0x1609C
 #define mmMP0_SMN_C2PMSG_126	0x160BE
 static void amdgpu_ras_boot_time_error_reporting(struct amdgpu_device *adev,
-						 u32 instance, u32 boot_error)
+						 u32 instance)
 {
 	u32 socket_id, aid_id, hbm_id;
-	u32 reg_data;
+	u32 fw_status;
+	u32 boot_error;
 	u64 reg_addr;
-
-	socket_id = AMDGPU_RAS_GPU_ERR_SOCKET_ID(boot_error);
-	aid_id = AMDGPU_RAS_GPU_ERR_AID_ID(boot_error);
-	hbm_id = AMDGPU_RAS_GPU_ERR_HBM_ID(boot_error);
 
 	/* The pattern for smn addressing in other SOC could be different from
 	 * the one for aqua_vanjaram. We should revisit the code if the pattern
@@ -4398,48 +4464,61 @@ static void amdgpu_ras_boot_time_error_reporting(struct amdgpu_device *adev,
 	 * with more common helper */
 	reg_addr = (mmMP0_SMN_C2PMSG_92 << 2) +
 		   aqua_vanjaram_encode_ext_smn_addressing(instance);
+	fw_status = amdgpu_device_indirect_rreg_ext(adev, reg_addr);
 
-	reg_data = amdgpu_device_indirect_rreg_ext(adev, reg_addr);
-	dev_err(adev->dev, "socket: %d, aid: %d, firmware boot failed, fw status is 0x%x\n",
-		socket_id, aid_id, reg_data);
+	reg_addr = (mmMP0_SMN_C2PMSG_126 << 2) +
+		   aqua_vanjaram_encode_ext_smn_addressing(instance);
+	boot_error = amdgpu_device_indirect_rreg_ext(adev, reg_addr);
+
+	socket_id = AMDGPU_RAS_GPU_ERR_SOCKET_ID(boot_error);
+	aid_id = AMDGPU_RAS_GPU_ERR_AID_ID(boot_error);
+	hbm_id = AMDGPU_RAS_GPU_ERR_HBM_ID(boot_error);
 
 	if (AMDGPU_RAS_GPU_ERR_MEM_TRAINING(boot_error))
-		dev_info(adev->dev, "socket: %d, aid: %d, hbm: %d, memory training failed\n",
-			 socket_id, aid_id, hbm_id);
+		dev_info(adev->dev,
+			 "socket: %d, aid: %d, hbm: %d, fw_status: 0x%x, memory training failed\n",
+			 socket_id, aid_id, hbm_id, fw_status);
 
 	if (AMDGPU_RAS_GPU_ERR_FW_LOAD(boot_error))
-		dev_info(adev->dev, "socket: %d, aid: %d, firmware load failed at boot time\n",
-			 socket_id, aid_id);
+		dev_info(adev->dev,
+			 "socket: %d, aid: %d, fw_status: 0x%x, firmware load failed at boot time\n",
+			 socket_id, aid_id, fw_status);
 
 	if (AMDGPU_RAS_GPU_ERR_WAFL_LINK_TRAINING(boot_error))
-		dev_info(adev->dev, "socket: %d, aid: %d, wafl link training failed\n",
-			 socket_id, aid_id);
+		dev_info(adev->dev,
+			 "socket: %d, aid: %d, fw_status: 0x%x, wafl link training failed\n",
+			 socket_id, aid_id, fw_status);
 
 	if (AMDGPU_RAS_GPU_ERR_XGMI_LINK_TRAINING(boot_error))
-		dev_info(adev->dev, "socket: %d, aid: %d, xgmi link training failed\n",
-			 socket_id, aid_id);
+		dev_info(adev->dev,
+			 "socket: %d, aid: %d, fw_status: 0x%x, xgmi link training failed\n",
+			 socket_id, aid_id, fw_status);
 
 	if (AMDGPU_RAS_GPU_ERR_USR_CP_LINK_TRAINING(boot_error))
-		dev_info(adev->dev, "socket: %d, aid: %d, usr cp link training failed\n",
-			 socket_id, aid_id);
+		dev_info(adev->dev,
+			 "socket: %d, aid: %d, fw_status: 0x%x, usr cp link training failed\n",
+			 socket_id, aid_id, fw_status);
 
 	if (AMDGPU_RAS_GPU_ERR_USR_DP_LINK_TRAINING(boot_error))
-		dev_info(adev->dev, "socket: %d, aid: %d, usr dp link training failed\n",
-			 socket_id, aid_id);
+		dev_info(adev->dev,
+			 "socket: %d, aid: %d, fw_status: 0x%x, usr dp link training failed\n",
+			 socket_id, aid_id, fw_status);
 
 	if (AMDGPU_RAS_GPU_ERR_HBM_MEM_TEST(boot_error))
-		dev_info(adev->dev, "socket: %d, aid: %d, hbm: %d, hbm memory test failed\n",
-			 socket_id, aid_id, hbm_id);
+		dev_info(adev->dev,
+			 "socket: %d, aid: %d, hbm: %d, fw_status: 0x%x, hbm memory test failed\n",
+			 socket_id, aid_id, hbm_id, fw_status);
 
 	if (AMDGPU_RAS_GPU_ERR_HBM_BIST_TEST(boot_error))
-		dev_info(adev->dev, "socket: %d, aid: %d, hbm: %d, hbm bist test failed\n",
-			 socket_id, aid_id, hbm_id);
+		dev_info(adev->dev,
+			 "socket: %d, aid: %d, hbm: %d, fw_status: 0x%x, hbm bist test failed\n",
+			 socket_id, aid_id, hbm_id, fw_status);
 }
 
-static int amdgpu_ras_wait_for_boot_complete(struct amdgpu_device *adev,
-					     u32 instance, u32 *boot_error)
+static bool amdgpu_ras_boot_error_detected(struct amdgpu_device *adev,
+					   u32 instance)
 {
-	u32 reg_addr;
+	u64 reg_addr;
 	u32 reg_data;
 	int retry_loop;
 
@@ -4448,41 +4527,22 @@ static int amdgpu_ras_wait_for_boot_complete(struct amdgpu_device *adev,
 
 	for (retry_loop = 0; retry_loop < AMDGPU_RAS_BOOT_STATUS_POLLING_LIMIT; retry_loop++) {
 		reg_data = amdgpu_device_indirect_rreg_ext(adev, reg_addr);
-		if ((reg_data & AMDGPU_RAS_BOOT_STATUS_MASK) == AMDGPU_RAS_BOOT_STEADY_STATUS) {
-			*boot_error = AMDGPU_RAS_BOOT_SUCEESS;
-			return 0;
-		}
-		msleep(1);
+		if ((reg_data & AMDGPU_RAS_BOOT_STATUS_MASK) == AMDGPU_RAS_BOOT_STEADY_STATUS)
+			return false;
+		else
+			msleep(1);
 	}
 
-	/* The pattern for smn addressing in other SOC could be different from
-	 * the one for aqua_vanjaram. We should revisit the code if the pattern
-	 * is changed. In such case, replace the aqua_vanjaram implementation
-	 * with more common helper */
-	reg_addr = (mmMP0_SMN_C2PMSG_126 << 2) +
-		   aqua_vanjaram_encode_ext_smn_addressing(instance);
-
-	for (retry_loop = 0; retry_loop < AMDGPU_RAS_BOOT_STATUS_POLLING_LIMIT; retry_loop++) {
-		reg_data = amdgpu_device_indirect_rreg_ext(adev, reg_addr);
-		if (AMDGPU_RAS_GPU_ERR_BOOT_STATUS(reg_data)) {
-			*boot_error = reg_data;
-			return 0;
-		}
-		msleep(1);
-	}
-
-	*boot_error = reg_data;
-	return -ETIME;
+	return true;
 }
 
 void amdgpu_ras_query_boot_status(struct amdgpu_device *adev, u32 num_instances)
 {
-	u32 boot_error = 0;
 	u32 i;
 
 	for (i = 0; i < num_instances; i++) {
-		if (amdgpu_ras_wait_for_boot_complete(adev, i, &boot_error))
-			amdgpu_ras_boot_time_error_reporting(adev, i, boot_error);
+		if (amdgpu_ras_boot_error_detected(adev, i))
+			amdgpu_ras_boot_time_error_reporting(adev, i);
 	}
 }
 
@@ -4500,4 +4560,22 @@ int amdgpu_ras_reserve_page(struct amdgpu_device *adev, uint64_t pfn)
 	mutex_unlock(&con->page_rsv_lock);
 
 	return ret;
+}
+
+void amdgpu_ras_event_log_print(struct amdgpu_device *adev, u64 event_id,
+				const char *fmt, ...)
+{
+	struct va_format vaf;
+	va_list args;
+
+	va_start(args, fmt);
+	vaf.fmt = fmt;
+	vaf.va = &args;
+
+	if (amdgpu_ras_event_id_is_valid(adev, event_id))
+		dev_printk(KERN_INFO, adev->dev, "{%llu}%pV", event_id, &vaf);
+	else
+		dev_printk(KERN_INFO, adev->dev, "%pV", &vaf);
+
+	va_end(args);
 }
