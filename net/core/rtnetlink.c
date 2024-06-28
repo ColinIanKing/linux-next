@@ -74,15 +74,89 @@ struct rtnl_link {
 
 static DEFINE_MUTEX(rtnl_mutex);
 
+#include <linux/sched/debug.h>
+#define MAX_HOLDERS 128
+static struct task_struct *__data_racy rtnl_holders[MAX_HOLDERS];
+static unsigned long __data_racy rtnl_started[MAX_HOLDERS];
+static void report_rtnl_holders(struct timer_list *timer);
+static DEFINE_TIMER(rtnl_debug_timer, report_rtnl_holders);
+static int __init rtnetlink_debug_init(void)
+{
+	mod_timer(&rtnl_debug_timer, jiffies + HZ);
+	return 0;
+}
+late_initcall(rtnetlink_debug_init);
+
+static void report_rtnl_holders(struct timer_list *timer)
+{
+	int idx;
+	bool found = false;
+
+	rcu_read_lock();
+	for (idx = 0; idx < MAX_HOLDERS; idx++) {
+		struct task_struct *t = READ_ONCE(rtnl_holders[idx]);
+		const unsigned long spent = jiffies - rtnl_started[idx];
+
+		if (t && spent >= 5 * HZ) {
+			pr_info("DEBUG: %s rtnl_mutex for %ld jiffies.\n", t ==
+				(struct task_struct *)(atomic_long_read(&rtnl_mutex.owner) & ~7) ?
+				"holding" : "waiting", spent);
+			sched_show_task(t);
+			found = true;
+		}
+	}
+	if (found)
+		debug_show_all_locks();
+	rcu_read_unlock();
+	mod_timer(&rtnl_debug_timer, jiffies + HZ);
+}
+
+static void get_rtnl_holder(void)
+{
+	int idx;
+	unsigned long now = jiffies;
+
+	if (unlikely(!now))
+		now--;
+
+	for (idx = 0; idx < MAX_HOLDERS; idx++) {
+		if (!rtnl_holders[idx] && !cmpxchg(&rtnl_started[idx], 0, now)) {
+			rtnl_holders[idx] = current;
+			break;
+		}
+	}
+}
+
+static void put_rtnl_holder(void)
+{
+	int idx;
+	struct task_struct * const task = current;
+
+	for (idx = 0; idx < MAX_HOLDERS; idx++) {
+		if (rtnl_holders[idx] == task) {
+			rtnl_holders[idx] = NULL;
+			synchronize_rcu();
+			rtnl_started[idx] = 0;
+		}
+	}
+}
+
 void rtnl_lock(void)
 {
+	get_rtnl_holder();
 	mutex_lock(&rtnl_mutex);
 }
 EXPORT_SYMBOL(rtnl_lock);
 
 int rtnl_lock_killable(void)
 {
-	return mutex_lock_killable(&rtnl_mutex);
+	int ret;
+
+	get_rtnl_holder();
+	ret = mutex_lock_killable(&rtnl_mutex);
+	if (ret)
+		put_rtnl_holder();
+	return ret;
 }
 EXPORT_SYMBOL(rtnl_lock_killable);
 
@@ -135,6 +209,7 @@ void __rtnl_unlock(void)
 	 */
 	WARN_ON(!list_empty(&net_todo_list));
 
+	put_rtnl_holder();
 	mutex_unlock(&rtnl_mutex);
 
 	while (head) {
@@ -155,7 +230,11 @@ EXPORT_SYMBOL(rtnl_unlock);
 
 int rtnl_trylock(void)
 {
-	return mutex_trylock(&rtnl_mutex);
+	const int ret = mutex_trylock(&rtnl_mutex);
+
+	if (ret)
+		get_rtnl_holder();
+	return ret;
 }
 EXPORT_SYMBOL(rtnl_trylock);
 
@@ -167,7 +246,13 @@ EXPORT_SYMBOL(rtnl_is_locked);
 
 bool refcount_dec_and_rtnl_lock(refcount_t *r)
 {
-	return refcount_dec_and_mutex_lock(r, &rtnl_mutex);
+	bool ret;
+
+	get_rtnl_holder();
+	ret = refcount_dec_and_mutex_lock(r, &rtnl_mutex);
+	if (!ret)
+		put_rtnl_holder();
+	return ret;
 }
 EXPORT_SYMBOL(refcount_dec_and_rtnl_lock);
 

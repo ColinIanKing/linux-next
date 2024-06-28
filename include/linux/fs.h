@@ -1016,7 +1016,7 @@ struct file {
 	struct file_ra_state	f_ra;
 	struct path		f_path;
 	struct inode		*f_inode;	/* cached value */
-	const struct file_operations	*f_op;
+	const struct file_operations	*__data_racy f_op;
 
 	u64			f_version;
 #ifdef CONFIG_SECURITY
