@@ -33,11 +33,12 @@
  *	than the level indicated above to trigger output.	
  */
 
+#include <linux/bio-integrity.h>
 #include <linux/module.h>
 #include <linux/fs.h>
 #include <linux/kernel.h>
 #include <linux/mm.h>
-#include <linux/bio.h>
+#include <linux/bio-integrity.h>
 #include <linux/hdreg.h>
 #include <linux/errno.h>
 #include <linux/idr.h>
@@ -63,6 +64,7 @@
 #include <scsi/scsi_cmnd.h>
 #include <scsi/scsi_dbg.h>
 #include <scsi/scsi_device.h>
+#include <scsi/scsi_devinfo.h>
 #include <scsi/scsi_driver.h>
 #include <scsi/scsi_eh.h>
 #include <scsi/scsi_host.h>
@@ -3229,6 +3231,9 @@ static void sd_read_io_hints(struct scsi_disk *sdkp, unsigned char *buffer)
 	struct scsi_sense_hdr sshdr;
 	struct scsi_mode_data data;
 	int res;
+
+	if (sdp->sdev_bflags & BLIST_SKIP_IO_HINTS)
+		return;
 
 	res = scsi_mode_sense(sdp, /*dbd=*/0x8, /*modepage=*/0x0a,
 			      /*subpage=*/0x05, buffer, SD_BUF_SIZE, SD_TIMEOUT,
