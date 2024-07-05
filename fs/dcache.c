@@ -355,7 +355,11 @@ static inline void __d_clear_type_and_inode(struct dentry *dentry)
 	flags &= ~DCACHE_ENTRY_TYPE;
 	WRITE_ONCE(dentry->d_flags, flags);
 	dentry->d_inode = NULL;
-	if (flags & DCACHE_LRU_LIST)
+	/*
+	 * The negative counter only tracks dentries on the LRU. Don't inc if
+	 * d_lru is on another list.
+	 */
+	if ((flags & (DCACHE_LRU_LIST|DCACHE_SHRINK_LIST)) == DCACHE_LRU_LIST)
 		this_cpu_inc(nr_dentry_negative);
 }
 
@@ -1844,9 +1848,11 @@ static void __d_instantiate(struct dentry *dentry, struct inode *inode)
 
 	spin_lock(&dentry->d_lock);
 	/*
-	 * Decrement negative dentry count if it was in the LRU list.
+	 * The negative counter only tracks dentries on the LRU. Don't dec if
+	 * d_lru is on another list.
 	 */
-	if (dentry->d_flags & DCACHE_LRU_LIST)
+	if ((dentry->d_flags &
+	     (DCACHE_LRU_LIST|DCACHE_SHRINK_LIST)) == DCACHE_LRU_LIST)
 		this_cpu_dec(nr_dentry_negative);
 	hlist_add_head(&dentry->d_u.d_alias, &inode->i_dentry);
 	raw_write_seqcount_begin(&dentry->d_seq);
@@ -2360,17 +2366,19 @@ EXPORT_SYMBOL(d_hash_and_lookup);
  * - unhash this dentry and free it.
  *
  * Usually, we want to just turn this into
- * a negative dentry, but certain workloads can
- * generate a large number of negative dentries.
- * Therefore, it would be better to simply
- * unhash it.
+ * a negative dentry, but if anybody else is
+ * currently using the dentry or the inode
+ * we can't do that and we fall back on removing
+ * it from the hash queues and waiting for
+ * it to be deleted later when it has no users
  */
  
 /**
  * d_delete - delete a dentry
  * @dentry: The dentry to delete
  *
- * Remove the dentry from the hash queues so it can be deleted later.
+ * Turn the dentry into a negative dentry if possible, otherwise
+ * remove it from the hash queues so it can be deleted later
  */
  
 void d_delete(struct dentry * dentry)
@@ -2379,8 +2387,6 @@ void d_delete(struct dentry * dentry)
 
 	spin_lock(&inode->i_lock);
 	spin_lock(&dentry->d_lock);
-	__d_drop(dentry);
-
 	/*
 	 * Are we the only user?
 	 */
@@ -2388,6 +2394,7 @@ void d_delete(struct dentry * dentry)
 		dentry->d_flags &= ~DCACHE_CANT_MOUNT;
 		dentry_unlink_inode(dentry);
 	} else {
+		__d_drop(dentry);
 		spin_unlock(&dentry->d_lock);
 		spin_unlock(&inode->i_lock);
 	}
