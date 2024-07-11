@@ -527,6 +527,7 @@ struct page_ext *page_ext_get(const struct page *page)
 
 	return page_ext;
 }
+EXPORT_SYMBOL(page_ext_get);
 
 /**
  * page_ext_put() - Working with page extended information is done.
@@ -545,3 +546,4 @@ void page_ext_put(struct page_ext *page_ext)
 
 	rcu_read_unlock();
 }
+EXPORT_SYMBOL(page_ext_put);
