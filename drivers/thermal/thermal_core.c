@@ -1357,7 +1357,8 @@ thermal_zone_device_register_with_trips(const char *type,
 					int num_trips, void *devdata,
 					const struct thermal_zone_device_ops *ops,
 					const struct thermal_zone_params *tzp,
-					int passive_delay, int polling_delay)
+					unsigned int passive_delay,
+					unsigned int polling_delay)
 {
 	const struct thermal_trip *trip = trips;
 	struct thermal_zone_device *tz;
@@ -1389,6 +1390,14 @@ thermal_zone_device_register_with_trips(const char *type,
 
 	if (num_trips > 0 && !trips)
 		return ERR_PTR(-EINVAL);
+
+	if (polling_delay) {
+		if (passive_delay > polling_delay)
+			return ERR_PTR(-EINVAL);
+
+		if (!passive_delay)
+			passive_delay = polling_delay;
+	}
 
 	if (!thermal_class)
 		return ERR_PTR(-ENODEV);
