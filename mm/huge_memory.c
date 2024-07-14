@@ -136,7 +136,8 @@ unsigned long __thp_vma_allowable_orders(struct vm_area_struct *vma,
 
 		while (orders) {
 			addr = vma->vm_end - (PAGE_SIZE << order);
-			if (thp_vma_suitable_order(vma, addr, order))
+			if (!(vma->vm_file && order > MAX_PAGECACHE_ORDER) &&
+			    thp_vma_suitable_order(vma, addr, order))
 				break;
 			order = next_order(&orders, order);
 		}
@@ -857,7 +858,7 @@ static unsigned long __thp_get_unmapped_area(struct file *filp,
 	loff_t off_align = round_up(off, size);
 	unsigned long len_pad, ret, off_sub;
 
-	if (IS_ENABLED(CONFIG_32BIT) || in_compat_syscall())
+	if (!IS_ENABLED(CONFIG_64BIT) || in_compat_syscall())
 		return 0;
 
 	if (off_end <= off_align || (off_end - off_align) < size)
