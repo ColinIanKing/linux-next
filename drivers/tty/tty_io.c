@@ -430,6 +430,24 @@ static ssize_t hung_up_tty_write(struct kiocb *iocb, struct iov_iter *from)
 	return -EIO;
 }
 
+static ssize_t hung_up_copy_splice_read(struct file *in, loff_t *ppos,
+					struct pipe_inode_info *pipe,
+					size_t len, unsigned int flags)
+{
+	return -EINVAL;
+}
+
+static ssize_t hung_up_iter_file_splice_write(struct pipe_inode_info *pipe, struct file *out,
+					      loff_t *ppos, size_t len, unsigned int flags)
+{
+	return -EINVAL;
+}
+
+static int hung_up_no_open(struct inode *inode, struct file *file)
+{
+	return -ENXIO;
+}
+
 /* No kernel lock held - none needed ;) */
 static __poll_t hung_up_tty_poll(struct file *filp, poll_table *wait)
 {
@@ -462,6 +480,12 @@ static void tty_show_fdinfo(struct seq_file *m, struct file *file)
 }
 
 static const struct file_operations tty_fops = {
+	/*
+	 * WARNING: You must implement all callbacks defined in tty_fops in
+	 * hung_up_tty_fops, for tty_fops and hung_up_tty_fops are toggled
+	 * after "struct file" is published. Failure to synchronize has a risk
+	 * of NULL pointer dereference bug.
+	 */
 	.llseek		= no_llseek,
 	.read_iter	= tty_read,
 	.write_iter	= tty_write,
@@ -491,14 +515,24 @@ static const struct file_operations console_fops = {
 };
 
 static const struct file_operations hung_up_tty_fops = {
+	/*
+	 * WARNING: You must implement all callbacks defined in hung_up_tty_fops
+	 * in tty_fops, for tty_fops and hung_up_tty_fops are toggled after
+	 * "struct file" is published. Failure to synchronize has a risk of
+	 * NULL pointer dereference bug.
+	 */
 	.llseek		= no_llseek,
 	.read_iter	= hung_up_tty_read,
 	.write_iter	= hung_up_tty_write,
+	.splice_read    = hung_up_copy_splice_read,
+	.splice_write   = hung_up_iter_file_splice_write,
 	.poll		= hung_up_tty_poll,
 	.unlocked_ioctl	= hung_up_tty_ioctl,
 	.compat_ioctl	= hung_up_tty_compat_ioctl,
+	.open           = hung_up_no_open,
 	.release	= tty_release,
 	.fasync		= hung_up_tty_fasync,
+	.show_fdinfo    = tty_show_fdinfo,
 };
 
 static DEFINE_SPINLOCK(redirect_lock);

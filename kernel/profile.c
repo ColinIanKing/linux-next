@@ -114,10 +114,8 @@ int __ref profile_init(void)
 
 	buffer_bytes = prof_len*sizeof(atomic_t);
 
-	if (!alloc_cpumask_var(&prof_cpu_mask, GFP_KERNEL))
+	if (!zalloc_cpumask_var(&prof_cpu_mask, GFP_KERNEL))
 		return -ENOMEM;
-
-	cpumask_copy(prof_cpu_mask, cpu_possible_mask);
 
 	prof_buffer = kzalloc(buffer_bytes, GFP_KERNEL|__GFP_NOWARN);
 	if (prof_buffer)
@@ -438,6 +436,8 @@ int __ref create_proc_profile(void)
 		goto err_state_prep;
 	online_state = err;
 	err = 0;
+#else
+	cpumask_copy(prof_cpu_mask, cpu_possible_mask);
 #endif
 	entry = proc_create("profile", S_IWUSR | S_IRUGO,
 			    NULL, &profile_proc_ops);
