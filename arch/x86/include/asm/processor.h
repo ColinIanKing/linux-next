@@ -502,21 +502,22 @@ struct thread_struct {
 
 	struct thread_shstk	shstk;
 #endif
-
-	/* Floating point and extended processor state */
-	struct fpu		fpu;
-	/*
-	 * WARNING: 'fpu' is dynamically-sized.  It *MUST* be at
-	 * the end.
-	 */
 };
 
-extern void fpu_thread_struct_whitelist(unsigned long *offset, unsigned long *size);
+#ifdef CONFIG_X86_DEBUG_FPU
+extern struct fpu *x86_task_fpu(struct task_struct *task);
+#else
+# define x86_task_fpu(task)	((struct fpu *)((void *)(task) + sizeof(*(task))))
+#endif
 
-static inline void arch_thread_struct_whitelist(unsigned long *offset,
-						unsigned long *size)
+/*
+ * X86 doesn't need any embedded-FPU-struct quirks:
+ */
+static inline void
+arch_thread_struct_whitelist(unsigned long *offset, unsigned long *size)
 {
-	fpu_thread_struct_whitelist(offset, size);
+	*offset = 0;
+	*size = 0;
 }
 
 static inline void
@@ -692,7 +693,17 @@ static inline u32 per_cpu_l2c_id(unsigned int cpu)
 
 #ifdef CONFIG_CPU_SUP_AMD
 extern u32 amd_get_highest_perf(void);
-extern void amd_clear_divider(void);
+
+/*
+ * Issue a DIV 0/1 insn to clear any division data from previous DIV
+ * operations.
+ */
+static __always_inline void amd_clear_divider(void)
+{
+	asm volatile(ALTERNATIVE("", "div %2\n\t", X86_BUG_DIV0)
+		     :: "a" (0), "d" (0), "r" (1));
+}
+
 extern void amd_check_microcode(void);
 #else
 static inline u32 amd_get_highest_perf(void)		{ return 0; }
