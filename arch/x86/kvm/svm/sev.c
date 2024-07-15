@@ -4401,9 +4401,9 @@ void sev_es_prepare_switch_to_guest(struct vcpu_svm *svm, struct sev_es_save_are
 	 * isn't saved by VMRUN, that isn't already saved by VMSAVE (performed
 	 * by common SVM code).
 	 */
-	hostsa->xcr0 = xgetbv(XCR_XFEATURE_ENABLED_MASK);
+	hostsa->xcr0 = kvm_host.xcr0;
 	hostsa->pkru = read_pkru();
-	hostsa->xss = host_xss;
+	hostsa->xss = kvm_host.xss;
 
 	/*
 	 * If DebugSwap is enabled, debug registers are loaded but NOT saved by
@@ -4459,13 +4459,13 @@ void sev_vcpu_deliver_sipi_vector(struct kvm_vcpu *vcpu, u8 vector)
 	}
 }
 
-struct page *snp_safe_alloc_page(struct kvm_vcpu *vcpu)
+struct page *snp_safe_alloc_page_node(int node, gfp_t gfp)
 {
 	unsigned long pfn;
 	struct page *p;
 
 	if (!cc_platform_has(CC_ATTR_HOST_SEV_SNP))
-		return alloc_page(GFP_KERNEL_ACCOUNT | __GFP_ZERO);
+		return alloc_pages_node(node, gfp | __GFP_ZERO, 0);
 
 	/*
 	 * Allocate an SNP-safe page to workaround the SNP erratum where
@@ -4476,7 +4476,7 @@ struct page *snp_safe_alloc_page(struct kvm_vcpu *vcpu)
 	 * Allocate one extra page, choose a page which is not
 	 * 2MB-aligned, and free the other.
 	 */
-	p = alloc_pages(GFP_KERNEL_ACCOUNT | __GFP_ZERO, 1);
+	p = alloc_pages_node(node, gfp | __GFP_ZERO, 1);
 	if (!p)
 		return NULL;
 
