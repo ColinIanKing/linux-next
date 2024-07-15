@@ -295,6 +295,7 @@ struct ufs_pwr_mode_info {
 /**
  * struct ufs_hba_variant_ops - variant specific callbacks
  * @name: variant name
+ * @max_num_rtt: maximum RTT supported by the host
  * @init: called when the driver is initialized
  * @exit: called to cleanup everything done in init
  * @get_ufs_hci_version: called to get UFS HCI version
@@ -332,6 +333,7 @@ struct ufs_pwr_mode_info {
  */
 struct ufs_hba_variant_ops {
 	const char *name;
+	int	max_num_rtt;
 	int	(*init)(struct ufs_hba *);
 	void    (*exit)(struct ufs_hba *);
 	u32	(*get_ufs_hci_version)(struct ufs_hba *);
@@ -457,6 +459,7 @@ struct ufs_clk_scaling {
 	bool is_initialized;
 	bool is_busy_started;
 	bool is_suspended;
+	bool suspend_on_no_request;
 };
 
 #define UFS_EVENT_HIST_LENGTH 8
@@ -819,6 +822,7 @@ enum ufshcd_mcq_opr {
  * @capabilities: UFS Controller Capabilities
  * @mcq_capabilities: UFS Multi Circular Queue capabilities
  * @nutrs: Transfer Request Queue depth supported by controller
+ * @nortt - Max outstanding RTTs supported by controller
  * @nutmrs: Task Management Queue depth supported by controller
  * @reserved_slot: Used to submit device commands. Protected by @dev_cmd.lock.
  * @ufs_version: UFS Version to which controller complies
@@ -957,6 +961,7 @@ struct ufs_hba {
 
 	u32 capabilities;
 	int nutrs;
+	int nortt;
 	u32 mcq_capabilities;
 	int nutmrs;
 	u32 reserved_slot;
@@ -1126,9 +1131,22 @@ struct ufs_hw_queue {
 	struct mutex sq_mutex;
 };
 
+#define MCQ_QCFG_SIZE		0x40
+
 static inline bool is_mcq_enabled(struct ufs_hba *hba)
 {
 	return hba->mcq_enabled;
+}
+
+static inline unsigned int ufshcd_mcq_opr_offset(struct ufs_hba *hba,
+		enum ufshcd_mcq_opr opr, int idx)
+{
+	return hba->mcq_opr[opr].offset + hba->mcq_opr[opr].stride * idx;
+}
+
+static inline unsigned int ufshcd_mcq_cfg_offset(unsigned int reg, int idx)
+{
+	return reg + MCQ_QCFG_SIZE * idx;
 }
 
 #ifdef CONFIG_SCSI_UFS_VARIABLE_SG_ENTRY_SIZE
@@ -1261,6 +1279,7 @@ void ufshcd_update_evt_hist(struct ufs_hba *hba, u32 id, u32 val);
 void ufshcd_hba_stop(struct ufs_hba *hba);
 void ufshcd_schedule_eh_work(struct ufs_hba *hba);
 void ufshcd_mcq_config_mac(struct ufs_hba *hba, u32 max_active_cmds);
+unsigned int ufshcd_mcq_queue_cfg_addr(struct ufs_hba *hba);
 u32 ufshcd_mcq_read_cqis(struct ufs_hba *hba, int i);
 void ufshcd_mcq_write_cqis(struct ufs_hba *hba, u32 val, int i);
 unsigned long ufshcd_mcq_poll_cqe_lock(struct ufs_hba *hba,
