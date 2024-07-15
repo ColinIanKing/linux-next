@@ -5831,6 +5831,10 @@ vm_fault_t handle_mm_fault(struct vm_area_struct *vma, unsigned long address,
 
 	lru_gen_exit_fault();
 
+	/* If the mapping is droppable, then errors due to OOM aren't fatal. */
+	if (vma->vm_flags & VM_DROPPABLE)
+		ret &= ~VM_FAULT_OOM;
+
 	if (flags & FAULT_FLAG_USER) {
 		mem_cgroup_exit_user_fault();
 		/*
