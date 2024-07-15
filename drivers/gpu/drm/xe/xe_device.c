@@ -54,6 +54,9 @@
 #include "xe_vm.h"
 #include "xe_vram.h"
 #include "xe_wait_user_fence.h"
+#include "xe_wa.h"
+
+#include <generated/xe_wa_oob.h>
 
 static int xe_file_open(struct drm_device *dev, struct drm_file *file)
 {
@@ -744,13 +747,22 @@ void xe_device_shutdown(struct xe_device *xe)
 {
 }
 
+/**
+ * xe_device_wmb() - Device specific write memory barrier
+ * @xe: the &xe_device
+ *
+ * While wmb() is sufficient for a barrier if we use system memory, on discrete
+ * platforms with device memory we additionally need to issue a register write.
+ * Since it doesn't matter which register we write to, use the read-only VF_CAP
+ * register that is also marked as accessible by the VFs.
+ */
 void xe_device_wmb(struct xe_device *xe)
 {
 	struct xe_gt *gt = xe_root_mmio_gt(xe);
 
 	wmb();
 	if (IS_DGFX(xe))
-		xe_mmio_write32(gt, SOFTWARE_FLAGS_SPR33, 0);
+		xe_mmio_write32(gt, VF_CAP_REG, 0);
 }
 
 /**
@@ -779,6 +791,11 @@ void xe_device_td_flush(struct xe_device *xe)
 	if (!IS_DGFX(xe) || GRAPHICS_VER(xe) < 20)
 		return;
 
+	if (XE_WA(xe_root_mmio_gt(xe), 16023588340)) {
+		xe_device_l2_flush(xe);
+		return;
+	}
+
 	for_each_gt(gt, xe, id) {
 		if (xe_gt_is_media_type(gt))
 			continue;
@@ -800,6 +817,30 @@ void xe_device_td_flush(struct xe_device *xe)
 
 		xe_force_wake_put(gt_to_fw(gt), XE_FW_GT);
 	}
+}
+
+void xe_device_l2_flush(struct xe_device *xe)
+{
+	struct xe_gt *gt;
+	int err;
+
+	gt = xe_root_mmio_gt(xe);
+
+	if (!XE_WA(gt, 16023588340))
+		return;
+
+	err = xe_force_wake_get(gt_to_fw(gt), XE_FW_GT);
+	if (err)
+		return;
+
+	spin_lock(&gt->global_invl_lock);
+	xe_mmio_write32(gt, XE2_GLOBAL_INVAL, 0x1);
+
+	if (xe_mmio_wait32(gt, XE2_GLOBAL_INVAL, 0x1, 0x0, 150, NULL, true))
+		xe_gt_err_once(gt, "Global invalidation timeout\n");
+	spin_unlock(&gt->global_invl_lock);
+
+	xe_force_wake_put(gt_to_fw(gt), XE_FW_GT);
 }
 
 u32 xe_device_ccs_bytes(struct xe_device *xe, u64 size)
