@@ -9,6 +9,30 @@
 
 #define _GNU_SOURCE
 #include MSRHEADER
+
+// copied from arch/x86/include/asm/cpu_device_id.h
+#define VFM_MODEL_BIT	0
+#define VFM_FAMILY_BIT	8
+#define VFM_VENDOR_BIT	16
+#define VFM_RSVD_BIT	24
+
+#define	VFM_MODEL_MASK	GENMASK(VFM_FAMILY_BIT - 1, VFM_MODEL_BIT)
+#define	VFM_FAMILY_MASK	GENMASK(VFM_VENDOR_BIT - 1, VFM_FAMILY_BIT)
+#define	VFM_VENDOR_MASK	GENMASK(VFM_RSVD_BIT - 1, VFM_VENDOR_BIT)
+
+#define VFM_MODEL(vfm)	(((vfm) & VFM_MODEL_MASK) >> VFM_MODEL_BIT)
+#define VFM_FAMILY(vfm)	(((vfm) & VFM_FAMILY_MASK) >> VFM_FAMILY_BIT)
+#define VFM_VENDOR(vfm)	(((vfm) & VFM_VENDOR_MASK) >> VFM_VENDOR_BIT)
+
+#define	VFM_MAKE(_vendor, _family, _model) (	\
+	((_model) << VFM_MODEL_BIT) |		\
+	((_family) << VFM_FAMILY_BIT) |		\
+	((_vendor) << VFM_VENDOR_BIT)		\
+)
+// end copied section
+
+#define X86_VENDOR_INTEL	0
+
 #include INTEL_FAMILY_HEADER
 #include BUILD_BUG_HEADER
 #include <stdarg.h>
@@ -55,15 +79,39 @@
  */
 #define	NAME_BYTES 20
 #define PATH_BYTES 128
+#define PERF_NAME_BYTES 128
 
 #define MAX_NOFILE 0x8000
+
+#define COUNTER_KIND_PERF_PREFIX "perf/"
+#define COUNTER_KIND_PERF_PREFIX_LEN strlen(COUNTER_KIND_PERF_PREFIX)
+#define PERF_DEV_NAME_BYTES 32
+#define PERF_EVT_NAME_BYTES 32
 
 enum counter_scope { SCOPE_CPU, SCOPE_CORE, SCOPE_PACKAGE };
 enum counter_type { COUNTER_ITEMS, COUNTER_CYCLES, COUNTER_SECONDS, COUNTER_USEC, COUNTER_K2M };
 enum counter_format { FORMAT_RAW, FORMAT_DELTA, FORMAT_PERCENT, FORMAT_AVERAGE };
-enum amperf_source { AMPERF_SOURCE_PERF, AMPERF_SOURCE_MSR };
-enum rapl_source { RAPL_SOURCE_NONE, RAPL_SOURCE_PERF, RAPL_SOURCE_MSR };
-enum cstate_source { CSTATE_SOURCE_NONE, CSTATE_SOURCE_PERF, CSTATE_SOURCE_MSR };
+enum counter_source { COUNTER_SOURCE_NONE, COUNTER_SOURCE_PERF, COUNTER_SOURCE_MSR };
+
+struct perf_counter_info {
+	struct perf_counter_info *next;
+
+	/* How to open the counter / What counter it is. */
+	char device[PERF_DEV_NAME_BYTES];
+	char event[PERF_EVT_NAME_BYTES];
+
+	/* How to show/format the counter. */
+	char name[PERF_NAME_BYTES];
+	unsigned int width;
+	enum counter_scope scope;
+	enum counter_type type;
+	enum counter_format format;
+	double scale;
+
+	/* For reading the counter. */
+	int *fd_perf_per_domain;
+	size_t num_domains;
+};
 
 struct sysfs_path {
 	char path[PATH_BYTES];
@@ -252,7 +300,6 @@ char *proc_stat = "/proc/stat";
 FILE *outf;
 int *fd_percpu;
 int *fd_instr_count_percpu;
-struct amperf_group_fd *fd_amperf_percpu;	/* File descriptors for perf group with APERF and MPERF counters. */
 struct timeval interval_tv = { 5, 0 };
 struct timespec interval_ts = { 5, 0 };
 
@@ -267,6 +314,7 @@ unsigned int summary_only;
 unsigned int list_header_only;
 unsigned int dump_only;
 unsigned int has_aperf;
+unsigned int has_aperf_access;
 unsigned int has_epb;
 unsigned int has_turbo;
 unsigned int is_hybrid;
@@ -307,7 +355,6 @@ unsigned int first_counter_read = 1;
 int ignore_stdin;
 bool no_msr;
 bool no_perf;
-enum amperf_source amperf_source;
 
 enum gfx_sysfs_idx {
 	GFX_rc6,
@@ -367,7 +414,7 @@ struct platform_features {
 };
 
 struct platform_data {
-	unsigned int model;
+	unsigned int vfm;
 	const struct platform_features *features;
 };
 
@@ -910,75 +957,75 @@ static const struct platform_features amd_features_with_rapl = {
 };
 
 static const struct platform_data turbostat_pdata[] = {
-	{ INTEL_FAM6_NEHALEM, &nhm_features },
-	{ INTEL_FAM6_NEHALEM_G, &nhm_features },
-	{ INTEL_FAM6_NEHALEM_EP, &nhm_features },
-	{ INTEL_FAM6_NEHALEM_EX, &nhx_features },
-	{ INTEL_FAM6_WESTMERE, &nhm_features },
-	{ INTEL_FAM6_WESTMERE_EP, &nhm_features },
-	{ INTEL_FAM6_WESTMERE_EX, &nhx_features },
-	{ INTEL_FAM6_SANDYBRIDGE, &snb_features },
-	{ INTEL_FAM6_SANDYBRIDGE_X, &snx_features },
-	{ INTEL_FAM6_IVYBRIDGE, &ivb_features },
-	{ INTEL_FAM6_IVYBRIDGE_X, &ivx_features },
-	{ INTEL_FAM6_HASWELL, &hsw_features },
-	{ INTEL_FAM6_HASWELL_X, &hsx_features },
-	{ INTEL_FAM6_HASWELL_L, &hswl_features },
-	{ INTEL_FAM6_HASWELL_G, &hswg_features },
-	{ INTEL_FAM6_BROADWELL, &bdw_features },
-	{ INTEL_FAM6_BROADWELL_G, &bdwg_features },
-	{ INTEL_FAM6_BROADWELL_X, &bdx_features },
-	{ INTEL_FAM6_BROADWELL_D, &bdx_features },
-	{ INTEL_FAM6_SKYLAKE_L, &skl_features },
-	{ INTEL_FAM6_SKYLAKE, &skl_features },
-	{ INTEL_FAM6_SKYLAKE_X, &skx_features },
-	{ INTEL_FAM6_KABYLAKE_L, &skl_features },
-	{ INTEL_FAM6_KABYLAKE, &skl_features },
-	{ INTEL_FAM6_COMETLAKE, &skl_features },
-	{ INTEL_FAM6_COMETLAKE_L, &skl_features },
-	{ INTEL_FAM6_CANNONLAKE_L, &cnl_features },
-	{ INTEL_FAM6_ICELAKE_X, &icx_features },
-	{ INTEL_FAM6_ICELAKE_D, &icx_features },
-	{ INTEL_FAM6_ICELAKE_L, &cnl_features },
-	{ INTEL_FAM6_ICELAKE_NNPI, &cnl_features },
-	{ INTEL_FAM6_ROCKETLAKE, &cnl_features },
-	{ INTEL_FAM6_TIGERLAKE_L, &cnl_features },
-	{ INTEL_FAM6_TIGERLAKE, &cnl_features },
-	{ INTEL_FAM6_SAPPHIRERAPIDS_X, &spr_features },
-	{ INTEL_FAM6_EMERALDRAPIDS_X, &spr_features },
-	{ INTEL_FAM6_GRANITERAPIDS_X, &spr_features },
-	{ INTEL_FAM6_LAKEFIELD, &cnl_features },
-	{ INTEL_FAM6_ALDERLAKE, &adl_features },
-	{ INTEL_FAM6_ALDERLAKE_L, &adl_features },
-	{ INTEL_FAM6_RAPTORLAKE, &adl_features },
-	{ INTEL_FAM6_RAPTORLAKE_P, &adl_features },
-	{ INTEL_FAM6_RAPTORLAKE_S, &adl_features },
-	{ INTEL_FAM6_METEORLAKE, &cnl_features },
-	{ INTEL_FAM6_METEORLAKE_L, &cnl_features },
-	{ INTEL_FAM6_ARROWLAKE_H, &arl_features },
-	{ INTEL_FAM6_ARROWLAKE_U, &arl_features },
-	{ INTEL_FAM6_ARROWLAKE, &arl_features },
-	{ INTEL_FAM6_LUNARLAKE_M, &arl_features },
-	{ INTEL_FAM6_ATOM_SILVERMONT, &slv_features },
-	{ INTEL_FAM6_ATOM_SILVERMONT_D, &slvd_features },
-	{ INTEL_FAM6_ATOM_AIRMONT, &amt_features },
-	{ INTEL_FAM6_ATOM_GOLDMONT, &gmt_features },
-	{ INTEL_FAM6_ATOM_GOLDMONT_D, &gmtd_features },
-	{ INTEL_FAM6_ATOM_GOLDMONT_PLUS, &gmtp_features },
-	{ INTEL_FAM6_ATOM_TREMONT_D, &tmtd_features },
-	{ INTEL_FAM6_ATOM_TREMONT, &tmt_features },
-	{ INTEL_FAM6_ATOM_TREMONT_L, &tmt_features },
-	{ INTEL_FAM6_ATOM_GRACEMONT, &adl_features },
-	{ INTEL_FAM6_ATOM_CRESTMONT_X, &srf_features },
-	{ INTEL_FAM6_ATOM_CRESTMONT, &grr_features },
-	{ INTEL_FAM6_XEON_PHI_KNL, &knl_features },
-	{ INTEL_FAM6_XEON_PHI_KNM, &knl_features },
+	{ INTEL_NEHALEM, &nhm_features },
+	{ INTEL_NEHALEM_G, &nhm_features },
+	{ INTEL_NEHALEM_EP, &nhm_features },
+	{ INTEL_NEHALEM_EX, &nhx_features },
+	{ INTEL_WESTMERE, &nhm_features },
+	{ INTEL_WESTMERE_EP, &nhm_features },
+	{ INTEL_WESTMERE_EX, &nhx_features },
+	{ INTEL_SANDYBRIDGE, &snb_features },
+	{ INTEL_SANDYBRIDGE_X, &snx_features },
+	{ INTEL_IVYBRIDGE, &ivb_features },
+	{ INTEL_IVYBRIDGE_X, &ivx_features },
+	{ INTEL_HASWELL, &hsw_features },
+	{ INTEL_HASWELL_X, &hsx_features },
+	{ INTEL_HASWELL_L, &hswl_features },
+	{ INTEL_HASWELL_G, &hswg_features },
+	{ INTEL_BROADWELL, &bdw_features },
+	{ INTEL_BROADWELL_G, &bdwg_features },
+	{ INTEL_BROADWELL_X, &bdx_features },
+	{ INTEL_BROADWELL_D, &bdx_features },
+	{ INTEL_SKYLAKE_L, &skl_features },
+	{ INTEL_SKYLAKE, &skl_features },
+	{ INTEL_SKYLAKE_X, &skx_features },
+	{ INTEL_KABYLAKE_L, &skl_features },
+	{ INTEL_KABYLAKE, &skl_features },
+	{ INTEL_COMETLAKE, &skl_features },
+	{ INTEL_COMETLAKE_L, &skl_features },
+	{ INTEL_CANNONLAKE_L, &cnl_features },
+	{ INTEL_ICELAKE_X, &icx_features },
+	{ INTEL_ICELAKE_D, &icx_features },
+	{ INTEL_ICELAKE_L, &cnl_features },
+	{ INTEL_ICELAKE_NNPI, &cnl_features },
+	{ INTEL_ROCKETLAKE, &cnl_features },
+	{ INTEL_TIGERLAKE_L, &cnl_features },
+	{ INTEL_TIGERLAKE, &cnl_features },
+	{ INTEL_SAPPHIRERAPIDS_X, &spr_features },
+	{ INTEL_EMERALDRAPIDS_X, &spr_features },
+	{ INTEL_GRANITERAPIDS_X, &spr_features },
+	{ INTEL_LAKEFIELD, &cnl_features },
+	{ INTEL_ALDERLAKE, &adl_features },
+	{ INTEL_ALDERLAKE_L, &adl_features },
+	{ INTEL_RAPTORLAKE, &adl_features },
+	{ INTEL_RAPTORLAKE_P, &adl_features },
+	{ INTEL_RAPTORLAKE_S, &adl_features },
+	{ INTEL_METEORLAKE, &cnl_features },
+	{ INTEL_METEORLAKE_L, &cnl_features },
+	{ INTEL_ARROWLAKE_H, &arl_features },
+	{ INTEL_ARROWLAKE_U, &arl_features },
+	{ INTEL_ARROWLAKE, &arl_features },
+	{ INTEL_LUNARLAKE_M, &arl_features },
+	{ INTEL_ATOM_SILVERMONT, &slv_features },
+	{ INTEL_ATOM_SILVERMONT_D, &slvd_features },
+	{ INTEL_ATOM_AIRMONT, &amt_features },
+	{ INTEL_ATOM_GOLDMONT, &gmt_features },
+	{ INTEL_ATOM_GOLDMONT_D, &gmtd_features },
+	{ INTEL_ATOM_GOLDMONT_PLUS, &gmtp_features },
+	{ INTEL_ATOM_TREMONT_D, &tmtd_features },
+	{ INTEL_ATOM_TREMONT, &tmt_features },
+	{ INTEL_ATOM_TREMONT_L, &tmt_features },
+	{ INTEL_ATOM_GRACEMONT, &adl_features },
+	{ INTEL_ATOM_CRESTMONT_X, &srf_features },
+	{ INTEL_ATOM_CRESTMONT, &grr_features },
+	{ INTEL_XEON_PHI_KNL, &knl_features },
+	{ INTEL_XEON_PHI_KNM, &knl_features },
 	/*
 	 * Missing support for
-	 * INTEL_FAM6_ICELAKE
-	 * INTEL_FAM6_ATOM_SILVERMONT_MID
-	 * INTEL_FAM6_ATOM_AIRMONT_MID
-	 * INTEL_FAM6_ATOM_AIRMONT_NP
+	 * INTEL_ICELAKE
+	 * INTEL_ATOM_SILVERMONT_MID
+	 * INTEL_ATOM_AIRMONT_MID
+	 * INTEL_ATOM_AIRMONT_NP
 	 */
 	{ 0, NULL },
 };
@@ -1003,11 +1050,12 @@ void probe_platform_features(unsigned int family, unsigned int model)
 		return;
 	}
 
-	if (!genuine_intel || family != 6)
+	if (!genuine_intel)
 		return;
 
 	for (i = 0; turbostat_pdata[i].features; i++) {
-		if (turbostat_pdata[i].model == model) {
+		if (VFM_FAMILY(turbostat_pdata[i].vfm) == family &&
+		    VFM_MODEL(turbostat_pdata[i].vfm) == model) {
 			platform = turbostat_pdata[i].features;
 			return;
 		}
@@ -1036,6 +1084,8 @@ size_t cpu_present_setsize, cpu_effective_setsize, cpu_allowed_setsize, cpu_affi
 #define MAX_ADDED_PACKAGE_COUNTERS 16
 #define BITMASK_SIZE 32
 
+#define ZERO_ARRAY(arr) (memset(arr, 0, sizeof(arr)) + __must_be_array(arr))
+
 /* Indexes used to map data read from perf and MSRs into global variables */
 enum rapl_rci_index {
 	RAPL_RCI_INDEX_ENERGY_PKG = 0,
@@ -1056,19 +1106,13 @@ enum rapl_unit {
 
 struct rapl_counter_info_t {
 	unsigned long long data[NUM_RAPL_COUNTERS];
-	enum rapl_source source[NUM_RAPL_COUNTERS];
+	enum counter_source source[NUM_RAPL_COUNTERS];
 	unsigned long long flags[NUM_RAPL_COUNTERS];
 	double scale[NUM_RAPL_COUNTERS];
 	enum rapl_unit unit[NUM_RAPL_COUNTERS];
-
-	union {
-		/* Active when source == RAPL_SOURCE_MSR */
-		struct {
-			unsigned long long msr[NUM_RAPL_COUNTERS];
-			unsigned long long msr_mask[NUM_RAPL_COUNTERS];
-			int msr_shift[NUM_RAPL_COUNTERS];
-		};
-	};
+	unsigned long long msr[NUM_RAPL_COUNTERS];
+	unsigned long long msr_mask[NUM_RAPL_COUNTERS];
+	int msr_shift[NUM_RAPL_COUNTERS];
 
 	int fd_perf;
 };
@@ -1224,7 +1268,7 @@ enum ccstate_rci_index {
 
 struct cstate_counter_info_t {
 	unsigned long long data[NUM_CSTATE_COUNTERS];
-	enum cstate_source source[NUM_CSTATE_COUNTERS];
+	enum counter_source source[NUM_CSTATE_COUNTERS];
 	unsigned long long msr[NUM_CSTATE_COUNTERS];
 	int fd_perf_core;
 	int fd_perf_pkg;
@@ -1361,6 +1405,67 @@ static struct cstate_counter_arch_info ccstate_counter_arch_infos[] = {
 	  },
 };
 
+/* Indexes used to map data read from perf and MSRs into global variables */
+enum msr_rci_index {
+	MSR_RCI_INDEX_APERF = 0,
+	MSR_RCI_INDEX_MPERF = 1,
+	MSR_RCI_INDEX_SMI = 2,
+	NUM_MSR_COUNTERS,
+};
+
+struct msr_counter_info_t {
+	unsigned long long data[NUM_MSR_COUNTERS];
+	enum counter_source source[NUM_MSR_COUNTERS];
+	unsigned long long msr[NUM_MSR_COUNTERS];
+	unsigned long long msr_mask[NUM_MSR_COUNTERS];
+	int fd_perf;
+};
+
+struct msr_counter_info_t *msr_counter_info;
+unsigned int msr_counter_info_size;
+
+struct msr_counter_arch_info {
+	const char *perf_subsys;
+	const char *perf_name;
+	unsigned long long msr;
+	unsigned long long msr_mask;
+	unsigned int rci_index;	/* Maps data from perf counters to global variables */
+	bool needed;
+	bool present;
+};
+
+enum msr_arch_info_index {
+	MSR_ARCH_INFO_APERF_INDEX = 0,
+	MSR_ARCH_INFO_MPERF_INDEX = 1,
+	MSR_ARCH_INFO_SMI_INDEX = 2,
+};
+
+static struct msr_counter_arch_info msr_counter_arch_infos[] = {
+	[MSR_ARCH_INFO_APERF_INDEX] = {
+		.perf_subsys = "msr",
+		.perf_name = "aperf",
+		.msr = MSR_IA32_APERF,
+		.msr_mask = 0xFFFFFFFFFFFFFFFF,
+		.rci_index = MSR_RCI_INDEX_APERF,
+	},
+
+	[MSR_ARCH_INFO_MPERF_INDEX] = {
+		.perf_subsys = "msr",
+		.perf_name = "mperf",
+		.msr = MSR_IA32_MPERF,
+		.msr_mask = 0xFFFFFFFFFFFFFFFF,
+		.rci_index = MSR_RCI_INDEX_MPERF,
+	},
+
+	[MSR_ARCH_INFO_SMI_INDEX] = {
+		.perf_subsys = "msr",
+		.perf_name = "smi",
+		.msr = MSR_SMI_COUNT,
+		.msr_mask = 0xFFFFFFFF,
+		.rci_index = MSR_RCI_INDEX_SMI,
+	},
+};
+
 struct thread_data {
 	struct timeval tv_begin;
 	struct timeval tv_end;
@@ -1378,6 +1483,7 @@ struct thread_data {
 	unsigned int flags;
 	bool is_atom;
 	unsigned long long counter[MAX_ADDED_THREAD_COUNTERS];
+	unsigned long long perf_counter[MAX_ADDED_THREAD_COUNTERS];
 } *thread_even, *thread_odd;
 
 struct core_data {
@@ -1391,6 +1497,7 @@ struct core_data {
 	unsigned int core_id;
 	unsigned long long core_throt_cnt;
 	unsigned long long counter[MAX_ADDED_CORE_COUNTERS];
+	unsigned long long perf_counter[MAX_ADDED_CORE_COUNTERS];
 } *core_even, *core_odd;
 
 struct pkg_data {
@@ -1424,6 +1531,7 @@ struct pkg_data {
 	unsigned int pkg_temp_c;
 	unsigned int uncore_mhz;
 	unsigned long long counter[MAX_ADDED_PACKAGE_COUNTERS];
+	unsigned long long perf_counter[MAX_ADDED_PACKAGE_COUNTERS];
 } *package_even, *package_odd;
 
 #define ODD_COUNTERS thread_odd, core_odd, package_odd
@@ -1558,12 +1666,21 @@ int idx_valid(int idx)
 }
 
 struct sys_counters {
+	/* MSR added counters */
 	unsigned int added_thread_counters;
 	unsigned int added_core_counters;
 	unsigned int added_package_counters;
 	struct msr_counter *tp;
 	struct msr_counter *cp;
 	struct msr_counter *pp;
+
+	/* perf added counters */
+	unsigned int added_thread_perf_counters;
+	unsigned int added_core_perf_counters;
+	unsigned int added_package_perf_counters;
+	struct perf_counter_info *perf_tp;
+	struct perf_counter_info *perf_cp;
+	struct perf_counter_info *perf_pp;
 } sys;
 
 static size_t free_msr_counters_(struct msr_counter **pp)
@@ -1747,7 +1864,7 @@ int get_msr_fd(int cpu)
 
 static void bic_disable_msr_access(void)
 {
-	const unsigned long bic_msrs = BIC_SMI | BIC_Mod_c6 | BIC_CoreTmp |
+	const unsigned long bic_msrs = BIC_Mod_c6 | BIC_CoreTmp |
 	    BIC_Totl_c0 | BIC_Any_c0 | BIC_GFX_c0 | BIC_CPUGFX | BIC_PkgTmp;
 
 	bic_enabled &= ~bic_msrs;
@@ -1823,6 +1940,23 @@ int probe_msr(int cpu, off_t offset)
 	return 0;
 }
 
+/* Convert CPU ID to domain ID for given added perf counter. */
+unsigned int cpu_to_domain(const struct perf_counter_info *pc, int cpu)
+{
+	switch (pc->scope) {
+	case SCOPE_CPU:
+		return cpu;
+
+	case SCOPE_CORE:
+		return cpus[cpu].physical_core_id;
+
+	case SCOPE_PACKAGE:
+		return cpus[cpu].physical_package_id;
+	}
+
+	__builtin_unreachable();
+}
+
 #define MAX_DEFERRED 16
 char *deferred_add_names[MAX_DEFERRED];
 char *deferred_skip_names[MAX_DEFERRED];
@@ -1846,6 +1980,7 @@ void help(void)
 		"to print statistics, until interrupted.\n"
 		"  -a, --add	add a counter\n"
 		"		  eg. --add msr0x10,u64,cpu,delta,MY_TSC\n"
+		"		  eg. --add perf/cstate_pkg/c2-residency,package,delta,percent,perfPC2\n"
 		"  -c, --cpu	cpu-set	limit output to summary plus cpu-set:\n"
 		"		  {core | package | j,k,l..m,n-p }\n"
 		"  -d, --debug	displays usec, Time_Of_Day_Seconds and more debugging\n"
@@ -1955,6 +2090,7 @@ unsigned long long bic_lookup(char *name_list, enum show_hide_mode mode)
 void print_header(char *delim)
 {
 	struct msr_counter *mp;
+	struct perf_counter_info *pp;
 	int printed = 0;
 
 	if (DO_BIC(BIC_USEC))
@@ -2012,6 +2148,21 @@ void print_header(char *delim)
 		}
 	}
 
+	for (pp = sys.perf_tp; pp; pp = pp->next) {
+
+		if (pp->format == FORMAT_RAW) {
+			if (pp->width == 64)
+				outp += sprintf(outp, "%s%18.18s", (printed++ ? delim : ""), pp->name);
+			else
+				outp += sprintf(outp, "%s%10.10s", (printed++ ? delim : ""), pp->name);
+		} else {
+			if ((pp->type == COUNTER_ITEMS) && sums_need_wide_columns)
+				outp += sprintf(outp, "%s%8s", (printed++ ? delim : ""), pp->name);
+			else
+				outp += sprintf(outp, "%s%s", (printed++ ? delim : ""), pp->name);
+		}
+	}
+
 	if (DO_BIC(BIC_CPU_c1))
 		outp += sprintf(outp, "%sCPU%%c1", (printed++ ? delim : ""));
 	if (DO_BIC(BIC_CPU_c3))
@@ -2049,6 +2200,21 @@ void print_header(char *delim)
 				outp += sprintf(outp, "%s%8s", delim, mp->name);
 			else
 				outp += sprintf(outp, "%s%s", delim, mp->name);
+		}
+	}
+
+	for (pp = sys.perf_cp; pp; pp = pp->next) {
+
+		if (pp->format == FORMAT_RAW) {
+			if (pp->width == 64)
+				outp += sprintf(outp, "%s%18.18s", (printed++ ? delim : ""), pp->name);
+			else
+				outp += sprintf(outp, "%s%10.10s", (printed++ ? delim : ""), pp->name);
+		} else {
+			if ((pp->type == COUNTER_ITEMS) && sums_need_wide_columns)
+				outp += sprintf(outp, "%s%8s", (printed++ ? delim : ""), pp->name);
+			else
+				outp += sprintf(outp, "%s%s", (printed++ ? delim : ""), pp->name);
 		}
 	}
 
@@ -2144,6 +2310,21 @@ void print_header(char *delim)
 				outp += sprintf(outp, "%s%8s", delim, mp->name);
 			else
 				outp += sprintf(outp, "%s%7.7s", delim, mp->name);
+		}
+	}
+
+	for (pp = sys.perf_pp; pp; pp = pp->next) {
+
+		if (pp->format == FORMAT_RAW) {
+			if (pp->width == 64)
+				outp += sprintf(outp, "%s%18.18s", (printed++ ? delim : ""), pp->name);
+			else
+				outp += sprintf(outp, "%s%10.10s", (printed++ ? delim : ""), pp->name);
+		} else {
+			if ((pp->type == COUNTER_ITEMS) && sums_need_wide_columns)
+				outp += sprintf(outp, "%s%8s", (printed++ ? delim : ""), pp->name);
+			else
+				outp += sprintf(outp, "%s%s", (printed++ ? delim : ""), pp->name);
 		}
 	}
 
@@ -2267,6 +2448,7 @@ int format_counters(struct thread_data *t, struct core_data *c, struct pkg_data 
 	char *fmt8;
 	int i;
 	struct msr_counter *mp;
+	struct perf_counter_info *pp;
 	char *delim = "\t";
 	int printed = 0;
 
@@ -2404,6 +2586,31 @@ int format_counters(struct thread_data *t, struct core_data *c, struct pkg_data 
 		}
 	}
 
+	/* Added perf counters */
+	for (i = 0, pp = sys.perf_tp; pp; ++i, pp = pp->next) {
+		if (pp->format == FORMAT_RAW) {
+			if (pp->width == 32)
+				outp +=
+				    sprintf(outp, "%s0x%08x", (printed++ ? delim : ""),
+					    (unsigned int)t->perf_counter[i]);
+			else
+				outp += sprintf(outp, "%s0x%016llx", (printed++ ? delim : ""), t->perf_counter[i]);
+		} else if (pp->format == FORMAT_DELTA) {
+			if ((pp->type == COUNTER_ITEMS) && sums_need_wide_columns)
+				outp += sprintf(outp, "%s%8lld", (printed++ ? delim : ""), t->perf_counter[i]);
+			else
+				outp += sprintf(outp, "%s%lld", (printed++ ? delim : ""), t->perf_counter[i]);
+		} else if (pp->format == FORMAT_PERCENT) {
+			if (pp->type == COUNTER_USEC)
+				outp +=
+				    sprintf(outp, "%s%.2f", (printed++ ? delim : ""),
+					    t->perf_counter[i] / interval_float / 10000);
+			else
+				outp +=
+				    sprintf(outp, "%s%.2f", (printed++ ? delim : ""), 100.0 * t->perf_counter[i] / tsc);
+		}
+	}
+
 	/* C1 */
 	if (DO_BIC(BIC_CPU_c1))
 		outp += sprintf(outp, "%s%.2f", (printed++ ? delim : ""), 100.0 * t->c1 / tsc);
@@ -2444,6 +2651,24 @@ int format_counters(struct thread_data *t, struct core_data *c, struct pkg_data 
 				outp += sprintf(outp, "%s%lld", (printed++ ? delim : ""), c->counter[i]);
 		} else if (mp->format == FORMAT_PERCENT) {
 			outp += sprintf(outp, "%s%.2f", (printed++ ? delim : ""), 100.0 * c->counter[i] / tsc);
+		}
+	}
+
+	for (i = 0, pp = sys.perf_cp; pp; i++, pp = pp->next) {
+		if (pp->format == FORMAT_RAW) {
+			if (pp->width == 32)
+				outp +=
+				    sprintf(outp, "%s0x%08x", (printed++ ? delim : ""),
+					    (unsigned int)c->perf_counter[i]);
+			else
+				outp += sprintf(outp, "%s0x%016llx", (printed++ ? delim : ""), c->perf_counter[i]);
+		} else if (pp->format == FORMAT_DELTA) {
+			if ((pp->type == COUNTER_ITEMS) && sums_need_wide_columns)
+				outp += sprintf(outp, "%s%8lld", (printed++ ? delim : ""), c->perf_counter[i]);
+			else
+				outp += sprintf(outp, "%s%lld", (printed++ ? delim : ""), c->perf_counter[i]);
+		} else if (pp->format == FORMAT_PERCENT) {
+			outp += sprintf(outp, "%s%.2f", (printed++ ? delim : ""), 100.0 * c->perf_counter[i] / tsc);
 		}
 	}
 
@@ -2601,6 +2826,26 @@ int format_counters(struct thread_data *t, struct core_data *c, struct pkg_data 
 			outp += sprintf(outp, "%s%d", (printed++ ? delim : ""), (unsigned int)p->counter[i] / 1000);
 	}
 
+	for (i = 0, pp = sys.perf_pp; pp; i++, pp = pp->next) {
+		if (pp->format == FORMAT_RAW) {
+			if (pp->width == 32)
+				outp +=
+				    sprintf(outp, "%s0x%08x", (printed++ ? delim : ""),
+					    (unsigned int)p->perf_counter[i]);
+			else
+				outp += sprintf(outp, "%s0x%016llx", (printed++ ? delim : ""), p->perf_counter[i]);
+		} else if (pp->format == FORMAT_DELTA) {
+			if ((pp->type == COUNTER_ITEMS) && sums_need_wide_columns)
+				outp += sprintf(outp, "%s%8lld", (printed++ ? delim : ""), p->perf_counter[i]);
+			else
+				outp += sprintf(outp, "%s%lld", (printed++ ? delim : ""), p->perf_counter[i]);
+		} else if (pp->format == FORMAT_PERCENT) {
+			outp += sprintf(outp, "%s%.2f", (printed++ ? delim : ""), 100.0 * p->perf_counter[i] / tsc);
+		} else if (pp->type == COUNTER_K2M)
+			outp +=
+			    sprintf(outp, "%s%d", (printed++ ? delim : ""), (unsigned int)p->perf_counter[i] / 1000);
+	}
+
 done:
 	if (*(outp - 1) != '\n')
 		outp += sprintf(outp, "\n");
@@ -2654,6 +2899,7 @@ int delta_package(struct pkg_data *new, struct pkg_data *old)
 {
 	int i;
 	struct msr_counter *mp;
+	struct perf_counter_info *pp;
 
 	if (DO_BIC(BIC_Totl_c0))
 		old->pkg_wtd_core_c0 = new->pkg_wtd_core_c0 - old->pkg_wtd_core_c0;
@@ -2714,6 +2960,15 @@ int delta_package(struct pkg_data *new, struct pkg_data *old)
 			old->counter[i] = new->counter[i] - old->counter[i];
 	}
 
+	for (i = 0, pp = sys.perf_pp; pp; i++, pp = pp->next) {
+		if (pp->format == FORMAT_RAW)
+			old->perf_counter[i] = new->perf_counter[i];
+		else if (pp->format == FORMAT_AVERAGE)
+			old->perf_counter[i] = new->perf_counter[i];
+		else
+			old->perf_counter[i] = new->perf_counter[i] - old->perf_counter[i];
+	}
+
 	return 0;
 }
 
@@ -2721,6 +2976,7 @@ void delta_core(struct core_data *new, struct core_data *old)
 {
 	int i;
 	struct msr_counter *mp;
+	struct perf_counter_info *pp;
 
 	old->c3 = new->c3 - old->c3;
 	old->c6 = new->c6 - old->c6;
@@ -2736,6 +2992,13 @@ void delta_core(struct core_data *new, struct core_data *old)
 			old->counter[i] = new->counter[i];
 		else
 			old->counter[i] = new->counter[i] - old->counter[i];
+	}
+
+	for (i = 0, pp = sys.perf_cp; pp; i++, pp = pp->next) {
+		if (pp->format == FORMAT_RAW)
+			old->perf_counter[i] = new->perf_counter[i];
+		else
+			old->perf_counter[i] = new->perf_counter[i] - old->perf_counter[i];
 	}
 }
 
@@ -2754,6 +3017,7 @@ int delta_thread(struct thread_data *new, struct thread_data *old, struct core_d
 {
 	int i;
 	struct msr_counter *mp;
+	struct perf_counter_info *pp;
 
 	/* we run cpuid just the 1st time, copy the results */
 	if (DO_BIC(BIC_APIC))
@@ -2832,6 +3096,14 @@ int delta_thread(struct thread_data *new, struct thread_data *old, struct core_d
 		else
 			old->counter[i] = new->counter[i] - old->counter[i];
 	}
+
+	for (i = 0, pp = sys.perf_tp; pp; i++, pp = pp->next) {
+		if (pp->format == FORMAT_RAW)
+			old->perf_counter[i] = new->perf_counter[i];
+		else
+			old->perf_counter[i] = new->perf_counter[i] - old->perf_counter[i];
+	}
+
 	return 0;
 }
 
@@ -2934,6 +3206,10 @@ void clear_counters(struct thread_data *t, struct core_data *c, struct pkg_data 
 
 	for (i = 0, mp = sys.pp; mp; i++, mp = mp->next)
 		p->counter[i] = 0;
+
+	memset(&t->perf_counter[0], 0, sizeof(t->perf_counter));
+	memset(&c->perf_counter[0], 0, sizeof(c->perf_counter));
+	memset(&p->perf_counter[0], 0, sizeof(p->perf_counter));
 }
 
 void rapl_counter_accumulate(struct rapl_counter *dst, const struct rapl_counter *src)
@@ -2954,6 +3230,7 @@ int sum_counters(struct thread_data *t, struct core_data *c, struct pkg_data *p)
 {
 	int i;
 	struct msr_counter *mp;
+	struct perf_counter_info *pp;
 
 	/* copy un-changing apic_id's */
 	if (DO_BIC(BIC_APIC))
@@ -2984,6 +3261,12 @@ int sum_counters(struct thread_data *t, struct core_data *c, struct pkg_data *p)
 		average.threads.counter[i] += t->counter[i];
 	}
 
+	for (i = 0, pp = sys.perf_tp; pp; i++, pp = pp->next) {
+		if (pp->format == FORMAT_RAW)
+			continue;
+		average.threads.perf_counter[i] += t->perf_counter[i];
+	}
+
 	/* sum per-core values only for 1st thread in core */
 	if (!is_cpu_first_thread_in_core(t, c, p))
 		return 0;
@@ -3002,6 +3285,12 @@ int sum_counters(struct thread_data *t, struct core_data *c, struct pkg_data *p)
 		if (mp->format == FORMAT_RAW)
 			continue;
 		average.cores.counter[i] += c->counter[i];
+	}
+
+	for (i = 0, pp = sys.perf_cp; pp; i++, pp = pp->next) {
+		if (pp->format == FORMAT_RAW)
+			continue;
+		average.cores.perf_counter[i] += c->perf_counter[i];
 	}
 
 	/* sum per-pkg values only for 1st core in pkg */
@@ -3055,6 +3344,14 @@ int sum_counters(struct thread_data *t, struct core_data *c, struct pkg_data *p)
 		else
 			average.packages.counter[i] += p->counter[i];
 	}
+
+	for (i = 0, pp = sys.perf_pp; pp; i++, pp = pp->next) {
+		if ((pp->format == FORMAT_RAW) && (topo.num_packages == 0))
+			average.packages.perf_counter[i] = p->perf_counter[i];
+		else
+			average.packages.perf_counter[i] += p->perf_counter[i];
+	}
+
 	return 0;
 }
 
@@ -3066,6 +3363,7 @@ void compute_average(struct thread_data *t, struct core_data *c, struct pkg_data
 {
 	int i;
 	struct msr_counter *mp;
+	struct perf_counter_info *pp;
 
 	clear_counters(&average.threads, &average.cores, &average.packages);
 
@@ -3136,6 +3434,35 @@ void compute_average(struct thread_data *t, struct core_data *c, struct pkg_data
 				sums_need_wide_columns = 1;
 		}
 		average.packages.counter[i] /= topo.allowed_packages;
+	}
+
+	for (i = 0, pp = sys.perf_tp; pp; i++, pp = pp->next) {
+		if (pp->format == FORMAT_RAW)
+			continue;
+		if (pp->type == COUNTER_ITEMS) {
+			if (average.threads.perf_counter[i] > 9999999)
+				sums_need_wide_columns = 1;
+			continue;
+		}
+		average.threads.perf_counter[i] /= topo.allowed_cpus;
+	}
+	for (i = 0, pp = sys.perf_cp; pp; i++, pp = pp->next) {
+		if (pp->format == FORMAT_RAW)
+			continue;
+		if (pp->type == COUNTER_ITEMS) {
+			if (average.cores.perf_counter[i] > 9999999)
+				sums_need_wide_columns = 1;
+		}
+		average.cores.perf_counter[i] /= topo.allowed_cores;
+	}
+	for (i = 0, pp = sys.perf_pp; pp; i++, pp = pp->next) {
+		if (pp->format == FORMAT_RAW)
+			continue;
+		if (pp->type == COUNTER_ITEMS) {
+			if (average.packages.perf_counter[i] > 9999999)
+				sums_need_wide_columns = 1;
+		}
+		average.packages.perf_counter[i] /= topo.allowed_packages;
 	}
 }
 
@@ -3382,30 +3709,6 @@ static unsigned int read_perf_counter_info_n(const char *const path, const char 
 	return v;
 }
 
-static unsigned int read_msr_type(void)
-{
-	const char *const path = "/sys/bus/event_source/devices/msr/type";
-	const char *const format = "%u";
-
-	return read_perf_counter_info_n(path, format);
-}
-
-static unsigned int read_aperf_config(void)
-{
-	const char *const path = "/sys/bus/event_source/devices/msr/events/aperf";
-	const char *const format = "event=%x";
-
-	return read_perf_counter_info_n(path, format);
-}
-
-static unsigned int read_mperf_config(void)
-{
-	const char *const path = "/sys/bus/event_source/devices/msr/events/mperf";
-	const char *const format = "event=%x";
-
-	return read_perf_counter_info_n(path, format);
-}
-
 static unsigned int read_perf_type(const char *subsys)
 {
 	const char *const path_format = "/sys/bus/event_source/devices/%s/type";
@@ -3459,130 +3762,12 @@ static double read_perf_rapl_scale(const char *subsys, const char *event_name)
 	return scale;
 }
 
-static struct amperf_group_fd open_amperf_fd(int cpu)
-{
-	const unsigned int msr_type = read_msr_type();
-	const unsigned int aperf_config = read_aperf_config();
-	const unsigned int mperf_config = read_mperf_config();
-	struct amperf_group_fd fds = {.aperf = -1, .mperf = -1 };
-
-	fds.aperf = open_perf_counter(cpu, msr_type, aperf_config, -1, PERF_FORMAT_GROUP);
-	fds.mperf = open_perf_counter(cpu, msr_type, mperf_config, fds.aperf, PERF_FORMAT_GROUP);
-
-	return fds;
-}
-
-static int get_amperf_fd(int cpu)
-{
-	assert(fd_amperf_percpu);
-
-	if (fd_amperf_percpu[cpu].aperf)
-		return fd_amperf_percpu[cpu].aperf;
-
-	fd_amperf_percpu[cpu] = open_amperf_fd(cpu);
-
-	return fd_amperf_percpu[cpu].aperf;
-}
-
-/* Read APERF, MPERF and TSC using the perf API. */
-static int read_aperf_mperf_tsc_perf(struct thread_data *t, int cpu)
-{
-	union {
-		struct {
-			unsigned long nr_entries;
-			unsigned long aperf;
-			unsigned long mperf;
-		};
-
-		unsigned long as_array[3];
-	} cnt;
-
-	const int fd_amperf = get_amperf_fd(cpu);
-
-	/*
-	 * Read the TSC with rdtsc, because we want the absolute value and not
-	 * the offset from the start of the counter.
-	 */
-	t->tsc = rdtsc();
-
-	const int n = read(fd_amperf, &cnt.as_array[0], sizeof(cnt.as_array));
-
-	if (n != sizeof(cnt.as_array))
-		return -2;
-
-	t->aperf = cnt.aperf * aperf_mperf_multiplier;
-	t->mperf = cnt.mperf * aperf_mperf_multiplier;
-
-	return 0;
-}
-
-/* Read APERF, MPERF and TSC using the MSR driver and rdtsc instruction. */
-static int read_aperf_mperf_tsc_msr(struct thread_data *t, int cpu)
-{
-	unsigned long long tsc_before, tsc_between, tsc_after, aperf_time, mperf_time;
-	int aperf_mperf_retry_count = 0;
-
-	/*
-	 * The TSC, APERF and MPERF must be read together for
-	 * APERF/MPERF and MPERF/TSC to give accurate results.
-	 *
-	 * Unfortunately, APERF and MPERF are read by
-	 * individual system call, so delays may occur
-	 * between them.  If the time to read them
-	 * varies by a large amount, we re-read them.
-	 */
-
-	/*
-	 * This initial dummy APERF read has been seen to
-	 * reduce jitter in the subsequent reads.
-	 */
-
-	if (get_msr(cpu, MSR_IA32_APERF, &t->aperf))
-		return -3;
-
-retry:
-	t->tsc = rdtsc();	/* re-read close to APERF */
-
-	tsc_before = t->tsc;
-
-	if (get_msr(cpu, MSR_IA32_APERF, &t->aperf))
-		return -3;
-
-	tsc_between = rdtsc();
-
-	if (get_msr(cpu, MSR_IA32_MPERF, &t->mperf))
-		return -4;
-
-	tsc_after = rdtsc();
-
-	aperf_time = tsc_between - tsc_before;
-	mperf_time = tsc_after - tsc_between;
-
-	/*
-	 * If the system call latency to read APERF and MPERF
-	 * differ by more than 2x, then try again.
-	 */
-	if ((aperf_time > (2 * mperf_time)) || (mperf_time > (2 * aperf_time))) {
-		aperf_mperf_retry_count++;
-		if (aperf_mperf_retry_count < 5)
-			goto retry;
-		else
-			warnx("cpu%d jitter %lld %lld", cpu, aperf_time, mperf_time);
-	}
-	aperf_mperf_retry_count = 0;
-
-	t->aperf = t->aperf * aperf_mperf_multiplier;
-	t->mperf = t->mperf * aperf_mperf_multiplier;
-
-	return 0;
-}
-
 size_t rapl_counter_info_count_perf(const struct rapl_counter_info_t *rci)
 {
 	size_t ret = 0;
 
 	for (int i = 0; i < NUM_RAPL_COUNTERS; ++i)
-		if (rci->source[i] == RAPL_SOURCE_PERF)
+		if (rci->source[i] == COUNTER_SOURCE_PERF)
 			++ret;
 
 	return ret;
@@ -3593,7 +3778,7 @@ static size_t cstate_counter_info_count_perf(const struct cstate_counter_info_t 
 	size_t ret = 0;
 
 	for (int i = 0; i < NUM_CSTATE_COUNTERS; ++i)
-		if (cci->source[i] == CSTATE_SOURCE_PERF)
+		if (cci->source[i] == COUNTER_SOURCE_PERF)
 			++ret;
 
 	return ret;
@@ -3634,10 +3819,10 @@ int get_rapl_counters(int cpu, unsigned int domain, struct core_data *c, struct 
 
 	for (unsigned int i = 0, pi = 1; i < NUM_RAPL_COUNTERS; ++i) {
 		switch (rci->source[i]) {
-		case RAPL_SOURCE_NONE:
+		case COUNTER_SOURCE_NONE:
 			break;
 
-		case RAPL_SOURCE_PERF:
+		case COUNTER_SOURCE_PERF:
 			assert(pi < ARRAY_SIZE(perf_data));
 			assert(rci->fd_perf != -1);
 
@@ -3650,7 +3835,7 @@ int get_rapl_counters(int cpu, unsigned int domain, struct core_data *c, struct 
 			++pi;
 			break;
 
-		case RAPL_SOURCE_MSR:
+		case COUNTER_SOURCE_MSR:
 			if (debug)
 				fprintf(stderr, "Reading rapl counter via msr at %u\n", i);
 
@@ -3715,9 +3900,9 @@ int get_cstate_counters(unsigned int cpu, struct thread_data *t, struct core_dat
 	assert(ccstate_counter_info);
 	assert(cpu <= ccstate_counter_info_size);
 
-	memset(perf_data, 0, sizeof(perf_data));
-	memset(perf_data_core, 0, sizeof(perf_data_core));
-	memset(perf_data_pkg, 0, sizeof(perf_data_pkg));
+	ZERO_ARRAY(perf_data);
+	ZERO_ARRAY(perf_data_core);
+	ZERO_ARRAY(perf_data_pkg);
 
 	cci = &ccstate_counter_info[cpu];
 
@@ -3772,10 +3957,10 @@ int get_cstate_counters(unsigned int cpu, struct thread_data *t, struct core_dat
 
 	for (unsigned int i = 0, pi = 0; i < NUM_CSTATE_COUNTERS; ++i) {
 		switch (cci->source[i]) {
-		case CSTATE_SOURCE_NONE:
+		case COUNTER_SOURCE_NONE:
 			break;
 
-		case CSTATE_SOURCE_PERF:
+		case COUNTER_SOURCE_PERF:
 			assert(pi < ARRAY_SIZE(perf_data));
 			assert(cci->fd_perf_core != -1 || cci->fd_perf_pkg != -1);
 
@@ -3788,7 +3973,7 @@ int get_cstate_counters(unsigned int cpu, struct thread_data *t, struct core_dat
 			++pi;
 			break;
 
-		case CSTATE_SOURCE_MSR:
+		case COUNTER_SOURCE_MSR:
 			assert(!no_msr);
 			if (get_msr(cpu, cci->msr[i], &cci->data[i]))
 				return -13 - i;
@@ -3809,7 +3994,7 @@ int get_cstate_counters(unsigned int cpu, struct thread_data *t, struct core_dat
 	 * when invoked for the thread sibling.
 	 */
 #define PERF_COUNTER_WRITE_DATA(out_counter, index) do {	\
-	if (cci->source[index] != CSTATE_SOURCE_NONE)		\
+	if (cci->source[index] != COUNTER_SOURCE_NONE)		\
 		out_counter = cci->data[index];			\
 } while (0)
 
@@ -3829,6 +4014,109 @@ int get_cstate_counters(unsigned int cpu, struct thread_data *t, struct core_dat
 	PERF_COUNTER_WRITE_DATA(p->pc10, PCSTATE_RCI_INDEX_C10_RESIDENCY);
 
 #undef PERF_COUNTER_WRITE_DATA
+
+	return 0;
+}
+
+size_t msr_counter_info_count_perf(const struct msr_counter_info_t *mci)
+{
+	size_t ret = 0;
+
+	for (int i = 0; i < NUM_MSR_COUNTERS; ++i)
+		if (mci->source[i] == COUNTER_SOURCE_PERF)
+			++ret;
+
+	return ret;
+}
+
+int get_smi_aperf_mperf(unsigned int cpu, struct thread_data *t)
+{
+	unsigned long long perf_data[NUM_MSR_COUNTERS + 1];
+
+	struct msr_counter_info_t *mci;
+
+	if (debug)
+		fprintf(stderr, "%s: cpu%d\n", __func__, cpu);
+
+	assert(msr_counter_info);
+	assert(cpu <= msr_counter_info_size);
+
+	mci = &msr_counter_info[cpu];
+
+	ZERO_ARRAY(perf_data);
+	ZERO_ARRAY(mci->data);
+
+	if (mci->fd_perf != -1) {
+		const size_t num_perf_counters = msr_counter_info_count_perf(mci);
+		const ssize_t expected_read_size = (num_perf_counters + 1) * sizeof(unsigned long long);
+		const ssize_t actual_read_size = read(mci->fd_perf, &perf_data[0], sizeof(perf_data));
+
+		if (actual_read_size != expected_read_size)
+			err(-1, "%s: failed to read perf_data (%zu %zu)", __func__, expected_read_size,
+			    actual_read_size);
+	}
+
+	for (unsigned int i = 0, pi = 1; i < NUM_MSR_COUNTERS; ++i) {
+		switch (mci->source[i]) {
+		case COUNTER_SOURCE_NONE:
+			break;
+
+		case COUNTER_SOURCE_PERF:
+			assert(pi < ARRAY_SIZE(perf_data));
+			assert(mci->fd_perf != -1);
+
+			if (debug)
+				fprintf(stderr, "Reading msr counter via perf at %u: %llu\n", i, perf_data[pi]);
+
+			mci->data[i] = perf_data[pi];
+
+			++pi;
+			break;
+
+		case COUNTER_SOURCE_MSR:
+			assert(!no_msr);
+
+			if (get_msr(cpu, mci->msr[i], &mci->data[i]))
+				return -2 - i;
+
+			mci->data[i] &= mci->msr_mask[i];
+
+			if (debug)
+				fprintf(stderr, "Reading msr counter via msr at %u: %llu\n", i, mci->data[i]);
+
+			break;
+		}
+	}
+
+	BUILD_BUG_ON(NUM_MSR_COUNTERS != 3);
+	t->aperf = mci->data[MSR_RCI_INDEX_APERF];
+	t->mperf = mci->data[MSR_RCI_INDEX_MPERF];
+	t->smi_count = mci->data[MSR_RCI_INDEX_SMI];
+
+	return 0;
+}
+
+int perf_counter_info_read_values(struct perf_counter_info *pp, int cpu, unsigned long long *out, size_t out_size)
+{
+	unsigned int domain;
+	unsigned long long value;
+	int fd_counter;
+
+	for (size_t i = 0; pp; ++i, pp = pp->next) {
+		domain = cpu_to_domain(pp, cpu);
+		assert(domain < pp->num_domains);
+
+		fd_counter = pp->fd_perf_per_domain[domain];
+
+		if (fd_counter == -1)
+			continue;
+
+		if (read(fd_counter, &value, sizeof(value)) != sizeof(value))
+			return 1;
+
+		assert(i < out_size);
+		out[i] = value * pp->scale;
+	}
 
 	return 0;
 }
@@ -3858,24 +4146,7 @@ int get_counters(struct thread_data *t, struct core_data *c, struct pkg_data *p)
 
 	t->tsc = rdtsc();	/* we are running on local CPU of interest */
 
-	if (DO_BIC(BIC_Avg_MHz) || DO_BIC(BIC_Busy) || DO_BIC(BIC_Bzy_MHz) || DO_BIC(BIC_IPC)
-	    || soft_c1_residency_display(BIC_Avg_MHz)) {
-		int status = -1;
-
-		assert(!no_perf || !no_msr);
-
-		switch (amperf_source) {
-		case AMPERF_SOURCE_PERF:
-			status = read_aperf_mperf_tsc_perf(t, cpu);
-			break;
-		case AMPERF_SOURCE_MSR:
-			status = read_aperf_mperf_tsc_msr(t, cpu);
-			break;
-		}
-
-		if (status != 0)
-			return status;
-	}
+	get_smi_aperf_mperf(cpu, t);
 
 	if (DO_BIC(BIC_IPC))
 		if (read(get_instr_count_fd(cpu), &t->instr_count, sizeof(long long)) != sizeof(long long))
@@ -3883,11 +4154,6 @@ int get_counters(struct thread_data *t, struct core_data *c, struct pkg_data *p)
 
 	if (DO_BIC(BIC_IRQ))
 		t->irq_count = irqs_per_cpu[cpu];
-	if (DO_BIC(BIC_SMI)) {
-		if (get_msr(cpu, MSR_SMI_COUNT, &msr))
-			return -5;
-		t->smi_count = msr & 0xFFFFFFFF;
-	}
 
 	get_cstate_counters(cpu, t, c, p);
 
@@ -3895,6 +4161,9 @@ int get_counters(struct thread_data *t, struct core_data *c, struct pkg_data *p)
 		if (get_mp(cpu, mp, &t->counter[i], mp->sp->path))
 			return -10;
 	}
+
+	if (perf_counter_info_read_values(sys.perf_tp, cpu, t->perf_counter, MAX_ADDED_THREAD_COUNTERS))
+		return -10;
 
 	/* collect core counters only for 1st thread in core */
 	if (!is_cpu_first_thread_in_core(t, c, p))
@@ -3933,6 +4202,9 @@ int get_counters(struct thread_data *t, struct core_data *c, struct pkg_data *p)
 		if (get_mp(cpu, mp, &c->counter[i], mp->sp->path))
 			return -10;
 	}
+
+	if (perf_counter_info_read_values(sys.perf_cp, cpu, c->perf_counter, MAX_ADDED_CORE_COUNTERS))
+		return -10;
 
 	/* collect package counters only for 1st core in package */
 	if (!is_cpu_first_core_in_package(t, c, p))
@@ -4006,6 +4278,10 @@ int get_counters(struct thread_data *t, struct core_data *c, struct pkg_data *p)
 		if (get_mp(cpu, mp, &p->counter[i], path))
 			return -10;
 	}
+
+	if (perf_counter_info_read_values(sys.perf_pp, cpu, p->perf_counter, MAX_ADDED_PACKAGE_COUNTERS))
+		return -10;
+
 done:
 	gettimeofday(&t->tv_end, (struct timezone *)NULL);
 
@@ -4469,25 +4745,6 @@ void free_fd_percpu(void)
 	fd_percpu = NULL;
 }
 
-void free_fd_amperf_percpu(void)
-{
-	int i;
-
-	if (!fd_amperf_percpu)
-		return;
-
-	for (i = 0; i < topo.max_cpu_num + 1; ++i) {
-		if (fd_amperf_percpu[i].mperf != 0)
-			close(fd_amperf_percpu[i].mperf);
-
-		if (fd_amperf_percpu[i].aperf != 0)
-			close(fd_amperf_percpu[i].aperf);
-	}
-
-	free(fd_amperf_percpu);
-	fd_amperf_percpu = NULL;
-}
-
 void free_fd_instr_count_percpu(void)
 {
 	if (!fd_instr_count_percpu)
@@ -4522,6 +4779,21 @@ void free_fd_cstate(void)
 	ccstate_counter_info_size = 0;
 }
 
+void free_fd_msr(void)
+{
+	if (!msr_counter_info)
+		return;
+
+	for (int cpu = 0; cpu < topo.max_cpu_num; ++cpu) {
+		if (msr_counter_info[cpu].fd_perf != -1)
+			close(msr_counter_info[cpu].fd_perf);
+	}
+
+	free(msr_counter_info);
+	msr_counter_info = NULL;
+	msr_counter_info_size = 0;
+}
+
 void free_fd_rapl_percpu(void)
 {
 	if (!rapl_counter_info_perdomain)
@@ -4537,6 +4809,36 @@ void free_fd_rapl_percpu(void)
 	free(rapl_counter_info_perdomain);
 	rapl_counter_info_perdomain = NULL;
 	rapl_counter_info_perdomain_size = 0;
+}
+
+void free_fd_added_perf_counters_(struct perf_counter_info *pp)
+{
+	if (!pp)
+		return;
+
+	if (!pp->fd_perf_per_domain)
+		return;
+
+	while (pp) {
+		for (size_t domain = 0; domain < pp->num_domains; ++domain) {
+			if (pp->fd_perf_per_domain[domain] != -1) {
+				close(pp->fd_perf_per_domain[domain]);
+				pp->fd_perf_per_domain[domain] = -1;
+			}
+		}
+
+		free(pp->fd_perf_per_domain);
+		pp->fd_perf_per_domain = NULL;
+
+		pp = pp->next;
+	}
+}
+
+void free_fd_added_perf_counters(void)
+{
+	free_fd_added_perf_counters_(sys.perf_tp);
+	free_fd_added_perf_counters_(sys.perf_cp);
+	free_fd_added_perf_counters_(sys.perf_pp);
 }
 
 void free_all_buffers(void)
@@ -4581,9 +4883,10 @@ void free_all_buffers(void)
 
 	free_fd_percpu();
 	free_fd_instr_count_percpu();
-	free_fd_amperf_percpu();
+	free_fd_msr();
 	free_fd_rapl_percpu();
 	free_fd_cstate();
+	free_fd_added_perf_counters();
 
 	free(irq_column_2_cpu);
 	free(irqs_per_cpu);
@@ -4918,16 +5221,20 @@ static void update_effective_set(bool startup)
 }
 
 void linux_perf_init(void);
+void msr_perf_init(void);
 void rapl_perf_init(void);
 void cstate_perf_init(void);
+void added_perf_counters_init(void);
 
 void re_initialize(void)
 {
 	free_all_buffers();
 	setup_all_buffers(false);
 	linux_perf_init();
+	msr_perf_init();
 	rapl_perf_init();
 	cstate_perf_init();
+	added_perf_counters_init();
 	fprintf(outf, "turbostat: re-initialized with num_cpus %d, allowed_cpus %d\n", topo.num_cpus,
 		topo.allowed_cpus);
 }
@@ -6779,15 +7086,6 @@ static int has_instr_count_access(void)
 	return has_access;
 }
 
-bool is_aperf_access_required(void)
-{
-	return BIC_IS_ENABLED(BIC_Avg_MHz)
-	    || BIC_IS_ENABLED(BIC_Busy)
-	    || BIC_IS_ENABLED(BIC_Bzy_MHz)
-	    || BIC_IS_ENABLED(BIC_IPC)
-	    || BIC_IS_ENABLED(BIC_CPU_c1);
-}
-
 int add_rapl_perf_counter_(int cpu, struct rapl_counter_info_t *rci, const struct rapl_counter_arch_info *cai,
 			   double *scale_, enum rapl_unit *unit_)
 {
@@ -6846,14 +7144,6 @@ void linux_perf_init(void)
 		if (fd_instr_count_percpu == NULL)
 			err(-1, "calloc fd_instr_count_percpu");
 	}
-
-	const bool aperf_required = is_aperf_access_required();
-
-	if (aperf_required && has_aperf && amperf_source == AMPERF_SOURCE_PERF) {
-		fd_amperf_percpu = calloc(topo.max_cpu_num + 1, sizeof(*fd_amperf_percpu));
-		if (fd_amperf_percpu == NULL)
-			err(-1, "calloc fd_amperf_percpu");
-	}
 }
 
 void rapl_perf_init(void)
@@ -6875,7 +7165,7 @@ void rapl_perf_init(void)
 		rci->fd_perf = -1;
 		for (size_t i = 0; i < NUM_RAPL_COUNTERS; ++i) {
 			rci->data[i] = 0;
-			rci->source[i] = RAPL_SOURCE_NONE;
+			rci->source[i] = COUNTER_SOURCE_NONE;
 		}
 	}
 
@@ -6917,14 +7207,14 @@ void rapl_perf_init(void)
 				/* Use perf API for this counter */
 				if (!no_perf && cai->perf_name
 				    && add_rapl_perf_counter(cpu, rci, cai, &scale, &unit) != -1) {
-					rci->source[cai->rci_index] = RAPL_SOURCE_PERF;
+					rci->source[cai->rci_index] = COUNTER_SOURCE_PERF;
 					rci->scale[cai->rci_index] = scale * cai->compat_scale;
 					rci->unit[cai->rci_index] = unit;
 					rci->flags[cai->rci_index] = cai->flags;
 
 					/* Use MSR for this counter */
 				} else if (!no_msr && cai->msr && probe_msr(cpu, cai->msr) == 0) {
-					rci->source[cai->rci_index] = RAPL_SOURCE_MSR;
+					rci->source[cai->rci_index] = COUNTER_SOURCE_MSR;
 					rci->msr[cai->rci_index] = cai->msr;
 					rci->msr_mask[cai->rci_index] = cai->msr_mask;
 					rci->msr_shift[cai->rci_index] = cai->msr_shift;
@@ -6934,7 +7224,7 @@ void rapl_perf_init(void)
 				}
 			}
 
-			if (rci->source[cai->rci_index] != RAPL_SOURCE_NONE)
+			if (rci->source[cai->rci_index] != COUNTER_SOURCE_NONE)
 				has_counter = 1;
 		}
 
@@ -6946,75 +7236,11 @@ void rapl_perf_init(void)
 	free(domain_visited);
 }
 
-static int has_amperf_access_via_msr(void)
-{
-	if (no_msr)
-		return 0;
-
-	if (probe_msr(base_cpu, MSR_IA32_APERF))
-		return 0;
-
-	if (probe_msr(base_cpu, MSR_IA32_MPERF))
-		return 0;
-
-	return 1;
-}
-
-static int has_amperf_access_via_perf(void)
-{
-	struct amperf_group_fd fds;
-
-	/*
-	 * Cache the last result, so we don't warn the user multiple times
-	 *
-	 * Negative means cached, no access
-	 * Zero means not cached
-	 * Positive means cached, has access
-	 */
-	static int has_access_cached;
-
-	if (no_perf)
-		return 0;
-
-	if (has_access_cached != 0)
-		return has_access_cached > 0;
-
-	fds = open_amperf_fd(base_cpu);
-	has_access_cached = (fds.aperf != -1) && (fds.mperf != -1);
-
-	if (fds.aperf == -1)
-		warnx("Failed to access %s. Some of the counters may not be available\n"
-		      "\tRun as root to enable them or use %s to disable the access explicitly",
-		      "APERF perf counter", "--no-perf");
-	else
-		close(fds.aperf);
-
-	if (fds.mperf == -1)
-		warnx("Failed to access %s. Some of the counters may not be available\n"
-		      "\tRun as root to enable them or use %s to disable the access explicitly",
-		      "MPERF perf counter", "--no-perf");
-	else
-		close(fds.mperf);
-
-	if (has_access_cached == 0)
-		has_access_cached = -1;
-
-	return has_access_cached > 0;
-}
-
-/* Check if we can access APERF and MPERF */
+/* Assumes msr_counter_info is populated */
 static int has_amperf_access(void)
 {
-	if (!is_aperf_access_required())
-		return 0;
-
-	if (!no_msr && has_amperf_access_via_msr())
-		return 1;
-
-	if (!no_perf && has_amperf_access_via_perf())
-		return 1;
-
-	return 0;
+	return msr_counter_arch_infos[MSR_ARCH_INFO_APERF_INDEX].present &&
+	    msr_counter_arch_infos[MSR_ARCH_INFO_MPERF_INDEX].present;
 }
 
 int *get_cstate_perf_group_fd(struct cstate_counter_info_t *cci, const char *group_name)
@@ -7061,6 +7287,114 @@ int add_cstate_perf_counter(int cpu, struct cstate_counter_info_t *cci, const st
 		fprintf(stderr, "%s: %d (cpu: %d)\n", __func__, ret, cpu);
 
 	return ret;
+}
+
+int add_msr_perf_counter_(int cpu, struct msr_counter_info_t *cci, const struct msr_counter_arch_info *cai)
+{
+	if (no_perf)
+		return -1;
+
+	const unsigned int type = read_perf_type(cai->perf_subsys);
+	const unsigned int config = read_rapl_config(cai->perf_subsys, cai->perf_name);
+
+	const int fd_counter = open_perf_counter(cpu, type, config, cci->fd_perf, PERF_FORMAT_GROUP);
+
+	if (fd_counter == -1)
+		return -1;
+
+	/* If it's the first counter opened, make it a group descriptor */
+	if (cci->fd_perf == -1)
+		cci->fd_perf = fd_counter;
+
+	return fd_counter;
+}
+
+int add_msr_perf_counter(int cpu, struct msr_counter_info_t *cci, const struct msr_counter_arch_info *cai)
+{
+	int ret = add_msr_perf_counter_(cpu, cci, cai);
+
+	if (debug)
+		fprintf(stderr, "%s: %s/%s: %d (cpu: %d)\n", __func__, cai->perf_subsys, cai->perf_name, ret, cpu);
+
+	return ret;
+}
+
+void msr_perf_init_(void)
+{
+	const int mci_num = topo.max_cpu_num + 1;
+
+	msr_counter_info = calloc(mci_num, sizeof(*msr_counter_info));
+	if (!msr_counter_info)
+		err(1, "calloc msr_counter_info");
+	msr_counter_info_size = mci_num;
+
+	for (int cpu = 0; cpu < mci_num; ++cpu)
+		msr_counter_info[cpu].fd_perf = -1;
+
+	for (int cidx = 0; cidx < NUM_MSR_COUNTERS; ++cidx) {
+
+		struct msr_counter_arch_info *cai = &msr_counter_arch_infos[cidx];
+
+		cai->present = false;
+
+		for (int cpu = 0; cpu < mci_num; ++cpu) {
+
+			struct msr_counter_info_t *const cci = &msr_counter_info[cpu];
+
+			if (cpu_is_not_allowed(cpu))
+				continue;
+
+			if (cai->needed) {
+				/* Use perf API for this counter */
+				if (!no_perf && cai->perf_name && add_msr_perf_counter(cpu, cci, cai) != -1) {
+					cci->source[cai->rci_index] = COUNTER_SOURCE_PERF;
+					cai->present = true;
+
+					/* User MSR for this counter */
+				} else if (!no_msr && cai->msr && probe_msr(cpu, cai->msr) == 0) {
+					cci->source[cai->rci_index] = COUNTER_SOURCE_MSR;
+					cci->msr[cai->rci_index] = cai->msr;
+					cci->msr_mask[cai->rci_index] = cai->msr_mask;
+					cai->present = true;
+				}
+			}
+		}
+	}
+}
+
+/* Initialize data for reading perf counters from the MSR group. */
+void msr_perf_init(void)
+{
+	bool need_amperf = false, need_smi = false;
+	const bool need_soft_c1 = (!platform->has_msr_core_c1_res) && (platform->supported_cstates & CC1);
+
+	need_amperf = BIC_IS_ENABLED(BIC_Avg_MHz) || BIC_IS_ENABLED(BIC_Busy) || BIC_IS_ENABLED(BIC_Bzy_MHz)
+	    || BIC_IS_ENABLED(BIC_IPC) || need_soft_c1;
+
+	if (BIC_IS_ENABLED(BIC_SMI))
+		need_smi = true;
+
+	/* Enable needed counters */
+	msr_counter_arch_infos[MSR_ARCH_INFO_APERF_INDEX].needed = need_amperf;
+	msr_counter_arch_infos[MSR_ARCH_INFO_MPERF_INDEX].needed = need_amperf;
+	msr_counter_arch_infos[MSR_ARCH_INFO_SMI_INDEX].needed = need_smi;
+
+	msr_perf_init_();
+
+	const bool has_amperf = has_amperf_access();
+	const bool has_smi = msr_counter_arch_infos[MSR_ARCH_INFO_SMI_INDEX].present;
+
+	has_aperf_access = has_amperf;
+
+	if (has_amperf) {
+		BIC_PRESENT(BIC_Avg_MHz);
+		BIC_PRESENT(BIC_Busy);
+		BIC_PRESENT(BIC_Bzy_MHz);
+		BIC_PRESENT(BIC_SMI);
+	}
+
+	if (has_smi)
+		BIC_PRESENT(BIC_SMI);
 }
 
 void cstate_perf_init_(bool soft_c1)
@@ -7127,17 +7461,17 @@ void cstate_perf_init_(bool soft_c1)
 				/* Use perf API for this counter */
 				if (!no_perf && cai->perf_name && add_cstate_perf_counter(cpu, cci, cai) != -1) {
 
-					cci->source[cai->rci_index] = CSTATE_SOURCE_PERF;
+					cci->source[cai->rci_index] = COUNTER_SOURCE_PERF;
 
 					/* User MSR for this counter */
 				} else if (!no_msr && cai->msr && pkg_cstate_limit >= cai->pkg_cstate_limit
 					   && probe_msr(cpu, cai->msr) == 0) {
-					cci->source[cai->rci_index] = CSTATE_SOURCE_MSR;
+					cci->source[cai->rci_index] = COUNTER_SOURCE_MSR;
 					cci->msr[cai->rci_index] = cai->msr;
 				}
 			}
 
-			if (cci->source[cai->rci_index] != CSTATE_SOURCE_NONE) {
+			if (cci->source[cai->rci_index] != COUNTER_SOURCE_NONE) {
 				has_counter = true;
 				cores_visited[core_id] = true;
 				pkg_visited[pkg_id] = true;
@@ -7320,12 +7654,6 @@ void process_cpuid()
 
 	__cpuid(0x6, eax, ebx, ecx, edx);
 	has_aperf = ecx & (1 << 0);
-	if (has_aperf && has_amperf_access()) {
-		BIC_PRESENT(BIC_Avg_MHz);
-		BIC_PRESENT(BIC_Busy);
-		BIC_PRESENT(BIC_Bzy_MHz);
-		BIC_PRESENT(BIC_IPC);
-	}
 	do_dts = eax & (1 << 0);
 	if (do_dts)
 		BIC_PRESENT(BIC_CoreTmp);
@@ -7441,6 +7769,11 @@ static void counter_info_init(void)
 
 		if (platform->has_msr_atom_pkg_c6_residency && cai->msr == MSR_PKG_C6_RESIDENCY)
 			cai->msr = MSR_ATOM_PKG_C6_RESIDENCY;
+	}
+
+	for (int i = 0; i < NUM_MSR_COUNTERS; ++i) {
+		msr_counter_arch_infos[i].present = false;
+		msr_counter_arch_infos[i].needed = false;
 	}
 }
 
@@ -7817,21 +8150,6 @@ void set_base_cpu(void)
 	err(-ENODEV, "No valid cpus found");
 }
 
-static void set_amperf_source(void)
-{
-	amperf_source = AMPERF_SOURCE_PERF;
-
-	const bool aperf_required = is_aperf_access_required();
-
-	if (no_perf || !aperf_required || !has_amperf_access_via_perf())
-		amperf_source = AMPERF_SOURCE_MSR;
-
-	if (quiet || !debug)
-		return;
-
-	fprintf(outf, "aperf/mperf source preference: %s\n", amperf_source == AMPERF_SOURCE_MSR ? "msr" : "perf");
-}
-
 bool has_added_counters(void)
 {
 	/*
@@ -7842,54 +8160,8 @@ bool has_added_counters(void)
 	return sys.added_core_counters | sys.added_thread_counters | sys.added_package_counters;
 }
 
-bool is_msr_access_required(void)
-{
-	if (no_msr)
-		return false;
-
-	if (has_added_counters())
-		return true;
-
-	return BIC_IS_ENABLED(BIC_SMI)
-	    || BIC_IS_ENABLED(BIC_CPU_c1)
-	    || BIC_IS_ENABLED(BIC_CPU_c3)
-	    || BIC_IS_ENABLED(BIC_CPU_c6)
-	    || BIC_IS_ENABLED(BIC_CPU_c7)
-	    || BIC_IS_ENABLED(BIC_Mod_c6)
-	    || BIC_IS_ENABLED(BIC_CoreTmp)
-	    || BIC_IS_ENABLED(BIC_Totl_c0)
-	    || BIC_IS_ENABLED(BIC_Any_c0)
-	    || BIC_IS_ENABLED(BIC_GFX_c0)
-	    || BIC_IS_ENABLED(BIC_CPUGFX)
-	    || BIC_IS_ENABLED(BIC_Pkgpc3)
-	    || BIC_IS_ENABLED(BIC_Pkgpc6)
-	    || BIC_IS_ENABLED(BIC_Pkgpc2)
-	    || BIC_IS_ENABLED(BIC_Pkgpc7)
-	    || BIC_IS_ENABLED(BIC_Pkgpc8)
-	    || BIC_IS_ENABLED(BIC_Pkgpc9)
-	    || BIC_IS_ENABLED(BIC_Pkgpc10)
-	    /* TODO: Multiplex access with perf */
-	    || BIC_IS_ENABLED(BIC_CorWatt)
-	    || BIC_IS_ENABLED(BIC_Cor_J)
-	    || BIC_IS_ENABLED(BIC_PkgWatt)
-	    || BIC_IS_ENABLED(BIC_CorWatt)
-	    || BIC_IS_ENABLED(BIC_GFXWatt)
-	    || BIC_IS_ENABLED(BIC_RAMWatt)
-	    || BIC_IS_ENABLED(BIC_Pkg_J)
-	    || BIC_IS_ENABLED(BIC_Cor_J)
-	    || BIC_IS_ENABLED(BIC_GFX_J)
-	    || BIC_IS_ENABLED(BIC_RAM_J)
-	    || BIC_IS_ENABLED(BIC_PKG__)
-	    || BIC_IS_ENABLED(BIC_RAM__)
-	    || BIC_IS_ENABLED(BIC_PkgTmp)
-	    || (is_aperf_access_required() && !has_amperf_access_via_perf());
-}
-
 void check_msr_access(void)
 {
-	if (!is_msr_access_required())
-		no_msr = 1;
-
 	check_dev_msr();
 	check_msr_permission();
 
@@ -7899,19 +8171,119 @@ void check_msr_access(void)
 
 void check_perf_access(void)
 {
-	const bool intrcount_required = BIC_IS_ENABLED(BIC_IPC);
-
-	if (no_perf || !intrcount_required || !has_instr_count_access())
+	if (no_perf || !BIC_IS_ENABLED(BIC_IPC) || !has_instr_count_access())
 		bic_enabled &= ~BIC_IPC;
+}
 
-	const bool aperf_required = is_aperf_access_required();
+int added_perf_counters_init_(struct perf_counter_info *pinfo)
+{
+	size_t num_domains = 0;
+	unsigned int next_domain;
+	bool *domain_visited;
+	unsigned int perf_type, perf_config;
+	double perf_scale;
+	int fd_perf;
 
-	if (!aperf_required || !has_amperf_access()) {
-		bic_enabled &= ~BIC_Avg_MHz;
-		bic_enabled &= ~BIC_Busy;
-		bic_enabled &= ~BIC_Bzy_MHz;
-		bic_enabled &= ~BIC_IPC;
+	if (!pinfo)
+		return 0;
+
+	const size_t max_num_domains = MAX(topo.max_cpu_num + 1, MAX(topo.max_core_id + 1, topo.max_package_id + 1));
+
+	domain_visited = calloc(max_num_domains, sizeof(*domain_visited));
+
+	while (pinfo) {
+		switch (pinfo->scope) {
+		case SCOPE_CPU:
+			num_domains = topo.max_cpu_num + 1;
+			break;
+
+		case SCOPE_CORE:
+			num_domains = topo.max_core_id + 1;
+			break;
+
+		case SCOPE_PACKAGE:
+			num_domains = topo.max_package_id + 1;
+			break;
+		}
+
+		/* Allocate buffer for file descriptor for each domain. */
+		pinfo->fd_perf_per_domain = calloc(num_domains, sizeof(*pinfo->fd_perf_per_domain));
+		if (!pinfo->fd_perf_per_domain)
+			errx(1, "%s: alloc %s", __func__, "fd_perf_per_domain");
+
+		for (size_t i = 0; i < num_domains; ++i)
+			pinfo->fd_perf_per_domain[i] = -1;
+
+		pinfo->num_domains = num_domains;
+		pinfo->scale = 1.0;
+
+		memset(domain_visited, 0, max_num_domains * sizeof(*domain_visited));
+
+		for (int cpu = 0; cpu < topo.max_cpu_num + 1; ++cpu) {
+
+			next_domain = cpu_to_domain(pinfo, cpu);
+
+			assert(next_domain < num_domains);
+
+			if (cpu_is_not_allowed(cpu))
+				continue;
+
+			if (domain_visited[next_domain])
+				continue;
+
+			perf_type = read_perf_type(pinfo->device);
+			if (perf_type == (unsigned int)-1) {
+				warnx("%s: perf/%s/%s: failed to read %s",
+				      __func__, pinfo->device, pinfo->event, "type");
+				continue;
+			}
+
+			perf_config = read_rapl_config(pinfo->device, pinfo->event);
+			if (perf_config == (unsigned int)-1) {
+				warnx("%s: perf/%s/%s: failed to read %s",
+				      __func__, pinfo->device, pinfo->event, "config");
+				continue;
+			}
+
+			/* Scale is not required, some counters just don't have it. */
+			perf_scale = read_perf_rapl_scale(pinfo->device, pinfo->event);
+			if (perf_scale == 0.0)
+				perf_scale = 1.0;
+
+			fd_perf = open_perf_counter(cpu, perf_type, perf_config, -1, 0);
+			if (fd_perf == -1) {
+				warnx("%s: perf/%s/%s: failed to open counter on cpu%d",
+				      __func__, pinfo->device, pinfo->event, cpu);
+				continue;
+			}
+
+			domain_visited[next_domain] = 1;
+			pinfo->fd_perf_per_domain[next_domain] = fd_perf;
+			pinfo->scale = perf_scale;
+
+			if (debug)
+				printf("Add perf/%s/%s cpu%d: %d\n",
+				       pinfo->device, pinfo->event, cpu, pinfo->fd_perf_per_domain[next_domain]);
+		}
+
+		pinfo = pinfo->next;
 	}
+
+	free(domain_visited);
+
+	return 0;
+}
+
+void added_perf_counters_init(void)
+{
+	if (added_perf_counters_init_(sys.perf_tp))
+		errx(1, "%s: %s", __func__, "thread");
+
+	if (added_perf_counters_init_(sys.perf_cp))
+		errx(1, "%s: %s", __func__, "core");
+
+	if (added_perf_counters_init_(sys.perf_pp))
+		errx(1, "%s: %s", __func__, "package");
 }
 
 void turbostat_init()
@@ -7923,16 +8295,17 @@ void turbostat_init()
 	process_cpuid();
 	counter_info_init();
 	probe_pm_features();
-	set_amperf_source();
+	msr_perf_init();
 	linux_perf_init();
 	rapl_perf_init();
 	cstate_perf_init();
+	added_perf_counters_init();
 
 	for_all_cpus(get_cpu_type, ODD_COUNTERS);
 	for_all_cpus(get_cpu_type, EVEN_COUNTERS);
 
-	if (DO_BIC(BIC_IPC))
-		(void)get_instr_count_fd(base_cpu);
+	if (BIC_IS_ENABLED(BIC_IPC) && has_aperf_access && get_instr_count_fd(base_cpu) != -1)
+		BIC_PRESENT(BIC_IPC);
 
 	/*
 	 * If TSC tweak is needed, but couldn't get it,
@@ -8116,6 +8489,7 @@ int add_counter(unsigned int msr_num, char *path, char *name,
 		msrp = calloc(1, sizeof(struct msr_counter));
 		if (msrp == NULL)
 			err(-1, "calloc msr_counter");
+
 		msrp->msr_num = msr_num;
 		strncpy(msrp->name, name, NAME_BYTES - 1);
 		msrp->width = width;
@@ -8156,11 +8530,106 @@ int add_counter(unsigned int msr_num, char *path, char *name,
 	return 0;
 }
 
+/*
+ * Initialize the fields used for identifying and opening the counter.
+ *
+ * Defer the initialization of any runtime buffers for actually reading
+ * the counters for when we initialize all perf counters, so we can later
+ * easily call re_initialize().
+ */
+struct perf_counter_info *make_perf_counter_info(const char *perf_device,
+						 const char *perf_event,
+						 const char *name,
+						 unsigned int width,
+						 enum counter_scope scope,
+						 enum counter_type type, enum counter_format format)
+{
+	struct perf_counter_info *pinfo;
+
+	pinfo = calloc(1, sizeof(*pinfo));
+	if (!pinfo)
+		errx(1, "%s: Failed to allocate %s/%s\n", __func__, perf_device, perf_event);
+
+	strncpy(pinfo->device, perf_device, ARRAY_SIZE(pinfo->device) - 1);
+	strncpy(pinfo->event, perf_event, ARRAY_SIZE(pinfo->event) - 1);
+
+	strncpy(pinfo->name, name, ARRAY_SIZE(pinfo->name) - 1);
+	pinfo->width = width;
+	pinfo->scope = scope;
+	pinfo->type = type;
+	pinfo->format = format;
+
+	return pinfo;
+}
+
+int add_perf_counter(const char *perf_device, const char *perf_event, const char *name_buffer, unsigned int width,
+		     enum counter_scope scope, enum counter_type type, enum counter_format format)
+{
+	struct perf_counter_info *pinfo;
+
+	switch (scope) {
+	case SCOPE_CPU:
+		if (sys.added_thread_perf_counters >= MAX_ADDED_THREAD_COUNTERS) {
+			warnx("ignoring thread counter perf/%s/%s", perf_device, perf_event);
+			return -1;
+		}
+		break;
+
+	case SCOPE_CORE:
+		if (sys.added_core_perf_counters >= MAX_ADDED_CORE_COUNTERS) {
+			warnx("ignoring core counter perf/%s/%s", perf_device, perf_event);
+			return -1;
+		}
+		break;
+
+	case SCOPE_PACKAGE:
+		if (sys.added_package_perf_counters >= MAX_ADDED_PACKAGE_COUNTERS) {
+			warnx("ignoring package counter perf/%s/%s", perf_device, perf_event);
+			return -1;
+		}
+		break;
+	}
+
+	pinfo = make_perf_counter_info(perf_device, perf_event, name_buffer, width, scope, type, format);
+
+	if (!pinfo)
+		return -1;
+
+	switch (scope) {
+	case SCOPE_CPU:
+		pinfo->next = sys.perf_tp;
+		sys.perf_tp = pinfo;
+		++sys.added_thread_perf_counters;
+		break;
+
+	case SCOPE_CORE:
+		pinfo->next = sys.perf_cp;
+		sys.perf_cp = pinfo;
+		++sys.added_core_perf_counters;
+		break;
+
+	case SCOPE_PACKAGE:
+		pinfo->next = sys.perf_pp;
+		sys.perf_pp = pinfo;
+		++sys.added_package_perf_counters;
+		break;
+	}
+
+	// FIXME: we might not have debug here yet
+	if (debug)
+		printf("%s: %s/%s, name: %s, scope%d\n",
+		       __func__, pinfo->device, pinfo->event, pinfo->name, pinfo->scope);
+
+	return 0;
+}
+
 void parse_add_command(char *add_command)
 {
 	int msr_num = 0;
 	char *path = NULL;
-	char name_buffer[NAME_BYTES] = "";
+	char perf_device[PERF_DEV_NAME_BYTES] = "";
+	char perf_event[PERF_EVT_NAME_BYTES] = "";
+	char name_buffer[PERF_NAME_BYTES] = "";
 	int width = 64;
 	int fail = 0;
 	enum counter_scope scope = SCOPE_CPU;
@@ -8173,6 +8642,11 @@ void parse_add_command(char *add_command)
 			goto next;
 
 		if (sscanf(add_command, "msr%d", &msr_num) == 1)
+			goto next;
+
+		BUILD_BUG_ON(ARRAY_SIZE(perf_device) <= 31);
+		BUILD_BUG_ON(ARRAY_SIZE(perf_event) <= 31);
+		if (sscanf(add_command, "perf/%31[^/]/%31[^,]", &perf_device[0], &perf_event[0]) == 2)
 			goto next;
 
 		if (*add_command == '/') {
@@ -8222,7 +8696,8 @@ void parse_add_command(char *add_command)
 			goto next;
 		}
 
-		if (sscanf(add_command, "%18s,%*s", name_buffer) == 1) {	/* 18 < NAME_BYTES */
+		BUILD_BUG_ON(ARRAY_SIZE(name_buffer) <= 18);
+		if (sscanf(add_command, "%18s,%*s", name_buffer) == 1) {
 			char *eos;
 
 			eos = strchr(name_buffer, ',');
@@ -8239,21 +8714,33 @@ next:
 		}
 
 	}
-	if ((msr_num == 0) && (path == NULL)) {
-		fprintf(stderr, "--add: (msrDDD | msr0xXXX | /path_to_counter ) required\n");
+	if ((msr_num == 0) && (path == NULL) && (perf_device[0] == '\0' || perf_event[0] == '\0')) {
+		fprintf(stderr, "--add: (msrDDD | msr0xXXX | /path_to_counter | perf/device/event ) required\n");
 		fail++;
 	}
+
+	/* Test for non-empty perf_device and perf_event */
+	const bool is_perf_counter = perf_device[0] && perf_event[0];
 
 	/* generate default column header */
 	if (*name_buffer == '\0') {
-		if (width == 32)
-			sprintf(name_buffer, "M0x%x%s", msr_num, format == FORMAT_PERCENT ? "%" : "");
-		else
-			sprintf(name_buffer, "M0X%x%s", msr_num, format == FORMAT_PERCENT ? "%" : "");
+		if (is_perf_counter) {
+			snprintf(name_buffer, ARRAY_SIZE(name_buffer), "perf/%s", perf_event);
+		} else {
+			if (width == 32)
+				sprintf(name_buffer, "M0x%x%s", msr_num, format == FORMAT_PERCENT ? "%" : "");
+			else
+				sprintf(name_buffer, "M0X%x%s", msr_num, format == FORMAT_PERCENT ? "%" : "");
+		}
 	}
 
-	if (add_counter(msr_num, path, name_buffer, width, scope, type, format, 0, 0))
-		fail++;
+	if (is_perf_counter) {
+		if (add_perf_counter(perf_device, perf_event, name_buffer, width, scope, type, format))
+			fail++;
+	} else {
+		if (add_counter(msr_num, path, name_buffer, width, scope, type, format, 0, 0))
+			fail++;
+	}
 
 	if (fail) {
 		help();

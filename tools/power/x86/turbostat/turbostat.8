@@ -28,10 +28,13 @@ name as necessary to disambiguate it from others is necessary.  Note that option
 .PP
 \fB--add attributes\fP add column with counter having specified 'attributes'.  The 'location' attribute is required, all others are optional.
 .nf
-	location: {\fBmsrDDD\fP | \fBmsr0xXXX\fP | \fB/sys/path...\fP}
+	location: {\fBmsrDDD\fP | \fBmsr0xXXX\fP | \fB/sys/path...\fP | \fBperf/<device>/<event>\fP}
 		msrDDD is a decimal offset, eg. msr16
 		msr0xXXX is a hex offset, eg. msr0x10
 		/sys/path... is an absolute path to a sysfs attribute
+		<device> is a perf device from /sys/bus/event_source/devices/<device> eg. cstate_core
+		<event> is a perf event for given device from /sys/bus/event_source/devices/<device>/events/<event> eg. c1-residency
+			perf/cstate_core/c1-residency would then use /sys/bus/event_source/devices/cstate_core/events/c1-residency
 
 	scope: {\fBcpu\fP | \fBcore\fP | \fBpackage\fP}
 		sample and print the counter for every cpu, core, or package.
@@ -67,10 +70,10 @@ The column name "all" can be used to enable all disabled-by-default built-in cou
 .PP
 \fB--quiet\fP Do not decode and print the system configuration header information.
 .PP
-+\fB--no-msr\fP Disable all the uses of the MSR driver.
-+.PP
-+\fB--no-perf\fP Disable all the uses of the perf API.
-+.PP
+\fB--no-msr\fP Disable all the uses of the MSR driver.
+.PP
+\fB--no-perf\fP Disable all the uses of the perf API.
+.PP
 \fB--interval seconds\fP overrides the default 5.0 second measurement interval.
 .PP
 \fB--num_iterations num\fP number of the measurement iterations.
@@ -320,7 +323,7 @@ available on all processors.
 Here we limit turbostat to showing just the CPU number for cpu0 - cpu3.
 We add a counter showing the 32-bit raw value of MSR 0x199 (MSR_IA32_PERF_CTL),
 labeling it with the column header, "PRF_CTRL", and display it only once,
-afte the conclusion of a 0.1 second sleep.
+after the conclusion of a 0.1 second sleep.
 .nf
 sudo ./turbostat --quiet --cpu 0-3 --show CPU --add msr0x199,u32,raw,PRF_CTRL sleep .1
 0.101604 sec
@@ -330,6 +333,24 @@ CPU	  PRF_CTRL
 1	0x00000800
 2	0x00000a00
 3	0x00000800
+
+.fi
+
+.SH ADD PERF COUNTER EXAMPLE
+Here we limit turbostat to showing just the CPU number for cpu0 - cpu3.
+We add a counter showing time spent in C1 core cstate,
+labeling it with the column header, "pCPU%c1", and display it only once,
+after the conclusion of 0.1 second sleep.
+We also show CPU%c1 built-in counter that should show similar values.
+.nf
+sudo ./turbostat --quiet --cpu 0-3 --show CPU,CPU%c1 --add perf/cstate_core/c1-residency,cpu,delta,percent,pCPU%c1 sleep .1
+0.102448 sec
+CPU     pCPU%c1 CPU%c1
+-       34.89   34.89
+0       45.99   45.99
+1       45.94   45.94
+2       23.83   23.83
+3       23.84   23.84
 
 .fi
 
