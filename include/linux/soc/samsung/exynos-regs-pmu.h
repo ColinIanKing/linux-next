@@ -661,4 +661,8 @@
 #define GS101_SYSIP_DAT0					(0x810)
 #define GS101_SYSTEM_CONFIGURATION				(0x3A00)
 
+/* For GS101 */
+#define GS101_PHY_CTRL_USB20					0x3eb0
+#define GS101_PHY_CTRL_USBDP					0x3eb4
+
 #endif /* __LINUX_SOC_EXYNOS_REGS_PMU_H */
