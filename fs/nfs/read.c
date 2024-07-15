@@ -367,7 +367,7 @@ out_put:
 int nfs_read_folio(struct file *file, struct folio *folio)
 {
 	struct inode *inode = file_inode(file);
-	loff_t pos = folio_file_pos(folio);
+	loff_t pos = folio_pos(folio);
 	size_t len = folio_size(folio);
 	int ret;
 
