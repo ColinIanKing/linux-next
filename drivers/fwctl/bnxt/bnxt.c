@@ -160,8 +160,8 @@ static struct auxiliary_driver bnxtctl_driver = {
 
 module_auxiliary_driver(bnxtctl_driver);
 
-MODULE_IMPORT_NS(BNXT);
-MODULE_IMPORT_NS(FWCTL);
+MODULE_IMPORT_NS("BNXT");
+MODULE_IMPORT_NS("FWCTL");
 MODULE_DESCRIPTION("BNXT fwctl driver");
 MODULE_AUTHOR("Broadcom Corporation");
 MODULE_LICENSE("GPL");

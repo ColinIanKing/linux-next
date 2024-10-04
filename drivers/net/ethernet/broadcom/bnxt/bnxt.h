@@ -30,6 +30,7 @@
 #include <net/xdp.h>
 #include <linux/dim.h>
 #include <linux/io-64-nonatomic-lo-hi.h>
+#include "bnxt_hsi.h"
 #ifdef CONFIG_TEE_BNXT_FW
 #include <linux/firmware/broadcom/tee_bnxt_fw.h>
 #endif
@@ -2326,7 +2327,9 @@ struct bnxt {
 	(BNXT_CHIP_P3(bp) || BNXT_CHIP_P4(bp) || BNXT_CHIP_P5(bp))
 
 	struct bnxt_aux_priv	*aux_priv;
+	struct bnxt_aux_priv	*aux_priv_fwctl;
 	struct bnxt_en_dev	*edev;
+	struct bnxt_en_dev	*edev_fwctl;
 
 	struct bnxt_napi	**bnapi;
 

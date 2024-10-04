@@ -26,7 +26,8 @@
 #include "bnxt_hwrm.h"
 #include "bnxt_ulp.h"
 
-static DEFINE_IDA(bnxt_aux_dev_ids);
+static DEFINE_IDA(bnxt_rdma_aux_dev_ids);
+static DEFINE_IDA(bnxt_fwctl_aux_dev_ids);
 
 static void bnxt_fill_msix_vecs(struct bnxt *bp, struct bnxt_msix_entry *ent)
 {
@@ -413,7 +414,7 @@ static void bnxt_aux_dev_release(struct device *dev)
 		container_of(dev, struct bnxt_aux_priv, aux_dev.dev);
 	struct bnxt *bp = netdev_priv(aux_priv->edev->net);
 
-	ida_free(&bnxt_aux_dev_ids, aux_priv->id);
+	ida_free(&bnxt_rdma_aux_dev_ids, aux_priv->id);
 	kfree(aux_priv->edev->ulp_tbl);
 	bp->edev = NULL;
 	kfree(aux_priv->edev);
@@ -488,7 +489,7 @@ void bnxt_rdma_aux_device_init(struct bnxt *bp)
 	if (!aux_priv)
 		goto exit;
 
-	aux_priv->id = ida_alloc(&bnxt_aux_dev_ids, GFP_KERNEL);
+	aux_priv->id = ida_alloc(&bnxt_rdma_aux_dev_ids, GFP_KERNEL);
 	if (aux_priv->id < 0) {
 		netdev_warn(bp->dev,
 			    "ida alloc failed for ROCE auxiliary device\n");
@@ -504,7 +505,7 @@ void bnxt_rdma_aux_device_init(struct bnxt *bp)
 
 	rc = auxiliary_device_init(aux_dev);
 	if (rc) {
-		ida_free(&bnxt_aux_dev_ids, aux_priv->id);
+		ida_free(&bnxt_rdma_aux_dev_ids, aux_priv->id);
 		kfree(aux_priv);
 		goto exit;
 	}
@@ -535,4 +536,121 @@ aux_dev_uninit:
 	auxiliary_device_uninit(aux_dev);
 exit:
 	bp->flags &= ~BNXT_FLAG_ROCE_CAP;
+}
+
+void bnxt_fwctl_aux_device_uninit(struct bnxt *bp)
+{
+	struct bnxt_aux_priv *aux_priv;
+	struct auxiliary_device *adev;
+
+	/* Skip if no auxiliary device init was done. */
+	if (!bp->aux_priv_fwctl)
+		return;
+
+	aux_priv = bp->aux_priv_fwctl;
+	adev = &aux_priv->aux_dev;
+	auxiliary_device_uninit(adev);
+}
+
+
+void bnxt_fwctl_aux_device_del(struct bnxt *bp)
+{
+	if (!bp->edev_fwctl)
+		return;
+
+	auxiliary_device_delete(&bp->aux_priv_fwctl->aux_dev);
+}
+
+void bnxt_fwctl_aux_device_add(struct bnxt *bp)
+{
+	struct auxiliary_device *aux_dev;
+	int rc;
+
+	if (!bp->edev_fwctl) {
+		printk(KERN_CRIT "edev_fwctl is NULL %s\n", __func__);
+		return;
+	}
+
+	aux_dev = &bp->aux_priv_fwctl->aux_dev;
+	rc = auxiliary_device_add(aux_dev);
+	if (rc) {
+		netdev_warn(bp->dev, "Failed to add auxiliary device for FWCTL\n");
+		auxiliary_device_uninit(aux_dev);
+		bp->flags &= ~BNXT_FLAG_ROCE_CAP;
+	} else {
+		netdev_warn(bp->dev, "Added auxiliary device for FWCTL!!!\n");
+	}
+}
+
+static void bnxt_fwctl_aux_dev_release(struct device *dev)
+{
+	struct bnxt_aux_priv *aux_priv =
+		container_of(dev, struct bnxt_aux_priv, aux_dev.dev);
+	struct bnxt *bp = netdev_priv(aux_priv->edev->net);
+
+	ida_free(&bnxt_fwctl_aux_dev_ids, aux_priv->id);
+	kfree(aux_priv->edev);
+	bp->edev_fwctl = NULL;
+	kfree(bp->aux_priv_fwctl);
+	bp->aux_priv_fwctl = NULL;
+}
+
+
+void bnxt_fwctl_aux_device_init(struct bnxt *bp)
+{
+	struct auxiliary_device *aux_dev;
+	struct bnxt_aux_priv *aux_priv;
+	struct bnxt_en_dev *edev;
+	struct bnxt_ulp *ulp;
+	int rc;
+
+	aux_priv = kzalloc(sizeof(*bp->aux_priv), GFP_KERNEL);
+	if (!aux_priv)
+		return;
+
+	aux_priv->id = ida_alloc(&bnxt_fwctl_aux_dev_ids, GFP_KERNEL);
+	if (aux_priv->id < 0) {
+		netdev_warn(bp->dev,
+			    "ida alloc failed for FWCTL auxiliary device\n");
+		kfree(aux_priv);
+		return;
+	}
+
+	aux_dev = &aux_priv->aux_dev;
+	aux_dev->id = aux_priv->id;
+	aux_dev->name = "fwctl";
+	aux_dev->dev.parent = &bp->pdev->dev;
+	aux_dev->dev.release = bnxt_fwctl_aux_dev_release;
+
+	rc = auxiliary_device_init(aux_dev);
+	if (rc) {
+		ida_free(&bnxt_fwctl_aux_dev_ids, aux_priv->id);
+		kfree(aux_priv);
+		return;
+	}
+	bp->aux_priv_fwctl = aux_priv;
+
+	/* From this point, all cleanup will happen via the .release callback &
+	 * any error unwinding will need to include a call to
+	 * auxiliary_device_uninit.
+	 */
+	edev = kzalloc(sizeof(*edev), GFP_KERNEL);
+	if (!edev)
+		goto aux_dev_uninit;
+
+	aux_priv->edev = edev;
+
+	ulp = kzalloc(sizeof(*ulp), GFP_KERNEL);
+	if (!ulp)
+		goto aux_dev_uninit;
+
+	edev->ulp_tbl = ulp;
+	bp->edev_fwctl = edev;
+	bnxt_set_edev_info(edev, bp);
+	/* bp->ulp_num_msix_want = bnxt_set_dflt_ulp_msix(bp); */
+	printk(KERN_CRIT "Made it %s\n", __func__);
+	return;
+
+aux_dev_uninit:
+	auxiliary_device_uninit(aux_dev);
 }
