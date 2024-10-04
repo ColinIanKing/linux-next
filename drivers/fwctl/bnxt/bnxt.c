@@ -54,6 +54,104 @@ static void *bnxtctl_info(struct fwctl_uctx *uctx, size_t *length)
 	return info;
 }
 
+#if 0
+static bool bnxtctl_validate_set_features(struct bnxt_aux_priv *bnxt_aux_priv,
+					 const struct fwctl_bnxt_command *send_cmd,
+					 enum fwctl_rpc_scope scope)
+{
+	struct bnxt_feat_entry *feat;
+	bool found = false;
+	uuid_t uuid;
+	u16 mask;
+	if (send_cmd->in.size < sizeof(struct set_feature_input))
+		return false;
+
+	if (copy_from_user(&uuid, u64_to_user_ptr(send_cmd->in.payload),
+			   sizeof(uuid)))
+		return false;
+
+	for (int i = 0; i < bnxt_aux_priv->num_features; i++) {
+		feat = &bnxt_aux_priv->entries[i];
+		if (uuid_equal(&uuid, &feat->uuid)) {
+			found = true;
+			break;
+		}
+	}
+
+	if (!found)
+		return false;
+
+	/* Currently no user background command support */
+	if (feat->effects & BNXT_CMD_BACKGROUND)
+		return false;
+
+	mask = BNXT_CMD_CONFIG_CHANGE_IMMEDIATE |
+	       BNXT_CMD_DATA_CHANGE_IMMEDIATE |
+	       BNXT_CMD_POLICY_CHANGE_IMMEDIATE |
+	       BNXT_CMD_LOG_CHANGE_IMMEDIATE;
+	if (feat->effects & mask && scope >= FWCTL_RPC_DEBUG_WRITE)
+		return true;
+
+	/* These effects supported for all scope */
+	if ((feat->effects & BNXT_CMD_CONFIG_CHANGE_COLD_RESET ||
+	     feat->effects & BNXT_CMD_CONFIG_CHANGE_CONV_RESET) &&
+	    scope >= FWCTL_RPC_DEBUG_READ_ONLY)
+		return true;
+	return false;
+}
+
+static bool bnxtctl_validate_hw_cmds(struct bnxt_aux_priv *bnxt_aux_priv,
+				    const struct fwctl_bnxt_command *send_cmd,
+				    enum fwctl_rpc_scope scope)
+{
+	struct bnxt_mem_command *cmd;
+	/*
+	 * Only supporting feature commands.
+	 */
+	if (!bnxt_aux_priv->num_features)
+		return false;
+
+	cmd = bnxt_get_mem_command(send_cmd->id);
+	if (!cmd)
+		return false;
+
+	if (test_bit(cmd->info.id, bnxt_aux_priv->enabled_cmds))
+		return false;
+
+	if (test_bit(cmd->info.id, bnxt_aux_priv->exclusive_cmds))
+		return false;
+
+	switch (cmd->opcode) {
+	case BNXT_MBOX_OP_GET_SUPPORTED_FEATURES:
+	case BNXT_MBOX_OP_GET_FEATURE:
+		if (scope >= FWCTL_RPC_DEBUG_READ_ONLY)
+			return true;
+		break;
+	case BNXT_MBOX_OP_SET_FEATURE:
+		return bnxtctl_validate_set_features(bnxt_aux_priv, send_cmd, scope);
+	default:
+		return false;
+	};
+	return false;
+}
+
+static bool bnxtctl_validate_query_commands(struct fwctl_rpc_bnxt *rpc_in)
+{
+	int cmds;
+	if (rpc_in->payload_size < sizeof(rpc_in->query))
+		return false;
+
+	cmds = rpc_in->query.n_commands;
+	if (cmds) {
+		int cmds_size = rpc_in->payload_size - sizeof(rpc_in->query);
+
+		if (cmds != cmds_size / sizeof(struct bnxt_command_info))
+			return false;
+	}
+	return true;
+}
+#endif
+
 /*
  * bnxt_fw_msg->msg has the whole command
  * the start of message is of type struct input
