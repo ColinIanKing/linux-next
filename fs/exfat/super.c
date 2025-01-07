@@ -263,11 +263,11 @@ static const struct fs_parameter_spec exfat_parameters[] = {
 	fsparam_u32oct("allow_utime",		Opt_allow_utime),
 	fsparam_string("iocharset",		Opt_charset),
 	fsparam_enum("errors",			Opt_errors, exfat_param_enums),
-	fsparam_flag("discard",			Opt_discard),
-	fsparam_flag("keep_last_dots",		Opt_keep_last_dots),
-	fsparam_flag("sys_tz",			Opt_sys_tz),
+	fsparam_flag_no("discard",		Opt_discard),
+	fsparam_flag_no("keep_last_dots",	Opt_keep_last_dots),
+	fsparam_flag_no("sys_tz",		Opt_sys_tz),
 	fsparam_s32("time_offset",		Opt_time_offset),
-	fsparam_flag("zero_size_dir",		Opt_zero_size_dir),
+	fsparam_flag_no("zero_size_dir",	Opt_zero_size_dir),
 	__fsparam(NULL, "utf8",			Opt_utf8, fs_param_deprecated,
 		  NULL),
 	__fsparam(NULL, "debug",		Opt_debug, fs_param_deprecated,
@@ -319,13 +319,13 @@ static int exfat_parse_param(struct fs_context *fc, struct fs_parameter *param)
 		opts->errors = result.uint_32;
 		break;
 	case Opt_discard:
-		opts->discard = 1;
+		opts->discard = !result.negated;
 		break;
 	case Opt_keep_last_dots:
-		opts->keep_last_dots = 1;
+		opts->keep_last_dots = !result.negated;
 		break;
 	case Opt_sys_tz:
-		opts->sys_tz = 1;
+		opts->sys_tz = !result.negated;
 		break;
 	case Opt_time_offset:
 		/*
@@ -337,7 +337,7 @@ static int exfat_parse_param(struct fs_context *fc, struct fs_parameter *param)
 		opts->time_offset = result.int_32;
 		break;
 	case Opt_zero_size_dir:
-		opts->zero_size_dir = true;
+		opts->zero_size_dir = !result.negated;
 		break;
 	case Opt_utf8:
 	case Opt_debug:
