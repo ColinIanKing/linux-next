@@ -745,7 +745,7 @@ static void exfat_free(struct fs_context *fc)
 {
 	struct exfat_sb_info *sbi = fc->s_fs_info;
 
-	if (sbi)
+	if (sbi && fc->purpose != FS_CONTEXT_FOR_RECONFIGURE)
 		exfat_free_sbi(sbi);
 }
 
@@ -769,6 +769,11 @@ static int exfat_init_fs_context(struct fs_context *fc)
 {
 	struct exfat_sb_info *sbi;
 
+	if (fc->purpose == FS_CONTEXT_FOR_RECONFIGURE) { /* remount */
+		sbi = EXFAT_SB(fc->root->d_sb);
+		goto out;
+	}
+
 	sbi = kzalloc(sizeof(struct exfat_sb_info), GFP_KERNEL);
 	if (!sbi)
 		return -ENOMEM;
@@ -786,6 +791,7 @@ static int exfat_init_fs_context(struct fs_context *fc)
 	sbi->options.iocharset = exfat_default_iocharset;
 	sbi->options.errors = EXFAT_ERRORS_RO;
 
+out:
 	fc->s_fs_info = sbi;
 	fc->ops = &exfat_context_ops;
 	return 0;
