@@ -463,8 +463,16 @@ If a person was not directly involved in the preparation or handling of a
 patch but wishes to signify and record their approval of it then they can
 ask to have an Acked-by: line added to the patch's changelog.
 
-Acked-by: is often used by the maintainer of the affected code when that
+Acked-by: is meant to be used by those responsible for or involved with the
+affected code in one way or another.  Most commonly, the maintainer when that
 maintainer neither contributed to nor forwarded the patch.
+
+Acked-by: may also be used by other stakeholders, such as people with domain
+knowledge (e.g. the original author of the code being modified), userspace-side
+reviewers for a kernel uAPI patch or key users of a feature.  Optionally, in
+these cases, it can be useful to add a "# Suffix" to clarify its meaning::
+
+	Acked-by: The Stakeholder <stakeholder@example.org> # As primary user
 
 Acked-by: is not as formal as Signed-off-by:.  It is a record that the acker
 has at least reviewed the patch and has indicated acceptance.  Hence patch
@@ -472,12 +480,18 @@ mergers will sometimes manually convert an acker's "yep, looks good to me"
 into an Acked-by: (but note that it is usually better to ask for an
 explicit ack).
 
+Acked-by: is also less formal than Reviewed-by:.  For instance, maintainers may
+use it to signify that they are OK with a patch landing, but they may not have
+reviewed it as thoroughly as if a Reviewed-by: was provided.  Similarly, a key
+user may not have carried out a technical review of the patch, yet they may be
+satisfied with the general approach, the feature or the user-facing interface.
+
 Acked-by: does not necessarily indicate acknowledgement of the entire patch.
 For example, if a patch affects multiple subsystems and has an Acked-by: from
 one subsystem maintainer then this usually indicates acknowledgement of just
 the part which affects that maintainer's code.  Judgement should be used here.
 When in doubt people should refer to the original discussion in the mailing
-list archives.
+list archives.  A "# Suffix" may also be used in this case to clarify.
 
 If a person has had the opportunity to comment on a patch, but has not
 provided such comments, you may optionally add a ``Cc:`` tag to the patch.
@@ -599,6 +613,10 @@ Note: Attaching a Fixes: tag does not subvert the stable kernel rules
 process nor the requirement to Cc: stable@vger.kernel.org on all stable
 patch candidates. For more information, please read
 Documentation/process/stable-kernel-rules.rst.
+
+Finally, while providing tags is welcome and typically very appreciated, please
+note that signers (i.e. submitters and maintainers) may use their discretion in
+applying offered tags.
 
 .. _the_canonical_patch_format:
 
