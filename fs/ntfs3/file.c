@@ -105,6 +105,8 @@ int ntfs_fileattr_set(struct mnt_idmap *idmap, struct dentry *dentry,
 		int err = ni_set_compress(inode, flags & FS_COMPR_FL);
 		if (err)
 			return err;
+		inode->i_mapping->a_ops =
+			(flags & FS_COMPR_FL) ? &ntfs_aops_cmpr : &ntfs_aops;
 	}
 
 	inode_set_flags(inode, new_fl, S_IMMUTABLE | S_APPEND);
