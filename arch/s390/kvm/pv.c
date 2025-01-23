@@ -17,6 +17,7 @@
 #include <linux/sched/mm.h>
 #include <linux/mmu_notifier.h>
 #include "kvm-s390.h"
+#include "gmap.h"
 
 bool kvm_s390_pv_is_protected(struct kvm *kvm)
 {

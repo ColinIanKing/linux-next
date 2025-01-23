@@ -21,6 +21,7 @@
 #include "gaccess.h"
 #include "trace.h"
 #include "trace-s390.h"
+#include "gmap.h"
 
 u8 kvm_s390_get_ilen(struct kvm_vcpu *vcpu)
 {
