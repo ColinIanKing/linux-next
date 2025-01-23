@@ -798,6 +798,10 @@ static int get_canonical_dev_path(const char *dev_path, char *canonical)
 	if (ret)
 		goto out;
 	resolved_path = d_path(&path, path_buf, PATH_MAX);
+	if (IS_ERR(resolved_path)) {
+		ret = PTR_ERR(resolved_path);
+		goto out;
+	}
 	ret = strscpy(canonical, resolved_path, PATH_MAX);
 out:
 	kfree(path_buf);
@@ -7836,7 +7840,7 @@ void btrfs_dev_stat_inc_and_print(struct btrfs_device *dev, int index)
 
 	if (!dev->dev_stats_valid)
 		return;
-	btrfs_err_rl_in_rcu(dev->fs_info,
+	btrfs_debug_rl_in_rcu(dev->fs_info,
 		"bdev %s errs: wr %u, rd %u, flush %u, corrupt %u, gen %u",
 			   btrfs_dev_name(dev),
 			   btrfs_dev_stat_read(dev, BTRFS_DEV_STAT_WRITE_ERRS),
