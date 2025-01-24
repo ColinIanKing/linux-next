@@ -4103,6 +4103,7 @@ print_trace_header(struct seq_file *m, struct trace_iterator *iter)
 		   preempt_model_none()      ? "server" :
 		   preempt_model_voluntary() ? "desktop" :
 		   preempt_model_full()      ? "preempt" :
+		   preempt_model_lazy()	     ? "lazy"    :
 		   preempt_model_rt()        ? "preempt_rt" :
 		   "unknown",
 		   /* These are reserved for later use */
@@ -5067,6 +5068,9 @@ tracing_cpumask_write(struct file *filp, const char __user *ubuf,
 	struct trace_array *tr = file_inode(filp)->i_private;
 	cpumask_var_t tracing_cpumask_new;
 	int err;
+
+	if (count == 0 || count > KMALLOC_MAX_SIZE)
+		return -EINVAL;
 
 	if (!zalloc_cpumask_var(&tracing_cpumask_new, GFP_KERNEL))
 		return -ENOMEM;
@@ -10605,6 +10609,14 @@ out_free_buffer_mask:
 out:
 	return ret;
 }
+
+#ifdef CONFIG_FUNCTION_TRACER
+/* Used to set module cached ftrace filtering at boot up */
+__init struct trace_array *trace_get_global_array(void)
+{
+	return &global_trace;
+}
+#endif
 
 void __init ftrace_boot_snapshot(void)
 {
