@@ -3,9 +3,9 @@
 #ifndef _ZCOMP_H_
 #define _ZCOMP_H_
 
-#include <linux/local_lock.h>
-
 #define ZCOMP_PARAM_NO_LEVEL	INT_MIN
+
+#include <linux/wait.h>
 
 /*
  * Immutable driver (backend) parameters. The driver may attach private
@@ -31,7 +31,7 @@ struct zcomp_ctx {
 };
 
 struct zcomp_strm {
-	local_lock_t lock;
+	struct list_head entry;
 	/* compression buffer */
 	void *buffer;
 	struct zcomp_ctx ctx;
@@ -60,16 +60,15 @@ struct zcomp_ops {
 	const char *name;
 };
 
-/* dynamic per-device compression frontend */
 struct zcomp {
-	struct zcomp_strm __percpu *stream;
+	struct list_head idle_strm;
+	spinlock_t strm_lock;
+	u32 avail_strm;
+	wait_queue_head_t strm_wait;
 	const struct zcomp_ops *ops;
 	struct zcomp_params *params;
-	struct hlist_node node;
 };
 
-int zcomp_cpu_up_prepare(unsigned int cpu, struct hlist_node *node);
-int zcomp_cpu_dead(unsigned int cpu, struct hlist_node *node);
 ssize_t zcomp_available_show(const char *comp, char *buf);
 bool zcomp_available_algorithm(const char *comp);
 
@@ -77,7 +76,7 @@ struct zcomp *zcomp_create(const char *alg, struct zcomp_params *params);
 void zcomp_destroy(struct zcomp *comp);
 
 struct zcomp_strm *zcomp_stream_get(struct zcomp *comp);
-void zcomp_stream_put(struct zcomp *comp);
+void zcomp_stream_put(struct zcomp *comp, struct zcomp_strm *strm);
 
 int zcomp_compress(struct zcomp *comp, struct zcomp_strm *zstrm,
 		   const void *src, unsigned int *dst_len);
