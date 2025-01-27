@@ -1924,6 +1924,7 @@ static int sysctl_compact_unevictable_allowed __read_mostly = CONFIG_COMPACT_UNE
  * background. It takes values in the range [0, 100].
  */
 static unsigned int __read_mostly sysctl_compaction_proactiveness = 20;
+static unsigned int __read_mostly sysctl_compaction_proactiveness_leeway = 10;
 static int sysctl_extfrag_threshold = 500;
 static int __read_mostly sysctl_compact_memory;
 
@@ -2257,7 +2258,7 @@ static unsigned int fragmentation_score_wmark(bool low)
 	 * close to 100 (maximum).
 	 */
 	wmark_low = 100U - sysctl_compaction_proactiveness;
-	return low ? wmark_low : min(wmark_low + 10, 100U);
+	return low ? wmark_low : min(wmark_low + sysctl_compaction_proactiveness_leeway, 100U);
 }
 
 static bool should_proactive_compact_node(pg_data_t *pgdat)
@@ -3308,6 +3309,15 @@ static const struct ctl_table vm_compaction[] = {
 		.procname	= "compaction_proactiveness",
 		.data		= &sysctl_compaction_proactiveness,
 		.maxlen		= sizeof(sysctl_compaction_proactiveness),
+		.mode		= 0644,
+		.proc_handler	= compaction_proactiveness_sysctl_handler,
+		.extra1		= SYSCTL_ZERO,
+		.extra2		= SYSCTL_ONE_HUNDRED,
+	},
+	{
+		.procname	= "compaction_proactiveness_leeway",
+		.data		= &sysctl_compaction_proactiveness_leeway,
+		.maxlen		= sizeof(sysctl_compaction_proactiveness_leeway),
 		.mode		= 0644,
 		.proc_handler	= compaction_proactiveness_sysctl_handler,
 		.extra1		= SYSCTL_ZERO,
