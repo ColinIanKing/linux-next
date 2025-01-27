@@ -16,7 +16,6 @@
 #define _ZRAM_DRV_H_
 
 #include <linux/zsmalloc.h>
-#include <linux/crypto.h>
 
 #include "zcomp.h"
 
