@@ -2256,7 +2256,7 @@ static unsigned int fragmentation_score_wmark(bool low)
 	 * activity in case a user sets the proactiveness tunable
 	 * close to 100 (maximum).
 	 */
-	wmark_low = max(100U - sysctl_compaction_proactiveness, 5U);
+	wmark_low = 100U - sysctl_compaction_proactiveness;
 	return low ? wmark_low : min(wmark_low + 10, 100U);
 }
 
