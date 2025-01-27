@@ -378,6 +378,7 @@ void free_pgtables(struct mmu_gather *tlb, struct ma_state *mas,
 		if (unlikely(xa_is_zero(next)))
 			next = NULL;
 
+		tlb_free_vma(tlb, vma);
 		/*
 		 * Hide vma from rmap and truncate_pagecache before freeing
 		 * pgtables
@@ -403,6 +404,7 @@ void free_pgtables(struct mmu_gather *tlb, struct ma_state *mas,
 				next = mas_find(mas, ceiling - 1);
 				if (unlikely(xa_is_zero(next)))
 					next = NULL;
+				tlb_free_vma(tlb, vma);
 				if (mm_wr_locked)
 					vma_start_write(vma);
 				unlink_anon_vmas(vma);
