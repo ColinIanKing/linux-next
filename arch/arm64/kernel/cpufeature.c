@@ -1802,6 +1802,35 @@ static bool cpu_is_meltdown_safe(void)
 	return false;
 }
 
+static bool cpu_has_leaky_prefetcher(void)
+{
+	struct arm_smccc_res res;
+
+	/* CPUs which are affected by CVE-2024-7881 */
+	static const struct midr_range leaky_prefetcher_list[] = {
+		MIDR_ALL_VERSIONS(MIDR_CORTEX_X3),
+		MIDR_ALL_VERSIONS(MIDR_CORTEX_X4),
+		MIDR_ALL_VERSIONS(MIDR_CORTEX_X925),
+		MIDR_ALL_VERSIONS(MIDR_NEOVERSE_V2),
+		MIDR_ALL_VERSIONS(MIDR_NEOVERSE_V3),
+		{ /* sentinel */ }
+	};
+
+	if (!is_midr_in_range_list(read_cpuid_id(), leaky_prefetcher_list))
+		return false;
+
+	/*
+	 * If ARCH_WORKAROUND_4 is implemented, then the firmware mitigation is
+	 * present. There is no need to call ARCH_WORKAROUND_4 itself.
+	 */
+	arm_smccc_1_1_invoke(ARM_SMCCC_ARCH_FEATURES_FUNC_ID,
+			     ARM_SMCCC_ARCH_WORKAROUND_4, &res);
+	if (res.a0 == SMCCC_RET_SUCCESS)
+		return false;
+
+	return true;
+}
+
 static bool __meltdown_safe = true;
 static int __kpti_forced; /* 0: not forced, >0: forced on, <0: forced off */
 
@@ -1809,12 +1838,15 @@ static bool needs_kpti(const struct arm64_cpu_capabilities *entry, int scope)
 {
 	char const *str = "kpti command line option";
 	bool meltdown_safe;
+	bool prefetcher_safe;
 
 	WARN_ON(scope != SCOPE_LOCAL_CPU);
 
 	meltdown_safe = cpu_is_meltdown_safe();
 	if (!meltdown_safe)
 		__meltdown_safe = false;
+
+	prefetcher_safe = !cpu_has_leaky_prefetcher();
 
 	/*
 	 * For reasons that aren't entirely clear, enabling KPTI on Cavium
@@ -1855,7 +1887,7 @@ static bool needs_kpti(const struct arm64_cpu_capabilities *entry, int scope)
 		return __kpti_forced > 0;
 	}
 
-	return !meltdown_safe;
+	return !meltdown_safe || !prefetcher_safe;
 }
 
 static bool has_nv1(const struct arm64_cpu_capabilities *entry, int scope)
