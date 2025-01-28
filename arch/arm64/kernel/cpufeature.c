@@ -1767,8 +1767,7 @@ has_useable_cnp(const struct arm64_cpu_capabilities *entry, int scope)
 static bool __meltdown_safe = true;
 static int __kpti_forced; /* 0: not forced, >0: forced on, <0: forced off */
 
-static bool unmap_kernel_at_el0(const struct arm64_cpu_capabilities *entry,
-				int scope)
+static bool needs_kpti(const struct arm64_cpu_capabilities *entry, int scope)
 {
 	/* List of CPUs that are not vulnerable and don't need KPTI */
 	static const struct midr_range kpti_safe_list[] = {
@@ -2554,11 +2553,10 @@ static const struct arm64_cpu_capabilities arm64_features[] = {
 		.capability = ARM64_UNMAP_KERNEL_AT_EL0,
 		.type = ARM64_CPUCAP_BOOT_RESTRICTED_CPU_LOCAL_FEATURE,
 		.cpu_enable = cpu_enable_kpti,
-		.matches = unmap_kernel_at_el0,
+		.matches = needs_kpti,
 		/*
-		 * The ID feature fields below are used to indicate that
-		 * the CPU doesn't need KPTI. See unmap_kernel_at_el0 for
-		 * more details.
+		 * The ID feature fields below are used to indicate that the
+		 * CPU doesn't need KPTI. See needs_kpti for more details.
 		 */
 		ARM64_CPUID_FIELDS(ID_AA64PFR0_EL1, CSV3, IMP)
 	},
