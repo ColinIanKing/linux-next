@@ -1,23 +1,29 @@
 #ifndef IOU_ALLOC_CACHE_H
 #define IOU_ALLOC_CACHE_H
 
+#include <linux/io_uring_types.h>
+
 /*
  * Don't allow the cache to grow beyond this size.
  */
 #define IO_ALLOC_CACHE_MAX	128
 
-#if defined(CONFIG_KASAN)
+void io_alloc_cache_free(struct io_alloc_cache *cache,
+			 void (*free)(const void *));
+bool io_alloc_cache_init(struct io_alloc_cache *cache,
+			 unsigned max_nr, unsigned int size,
+			 unsigned int init_bytes);
+
+void *io_cache_alloc_new(struct io_alloc_cache *cache, gfp_t gfp);
+
 static inline void io_alloc_cache_kasan(struct iovec **iov, int *nr)
 {
-	kfree(*iov);
-	*iov = NULL;
-	*nr = 0;
+	if (IS_ENABLED(CONFIG_KASAN)) {
+		kfree(*iov);
+		*iov = NULL;
+		*nr = 0;
+	}
 }
-#else
-static inline void io_alloc_cache_kasan(struct iovec **iov, int *nr)
-{
-}
-#endif
 
 static inline bool io_alloc_cache_put(struct io_alloc_cache *cache,
 				      void *entry)
@@ -59,41 +65,7 @@ static inline void *io_cache_alloc(struct io_alloc_cache *cache, gfp_t gfp)
 	obj = io_alloc_cache_get(cache);
 	if (obj)
 		return obj;
-
-	obj = kmalloc(cache->elem_size, gfp);
-	if (obj && cache->init_clear)
-		memset(obj, 0, cache->init_clear);
-	return obj;
+	return io_cache_alloc_new(cache, gfp);
 }
 
-/* returns false if the cache was initialized properly */
-static inline bool io_alloc_cache_init(struct io_alloc_cache *cache,
-				       unsigned max_nr, unsigned int size,
-				       unsigned int init_bytes)
-{
-	cache->entries = kvmalloc_array(max_nr, sizeof(void *), GFP_KERNEL);
-	if (cache->entries) {
-		cache->nr_cached = 0;
-		cache->max_cached = max_nr;
-		cache->elem_size = size;
-		cache->init_clear = init_bytes;
-		return false;
-	}
-	return true;
-}
-
-static inline void io_alloc_cache_free(struct io_alloc_cache *cache,
-				       void (*free)(const void *))
-{
-	void *entry;
-
-	if (!cache->entries)
-		return;
-
-	while ((entry = io_alloc_cache_get(cache)) != NULL)
-		free(entry);
-
-	kvfree(cache->entries);
-	cache->entries = NULL;
-}
 #endif
