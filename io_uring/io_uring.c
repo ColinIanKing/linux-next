@@ -393,28 +393,30 @@ static bool req_need_defer(struct io_kiocb *req, u32 seq)
 
 static void io_clean_op(struct io_kiocb *req)
 {
-	if (req->flags & REQ_F_BUFFER_SELECTED) {
+	const io_req_flags_t req_flags = req->flags;
+
+	if (req_flags & REQ_F_BUFFER_SELECTED) {
 		spin_lock(&req->ctx->completion_lock);
 		io_kbuf_drop(req);
 		spin_unlock(&req->ctx->completion_lock);
 	}
 
-	if (req->flags & REQ_F_NEED_CLEANUP) {
+	if (req_flags & REQ_F_NEED_CLEANUP) {
 		const struct io_cold_def *def = &io_cold_defs[req->opcode];
 
 		if (def->cleanup)
 			def->cleanup(req);
 	}
-	if ((req->flags & REQ_F_POLLED) && req->apoll) {
+	if ((req_flags & REQ_F_POLLED) && req->apoll) {
 		kfree(req->apoll->double_poll);
 		kfree(req->apoll);
 		req->apoll = NULL;
 	}
-	if (req->flags & REQ_F_INFLIGHT)
+	if (req_flags & REQ_F_INFLIGHT)
 		atomic_dec(&req->tctx->inflight_tracked);
-	if (req->flags & REQ_F_CREDS)
+	if (req_flags & REQ_F_CREDS)
 		put_cred(req->creds);
-	if (req->flags & REQ_F_ASYNC_DATA) {
+	if (req_flags & REQ_F_ASYNC_DATA) {
 		kfree(req->async_data);
 		req->async_data = NULL;
 	}
@@ -455,31 +457,37 @@ static noinline void __io_arm_ltimeout(struct io_kiocb *req)
 	io_queue_linked_timeout(__io_prep_linked_timeout(req));
 }
 
+static inline void _io_arm_ltimeout(struct io_kiocb *req, unsigned int req_flags)
+{
+	if (unlikely(req_flags & REQ_F_ARM_LTIMEOUT))
+		__io_arm_ltimeout(req);
+}
+
 static inline void io_arm_ltimeout(struct io_kiocb *req)
 {
-	if (unlikely(req->flags & REQ_F_ARM_LTIMEOUT))
-		__io_arm_ltimeout(req);
+	_io_arm_ltimeout(req, req->flags);
 }
 
 static void io_prep_async_work(struct io_kiocb *req)
 {
+	io_req_flags_t req_flags = req->flags;
 	const struct io_issue_def *def = &io_issue_defs[req->opcode];
 	struct io_ring_ctx *ctx = req->ctx;
 
-	if (!(req->flags & REQ_F_CREDS)) {
-		req->flags |= REQ_F_CREDS;
+	if (!(req_flags & REQ_F_CREDS)) {
+		req_flags = req->flags |= REQ_F_CREDS;
 		req->creds = get_current_cred();
 	}
 
 	req->work.list.next = NULL;
 	atomic_set(&req->work.flags, 0);
-	if (req->flags & REQ_F_FORCE_ASYNC)
+	if (req_flags & REQ_F_FORCE_ASYNC)
 		atomic_or(IO_WQ_WORK_CONCURRENT, &req->work.flags);
 
-	if (req->file && !(req->flags & REQ_F_FIXED_FILE))
-		req->flags |= io_file_get_flags(req->file);
+	if (req->file && !(req_flags & REQ_F_FIXED_FILE))
+		req_flags = req->flags |= io_file_get_flags(req->file);
 
-	if (req->file && (req->flags & REQ_F_ISREG)) {
+	if (req->file && (req_flags & REQ_F_ISREG)) {
 		bool should_hash = def->hash_reg_file;
 
 		/* don't serialize this request if the fs doesn't need it */
@@ -1705,13 +1713,14 @@ queue:
 	spin_unlock(&ctx->completion_lock);
 }
 
-static bool io_assign_file(struct io_kiocb *req, const struct io_issue_def *def,
+static bool io_assign_file(struct io_kiocb *req, unsigned int req_flags,
+			   const struct io_issue_def *def,
 			   unsigned int issue_flags)
 {
 	if (req->file || !def->needs_file)
 		return true;
 
-	if (req->flags & REQ_F_FIXED_FILE)
+	if (req_flags & REQ_F_FIXED_FILE)
 		req->file = io_file_get_fixed(req, req->cqe.fd, issue_flags);
 	else
 		req->file = io_file_get_normal(req, req->cqe.fd);
@@ -1721,14 +1730,15 @@ static bool io_assign_file(struct io_kiocb *req, const struct io_issue_def *def,
 
 static int io_issue_sqe(struct io_kiocb *req, unsigned int issue_flags)
 {
+	const io_req_flags_t req_flags = req->flags;
 	const struct io_issue_def *def = &io_issue_defs[req->opcode];
 	const struct cred *creds = NULL;
 	int ret;
 
-	if (unlikely(!io_assign_file(req, def, issue_flags)))
+	if (unlikely(!io_assign_file(req, req_flags, def, issue_flags)))
 		return -EBADF;
 
-	if (unlikely((req->flags & REQ_F_CREDS) && req->creds != current_cred()))
+	if (unlikely((req_flags & REQ_F_CREDS) && req->creds != current_cred()))
 		creds = override_creds(req->creds);
 
 	if (!def->audit_skip)
@@ -1785,18 +1795,19 @@ struct io_wq_work *io_wq_free_work(struct io_wq_work *work)
 void io_wq_submit_work(struct io_wq_work *work)
 {
 	struct io_kiocb *req = container_of(work, struct io_kiocb, work);
+	const io_req_flags_t req_flags = req->flags;
 	const struct io_issue_def *def = &io_issue_defs[req->opcode];
 	unsigned int issue_flags = IO_URING_F_UNLOCKED | IO_URING_F_IOWQ;
 	bool needs_poll = false;
 	int ret = 0, err = -ECANCELED;
 
 	/* one will be dropped by ->io_wq_free_work() after returning to io-wq */
-	if (!(req->flags & REQ_F_REFCOUNT))
+	if (!(req_flags & REQ_F_REFCOUNT))
 		__io_req_set_refcount(req, 2);
 	else
 		req_ref_get(req);
 
-	io_arm_ltimeout(req);
+	_io_arm_ltimeout(req, req_flags);
 
 	/* either cancelled or io-wq is dying, so don't touch tctx->iowq */
 	if (atomic_read(&work->flags) & IO_WQ_WORK_CANCEL) {
@@ -1804,7 +1815,7 @@ fail:
 		io_req_task_queue_fail(req, err);
 		return;
 	}
-	if (!io_assign_file(req, def, issue_flags)) {
+	if (!io_assign_file(req, req_flags, def, issue_flags)) {
 		err = -EBADF;
 		atomic_or(IO_WQ_WORK_CANCEL, &work->flags);
 		goto fail;
@@ -1818,7 +1829,7 @@ fail:
 	 * Don't allow any multishot execution from io-wq. It's more restrictive
 	 * than necessary and also cleaner.
 	 */
-	if (req->flags & REQ_F_APOLL_MULTISHOT) {
+	if (req_flags & REQ_F_APOLL_MULTISHOT) {
 		err = -EBADFD;
 		if (!io_file_can_poll(req))
 			goto fail;
@@ -1833,7 +1844,7 @@ fail:
 		}
 	}
 
-	if (req->flags & REQ_F_FORCE_ASYNC) {
+	if (req_flags & REQ_F_FORCE_ASYNC) {
 		bool opcode_poll = def->pollin || def->pollout;
 
 		if (opcode_poll && io_file_can_poll(req)) {
@@ -1851,7 +1862,7 @@ fail:
 		 * If REQ_F_NOWAIT is set, then don't wait or retry with
 		 * poll. -EAGAIN is final for that case.
 		 */
-		if (req->flags & REQ_F_NOWAIT)
+		if (req_flags & REQ_F_NOWAIT)
 			break;
 
 		/*
