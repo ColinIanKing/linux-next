@@ -1764,13 +1764,12 @@ has_useable_cnp(const struct arm64_cpu_capabilities *entry, int scope)
 	return has_cpuid_feature(entry, scope);
 }
 
-static bool __meltdown_safe = true;
-static int __kpti_forced; /* 0: not forced, >0: forced on, <0: forced off */
-
-static bool needs_kpti(const struct arm64_cpu_capabilities *entry, int scope)
+static bool cpu_is_meltdown_safe(void)
 {
-	/* List of CPUs that are not vulnerable and don't need KPTI */
-	static const struct midr_range kpti_safe_list[] = {
+	u64 pfr0;
+
+	/* List of CPUs that are not vulnerable to meltdown */
+	static const struct midr_range meltdown_safe_list[] = {
 		MIDR_ALL_VERSIONS(MIDR_CAVIUM_THUNDERX2),
 		MIDR_ALL_VERSIONS(MIDR_BRCM_VULCAN),
 		MIDR_ALL_VERSIONS(MIDR_BRAHMA_B53),
@@ -1788,15 +1787,32 @@ static bool needs_kpti(const struct arm64_cpu_capabilities *entry, int scope)
 		MIDR_ALL_VERSIONS(MIDR_QCOM_KRYO_4XX_SILVER),
 		{ /* sentinel */ }
 	};
+
+	if (is_midr_in_range_list(read_cpuid_id(), meltdown_safe_list))
+		return true;
+
+	/*
+	 * ID_AA64PFR0_EL1.CSV3 > 0 indicates that this CPU is not vulnerable
+	 * to meltdown.
+	 */
+	pfr0 = __read_sysreg_by_encoding(SYS_ID_AA64PFR0_EL1);
+	if (cpuid_feature_extract_unsigned_field(pfr0, ID_AA64PFR0_EL1_CSV3_SHIFT))
+		return true;
+
+	return false;
+}
+
+static bool __meltdown_safe = true;
+static int __kpti_forced; /* 0: not forced, >0: forced on, <0: forced off */
+
+static bool needs_kpti(const struct arm64_cpu_capabilities *entry, int scope)
+{
 	char const *str = "kpti command line option";
 	bool meltdown_safe;
 
-	meltdown_safe = is_midr_in_range_list(read_cpuid_id(), kpti_safe_list);
+	WARN_ON(scope != SCOPE_LOCAL_CPU);
 
-	/* Defer to CPU feature registers */
-	if (has_cpuid_feature(entry, scope))
-		meltdown_safe = true;
-
+	meltdown_safe = cpu_is_meltdown_safe();
 	if (!meltdown_safe)
 		__meltdown_safe = false;
 
@@ -2554,11 +2570,6 @@ static const struct arm64_cpu_capabilities arm64_features[] = {
 		.type = ARM64_CPUCAP_BOOT_RESTRICTED_CPU_LOCAL_FEATURE,
 		.cpu_enable = cpu_enable_kpti,
 		.matches = needs_kpti,
-		/*
-		 * The ID feature fields below are used to indicate that the
-		 * CPU doesn't need KPTI. See needs_kpti for more details.
-		 */
-		ARM64_CPUID_FIELDS(ID_AA64PFR0_EL1, CSV3, IMP)
 	},
 	{
 		.capability = ARM64_HAS_FPSIMD,
