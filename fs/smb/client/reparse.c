@@ -536,7 +536,7 @@ static int parse_reparse_posix(struct reparse_posix_data *buf,
 }
 
 int smb2_parse_native_symlink(char **target, const char *buf, unsigned int len,
-			      bool unicode, bool relative,
+			      bool relative,
 			      const char *full_path,
 			      struct cifs_sb_info *cifs_sb)
 {
@@ -547,26 +547,24 @@ int smb2_parse_native_symlink(char **target, const char *buf, unsigned int len,
 	int rc;
 	int i;
 
-	/* Check that length it valid for unicode/non-unicode mode */
-	if (!len || (unicode && (len % 2))) {
+	/* Check that length it valid */
+	if (!len || (len % 2)) {
 		cifs_dbg(VFS, "srv returned malformed symlink buffer\n");
 		rc = -EIO;
 		goto out;
 	}
 
 	/*
-	 * Check that buffer does not contain UTF-16 null codepoint in unicode
-	 * mode or null byte in non-unicode mode because Linux cannot process
-	 * symlink with null byte.
+	 * Check that buffer does not contain UTF-16 null codepoint
+	 * because Linux cannot process symlink with null byte.
 	 */
-	if ((unicode && UniStrnlen((wchar_t *)buf, len/2) != len/2) ||
-	    (!unicode && strnlen(buf, len) != len)) {
+	if (UniStrnlen((wchar_t *)buf, len/2) != len/2) {
 		cifs_dbg(VFS, "srv returned null byte in native symlink target location\n");
 		rc = -EIO;
 		goto out;
 	}
 
-	smb_target = cifs_strndup_from_utf16(buf, len, unicode, cifs_sb->local_nls);
+	smb_target = cifs_strndup_from_utf16(buf, len, true, cifs_sb->local_nls);
 	if (!smb_target) {
 		rc = -ENOMEM;
 		goto out;
@@ -621,7 +619,7 @@ out:
 }
 
 static int parse_reparse_symlink(struct reparse_symlink_data_buffer *sym,
-				 u32 plen, bool unicode,
+				 u32 plen,
 				 struct cifs_sb_info *cifs_sb,
 				 const char *full_path,
 				 struct cifs_open_info_data *data)
@@ -641,7 +639,6 @@ static int parse_reparse_symlink(struct reparse_symlink_data_buffer *sym,
 	return smb2_parse_native_symlink(&data->symlink_target,
 					 sym->PathBuffer + offs,
 					 len,
-					 unicode,
 					 le32_to_cpu(sym->Flags) & SYMLINK_FLAG_RELATIVE,
 					 full_path,
 					 cifs_sb);
@@ -696,7 +693,7 @@ static int parse_reparse_wsl_symlink(struct reparse_wsl_symlink_data_buffer *buf
 int parse_reparse_point(struct reparse_data_buffer *buf,
 			u32 plen, struct cifs_sb_info *cifs_sb,
 			const char *full_path,
-			bool unicode, struct cifs_open_info_data *data)
+			struct cifs_open_info_data *data)
 {
 	struct cifs_tcon *tcon = cifs_sb_master_tcon(cifs_sb);
 
@@ -710,7 +707,7 @@ int parse_reparse_point(struct reparse_data_buffer *buf,
 	case IO_REPARSE_TAG_SYMLINK:
 		return parse_reparse_symlink(
 			(struct reparse_symlink_data_buffer *)buf,
-			plen, unicode, cifs_sb, full_path, data);
+			plen, cifs_sb, full_path, data);
 	case IO_REPARSE_TAG_LX_SYMLINK:
 		return parse_reparse_wsl_symlink(
 			(struct reparse_wsl_symlink_data_buffer *)buf,
@@ -744,14 +741,15 @@ int smb2_parse_reparse_point(struct cifs_sb_info *cifs_sb,
 
 	buf = (struct reparse_data_buffer *)((u8 *)io +
 					     le32_to_cpu(io->OutputOffset));
-	return parse_reparse_point(buf, plen, cifs_sb, full_path, true, data);
+	return parse_reparse_point(buf, plen, cifs_sb, full_path, data);
 }
 
-static void wsl_to_fattr(struct cifs_open_info_data *data,
+static bool wsl_to_fattr(struct cifs_open_info_data *data,
 			 struct cifs_sb_info *cifs_sb,
 			 u32 tag, struct cifs_fattr *fattr)
 {
 	struct smb2_file_full_ea_info *ea;
+	bool have_xattr_dev = false;
 	u32 next = 0;
 
 	switch (tag) {
@@ -794,13 +792,24 @@ static void wsl_to_fattr(struct cifs_open_info_data *data,
 			fattr->cf_uid = wsl_make_kuid(cifs_sb, v);
 		else if (!strncmp(name, SMB2_WSL_XATTR_GID, nlen))
 			fattr->cf_gid = wsl_make_kgid(cifs_sb, v);
-		else if (!strncmp(name, SMB2_WSL_XATTR_MODE, nlen))
+		else if (!strncmp(name, SMB2_WSL_XATTR_MODE, nlen)) {
+			/* File type in reparse point tag and in xattr mode must match. */
+			if (S_DT(fattr->cf_mode) != S_DT(le32_to_cpu(*(__le32 *)v)))
+				return false;
 			fattr->cf_mode = (umode_t)le32_to_cpu(*(__le32 *)v);
-		else if (!strncmp(name, SMB2_WSL_XATTR_DEV, nlen))
+		} else if (!strncmp(name, SMB2_WSL_XATTR_DEV, nlen)) {
 			fattr->cf_rdev = reparse_mkdev(v);
+			have_xattr_dev = true;
+		}
 	} while (next);
 out:
+
+	/* Major and minor numbers for char and block devices are mandatory. */
+	if (!have_xattr_dev && (tag == IO_REPARSE_TAG_LX_CHR || tag == IO_REPARSE_TAG_LX_BLK))
+		return false;
+
 	fattr->cf_dtype = S_DT(fattr->cf_mode);
+	return true;
 }
 
 static bool posix_reparse_to_fattr(struct cifs_sb_info *cifs_sb,
@@ -874,7 +883,9 @@ bool cifs_reparse_point_to_fattr(struct cifs_sb_info *cifs_sb,
 	case IO_REPARSE_TAG_AF_UNIX:
 	case IO_REPARSE_TAG_LX_CHR:
 	case IO_REPARSE_TAG_LX_BLK:
-		wsl_to_fattr(data, cifs_sb, tag, fattr);
+		ok = wsl_to_fattr(data, cifs_sb, tag, fattr);
+		if (!ok)
+			return false;
 		break;
 	case IO_REPARSE_TAG_NFS:
 		ok = posix_reparse_to_fattr(cifs_sb, fattr, data);
