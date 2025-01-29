@@ -358,7 +358,7 @@ static void pgtable_pte_populate(pmd_t *pmd, unsigned long addr, unsigned long e
 			pages++;
 		}
 	}
-	if (mode == POPULATE_DIRECT)
+	if (mode == POPULATE_IDENTITY)
 		update_page_count(PG_DIRECT_MAP_4K, pages);
 }
 
@@ -390,7 +390,7 @@ static void pgtable_pmd_populate(pud_t *pud, unsigned long addr, unsigned long e
 		}
 		pgtable_pte_populate(pmd, addr, next, mode);
 	}
-	if (mode == POPULATE_DIRECT)
+	if (mode == POPULATE_IDENTITY)
 		update_page_count(PG_DIRECT_MAP_1M, pages);
 }
 
@@ -422,7 +422,7 @@ static void pgtable_pud_populate(p4d_t *p4d, unsigned long addr, unsigned long e
 		}
 		pgtable_pmd_populate(pud, addr, next, mode);
 	}
-	if (mode == POPULATE_DIRECT)
+	if (mode == POPULATE_IDENTITY)
 		update_page_count(PG_DIRECT_MAP_2G, pages);
 }
 
