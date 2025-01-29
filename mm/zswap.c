@@ -1504,11 +1504,14 @@ static ssize_t zswap_store_page(struct page *page,
 	entry->pool = pool;
 	entry->swpentry = page_swpentry;
 	entry->objcg = objcg;
+	if (objcg)
+		obj_cgroup_charge_zswap(objcg, entry->length);
 	entry->referenced = true;
 	if (entry->length) {
 		INIT_LIST_HEAD(&entry->lru);
 		zswap_lru_add(&zswap_list_lru, entry);
 	}
+	atomic_long_inc(&zswap_stored_pages);
 
 	return entry->length;
 
@@ -1526,7 +1529,6 @@ bool zswap_store(struct folio *folio)
 	struct obj_cgroup *objcg = NULL;
 	struct mem_cgroup *memcg = NULL;
 	struct zswap_pool *pool;
-	size_t compressed_bytes = 0;
 	bool ret = false;
 	long index;
 
@@ -1569,15 +1571,11 @@ bool zswap_store(struct folio *folio)
 		bytes = zswap_store_page(page, objcg, pool);
 		if (bytes < 0)
 			goto put_pool;
-		compressed_bytes += bytes;
 	}
 
-	if (objcg) {
-		obj_cgroup_charge_zswap(objcg, compressed_bytes);
+	if (objcg)
 		count_objcg_events(objcg, ZSWPOUT, nr_pages);
-	}
 
-	atomic_long_add(nr_pages, &zswap_stored_pages);
 	count_vm_events(ZSWPOUT, nr_pages);
 
 	ret = true;
