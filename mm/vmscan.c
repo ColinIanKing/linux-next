@@ -2400,8 +2400,8 @@ static void prepare_scan_control(pg_data_t *pgdat, struct scan_control *sc)
 	}
 }
 
-static inline void calculate_pressure_balance(struct scan_control *sc, int swappiness,
-			u64 *fraction, u64 *denominator)
+static inline void calculate_pressure_balance(struct scan_control *sc,
+			int swappiness, u64 *fraction, u64 *denominator)
 {
 	unsigned long anon_cost, file_cost, total_cost;
 	unsigned long ap, fp;
