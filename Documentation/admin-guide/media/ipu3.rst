@@ -99,6 +99,7 @@ frames in packed raw Bayer format to IPU3 CSI2 receiver.
     export SDEV=$(media-ctl -d $MDEV -e "ov5670 10-0036")
 
     # Establish the link for the media devices using media-ctl
+    # (from https://git.linuxtv.org/v4l-utils.git)
     media-ctl -d $MDEV -l "ov5670:0 -> ipu3-csi2 0:0[1]"
 
     # Set the format for the media devices
