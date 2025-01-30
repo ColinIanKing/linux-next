@@ -56,6 +56,7 @@ xe-y += xe_bb.o \
 	xe_gt_topology.o \
 	xe_guc.o \
 	xe_guc_ads.o \
+	xe_guc_buf.o \
 	xe_guc_capture.o \
 	xe_guc_ct.o \
 	xe_guc_db_mgr.o \
@@ -95,6 +96,7 @@ xe-y += xe_bb.o \
 	xe_sa.o \
 	xe_sched_job.o \
 	xe_step.o \
+	xe_survivability_mode.o \
 	xe_sync.o \
 	xe_tile.o \
 	xe_tile_sysfs.o \
@@ -120,6 +122,8 @@ xe-$(CONFIG_HMM_MIRROR) += xe_hmm.o
 
 # graphics hardware monitoring (HWMON) support
 xe-$(CONFIG_HWMON) += xe_hwmon.o
+
+xe-$(CONFIG_PERF_EVENTS) += xe_pmu.o
 
 # graphics virtualization (SR-IOV) support
 xe-y += \
