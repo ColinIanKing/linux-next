@@ -2666,6 +2666,7 @@ int attr_set_compress(struct ntfs_inode *ni, bool compr)
 
 	/* Update data attribute flags. */
 	if (compr) {
+		attr->flags &= ATTR_FLAG_SPARSED;
 		attr->flags |= ATTR_FLAG_COMPRESSED;
 		attr->nres.c_unit = NTFS_LZNT_CUNIT;
 	} else {
