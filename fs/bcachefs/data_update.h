@@ -4,6 +4,7 @@
 #define _BCACHEFS_DATA_UPDATE_H
 
 #include "bkey_buf.h"
+#include "io_read.h"
 #include "io_write_types.h"
 
 struct moving_context;
@@ -22,20 +23,24 @@ void bch2_data_update_opts_to_text(struct printbuf *, struct bch_fs *,
 
 struct data_update {
 	/* extent being updated: */
+	bool			read_done;
 	enum btree_id		btree_id;
 	struct bkey_buf		k;
 	struct data_update_opts	data_opts;
 	struct moving_context	*ctxt;
 	struct bch_move_stats	*stats;
+
+	struct bch_read_bio	rbio;
 	struct bch_write_op	op;
+	struct bio_vec		*bvecs;
 };
 
 void bch2_data_update_to_text(struct printbuf *, struct data_update *);
+void bch2_data_update_inflight_to_text(struct printbuf *, struct data_update *);
 
 int bch2_data_update_index_update(struct bch_write_op *);
 
-void bch2_data_update_read_done(struct data_update *,
-				struct bch_extent_crc_unpacked);
+void bch2_data_update_read_done(struct data_update *);
 
 int bch2_extent_drop_ptrs(struct btree_trans *,
 			  struct btree_iter *,
