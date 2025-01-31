@@ -1495,10 +1495,8 @@ static int ffa_setup_partitions(void)
 
 	/* Allocate for the host */
 	ret = ffa_xa_add_partition_info(drv_info->vm_id);
-	if (ret) {
-		/* Already registered devices are freed on bus_exit */
+	if (ret)
 		ffa_partitions_cleanup();
-	}
 
 	return ret;
 }
@@ -1507,6 +1505,9 @@ static void ffa_partitions_cleanup(void)
 {
 	struct ffa_dev_part_info *info;
 	unsigned long idx;
+
+	/* Clean up/free all registered devices */
+	ffa_devices_unregister();
 
 	xa_for_each(&drv_info->partition_info, idx, info) {
 		xa_erase(&drv_info->partition_info, idx);
