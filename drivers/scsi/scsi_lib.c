@@ -184,6 +184,10 @@ void scsi_queue_insert(struct scsi_cmnd *cmd, int reason)
 	__scsi_queue_insert(cmd, reason, true);
 }
 
+/**
+ * scsi_failures_reset_retries - reset all failures to zero
+ * @failures: &struct scsi_failures with specific failure modes set
+ */
 void scsi_failures_reset_retries(struct scsi_failures *failures)
 {
 	struct scsi_failure *failure;
@@ -1217,6 +1221,15 @@ static void scsi_initialize_rq(struct request *rq)
 	cmd->retries = 0;
 }
 
+/**
+ * scsi_alloc_request - allocate a block request and partially
+ *                      initialize its &scsi_cmnd
+ * @q: the device's request queue
+ * @opf: the request operation code
+ * @flags: block layer allocation flags
+ *
+ * Return: &struct request pointer on success or %NULL on failure
+ */
 struct request *scsi_alloc_request(struct request_queue *q, blk_opf_t opf,
 				   blk_mq_req_flags_t flags)
 {
@@ -2723,6 +2736,7 @@ int
 scsi_device_quiesce(struct scsi_device *sdev)
 {
 	struct request_queue *q = sdev->request_queue;
+	unsigned int memflags;
 	int err;
 
 	/*
@@ -2737,7 +2751,7 @@ scsi_device_quiesce(struct scsi_device *sdev)
 
 	blk_set_pm_only(q);
 
-	blk_mq_freeze_queue(q);
+	memflags = blk_mq_freeze_queue(q);
 	/*
 	 * Ensure that the effect of blk_set_pm_only() will be visible
 	 * for percpu_ref_tryget() callers that occur after the queue
@@ -2745,7 +2759,7 @@ scsi_device_quiesce(struct scsi_device *sdev)
 	 * was called. See also https://lwn.net/Articles/573497/.
 	 */
 	synchronize_rcu();
-	blk_mq_unfreeze_queue(q);
+	blk_mq_unfreeze_queue(q, memflags);
 
 	mutex_lock(&sdev->state_mutex);
 	err = scsi_device_set_state(sdev, SDEV_QUIESCE);
@@ -3367,14 +3381,16 @@ int scsi_vpd_lun_id(struct scsi_device *sdev, char *id, size_t id_len)
 }
 EXPORT_SYMBOL(scsi_vpd_lun_id);
 
-/*
+/**
  * scsi_vpd_tpg_id - return a target port group identifier
  * @sdev: SCSI device
+ * @rel_id: pointer to return relative target port in if not %NULL
  *
  * Returns the Target Port Group identifier from the information
- * froom VPD page 0x83 of the device.
+ * from VPD page 0x83 of the device.
+ * Optionally sets @rel_id to the relative target port on success.
  *
- * Returns the identifier or error on failure.
+ * Return: the identifier or error on failure.
  */
 int scsi_vpd_tpg_id(struct scsi_device *sdev, int *rel_id)
 {
