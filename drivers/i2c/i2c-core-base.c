@@ -585,6 +585,8 @@ static int i2c_device_probe(struct device *dev)
 
 	client->debugfs = debugfs_create_dir(dev_name(&client->dev),
 					     client->adapter->debugfs);
+	if (IS_ERR(client->debugfs))
+		client->debugfs = NULL;
 
 	if (driver->probe)
 		status = driver->probe(client);
