@@ -203,9 +203,9 @@ static int si7210_read_raw(struct iio_dev *indio_dev,
 	case IIO_CHAN_INFO_SCALE:
 		*val = 0;
 		if (data->curr_scale == 20)
-			*val2 = 1250;
-		else /* data->curr_scale == 200 */
 			*val2 = 12500;
+		else /* data->curr_scale == 200 */
+			*val2 = 125000;
 		return IIO_VAL_INT_PLUS_MICRO;
 	case IIO_CHAN_INFO_OFFSET:
 		*val = -16384;
@@ -274,9 +274,9 @@ static int si7210_write_raw(struct iio_dev *indio_dev,
 
 	switch (mask) {
 	case IIO_CHAN_INFO_SCALE:
-		if (val == 0 && val2 == 1250)
+		if (val == 0 && val2 == 12500)
 			scale = 20;
-		else if (val == 0 && val2 == 12500)
+		else if (val == 0 && val2 == 125000)
 			scale = 200;
 		else
 			return -EINVAL;
