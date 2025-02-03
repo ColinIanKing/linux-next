@@ -682,10 +682,16 @@ void folio_migrate_flags(struct folio *newfolio, struct folio *folio)
 	if (folio_test_dirty(folio))
 		folio_set_dirty(newfolio);
 
+	/* TODO: free the folio on migration? */
+	if (folio_test_reclaim(folio))
+		folio_set_reclaim(newfolio);
+
 	if (folio_test_young(folio))
 		folio_set_young(newfolio);
 	if (folio_test_idle(folio))
 		folio_set_idle(newfolio);
+	if (folio_test_readahead(folio))
+		folio_set_readahead(newfolio);
 
 	folio_migrate_refs(newfolio, folio);
 	/*
@@ -727,14 +733,6 @@ void folio_migrate_flags(struct folio *newfolio, struct folio *folio)
 	 */
 	if (folio_test_writeback(newfolio))
 		folio_end_writeback(newfolio);
-
-	/*
-	 * PG_readahead shares the same bit with PG_reclaim.  The above
-	 * end_page_writeback() may clear PG_readahead mistakenly, so set the
-	 * bit after that.
-	 */
-	if (folio_test_readahead(folio))
-		folio_set_readahead(newfolio);
 
 	folio_copy_owner(newfolio, folio);
 	pgalloc_tag_swap(newfolio, folio);

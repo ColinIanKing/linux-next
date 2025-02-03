@@ -241,8 +241,7 @@ static inline unsigned long lru_gen_folio_seq(struct lruvec *lruvec, struct foli
 	else if (reclaiming)
 		gen = MAX_NR_GENS;
 	else if ((!folio_is_file_lru(folio) && !folio_test_swapcache(folio)) ||
-		 (folio_test_reclaim(folio) &&
-		  (folio_test_dirty(folio) || folio_test_writeback(folio))))
+		 folio_test_reclaim(folio))
 		gen = MIN_NR_GENS;
 	else
 		gen = MAX_NR_GENS - folio_test_workingset(folio);
@@ -271,7 +270,6 @@ static inline bool lru_gen_add_folio(struct lruvec *lruvec, struct folio *folio,
 	set_mask_bits(&folio->flags, LRU_GEN_MASK | BIT(PG_active), flags);
 
 	lru_gen_update_size(lruvec, folio, -1, gen);
-	/* for folio_rotate_reclaimable() */
 	if (reclaiming)
 		list_add_tail(&folio->lru, &lrugen->folios[gen][type][zone]);
 	else
@@ -348,20 +346,6 @@ void lruvec_add_folio(struct lruvec *lruvec, struct folio *folio)
 			folio_nr_pages(folio));
 	if (lru != LRU_UNEVICTABLE)
 		list_add(&folio->lru, &lruvec->lists[lru]);
-}
-
-static __always_inline
-void lruvec_add_folio_tail(struct lruvec *lruvec, struct folio *folio)
-{
-	enum lru_list lru = folio_lru_list(folio);
-
-	if (lru_gen_add_folio(lruvec, folio, true))
-		return;
-
-	update_lru_size(lruvec, lru, folio_zonenum(folio),
-			folio_nr_pages(folio));
-	/* This is not expected to be used on LRU_UNEVICTABLE */
-	list_add_tail(&folio->lru, &lruvec->lists[lru]);
 }
 
 static __always_inline

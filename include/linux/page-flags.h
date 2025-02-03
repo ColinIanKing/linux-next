@@ -63,8 +63,8 @@
  * might lose their PG_swapbacked flag when they simply can be dropped (e.g. as
  * a result of MADV_FREE).
  *
- * PG_referenced, PG_reclaim are used for page reclaim for anonymous and
- * file-backed pagecache (see mm/vmscan.c).
+ * PG_referenced is used for page reclaim for anonymous and file-backed
+ * pagecache (see mm/vmscan.c).
  *
  * PG_arch_1 is an architecture specific page state bit.  The generic code
  * guarantees that this bit is cleared for a page when it first is entered into
@@ -107,10 +107,10 @@ enum pageflags {
 	PG_reserved,
 	PG_private,		/* If pagecache, has fs-private data */
 	PG_private_2,		/* If pagecache, has fs aux data */
-	PG_reclaim,		/* To be reclaimed asap */
+	PG_readahead,
 	PG_swapbacked,		/* Page is backed by RAM/swap */
 	PG_unevictable,		/* Page is "unevictable"  */
-	PG_dropbehind,		/* drop pages on IO completion */
+	PG_reclaim,		/* drop pages on IO completion */
 #ifdef CONFIG_MMU
 	PG_mlocked,		/* Page is vma mlocked */
 #endif
@@ -128,8 +128,6 @@ enum pageflags {
 	PG_arch_3,
 #endif
 	__NR_PAGEFLAGS,
-
-	PG_readahead = PG_reclaim,
 
 	/* Anonymous memory (and shmem) */
 	PG_swapcache = PG_owner_priv_1, /* Swap page: swp_entry_t in private */
@@ -168,7 +166,7 @@ enum pageflags {
 	PG_xen_remapped = PG_owner_priv_1,
 
 	/* non-lru isolated movable page */
-	PG_isolated = PG_reclaim,
+	PG_isolated = PG_readahead,
 
 	/* Only valid for buddy pages. Used to track pages that are reported */
 	PG_reported = PG_uptodate,
@@ -187,7 +185,7 @@ enum pageflags {
 	/* At least one page in this folio has the hwpoison flag set */
 	PG_has_hwpoisoned = PG_active,
 	PG_large_rmappable = PG_workingset, /* anon or file-backed */
-	PG_partially_mapped = PG_reclaim, /* was identified to be partially mapped */
+	PG_partially_mapped = PG_readahead, /* was identified to be partially mapped */
 };
 
 #define PAGEFLAGS_MASK		((1UL << NR_PAGEFLAGS) - 1)
@@ -594,15 +592,12 @@ TESTPAGEFLAG(Writeback, writeback, PF_NO_TAIL)
 	TESTSCFLAG(Writeback, writeback, PF_NO_TAIL)
 FOLIO_FLAG(mappedtodisk, FOLIO_HEAD_PAGE)
 
-/* PG_readahead is only used for reads; PG_reclaim is only for writes */
-PAGEFLAG(Reclaim, reclaim, PF_NO_TAIL)
-	TESTCLEARFLAG(Reclaim, reclaim, PF_NO_TAIL)
 FOLIO_FLAG(readahead, FOLIO_HEAD_PAGE)
 	FOLIO_TEST_CLEAR_FLAG(readahead, FOLIO_HEAD_PAGE)
 
-FOLIO_FLAG(dropbehind, FOLIO_HEAD_PAGE)
-	FOLIO_TEST_CLEAR_FLAG(dropbehind, FOLIO_HEAD_PAGE)
-	__FOLIO_SET_FLAG(dropbehind, FOLIO_HEAD_PAGE)
+FOLIO_FLAG(reclaim, FOLIO_HEAD_PAGE)
+	FOLIO_TEST_CLEAR_FLAG(reclaim, FOLIO_HEAD_PAGE)
+	__FOLIO_SET_FLAG(reclaim, FOLIO_HEAD_PAGE)
 
 #ifdef CONFIG_HIGHMEM
 /*

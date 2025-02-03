@@ -1102,7 +1102,7 @@ static int zswap_writeback_entry(struct zswap_entry *entry,
 	/* folio is up to date */
 	folio_mark_uptodate(folio);
 
-	/* move it to the tail of the inactive list after end_writeback */
+	/* free the folio after writeback */
 	folio_set_reclaim(folio);
 
 	/* start writeback */

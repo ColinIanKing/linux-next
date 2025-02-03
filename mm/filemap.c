@@ -1591,11 +1591,11 @@ int folio_wait_private_2_killable(struct folio *folio)
 EXPORT_SYMBOL(folio_wait_private_2_killable);
 
 /*
- * If folio was marked as dropbehind, then pages should be dropped when writeback
+ * If folio was marked as reclaim, then pages should be dropped when writeback
  * completes. Do that now. If we fail, it's likely because of a big folio -
- * just reset dropbehind for that case and latter completions should invalidate.
+ * just reset reclaim for that case and latter completions should invalidate.
  */
-static void folio_end_dropbehind_write(struct folio *folio)
+static void folio_end_reclaim_write(struct folio *folio)
 {
 	/*
 	 * Hitting !in_task() should not happen off RWF_DONTCACHE writeback,
@@ -1621,21 +1621,9 @@ static void folio_end_dropbehind_write(struct folio *folio)
  */
 void folio_end_writeback(struct folio *folio)
 {
-	bool folio_dropbehind = false;
+	bool folio_reclaim = false;
 
 	VM_BUG_ON_FOLIO(!folio_test_writeback(folio), folio);
-
-	/*
-	 * folio_test_clear_reclaim() could be used here but it is an
-	 * atomic operation and overkill in this particular case. Failing
-	 * to shuffle a folio marked for immediate reclaim is too mild
-	 * a gain to justify taking an atomic operation penalty at the
-	 * end of every folio writeback.
-	 */
-	if (folio_test_reclaim(folio)) {
-		folio_clear_reclaim(folio);
-		folio_rotate_reclaimable(folio);
-	}
 
 	/*
 	 * Writeback does not hold a folio reference of its own, relying
@@ -1645,13 +1633,13 @@ void folio_end_writeback(struct folio *folio)
 	 */
 	folio_get(folio);
 	if (!folio_test_dirty(folio))
-		folio_dropbehind = folio_test_clear_dropbehind(folio);
+		folio_reclaim = folio_test_clear_reclaim(folio);
 	if (__folio_end_writeback(folio))
 		folio_wake_bit(folio, PG_writeback);
 	acct_reclaim_writeback(folio);
 
-	if (folio_dropbehind)
-		folio_end_dropbehind_write(folio);
+	if (folio_reclaim)
+		folio_end_reclaim_write(folio);
 	folio_put(folio);
 }
 EXPORT_SYMBOL(folio_end_writeback);
@@ -1975,7 +1963,7 @@ no_page:
 			if (fgp_flags & FGP_ACCESSED)
 				__folio_set_referenced(folio);
 			if (fgp_flags & FGP_DONTCACHE)
-				__folio_set_dropbehind(folio);
+				__folio_set_reclaim(folio);
 
 			err = filemap_add_folio(mapping, folio, index, gfp);
 			if (!err)
@@ -1999,8 +1987,8 @@ no_page:
 	if (!folio)
 		return ERR_PTR(-ENOENT);
 	/* not an uncached lookup, clear uncached if set */
-	if (folio_test_dropbehind(folio) && !(fgp_flags & FGP_DONTCACHE))
-		folio_clear_dropbehind(folio);
+	if (folio_test_reclaim(folio) && !(fgp_flags & FGP_DONTCACHE))
+		folio_clear_reclaim(folio);
 	return folio;
 }
 EXPORT_SYMBOL(__filemap_get_folio);
@@ -2498,7 +2486,7 @@ static int filemap_create_folio(struct kiocb *iocb, struct folio_batch *fbatch)
 	if (!folio)
 		return -ENOMEM;
 	if (iocb->ki_flags & IOCB_DONTCACHE)
-		__folio_set_dropbehind(folio);
+		__folio_set_reclaim(folio);
 
 	/*
 	 * Protect against truncate / hole punch. Grabbing invalidate_lock
@@ -2545,7 +2533,7 @@ static int filemap_readahead(struct kiocb *iocb, struct file *file,
 	if (iocb->ki_flags & IOCB_NOIO)
 		return -EAGAIN;
 	if (iocb->ki_flags & IOCB_DONTCACHE)
-		ractl.dropbehind = 1;
+		ractl.reclaim = 1;
 	page_cache_async_ra(&ractl, folio, last_index - folio->index);
 	return 0;
 }
@@ -2576,7 +2564,7 @@ retry:
 		if (iocb->ki_flags & IOCB_NOWAIT)
 			flags = memalloc_noio_save();
 		if (iocb->ki_flags & IOCB_DONTCACHE)
-			ractl.dropbehind = 1;
+			ractl.reclaim = 1;
 		page_cache_sync_ra(&ractl, last_index - index);
 		if (iocb->ki_flags & IOCB_NOWAIT)
 			memalloc_noio_restore(flags);
@@ -2624,15 +2612,15 @@ static inline bool pos_same_folio(loff_t pos1, loff_t pos2, struct folio *folio)
 	return (pos1 >> shift == pos2 >> shift);
 }
 
-static void filemap_end_dropbehind_read(struct address_space *mapping,
+static void filemap_end_reclaim_read(struct address_space *mapping,
 					struct folio *folio)
 {
-	if (!folio_test_dropbehind(folio))
+	if (!folio_test_reclaim(folio))
 		return;
 	if (folio_test_writeback(folio) || folio_test_dirty(folio))
 		return;
 	if (folio_trylock(folio)) {
-		if (folio_test_clear_dropbehind(folio))
+		if (folio_test_clear_reclaim(folio))
 			folio_unmap_invalidate(mapping, folio, 0);
 		folio_unlock(folio);
 	}
@@ -2754,7 +2742,7 @@ put_folios:
 		for (i = 0; i < folio_batch_count(&fbatch); i++) {
 			struct folio *folio = fbatch.folios[i];
 
-			filemap_end_dropbehind_read(mapping, folio);
+			filemap_end_reclaim_read(mapping, folio);
 			folio_put(folio);
 		}
 		folio_batch_init(&fbatch);

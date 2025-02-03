@@ -185,8 +185,8 @@ static struct folio *ractl_alloc_folio(struct readahead_control *ractl,
 	struct folio *folio;
 
 	folio = filemap_alloc_folio(gfp_mask, order);
-	if (folio && ractl->dropbehind)
-		__folio_set_dropbehind(folio);
+	if (folio && ractl->reclaim)
+		__folio_set_reclaim(folio);
 
 	return folio;
 }

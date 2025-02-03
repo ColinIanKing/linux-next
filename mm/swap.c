@@ -54,20 +54,15 @@ struct cpu_fbatches {
 	 */
 	local_lock_t lock;
 	struct folio_batch lru_add;
-	struct folio_batch lru_deactivate_file;
 	struct folio_batch lru_deactivate;
 	struct folio_batch lru_lazyfree;
 #ifdef CONFIG_SMP
 	struct folio_batch lru_activate;
 #endif
-	/* Protecting the following batches which require disabling interrupts */
-	local_lock_t lock_irq;
-	struct folio_batch lru_move_tail;
 };
 
 static DEFINE_PER_CPU(struct cpu_fbatches, cpu_fbatches) = {
 	.lock = INIT_LOCAL_LOCK(lock),
-	.lock_irq = INIT_LOCAL_LOCK(lock_irq),
 };
 
 static void __page_cache_release(struct folio *folio, struct lruvec **lruvecp,
@@ -176,29 +171,20 @@ static void folio_batch_move_lru(struct folio_batch *fbatch, move_fn_t move_fn)
 }
 
 static void __folio_batch_add_and_move(struct folio_batch __percpu *fbatch,
-		struct folio *folio, move_fn_t move_fn,
-		bool on_lru, bool disable_irq)
+		struct folio *folio, move_fn_t move_fn, bool on_lru)
 {
-	unsigned long flags;
-
 	if (on_lru && !folio_test_clear_lru(folio))
 		return;
 
 	folio_get(folio);
 
-	if (disable_irq)
-		local_lock_irqsave(&cpu_fbatches.lock_irq, flags);
-	else
-		local_lock(&cpu_fbatches.lock);
+	local_lock(&cpu_fbatches.lock);
 
 	if (!folio_batch_add(this_cpu_ptr(fbatch), folio) || folio_test_large(folio) ||
 	    lru_cache_disabled())
 		folio_batch_move_lru(this_cpu_ptr(fbatch), move_fn);
 
-	if (disable_irq)
-		local_unlock_irqrestore(&cpu_fbatches.lock_irq, flags);
-	else
-		local_unlock(&cpu_fbatches.lock);
+	local_unlock(&cpu_fbatches.lock);
 }
 
 #define folio_batch_add_and_move(folio, op, on_lru)						\
@@ -206,36 +192,8 @@ static void __folio_batch_add_and_move(struct folio_batch __percpu *fbatch,
 		&cpu_fbatches.op,								\
 		folio,										\
 		op,										\
-		on_lru,										\
-		offsetof(struct cpu_fbatches, op) >= offsetof(struct cpu_fbatches, lock_irq)	\
+		on_lru										\
 	)
-
-static void lru_move_tail(struct lruvec *lruvec, struct folio *folio)
-{
-	if (folio_test_unevictable(folio))
-		return;
-
-	lruvec_del_folio(lruvec, folio);
-	folio_clear_active(folio);
-	lruvec_add_folio_tail(lruvec, folio);
-	__count_vm_events(PGROTATED, folio_nr_pages(folio));
-}
-
-/*
- * Writeback is about to end against a folio which has been marked for
- * immediate reclaim.  If it still appears to be reclaimable, move it
- * to the tail of the inactive list.
- *
- * folio_rotate_reclaimable() must disable IRQs, to prevent nasty races.
- */
-void folio_rotate_reclaimable(struct folio *folio)
-{
-	if (folio_test_locked(folio) || folio_test_dirty(folio) ||
-	    folio_test_unevictable(folio))
-		return;
-
-	folio_batch_add_and_move(folio, lru_move_tail, true);
-}
 
 void lru_note_cost(struct lruvec *lruvec, bool file,
 		   unsigned int nr_io, unsigned int nr_rotated)
@@ -448,7 +406,7 @@ static bool lru_gen_clear_refs(struct folio *folio)
  */
 void folio_mark_accessed(struct folio *folio)
 {
-	if (folio_test_dropbehind(folio))
+	if (folio_test_reclaim(folio))
 		return;
 	if (lru_gen_enabled()) {
 		lru_gen_inc_refs(folio);
@@ -524,68 +482,6 @@ void folio_add_lru_vma(struct folio *folio, struct vm_area_struct *vma)
 		folio_add_lru(folio);
 }
 
-/*
- * If the folio cannot be invalidated, it is moved to the
- * inactive list to speed up its reclaim.  It is moved to the
- * head of the list, rather than the tail, to give the flusher
- * threads some time to write it out, as this is much more
- * effective than the single-page writeout from reclaim.
- *
- * If the folio isn't mapped and dirty/writeback, the folio
- * could be reclaimed asap using the reclaim flag.
- *
- * 1. active, mapped folio -> none
- * 2. active, dirty/writeback folio -> inactive, head, reclaim
- * 3. inactive, mapped folio -> none
- * 4. inactive, dirty/writeback folio -> inactive, head, reclaim
- * 5. inactive, clean -> inactive, tail
- * 6. Others -> none
- *
- * In 4, it moves to the head of the inactive list so the folio is
- * written out by flusher threads as this is much more efficient
- * than the single-page writeout from reclaim.
- */
-static void lru_deactivate_file(struct lruvec *lruvec, struct folio *folio)
-{
-	bool active = folio_test_active(folio) || lru_gen_enabled();
-	long nr_pages = folio_nr_pages(folio);
-
-	if (folio_test_unevictable(folio))
-		return;
-
-	/* Some processes are using the folio */
-	if (folio_mapped(folio))
-		return;
-
-	lruvec_del_folio(lruvec, folio);
-	folio_clear_active(folio);
-	folio_clear_referenced(folio);
-
-	if (folio_test_writeback(folio) || folio_test_dirty(folio)) {
-		/*
-		 * Setting the reclaim flag could race with
-		 * folio_end_writeback() and confuse readahead.  But the
-		 * race window is _really_ small and  it's not a critical
-		 * problem.
-		 */
-		lruvec_add_folio(lruvec, folio);
-		folio_set_reclaim(folio);
-	} else {
-		/*
-		 * The folio's writeback ended while it was in the batch.
-		 * We move that folio to the tail of the inactive list.
-		 */
-		lruvec_add_folio_tail(lruvec, folio);
-		__count_vm_events(PGROTATED, nr_pages);
-	}
-
-	if (active) {
-		__count_vm_events(PGDEACTIVATE, nr_pages);
-		__count_memcg_events(lruvec_memcg(lruvec), PGDEACTIVATE,
-				     nr_pages);
-	}
-}
-
 static void lru_deactivate(struct lruvec *lruvec, struct folio *folio)
 {
 	long nr_pages = folio_nr_pages(folio);
@@ -641,21 +537,6 @@ void lru_add_drain_cpu(int cpu)
 	if (folio_batch_count(fbatch))
 		folio_batch_move_lru(fbatch, lru_add);
 
-	fbatch = &fbatches->lru_move_tail;
-	/* Disabling interrupts below acts as a compiler barrier. */
-	if (data_race(folio_batch_count(fbatch))) {
-		unsigned long flags;
-
-		/* No harm done if a racing interrupt already did this */
-		local_lock_irqsave(&cpu_fbatches.lock_irq, flags);
-		folio_batch_move_lru(fbatch, lru_move_tail);
-		local_unlock_irqrestore(&cpu_fbatches.lock_irq, flags);
-	}
-
-	fbatch = &fbatches->lru_deactivate_file;
-	if (folio_batch_count(fbatch))
-		folio_batch_move_lru(fbatch, lru_deactivate_file);
-
 	fbatch = &fbatches->lru_deactivate;
 	if (folio_batch_count(fbatch))
 		folio_batch_move_lru(fbatch, lru_deactivate);
@@ -665,28 +546,6 @@ void lru_add_drain_cpu(int cpu)
 		folio_batch_move_lru(fbatch, lru_lazyfree);
 
 	folio_activate_drain(cpu);
-}
-
-/**
- * deactivate_file_folio() - Deactivate a file folio.
- * @folio: Folio to deactivate.
- *
- * This function hints to the VM that @folio is a good reclaim candidate,
- * for example if its invalidation fails due to the folio being dirty
- * or under writeback.
- *
- * Context: Caller holds a reference on the folio.
- */
-void deactivate_file_folio(struct folio *folio)
-{
-	/* Deactivating an unevictable folio will not accelerate reclaim */
-	if (folio_test_unevictable(folio))
-		return;
-
-	if (lru_gen_enabled() && lru_gen_clear_refs(folio))
-		return;
-
-	folio_batch_add_and_move(folio, lru_deactivate_file, true);
 }
 
 /*
@@ -771,8 +630,6 @@ static bool cpu_needs_drain(unsigned int cpu)
 
 	/* Check these in order of likelihood that they're not zero */
 	return folio_batch_count(&fbatches->lru_add) ||
-		folio_batch_count(&fbatches->lru_move_tail) ||
-		folio_batch_count(&fbatches->lru_deactivate_file) ||
 		folio_batch_count(&fbatches->lru_deactivate) ||
 		folio_batch_count(&fbatches->lru_lazyfree) ||
 		folio_batch_count(&fbatches->lru_activate) ||

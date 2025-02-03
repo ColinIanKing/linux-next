@@ -486,7 +486,10 @@ unsigned long mapping_try_invalidate(struct address_space *mapping,
 			 * of interest and try to speed up its reclaim.
 			 */
 			if (!ret) {
-				deactivate_file_folio(folio);
+				if (!folio_test_unevictable(folio) &&
+				    !folio_mapped(folio))
+					folio_set_reclaim(folio);
+
 				/* Likely in the lru cache of a remote CPU */
 				if (nr_failed)
 					(*nr_failed)++;
