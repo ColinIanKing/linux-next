@@ -121,12 +121,10 @@ u64 bch2_bkey_sectors_need_rebalance(struct bch_fs *c, struct bkey_s_c k)
 		}
 	}
 incompressible:
-	if (opts->background_target &&
-	    bch2_target_accepts_data(c, BCH_DATA_user, opts->background_target)) {
+	if (opts->background_target)
 		bkey_for_each_ptr_decode(k.k, ptrs, p, entry)
 			if (!p.ptr.cached && !bch2_dev_in_target(c, p.ptr.dev, opts->background_target))
 				sectors += p.crc.compressed_size;
-	}
 
 	return sectors;
 }
@@ -140,7 +138,7 @@ static bool bch2_bkey_rebalance_needs_update(struct bch_fs *c, struct bch_io_opt
 	const struct bch_extent_rebalance *old = bch2_bkey_rebalance_opts(k);
 
 	if (k.k->type == KEY_TYPE_reflink_v || bch2_bkey_ptrs_need_rebalance(c, opts, k)) {
-		struct bch_extent_rebalance new = io_opts_to_rebalance_opts(opts);
+		struct bch_extent_rebalance new = io_opts_to_rebalance_opts(c, opts);
 		return old == NULL || memcmp(old, &new, sizeof(new));
 	} else {
 		return old != NULL;
@@ -163,7 +161,7 @@ int bch2_bkey_set_needs_rebalance(struct bch_fs *c, struct bch_io_opts *opts,
 			k.k->u64s += sizeof(*old) / sizeof(u64);
 		}
 
-		*old = io_opts_to_rebalance_opts(opts);
+		*old = io_opts_to_rebalance_opts(c, opts);
 	} else {
 		if (old)
 			extent_entry_drop(k, (union bch_extent_entry *) old);
@@ -343,7 +341,7 @@ static struct bkey_s_c next_rebalance_extent(struct btree_trans *trans,
 	memset(data_opts, 0, sizeof(*data_opts));
 	data_opts->rewrite_ptrs		= bch2_bkey_ptrs_need_rebalance(c, io_opts, k);
 	data_opts->target		= io_opts->background_target;
-	data_opts->write_flags		|= BCH_WRITE_ONLY_SPECIFIED_DEVS;
+	data_opts->write_flags		|= BCH_WRITE_only_specified_devs;
 
 	if (!data_opts->rewrite_ptrs) {
 		/*
@@ -451,7 +449,7 @@ static bool rebalance_pred(struct bch_fs *c, void *arg,
 {
 	data_opts->rewrite_ptrs		= bch2_bkey_ptrs_need_rebalance(c, io_opts, k);
 	data_opts->target		= io_opts->background_target;
-	data_opts->write_flags		|= BCH_WRITE_ONLY_SPECIFIED_DEVS;
+	data_opts->write_flags		|= BCH_WRITE_only_specified_devs;
 	return data_opts->rewrite_ptrs != 0;
 }
 
