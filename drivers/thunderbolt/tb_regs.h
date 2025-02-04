@@ -398,6 +398,7 @@ struct tb_regs_port_header {
 #define PORT_CS_19_WOD				BIT(17)
 #define PORT_CS_19_WOU4				BIT(18)
 #define PORT_CS_19_START_ASYM			BIT(24)
+#define PORT_CS_19_ELR				BIT(31)
 
 /* Display Port adapter registers */
 #define ADP_DP_CS_0				0x00

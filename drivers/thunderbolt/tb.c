@@ -1042,6 +1042,7 @@ static int tb_configure_asym(struct tb *tb, struct tb_port *src_port,
 
 	tb_for_each_upstream_port_on_path(src_port, dst_port, up) {
 		struct tb_port *down = tb_switch_downstream_port(up->sw);
+		bool link_recovery_up, link_recovery_down;
 		enum tb_link_width width_up, width_down;
 		int consumed_up, consumed_down;
 
@@ -1096,6 +1097,13 @@ static int tb_configure_asym(struct tb *tb, struct tb_port *src_port,
 			clx_disabled = true;
 		}
 
+		/*
+		 * Disable link recovery flow before the link is
+		 * switched to asymmetric as per spec.
+		 */
+		link_recovery_up = usb4_port_link_recovery_disable(up);
+		link_recovery_down = usb4_port_link_recovery_disable(down);
+
 		tb_sw_dbg(up->sw, "configuring asymmetric link\n");
 
 		/*
@@ -1107,6 +1115,12 @@ static int tb_configure_asym(struct tb *tb, struct tb_port *src_port,
 			tb_sw_warn(up->sw, "failed to set link width\n");
 			break;
 		}
+
+		/* Re-enable link recovery if it was previously enabled */
+		if (link_recovery_up)
+			usb4_port_link_recovery_enable(up);
+		if (link_recovery_down)
+			usb4_port_link_recovery_enable(down);
 	}
 
 	/* Re-enable CL states if they were previosly enabled */

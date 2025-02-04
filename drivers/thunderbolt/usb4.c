@@ -10,6 +10,7 @@
 #include <linux/delay.h>
 #include <linux/ktime.h>
 #include <linux/units.h>
+#include <linux/string_helpers.h>
 
 #include "sb_regs.h"
 #include "tb.h"
@@ -1516,6 +1517,76 @@ bool usb4_port_clx_supported(struct tb_port *port)
 		return false;
 
 	return !!(val & PORT_CS_18_CPS);
+}
+
+static int __usb4_port_link_recovery_enable(struct tb_port *port, bool enable)
+{
+	int ret;
+	u32 val;
+
+	if (!port->cap_usb4)
+		return -EINVAL;
+
+	ret = tb_port_read(port, &val, TB_CFG_PORT,
+			   port->cap_usb4 + PORT_CS_19, 1);
+	if (ret)
+		return ret;
+
+	/* Already set, no need to change */
+	if (!!(val & PORT_CS_19_ELR) == enable)
+		return 0;
+
+	if (enable)
+		val |= PORT_CS_19_ELR;
+	else
+		val &= ~PORT_CS_19_ELR;
+
+	ret = tb_port_write(port, &val, TB_CFG_PORT,
+			    port->cap_usb4 + PORT_CS_19, 1);
+	if (ret)
+		return ret;
+
+	tb_port_dbg(port, "link recovery %s\n", str_enabled_disabled(enable));
+	return 1;
+}
+
+/**
+ * usb4_port_link_recovery_enable() - Enable link recovery
+ * @port: USB4 port
+ *
+ * Enables link recovery for @port. Returns %0 in case of success,
+ * negative errno otherwise.
+ */
+int usb4_port_link_recovery_enable(struct tb_port *port)
+{
+	int ret;
+
+	ret = __usb4_port_link_recovery_enable(port, true);
+	if (ret < 0) {
+		tb_port_warn(port, "failed to enable link recovery\n");
+		return ret;
+	}
+
+	return 0;
+}
+
+/**
+ * usb4_port_link_recovery_disable() - Disable link recovery
+ * @port: USB4 port
+ *
+ * Disables link recovery for @port. Returns %0 if case of success (%1
+ * if recovery was enabled prior calling this function). Negative errno
+ * otherwise.
+ */
+int usb4_port_link_recovery_disable(struct tb_port *port)
+{
+	int ret;
+
+	ret = __usb4_port_link_recovery_enable(port, false);
+	if (ret < 0)
+		tb_port_warn(port, "failed to disable link recovery\n");
+
+	return ret;
 }
 
 /**
