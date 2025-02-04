@@ -1461,6 +1461,27 @@ struct scx_event_stats {
 	 * continued to run because there were no other tasks on the CPU.
 	 */
 	u64		SCX_EV_DISPATCH_KEEP_LAST;
+
+	/*
+	 * If SCX_OPS_ENQ_EXITING is not set, the number of times that a task
+	 * is dispatched to a local DSQ when exiting.
+	 */
+	u64		SCX_EV_ENQ_SKIP_EXITING;
+
+	/*
+	 * The total duration of bypass modes in nanoseconds.
+	 */
+	u64		SCX_EV_BYPASS_DURATION;
+
+	/*
+	 * The number of tasks dispatched in the bypassing mode.
+	 */
+	u64		SCX_EV_BYPASS_DISPATCH;
+
+	/*
+	 * The number of times the bypassing mode has been activated.
+	 */
+	u64		SCX_EV_BYPASS_ACTIVATE;
 };
 
 /*
@@ -2060,16 +2081,20 @@ static void do_enqueue_task(struct rq *rq, struct task_struct *p, u64 enq_flags,
 	if (!scx_rq_online(rq))
 		goto local;
 
-	if (scx_rq_bypassing(rq))
+	if (scx_rq_bypassing(rq)) {
+		__scx_add_event(SCX_EV_BYPASS_DISPATCH, 1);
 		goto global;
+	}
 
 	if (p->scx.ddsp_dsq_id != SCX_DSQ_INVALID)
 		goto direct;
 
 	/* see %SCX_OPS_ENQ_EXITING */
 	if (!static_branch_unlikely(&scx_ops_enq_exiting) &&
-	    unlikely(p->flags & PF_EXITING))
+	    unlikely(p->flags & PF_EXITING)) {
+		__scx_add_event(SCX_EV_ENQ_SKIP_EXITING, 1);
 		goto local;
+	}
 
 	if (!SCX_HAS_OP(enqueue))
 		goto global;
@@ -3240,6 +3265,8 @@ bool scx_prio_less(const struct task_struct *a, const struct task_struct *b,
 
 static int select_task_rq_scx(struct task_struct *p, int prev_cpu, int wake_flags)
 {
+	bool rq_bypass;
+
 	/*
 	 * sched_exec() calls with %WF_EXEC when @p is about to exec(2) as it
 	 * can be a good migration opportunity with low cache and memory
@@ -3253,7 +3280,8 @@ static int select_task_rq_scx(struct task_struct *p, int prev_cpu, int wake_flag
 	if (unlikely(wake_flags & WF_EXEC))
 		return prev_cpu;
 
-	if (SCX_HAS_OP(select_cpu) && !scx_rq_bypassing(task_rq(p))) {
+	rq_bypass = scx_rq_bypassing(task_rq(p));
+	if (SCX_HAS_OP(select_cpu) && !rq_bypass) {
 		s32 cpu;
 		struct task_struct **ddsp_taskp;
 
@@ -3279,6 +3307,9 @@ static int select_task_rq_scx(struct task_struct *p, int prev_cpu, int wake_flag
 			p->scx.slice = SCX_SLICE_DFL;
 			p->scx.ddsp_dsq_id = SCX_DSQ_LOCAL;
 		}
+
+		if (rq_bypass)
+			__scx_add_event(SCX_EV_BYPASS_DISPATCH, 1);
 		return cpu;
 	}
 }
@@ -4382,6 +4413,8 @@ static void scx_clear_softlockup(void)
 static void scx_ops_bypass(bool bypass)
 {
 	static DEFINE_RAW_SPINLOCK(bypass_lock);
+	static unsigned long bypass_timestamp;
+
 	int cpu;
 	unsigned long flags;
 
@@ -4391,11 +4424,15 @@ static void scx_ops_bypass(bool bypass)
 		WARN_ON_ONCE(scx_ops_bypass_depth <= 0);
 		if (scx_ops_bypass_depth != 1)
 			goto unlock;
+		bypass_timestamp = ktime_get_ns();
+		scx_add_event(SCX_EV_BYPASS_ACTIVATE, 1);
 	} else {
 		scx_ops_bypass_depth--;
 		WARN_ON_ONCE(scx_ops_bypass_depth < 0);
 		if (scx_ops_bypass_depth != 0)
 			goto unlock;
+		scx_add_event(SCX_EV_BYPASS_DURATION,
+			      ktime_get_ns() - bypass_timestamp);
 	}
 
 	atomic_inc(&scx_ops_breather_depth);
@@ -4985,6 +5022,10 @@ static void scx_dump_state(struct scx_exit_info *ei, size_t dump_len)
 	scx_dump_event(s, &events, SCX_EV_SELECT_CPU_FALLBACK);
 	scx_dump_event(s, &events, SCX_EV_DISPATCH_LOCAL_DSQ_OFFLINE);
 	scx_dump_event(s, &events, SCX_EV_DISPATCH_KEEP_LAST);
+	scx_dump_event(s, &events, SCX_EV_ENQ_SKIP_EXITING);
+	scx_dump_event(s, &events, SCX_EV_BYPASS_DURATION);
+	scx_dump_event(s, &events, SCX_EV_BYPASS_DISPATCH);
+	scx_dump_event(s, &events, SCX_EV_BYPASS_ACTIVATE);
 
 	if (seq_buf_has_overflowed(&s) && dump_len >= sizeof(trunc_marker))
 		memcpy(ei->dump + dump_len - sizeof(trunc_marker),
@@ -7121,6 +7162,10 @@ __bpf_kfunc void scx_bpf_events(struct scx_event_stats *events,
 		scx_agg_event(&e_sys, e_cpu, SCX_EV_SELECT_CPU_FALLBACK);
 		scx_agg_event(&e_sys, e_cpu, SCX_EV_DISPATCH_LOCAL_DSQ_OFFLINE);
 		scx_agg_event(&e_sys, e_cpu, SCX_EV_DISPATCH_KEEP_LAST);
+		scx_agg_event(&e_sys, e_cpu, SCX_EV_ENQ_SKIP_EXITING);
+		scx_agg_event(&e_sys, e_cpu, SCX_EV_BYPASS_DURATION);
+		scx_agg_event(&e_sys, e_cpu, SCX_EV_BYPASS_DISPATCH);
+		scx_agg_event(&e_sys, e_cpu, SCX_EV_BYPASS_ACTIVATE);
 	}
 
 	/*
