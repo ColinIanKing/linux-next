@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: BSD-3-Clause-Clear */
 /*
  * Copyright (c) 2018-2021 The Linux Foundation. All rights reserved.
- * Copyright (c) 2021-2024 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) 2021-2025 Qualcomm Innovation Center, Inc. All rights reserved.
  */
 
 #ifndef ATH12K_WMI_H
@@ -25,6 +25,7 @@
 struct ath12k_base;
 struct ath12k;
 struct ath12k_link_vif;
+struct ath12k_fw_stats;
 
 /* There is no signed version of __le32, so for a temporary solution come
  * up with our own version. The idea is from fs/ntfs/endian.h.
@@ -3624,6 +3625,26 @@ struct ath12k_wmi_p2p_noa_info {
 	struct ath12k_wmi_p2p_noa_descriptor descriptors[WMI_P2P_MAX_NOA_DESCRIPTORS];
 } __packed;
 
+#define MAX_WMI_UTF_LEN 252
+
+struct ath12k_wmi_ftm_seg_hdr_params {
+	__le32 len;
+	__le32 msgref;
+	__le32 segmentinfo;
+	__le32 pdev_id;
+} __packed;
+
+struct ath12k_wmi_ftm_cmd {
+	__le32 tlv_header;
+	struct ath12k_wmi_ftm_seg_hdr_params seg_hdr;
+	u8 data[];
+} __packed;
+
+struct ath12k_wmi_ftm_event {
+	struct ath12k_wmi_ftm_seg_hdr_params seg_hdr;
+	u8 data[];
+} __packed;
+
 #define WMI_BEACON_TX_BUFFER_SIZE	512
 
 #define WMI_EMA_BEACON_CNT      GENMASK(7, 0)
@@ -5628,6 +5649,125 @@ enum wmi_sta_keepalive_method {
 #define WMI_STA_KEEPALIVE_INTERVAL_DEFAULT	30
 #define WMI_STA_KEEPALIVE_INTERVAL_DISABLE	0
 
+struct wmi_stats_event {
+	__le32 stats_id;
+	__le32 num_pdev_stats;
+	__le32 num_vdev_stats;
+	__le32 num_peer_stats;
+	__le32 num_bcnflt_stats;
+	__le32 num_chan_stats;
+	__le32 num_mib_stats;
+	__le32 pdev_id;
+	__le32 num_bcn_stats;
+	__le32 num_peer_extd_stats;
+	__le32 num_peer_extd2_stats;
+} __packed;
+
+enum wmi_stats_id {
+	WMI_REQUEST_PDEV_STAT	= BIT(2),
+	WMI_REQUEST_VDEV_STAT	= BIT(3),
+	WMI_REQUEST_BCN_STAT	= BIT(11),
+};
+
+struct wmi_request_stats_cmd {
+	__le32 tlv_header;
+	__le32 stats_id;
+	__le32 vdev_id;
+	struct ath12k_wmi_mac_addr_params peer_macaddr;
+	__le32 pdev_id;
+} __packed;
+
+#define WLAN_MAX_AC 4
+#define MAX_TX_RATE_VALUES 10
+
+struct wmi_vdev_stats_params {
+	__le32 vdev_id;
+	__le32 beacon_snr;
+	__le32 data_snr;
+	__le32 num_tx_frames[WLAN_MAX_AC];
+	__le32 num_rx_frames;
+	__le32 num_tx_frames_retries[WLAN_MAX_AC];
+	__le32 num_tx_frames_failures[WLAN_MAX_AC];
+	__le32 num_rts_fail;
+	__le32 num_rts_success;
+	__le32 num_rx_err;
+	__le32 num_rx_discard;
+	__le32 num_tx_not_acked;
+	__le32 tx_rate_history[MAX_TX_RATE_VALUES];
+	__le32 beacon_rssi_history[MAX_TX_RATE_VALUES];
+} __packed;
+
+struct ath12k_wmi_bcn_stats_params {
+	__le32 vdev_id;
+	__le32 tx_bcn_succ_cnt;
+	__le32 tx_bcn_outage_cnt;
+} __packed;
+
+struct ath12k_wmi_pdev_base_stats_params {
+	a_sle32 chan_nf;
+	__le32 tx_frame_count; /* Cycles spent transmitting frames */
+	__le32 rx_frame_count; /* Cycles spent receiving frames */
+	__le32 rx_clear_count; /* Total channel busy time, evidently */
+	__le32 cycle_count; /* Total on-channel time */
+	__le32 phy_err_count;
+	__le32 chan_tx_pwr;
+} __packed;
+
+struct ath12k_wmi_pdev_tx_stats_params {
+	a_sle32 comp_queued;
+	a_sle32 comp_delivered;
+	a_sle32 msdu_enqued;
+	a_sle32 mpdu_enqued;
+	a_sle32 wmm_drop;
+	a_sle32 local_enqued;
+	a_sle32 local_freed;
+	a_sle32 hw_queued;
+	a_sle32 hw_reaped;
+	a_sle32 underrun;
+	a_sle32 tx_abort;
+	a_sle32 mpdus_requed;
+	__le32 tx_ko;
+	__le32 data_rc;
+	__le32 self_triggers;
+	__le32 sw_retry_failure;
+	__le32 illgl_rate_phy_err;
+	__le32 pdev_cont_xretry;
+	__le32 pdev_tx_timeout;
+	__le32 pdev_resets;
+	__le32 stateless_tid_alloc_failure;
+	__le32 phy_underrun;
+	__le32 txop_ovf;
+} __packed;
+
+struct ath12k_wmi_pdev_rx_stats_params {
+	a_sle32 mid_ppdu_route_change;
+	a_sle32 status_rcvd;
+	a_sle32 r0_frags;
+	a_sle32 r1_frags;
+	a_sle32 r2_frags;
+	a_sle32 r3_frags;
+	a_sle32 htt_msdus;
+	a_sle32 htt_mpdus;
+	a_sle32 loc_msdus;
+	a_sle32 loc_mpdus;
+	a_sle32 oversize_amsdu;
+	a_sle32 phy_errs;
+	a_sle32 phy_err_drop;
+	a_sle32 mpdu_errs;
+} __packed;
+
+struct ath12k_wmi_pdev_stats_params {
+	struct ath12k_wmi_pdev_base_stats_params base;
+	struct ath12k_wmi_pdev_tx_stats_params tx;
+	struct ath12k_wmi_pdev_rx_stats_params rx;
+} __packed;
+
+struct ath12k_fw_stats_req_params {
+	u32 stats_id;
+	u32 vdev_id;
+	u32 pdev_id;
+};
+
 void ath12k_wmi_init_qcn9274(struct ath12k_base *ab,
 			     struct ath12k_wmi_resource_config_arg *config);
 void ath12k_wmi_init_wcn7850(struct ath12k_base *ab,
@@ -5639,7 +5779,7 @@ int ath12k_wmi_mgmt_send(struct ath12k *ar, u32 vdev_id, u32 buf_id,
 			 struct sk_buff *frame);
 int ath12k_wmi_p2p_go_bcn_ie(struct ath12k *ar, u32 vdev_id,
 			     const u8 *p2p_ie);
-int ath12k_wmi_bcn_tmpl(struct ath12k *ar, u32 vdev_id,
+int ath12k_wmi_bcn_tmpl(struct ath12k_link_vif *arvif,
 			struct ieee80211_mutable_offsets *offs,
 			struct sk_buff *bcn,
 			struct ath12k_wmi_bcn_tmpl_ema_arg *ema_args);
@@ -5753,6 +5893,9 @@ int ath12k_wmi_set_bios_cmd(struct ath12k_base *ab, u32 param_id,
 			    const u8 *buf, size_t buf_len);
 int ath12k_wmi_set_bios_sar_cmd(struct ath12k_base *ab, const u8 *psar_table);
 int ath12k_wmi_set_bios_geo_cmd(struct ath12k_base *ab, const u8 *pgeo_table);
+int ath12k_wmi_send_stats_request_cmd(struct ath12k *ar, u32 stats_id,
+				      u32 vdev_id, u32 pdev_id);
+__le32 ath12k_wmi_tlv_hdr(u32 cmd, u32 len);
 
 static inline u32
 ath12k_wmi_caps_ext_get_pdev_id(const struct ath12k_wmi_caps_ext_params *param)
@@ -5806,5 +5949,8 @@ int ath12k_wmi_sta_keepalive(struct ath12k *ar,
 int ath12k_wmi_mlo_setup(struct ath12k *ar, struct wmi_mlo_setup_arg *mlo_params);
 int ath12k_wmi_mlo_ready(struct ath12k *ar);
 int ath12k_wmi_mlo_teardown(struct ath12k *ar);
+void ath12k_wmi_fw_stats_dump(struct ath12k *ar,
+			      struct ath12k_fw_stats *fw_stats, u32 stats_id,
+			      char *buf);
 
 #endif
