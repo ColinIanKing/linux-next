@@ -829,7 +829,7 @@ static int fuse_check_folio(struct folio *folio)
 	       1 << PG_lru |
 	       1 << PG_active |
 	       1 << PG_workingset |
-	       1 << PG_reclaim |
+	       1 << PG_readahead |
 	       1 << PG_waiters |
 	       LRU_GEN_MASK | LRU_REFS_MASK))) {
 		dump_page(&folio->page, "fuse: trying to steal weird page");

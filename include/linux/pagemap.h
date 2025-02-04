@@ -1360,7 +1360,7 @@ struct readahead_control {
 	pgoff_t _index;
 	unsigned int _nr_pages;
 	unsigned int _batch_count;
-	bool dropbehind;
+	bool reclaim;
 	bool _workingset;
 	unsigned long _pflags;
 };

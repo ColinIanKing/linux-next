@@ -15,7 +15,7 @@
 #define KPF_ACTIVE		6
 #define KPF_SLAB		7
 #define KPF_WRITEBACK		8
-#define KPF_RECLAIM		9
+#define KPF_READAHEAD		9
 #define KPF_BUDDY		10
 
 /* 11-20: new additions in 2.6.31 */

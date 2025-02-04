@@ -135,11 +135,20 @@ enum numa_stat_item {
 #define NR_VM_NUMA_EVENT_ITEMS 0
 #endif
 
+/*
+ * NR_ZONE_LRU_BASE and NR_VM_ZONE_STAT_ITEMS are often added to enumeration
+ * constants of another type than enum_zone_stat_item. Define these constants
+ * as an integer instead of enum node_stat_item to prevent that the compiler
+ * warns about enumeration type mismatches when these constants are used.
+ */
+#define NR_ZONE_LRU_BASE	(__NR_ZONE_LRU_BASE + 0)
+#define NR_VM_ZONE_STAT_ITEMS	(__NR_VM_ZONE_STAT_ITEMS + 0)
+
 enum zone_stat_item {
 	/* First 128 byte cacheline (assuming 64 bit words) */
 	NR_FREE_PAGES,
-	NR_ZONE_LRU_BASE, /* Used only for compaction and reclaim retry */
-	NR_ZONE_INACTIVE_ANON = NR_ZONE_LRU_BASE,
+	__NR_ZONE_LRU_BASE, /* Used only for compaction and reclaim retry */
+	NR_ZONE_INACTIVE_ANON = __NR_ZONE_LRU_BASE,
 	NR_ZONE_ACTIVE_ANON,
 	NR_ZONE_INACTIVE_FILE,
 	NR_ZONE_ACTIVE_FILE,
@@ -155,11 +164,18 @@ enum zone_stat_item {
 #ifdef CONFIG_UNACCEPTED_MEMORY
 	NR_UNACCEPTED,
 #endif
-	NR_VM_ZONE_STAT_ITEMS };
+	__NR_VM_ZONE_STAT_ITEMS };
+
+/*
+ * enum lru_list constants are often added to NR_LRU_BASE. Define NR_LRU_BASE
+ * as an integer instead of enum node_stat_item to prevent that the compiler
+ * warns about enumeration type mismatches.
+ */
+#define NR_LRU_BASE (__NR_LRU_BASE + 0)
 
 enum node_stat_item {
-	NR_LRU_BASE,
-	NR_INACTIVE_ANON = NR_LRU_BASE, /* must match order of LRU_[IN]ACTIVE */
+	__NR_LRU_BASE,
+	NR_INACTIVE_ANON = __NR_LRU_BASE, /*must match order of LRU_[IN]ACTIVE*/
 	NR_ACTIVE_ANON,		/*  "     "     "   "       "         */
 	NR_INACTIVE_FILE,	/*  "     "     "   "       "         */
 	NR_ACTIVE_FILE,		/*  "     "     "   "       "         */

@@ -85,7 +85,6 @@
  * not part of kernel API
  */
 #define KPF_ANON_EXCLUSIVE	47
-#define KPF_READAHEAD		48
 #define KPF_SLUB_FROZEN		50
 #define KPF_SLUB_DEBUG		51
 #define KPF_FILE		61
@@ -108,7 +107,7 @@ static const char * const page_flag_names[] = {
 	[KPF_ACTIVE]		= "A:active",
 	[KPF_SLAB]		= "S:slab",
 	[KPF_WRITEBACK]		= "W:writeback",
-	[KPF_RECLAIM]		= "I:reclaim",
+	[KPF_READAHEAD]		= "I:readahead",
 	[KPF_BUDDY]		= "B:buddy",
 
 	[KPF_MMAP]		= "M:mmap",
@@ -139,7 +138,6 @@ static const char * const page_flag_names[] = {
 	[KPF_ARCH_2]		= "H:arch_2",
 
 	[KPF_ANON_EXCLUSIVE]	= "d:anon_exclusive",
-	[KPF_READAHEAD]		= "I:readahead",
 	[KPF_SLUB_FROZEN]	= "A:slub_frozen",
 	[KPF_SLUB_DEBUG]	= "E:slub_debug",
 
@@ -483,10 +481,6 @@ static uint64_t expand_overloaded_flags(uint64_t flags, uint64_t pme)
 		if (flags & BIT(ERROR))
 			flags ^= BIT(ERROR) | BIT(SLUB_DEBUG);
 	}
-
-	/* PG_reclaim is overloaded as PG_readahead in the read path */
-	if ((flags & (BIT(RECLAIM) | BIT(WRITEBACK))) == BIT(RECLAIM))
-		flags ^= BIT(RECLAIM) | BIT(READAHEAD);
 
 	if (pme & PM_SOFT_DIRTY)
 		flags |= BIT(SOFTDIRTY);

@@ -316,25 +316,23 @@ void __shmem_writeback(size_t size, struct address_space *mapping)
 
 	/* Begin writeback on each dirty page */
 	for (i = 0; i < size >> PAGE_SHIFT; i++) {
-		struct page *page;
+		struct folio *folio;
 
-		page = find_lock_page(mapping, i);
-		if (!page)
+		folio = filemap_lock_folio(mapping, i);
+		if (!folio)
 			continue;
 
-		if (!page_mapped(page) && clear_page_dirty_for_io(page)) {
+		if (!folio_mapped(folio) && folio_clear_dirty_for_io(folio)) {
 			int ret;
 
-			SetPageReclaim(page);
-			ret = mapping->a_ops->writepage(page, &wbc);
-			if (!PageWriteback(page))
-				ClearPageReclaim(page);
+			folio_set_reclaim(folio);
+			ret = mapping->a_ops->writepage(&folio->page, &wbc);
 			if (!ret)
 				goto put;
 		}
-		unlock_page(page);
+		folio_unlock(folio);
 put:
-		put_page(page);
+		folio_put(folio);
 	}
 }
 
