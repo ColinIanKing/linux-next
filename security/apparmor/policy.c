@@ -280,7 +280,7 @@ void aa_free_profile(struct aa_profile *profile)
 	struct aa_ruleset *rule, *tmp;
 	struct rhashtable *rht;
 
-	AA_DEBUG("%s(%p)\n", __func__, profile);
+	AA_DEBUG(DEBUG_POLICY, "%s(%p)\n", __func__, profile);
 
 	if (!profile)
 		return;
@@ -364,6 +364,7 @@ struct aa_profile *aa_alloc_profile(const char *hname, struct aa_proxy *proxy,
 	profile->label.flags |= FLAG_PROFILE;
 	profile->label.vec[0] = profile;
 
+	profile->signal = SIGKILL;
 	/* refcount released by caller */
 	return profile;
 
@@ -371,6 +372,30 @@ fail:
 	aa_free_profile(profile);
 
 	return NULL;
+}
+
+/* set of rules that are mediated by unconfined */
+static int unconfined_mediates[] = { AA_CLASS_NS, AA_CLASS_IO_URING, 0 };
+
+/* must be called after profile rulesets and start information is setup */
+void aa_compute_profile_mediates(struct aa_profile *profile)
+{
+	int c;
+
+	if (profile_unconfined(profile)) {
+		int *pos;
+
+		for (pos = unconfined_mediates; *pos; pos++) {
+			if (ANY_RULE_MEDIATES(&profile->rules, AA_CLASS_NS) !=
+			    DFA_NOMATCH)
+				profile->label.mediates |= ((u64) 1) << AA_CLASS_NS;
+		}
+		return;
+	}
+	for (c = 0; c <= AA_CLASS_LAST; c++) {
+		if (ANY_RULE_MEDIATES(&profile->rules, c) != DFA_NOMATCH)
+			profile->label.mediates |= ((u64) 1) << c;
+	}
 }
 
 /* TODO: profile accounting - setup in remove */
@@ -624,10 +649,12 @@ struct aa_profile *aa_alloc_null(struct aa_profile *parent, const char *name,
 	rules = list_first_entry(&profile->rules, typeof(*rules), list);
 	rules->file = aa_get_pdb(nullpdb);
 	rules->policy = aa_get_pdb(nullpdb);
+	aa_compute_profile_mediates(profile);
 
 	if (parent) {
 		profile->path_flags = parent->path_flags;
-
+		/* override/inherit what is mediated from parent */
+		profile->label.mediates = parent->label.mediates;
 		/* released on free_profile */
 		rcu_assign_pointer(profile->parent, aa_get_profile(parent));
 		profile->ns = aa_get_ns(parent->ns);
@@ -833,8 +860,8 @@ bool aa_policy_admin_capable(const struct cred *subj_cred,
 	bool capable = policy_ns_capable(subj_cred, label, user_ns,
 					 CAP_MAC_ADMIN) == 0;
 
-	AA_DEBUG("cap_mac_admin? %d\n", capable);
-	AA_DEBUG("policy locked? %d\n", aa_g_lock_policy);
+	AA_DEBUG(DEBUG_POLICY, "cap_mac_admin? %d\n", capable);
+	AA_DEBUG(DEBUG_POLICY, "policy locked? %d\n", aa_g_lock_policy);
 
 	return aa_policy_view_capable(subj_cred, label, ns) && capable &&
 		!aa_g_lock_policy;
