@@ -156,6 +156,11 @@ bool intel_plane_needs_physical(struct intel_plane *plane)
 		DISPLAY_INFO(i915)->cursor_needs_physical;
 }
 
+bool intel_plane_can_async_flip(struct intel_plane *plane, u64 modifier)
+{
+	return plane->can_async_flip && plane->can_async_flip(modifier);
+}
+
 unsigned int intel_adjusted_rate(const struct drm_rect *src,
 				 const struct drm_rect *dst,
 				 unsigned int rate)
@@ -767,7 +772,7 @@ void intel_plane_update_noarm(struct intel_dsb *dsb,
 {
 	struct intel_crtc *crtc = to_intel_crtc(crtc_state->uapi.crtc);
 
-	trace_intel_plane_update_noarm(plane, crtc);
+	trace_intel_plane_update_noarm(plane_state, crtc);
 
 	if (plane->update_noarm)
 		plane->update_noarm(dsb, plane, crtc_state, plane_state);
@@ -797,7 +802,7 @@ void intel_plane_update_arm(struct intel_dsb *dsb,
 		return;
 	}
 
-	trace_intel_plane_update_arm(plane, crtc);
+	trace_intel_plane_update_arm(plane_state, crtc);
 	plane->update_arm(dsb, plane, crtc_state, plane_state);
 }
 
@@ -1130,7 +1135,7 @@ intel_prepare_plane_fb(struct drm_plane *_plane,
 	if (!obj)
 		return 0;
 
-	ret = intel_plane_pin_fb(new_plane_state);
+	ret = intel_plane_pin_fb(new_plane_state, old_plane_state);
 	if (ret)
 		return ret;
 

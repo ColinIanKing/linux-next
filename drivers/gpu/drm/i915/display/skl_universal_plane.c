@@ -512,6 +512,79 @@ skl_plane_max_stride(struct intel_plane *plane,
 				max_pixels, max_bytes);
 }
 
+static bool tgl_plane_can_async_flip(u64 modifier)
+{
+	switch (modifier) {
+	case DRM_FORMAT_MOD_LINEAR:
+	case I915_FORMAT_MOD_X_TILED:
+	case I915_FORMAT_MOD_Y_TILED:
+	case I915_FORMAT_MOD_4_TILED:
+	case I915_FORMAT_MOD_Y_TILED_GEN12_RC_CCS:
+	case I915_FORMAT_MOD_4_TILED_MTL_RC_CCS:
+	case I915_FORMAT_MOD_4_TILED_DG2_RC_CCS:
+	case I915_FORMAT_MOD_4_TILED_BMG_CCS:
+	case I915_FORMAT_MOD_4_TILED_LNL_CCS:
+		return true;
+	case I915_FORMAT_MOD_Y_TILED_GEN12_MC_CCS:
+	case I915_FORMAT_MOD_4_TILED_MTL_MC_CCS:
+	case I915_FORMAT_MOD_4_TILED_DG2_MC_CCS:
+	case I915_FORMAT_MOD_Y_TILED_GEN12_RC_CCS_CC:
+	case I915_FORMAT_MOD_4_TILED_MTL_RC_CCS_CC:
+	case I915_FORMAT_MOD_4_TILED_DG2_RC_CCS_CC:
+		return false;
+	default:
+		return false;
+	}
+}
+
+static bool icl_plane_can_async_flip(u64 modifier)
+{
+	switch (modifier) {
+	case DRM_FORMAT_MOD_LINEAR:
+		/*
+		 * FIXME: Async on Linear buffer is supported on ICL
+		 * but with additional alignment and fbc restrictions
+		 * need to be taken care of.
+		 */
+		return false;
+	case I915_FORMAT_MOD_X_TILED:
+	case I915_FORMAT_MOD_Y_TILED:
+	case I915_FORMAT_MOD_Yf_TILED:
+	case I915_FORMAT_MOD_Y_TILED_CCS:
+	case I915_FORMAT_MOD_Yf_TILED_CCS:
+		return true;
+	default:
+		return false;
+	}
+}
+
+static bool skl_plane_can_async_flip(u64 modifier)
+{
+	switch (modifier) {
+	case DRM_FORMAT_MOD_LINEAR:
+		return false;
+	case I915_FORMAT_MOD_X_TILED:
+	case I915_FORMAT_MOD_Y_TILED:
+	case I915_FORMAT_MOD_Yf_TILED:
+		return true;
+	case I915_FORMAT_MOD_Y_TILED_CCS:
+	case I915_FORMAT_MOD_Yf_TILED_CCS:
+		/*
+		 * Display WA #0731: skl
+		 * WaDisableRCWithAsyncFlip: skl
+		 * "When render decompression is enabled, hardware
+		 *  internally converts the Async flips to Sync flips."
+		 *
+		 * Display WA #1159: glk
+		 * "Async flip with render compression may result in
+		 *  intermittent underrun corruption."
+		 */
+		return false;
+	default:
+		return false;
+	}
+}
+
 static u32 tgl_plane_min_alignment(struct intel_plane *plane,
 				   const struct drm_framebuffer *fb,
 				   int color_plane)
@@ -524,28 +597,30 @@ static u32 tgl_plane_min_alignment(struct intel_plane *plane,
 	if (intel_fb_is_ccs_aux_plane(fb, color_plane))
 		return mult * 4 * 1024;
 
+	/*
+	 * FIXME ADL sees GGTT/DMAR faults with async
+	 * flips unless we align to 16k at least.
+	 * Figure out what's going on here...
+	 */
+	if (IS_ALDERLAKE_P(i915) &&
+	    intel_plane_can_async_flip(plane, fb->modifier))
+		return mult * 16 * 1024;
+
 	switch (fb->modifier) {
 	case DRM_FORMAT_MOD_LINEAR:
 	case I915_FORMAT_MOD_X_TILED:
 	case I915_FORMAT_MOD_Y_TILED:
 	case I915_FORMAT_MOD_4_TILED:
-		/*
-		 * FIXME ADL sees GGTT/DMAR faults with async
-		 * flips unless we align to 16k at least.
-		 * Figure out what's going on here...
-		 */
-		if (IS_ALDERLAKE_P(i915) && HAS_ASYNC_FLIPS(i915))
-			return mult * 16 * 1024;
 		return mult * 4 * 1024;
-	case I915_FORMAT_MOD_Y_TILED_GEN12_MC_CCS:
 	case I915_FORMAT_MOD_Y_TILED_GEN12_RC_CCS:
-	case I915_FORMAT_MOD_Y_TILED_GEN12_RC_CCS_CC:
-	case I915_FORMAT_MOD_4_TILED_MTL_MC_CCS:
 	case I915_FORMAT_MOD_4_TILED_MTL_RC_CCS:
-	case I915_FORMAT_MOD_4_TILED_MTL_RC_CCS_CC:
 	case I915_FORMAT_MOD_4_TILED_DG2_RC_CCS:
-	case I915_FORMAT_MOD_4_TILED_DG2_RC_CCS_CC:
+	case I915_FORMAT_MOD_Y_TILED_GEN12_MC_CCS:
+	case I915_FORMAT_MOD_4_TILED_MTL_MC_CCS:
 	case I915_FORMAT_MOD_4_TILED_DG2_MC_CCS:
+	case I915_FORMAT_MOD_Y_TILED_GEN12_RC_CCS_CC:
+	case I915_FORMAT_MOD_4_TILED_MTL_RC_CCS_CC:
+	case I915_FORMAT_MOD_4_TILED_DG2_RC_CCS_CC:
 	case I915_FORMAT_MOD_4_TILED_BMG_CCS:
 	case I915_FORMAT_MOD_4_TILED_LNL_CCS:
 		/*
@@ -1020,7 +1095,7 @@ static u32 skl_plane_ctl_rotate(unsigned int rotate)
 		break;
 	/*
 	 * DRM_MODE_ROTATE_ is counter clockwise to stay compatible with Xrandr
-	 * while i915 HW rotation is clockwise, thats why this swapping.
+	 * while i915 HW rotation is clockwise, that's why this swapping.
 	 */
 	case DRM_MODE_ROTATE_90:
 		return PLANE_CTL_ROTATE_270;
@@ -1225,8 +1300,8 @@ static u32 skl_plane_surf(const struct intel_plane_state *plane_state,
 	return plane_surf;
 }
 
-static u32 skl_plane_aux_dist(const struct intel_plane_state *plane_state,
-			      int color_plane)
+u32 skl_plane_aux_dist(const struct intel_plane_state *plane_state,
+		       int color_plane)
 {
 	struct drm_i915_private *i915 = to_i915(plane_state->uapi.plane->dev);
 	const struct drm_framebuffer *fb = plane_state->hw.fb;
@@ -2536,59 +2611,74 @@ skl_plane_disable_flip_done(struct intel_plane *plane)
 static bool skl_plane_has_rc_ccs(struct drm_i915_private *i915,
 				 enum pipe pipe, enum plane_id plane_id)
 {
-	/* Wa_22011186057 */
-	if (IS_ALDERLAKE_P(i915) && IS_DISPLAY_STEP(i915, STEP_A0, STEP_B0))
-		return false;
-
-	if (DISPLAY_VER(i915) >= 11)
-		return true;
-
-	if (IS_GEMINILAKE(i915))
-		return pipe != PIPE_C;
-
 	return pipe != PIPE_C &&
 		(plane_id == PLANE_1 || plane_id == PLANE_2);
+}
+
+static u8 skl_plane_caps(struct drm_i915_private *i915,
+			 enum pipe pipe, enum plane_id plane_id)
+{
+	u8 caps = INTEL_PLANE_CAP_TILING_X |
+		INTEL_PLANE_CAP_TILING_Y |
+		INTEL_PLANE_CAP_TILING_Yf;
+
+	if (skl_plane_has_rc_ccs(i915, pipe, plane_id))
+		caps |= INTEL_PLANE_CAP_CCS_RC;
+
+	return caps;
+}
+
+static bool glk_plane_has_rc_ccs(struct drm_i915_private *i915,
+				 enum pipe pipe)
+{
+	return pipe != PIPE_C;
+}
+
+static u8 glk_plane_caps(struct drm_i915_private *i915,
+			 enum pipe pipe, enum plane_id plane_id)
+{
+	u8 caps = INTEL_PLANE_CAP_TILING_X |
+		INTEL_PLANE_CAP_TILING_Y |
+		INTEL_PLANE_CAP_TILING_Yf;
+
+	if (glk_plane_has_rc_ccs(i915, pipe))
+		caps |= INTEL_PLANE_CAP_CCS_RC;
+
+	return caps;
+}
+
+static u8 icl_plane_caps(struct drm_i915_private *i915,
+			 enum pipe pipe, enum plane_id plane_id)
+{
+	return INTEL_PLANE_CAP_TILING_X |
+		INTEL_PLANE_CAP_TILING_Y |
+		INTEL_PLANE_CAP_TILING_Yf |
+		INTEL_PLANE_CAP_CCS_RC;
 }
 
 static bool tgl_plane_has_mc_ccs(struct drm_i915_private *i915,
 				 enum plane_id plane_id)
 {
-	if (DISPLAY_VER(i915) < 12)
-		return false;
-
 	/* Wa_14010477008 */
 	if (IS_DG1(i915) || IS_ROCKETLAKE(i915) ||
-		(IS_TIGERLAKE(i915) && IS_DISPLAY_STEP(i915, STEP_A0, STEP_D0)))
-		return false;
-
-	/* Wa_22011186057 */
-	if (IS_ALDERLAKE_P(i915) && IS_DISPLAY_STEP(i915, STEP_A0, STEP_B0))
+	    (IS_TIGERLAKE(i915) && IS_DISPLAY_STEP(i915, STEP_A0, STEP_D0)))
 		return false;
 
 	return plane_id < PLANE_6;
 }
 
-static u8 skl_get_plane_caps(struct drm_i915_private *i915,
-			     enum pipe pipe, enum plane_id plane_id)
+static u8 tgl_plane_caps(struct drm_i915_private *i915,
+			 enum pipe pipe, enum plane_id plane_id)
 {
 	struct intel_display *display = &i915->display;
-	u8 caps = INTEL_PLANE_CAP_TILING_X;
+	u8 caps = INTEL_PLANE_CAP_TILING_X |
+		INTEL_PLANE_CAP_CCS_RC |
+		INTEL_PLANE_CAP_CCS_RC_CC;
 
-	if (DISPLAY_VER(display) < 13 || display->platform.alderlake_p)
-		caps |= INTEL_PLANE_CAP_TILING_Y;
-	if (DISPLAY_VER(display) < 12)
-		caps |= INTEL_PLANE_CAP_TILING_Yf;
 	if (HAS_4TILE(display))
 		caps |= INTEL_PLANE_CAP_TILING_4;
-
-	if (!IS_ENABLED(I915) && !HAS_FLAT_CCS(i915))
-		return caps;
-
-	if (skl_plane_has_rc_ccs(i915, pipe, plane_id)) {
-		caps |= INTEL_PLANE_CAP_CCS_RC;
-		if (DISPLAY_VER(display) >= 12)
-			caps |= INTEL_PLANE_CAP_CCS_RC_CC;
-	}
+	else
+		caps |= INTEL_PLANE_CAP_TILING_Y;
 
 	if (tgl_plane_has_mc_ccs(i915, plane_id))
 		caps |= INTEL_PLANE_CAP_CCS_MC;
@@ -2612,6 +2702,7 @@ skl_universal_plane_create(struct drm_i915_private *dev_priv,
 	const u32 *formats;
 	int num_formats;
 	int ret;
+	u8 caps;
 
 	plane = intel_plane_alloc();
 	if (IS_ERR(plane))
@@ -2667,11 +2758,18 @@ skl_universal_plane_create(struct drm_i915_private *dev_priv,
 	plane->get_hw_state = skl_plane_get_hw_state;
 	plane->check_plane = skl_plane_check;
 
-	if (plane_id == PLANE_1) {
+	if (HAS_ASYNC_FLIPS(dev_priv) && plane_id == PLANE_1) {
 		plane->need_async_flip_toggle_wa = IS_DISPLAY_VER(dev_priv, 9, 10);
 		plane->async_flip = skl_plane_async_flip;
 		plane->enable_flip_done = skl_plane_enable_flip_done;
 		plane->disable_flip_done = skl_plane_disable_flip_done;
+
+		if (DISPLAY_VER(dev_priv) >= 12)
+			plane->can_async_flip = tgl_plane_can_async_flip;
+		else if (DISPLAY_VER(dev_priv) == 11)
+			plane->can_async_flip = icl_plane_can_async_flip;
+		else
+			plane->can_async_flip = skl_plane_can_async_flip;
 	}
 
 	if (DISPLAY_VER(dev_priv) >= 11)
@@ -2696,8 +2794,22 @@ skl_universal_plane_create(struct drm_i915_private *dev_priv,
 	else
 		plane_type = DRM_PLANE_TYPE_OVERLAY;
 
-	modifiers = intel_fb_plane_get_modifiers(dev_priv,
-						 skl_get_plane_caps(dev_priv, pipe, plane_id));
+	if (DISPLAY_VER(dev_priv) >= 12)
+		caps = tgl_plane_caps(dev_priv, pipe, plane_id);
+	else if (DISPLAY_VER(dev_priv) == 11)
+		caps = icl_plane_caps(dev_priv, pipe, plane_id);
+	else if (DISPLAY_VER(dev_priv) == 10)
+		caps = glk_plane_caps(dev_priv, pipe, plane_id);
+	else
+		caps = skl_plane_caps(dev_priv, pipe, plane_id);
+
+	/* FIXME: xe has problems with AUX */
+	if (!IS_ENABLED(I915) && !HAS_FLAT_CCS(dev_priv))
+		caps &= ~(INTEL_PLANE_CAP_CCS_RC |
+			  INTEL_PLANE_CAP_CCS_RC_CC |
+			  INTEL_PLANE_CAP_CCS_MC);
+
+	modifiers = intel_fb_plane_get_modifiers(dev_priv, caps);
 
 	ret = drm_universal_plane_init(&dev_priv->drm, &plane->base,
 				       0, plane_funcs,
@@ -2881,7 +2993,7 @@ skl_get_initial_plane_config(struct intel_crtc *crtc,
 
 	/*
 	 * DRM_MODE_ROTATE_ is counter clockwise to stay compatible with Xrandr
-	 * while i915 HW rotation is clockwise, thats why this swapping.
+	 * while i915 HW rotation is clockwise, that's why this swapping.
 	 */
 	switch (val & PLANE_CTL_ROTATE_MASK) {
 	case PLANE_CTL_ROTATE_0:

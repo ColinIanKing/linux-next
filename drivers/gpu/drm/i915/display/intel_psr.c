@@ -154,7 +154,7 @@
  *
  *  Unfortunately CHICKEN_TRANS itself seems to be double buffered
  *  and thus won't latch until the first vblank. So with DC states
- *  enabled the register effctively uses the reset value during DC5
+ *  enabled the register effectively uses the reset value during DC5
  *  exit+PSR exit sequence, and thus the bit does nothing until
  *  latched by the vblank that it was trying to prevent from being
  *  generated in the first place. So we should probably call this
@@ -171,7 +171,7 @@
  * CHICKEN_PIPESL_1[15]/HSW_UNMASK_VBL_TO_REGS_IN_SRD (hsw):
  *
  *  On BDW without this bit is no vblanks whatsoever are
- *  generated after PSR exit. On HSW this has no apparant effect.
+ *  generated after PSR exit. On HSW this has no apparent effect.
  *  WaPsrDPRSUnmaskVBlankInSRD says to set this.
  *
  * The rest of the bits are more self-explanatory and/or
@@ -185,7 +185,7 @@
  *  has_psr + has_panel_replay:				Panel Replay
  *  has_psr + has_panel_replay + has_sel_update:	Panel Replay Selective Update
  *
- * Description of some intel_psr varibles. enabled, panel_replay_enabled,
+ * Description of some intel_psr variables. enabled, panel_replay_enabled,
  * sel_update_enabled
  *
  *  enabled (alone):						PSR1
@@ -814,8 +814,8 @@ static void intel_psr_enable_sink_alpm(struct intel_dp *intel_dp,
 	drm_dp_dpcd_writeb(&intel_dp->aux, DP_RECEIVER_ALPM_CONFIG, val);
 }
 
-void intel_psr_enable_sink(struct intel_dp *intel_dp,
-			   const struct intel_crtc_state *crtc_state)
+static void intel_psr_enable_sink(struct intel_dp *intel_dp,
+				  const struct intel_crtc_state *crtc_state)
 {
 	intel_psr_enable_sink_alpm(intel_dp, crtc_state);
 
@@ -825,6 +825,13 @@ void intel_psr_enable_sink(struct intel_dp *intel_dp,
 
 	if (intel_dp_is_edp(intel_dp))
 		drm_dp_dpcd_writeb(&intel_dp->aux, DP_SET_POWER, DP_SET_POWER_D0);
+}
+
+void intel_psr_panel_replay_enable_sink(struct intel_dp *intel_dp)
+{
+	if (CAN_PANEL_REPLAY(intel_dp))
+		drm_dp_dpcd_writeb(&intel_dp->aux, PANEL_REPLAY_CONFIG,
+				   DP_PANEL_REPLAY_ENABLE);
 }
 
 static u32 intel_psr1_get_tp_time(struct intel_dp *intel_dp)
@@ -1043,7 +1050,7 @@ static void hsw_activate_psr2(struct intel_dp *intel_dp)
 		};
 		/*
 		 * Still using the default IO_BUFFER_WAKE and FAST_WAKE, see
-		 * comments bellow for more information
+		 * comments below for more information
 		 */
 		int tmp;
 
@@ -1991,18 +1998,25 @@ static void intel_psr_enable_locked(struct intel_dp *intel_dp,
 	if (!psr_interrupt_error_check(intel_dp))
 		return;
 
-	if (intel_dp->psr.panel_replay_enabled) {
+	if (intel_dp->psr.panel_replay_enabled)
 		drm_dbg_kms(display->drm, "Enabling Panel Replay\n");
-	} else {
+	else
 		drm_dbg_kms(display->drm, "Enabling PSR%s\n",
 			    intel_dp->psr.sel_update_enabled ? "2" : "1");
 
-		/*
-		 * Panel replay has to be enabled before link training: doing it
-		 * only for PSR here.
-		 */
-		intel_psr_enable_sink(intel_dp, crtc_state);
-	}
+	/*
+	 * Enabling here only for PSR. Panel Replay enable bit is already
+	 * written at this point. See
+	 * intel_psr_panel_replay_enable_sink. Modifiers/options:
+	 *  - Selective Update
+	 *  - Region Early Transport
+	 *  - Selective Update Region Scanline Capture
+	 *  - VSC_SDP_CRC
+	 *  - HPD on different Errors
+	 *  - CRC verification
+	 * are written for PSR and Panel Replay here.
+	 */
+	intel_psr_enable_sink(intel_dp, crtc_state);
 
 	if (intel_dp_is_edp(intel_dp))
 		intel_snps_phy_update_psr_power_state(&dig_port->base, true);
@@ -2808,6 +2822,8 @@ void intel_psr_pre_plane_update(struct intel_atomic_state *state,
 		needs_to_disable |= new_crtc_state->has_sel_update != psr->sel_update_enabled;
 		needs_to_disable |= new_crtc_state->enable_psr2_su_region_et !=
 			psr->su_region_et_enabled;
+		needs_to_disable |= new_crtc_state->has_panel_replay !=
+			psr->panel_replay_enabled;
 		needs_to_disable |= DISPLAY_VER(i915) < 11 &&
 			new_crtc_state->wm_level_disabled;
 
