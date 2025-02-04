@@ -79,7 +79,6 @@ struct journal_entry_pin {
 
 struct journal_res {
 	bool			ref;
-	u8			idx;
 	u16			u64s;
 	u32			offset;
 	u64			seq;
@@ -95,9 +94,8 @@ union journal_res_state {
 	};
 
 	struct {
-		u64		cur_entry_offset:20,
+		u64		cur_entry_offset:22,
 				idx:2,
-				unwritten_idx:2,
 				buf0_count:10,
 				buf1_count:10,
 				buf2_count:10,
@@ -107,13 +105,13 @@ union journal_res_state {
 
 /* bytes: */
 #define JOURNAL_ENTRY_SIZE_MIN		(64U << 10) /* 64k */
-#define JOURNAL_ENTRY_SIZE_MAX		(4U  << 20) /* 4M */
+#define JOURNAL_ENTRY_SIZE_MAX		(4U  << 22) /* 16M */
 
 /*
  * We stash some journal state as sentinal values in cur_entry_offset:
  * note - cur_entry_offset is in units of u64s
  */
-#define JOURNAL_ENTRY_OFFSET_MAX	((1U << 20) - 1)
+#define JOURNAL_ENTRY_OFFSET_MAX	((1U << 22) - 1)
 
 #define JOURNAL_ENTRY_BLOCKED_VAL	(JOURNAL_ENTRY_OFFSET_MAX - 2)
 #define JOURNAL_ENTRY_CLOSED_VAL	(JOURNAL_ENTRY_OFFSET_MAX - 1)
@@ -237,6 +235,7 @@ struct journal {
 	/* seq, last_seq from the most recent journal entry successfully written */
 	u64			seq_ondisk;
 	u64			flushed_seq_ondisk;
+	u64			flushing_seq;
 	u64			last_seq_ondisk;
 	u64			err_seq;
 	u64			last_empty_seq;
