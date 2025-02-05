@@ -179,23 +179,6 @@ static void open_bucket_free_unused(struct bch_fs *c, struct open_bucket *ob)
 	closure_wake_up(&c->freelist_wait);
 }
 
-static inline unsigned open_buckets_reserved(enum bch_watermark watermark)
-{
-	switch (watermark) {
-	case BCH_WATERMARK_interior_updates:
-		return 0;
-	case BCH_WATERMARK_reclaim:
-		return OPEN_BUCKETS_COUNT / 6;
-	case BCH_WATERMARK_btree:
-	case BCH_WATERMARK_btree_copygc:
-		return OPEN_BUCKETS_COUNT / 4;
-	case BCH_WATERMARK_copygc:
-		return OPEN_BUCKETS_COUNT / 3;
-	default:
-		return OPEN_BUCKETS_COUNT / 2;
-	}
-}
-
 static inline bool may_alloc_bucket(struct bch_fs *c,
 				    struct bpos bucket,
 				    struct bucket_alloc_state *s)
@@ -205,8 +188,12 @@ static inline bool may_alloc_bucket(struct bch_fs *c,
 		return false;
 	}
 
-	if (bch2_bucket_needs_journal_commit(&c->buckets_waiting_for_journal,
-			c->journal.flushed_seq_ondisk, bucket.inode, bucket.offset)) {
+	u64 journal_seq_ready =
+		bch2_bucket_journal_seq_ready(&c->buckets_waiting_for_journal,
+					      bucket.inode, bucket.offset);
+	if (journal_seq_ready > c->journal.flushed_seq_ondisk) {
+		if (journal_seq_ready > c->journal.flushing_seq)
+			s->need_journal_commit++;
 		s->skipped_need_journal_commit++;
 		return false;
 	}
@@ -235,7 +222,7 @@ static struct open_bucket *__try_alloc_bucket(struct bch_fs *c, struct bch_dev *
 
 	spin_lock(&c->freelist_lock);
 
-	if (unlikely(c->open_buckets_nr_free <= open_buckets_reserved(watermark))) {
+	if (unlikely(c->open_buckets_nr_free <= bch2_open_buckets_reserved(watermark))) {
 		if (cl)
 			closure_wait(&c->open_buckets_wait, cl);
 
@@ -570,7 +557,7 @@ alloc:
 		? bch2_bucket_alloc_freelist(trans, ca, watermark, &s, cl)
 		: bch2_bucket_alloc_early(trans, ca, watermark, &s, cl);
 
-	if (s.skipped_need_journal_commit * 2 > avail)
+	if (s.need_journal_commit * 2 > avail)
 		bch2_journal_flush_async(&c->journal, NULL);
 
 	if (!ob && s.btree_bitmap != BTREE_BITMAP_ANY) {
@@ -724,7 +711,7 @@ int bch2_bucket_alloc_set_trans(struct btree_trans *trans,
 
 		struct bch_dev_usage usage;
 		struct open_bucket *ob = bch2_bucket_alloc_trans(trans, ca, watermark, data_type,
-						     cl, flags & BCH_WRITE_ALLOC_NOWAIT, &usage);
+						     cl, flags & BCH_WRITE_alloc_nowait, &usage);
 		if (!IS_ERR(ob))
 			bch2_dev_stripe_increment_inlined(ca, stripe, &usage);
 		bch2_dev_put(ca);
@@ -1332,7 +1319,7 @@ retry:
 	if (wp->data_type != BCH_DATA_user)
 		have_cache = true;
 
-	if (target && !(flags & BCH_WRITE_ONLY_SPECIFIED_DEVS)) {
+	if (target && !(flags & BCH_WRITE_only_specified_devs)) {
 		ret = open_bucket_add_buckets(trans, &ptrs, wp, devs_have,
 					      target, erasure_code,
 					      nr_replicas, &nr_effective,
@@ -1422,7 +1409,7 @@ err:
 	if (cl && bch2_err_matches(ret, BCH_ERR_open_buckets_empty))
 		ret = -BCH_ERR_bucket_alloc_blocked;
 
-	if (cl && !(flags & BCH_WRITE_ALLOC_NOWAIT) &&
+	if (cl && !(flags & BCH_WRITE_alloc_nowait) &&
 	    bch2_err_matches(ret, BCH_ERR_freelist_empty))
 		ret = -BCH_ERR_bucket_alloc_blocked;
 
