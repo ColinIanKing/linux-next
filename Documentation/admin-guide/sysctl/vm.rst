@@ -27,6 +27,7 @@ Currently, these files are in /proc/sys/vm:
 - admin_reserve_kbytes
 - compact_memory
 - compaction_proactiveness
+- compaction_proactiveness_leeway
 - compact_unevictable_allowed
 - dirty_background_bytes
 - dirty_background_ratio
@@ -132,6 +133,22 @@ proactive compaction is not being effective.
 
 Be careful when setting it to extreme values like 100, as that may
 cause excessive background compaction activity.
+
+compaction_proactiveness_leeway
+===============================
+
+This tunable controls the difference between high and low watermarks for
+proactive compaction. This tunable takes a value in the range [0, 100] with
+a default value of 10. Higher values will result in proactive compaction
+triggering less often but doing more work when it does trigger.
+
+Proactive compaction triggers when fragmentation score (lower is better) gets
+larger than high watermark. Compaction stops when the score gets smaller or
+equal to low watermark (or when no progress is being made).
+The watermarks are calculated as follows:
+
+low_wmark = 100 - compaction_proactiveness;
+high_wmark = low_wmark + compaction_proactiveness_leeway;
 
 compact_unevictable_allowed
 ===========================
