@@ -78,6 +78,10 @@ struct rq *scx_bpf_cpu_rq(s32 cpu) __ksym;
 struct cgroup *scx_bpf_task_cgroup(struct task_struct *p) __ksym __weak;
 u64 scx_bpf_now(void) __ksym __weak;
 
+void scx_bpf_events(struct scx_event_stats *events, size_t events__sz) __ksym __weak;
+#define scx_read_event(e, name)							\
+	(bpf_core_field_exists((e)->name) ? (e)->name : 0)
+
 /*
  * Use the following as @it__iter when calling scx_bpf_dsq_move[_vtime]() from
  * within bpf_for_each() loops.
@@ -404,6 +408,17 @@ static __always_inline const struct cpumask *cast_mask(struct bpf_cpumask *mask)
 	return (const struct cpumask *)mask;
 }
 
+/*
+ * Return true if task @p cannot migrate to a different CPU, false
+ * otherwise.
+ */
+static inline bool is_migration_disabled(const struct task_struct *p)
+{
+	if (bpf_core_field_exists(p->migration_disabled))
+		return p->migration_disabled;
+	return false;
+}
+
 /* rcu */
 void bpf_rcu_read_lock(void) __ksym;
 void bpf_rcu_read_unlock(void) __ksym;
@@ -421,7 +436,7 @@ void bpf_rcu_read_unlock(void) __ksym;
  */
 static inline s64 time_delta(u64 after, u64 before)
 {
-	return (s64)(after - before) > 0 ? : 0;
+	return (s64)(after - before) > 0 ? (s64)(after - before) : 0;
 }
 
 /**
