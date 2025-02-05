@@ -977,15 +977,13 @@ session_recover:
 retry_new_seq:
 	++slot->seq_nr;
 retry_nowait:
-	if (rpc_restart_call_prepare(task)) {
-		nfs41_sequence_free_slot(res);
-		task->tk_status = 0;
-		ret = 0;
-	}
+	rpc_restart_call_prepare(task);
+	nfs41_sequence_free_slot(res);
+	task->tk_status = 0;
+	ret = 0;
 	goto out;
 out_retry:
-	if (!rpc_restart_call(task))
-		goto out;
+	rpc_restart_call(task);
 	rpc_delay(task, NFS4_POLL_RETRY_MAX);
 	return 0;
 }
