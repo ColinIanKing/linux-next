@@ -18,9 +18,11 @@
 #include "xe_memirq_types.h"
 #include "xe_oa_types.h"
 #include "xe_platform_types.h"
+#include "xe_pmu_types.h"
 #include "xe_pt_types.h"
 #include "xe_sriov_types.h"
 #include "xe_step_types.h"
+#include "xe_survivability_mode_types.h"
 
 #if IS_ENABLED(CONFIG_DRM_XE_DEBUG)
 #define TEST_VM_OPS_ERROR
@@ -34,6 +36,7 @@
 
 struct xe_ggtt;
 struct xe_pat_ops;
+struct xe_pxp;
 
 #define XE_BO_INVALID_OFFSET	LONG_MAX
 
@@ -186,13 +189,6 @@ struct xe_tile {
 	 */
 	struct xe_mmio mmio;
 
-	/**
-	 * @mmio_ext: MMIO-extension info for a tile.
-	 *
-	 * Each tile has its own additional 256MB (28-bit) MMIO-extension space.
-	 */
-	struct xe_mmio mmio_ext;
-
 	/** @mem: memory management info for tile */
 	struct {
 		/**
@@ -263,8 +259,6 @@ struct xe_device {
 		const char *graphics_name;
 		/** @info.media_name: media IP name */
 		const char *media_name;
-		/** @info.tile_mmio_ext_size: size of MMIO extension space, per-tile */
-		u32 tile_mmio_ext_size;
 		/** @info.graphics_verx100: graphics IP version */
 		u32 graphics_verx100;
 		/** @info.media_verx100: media IP version */
@@ -314,8 +308,8 @@ struct xe_device {
 		u8 has_heci_gscfi:1;
 		/** @info.has_llc: Device has a shared CPU+GPU last level cache */
 		u8 has_llc:1;
-		/** @info.has_mmio_ext: Device has extra MMIO address range */
-		u8 has_mmio_ext:1;
+		/** @info.has_pxp: Device has PXP support */
+		u8 has_pxp:1;
 		/** @info.has_range_tlb_invalidation: Has range based TLB invalidations */
 		u8 has_range_tlb_invalidation:1;
 		/** @info.has_sriov: Supports SR-IOV */
@@ -340,6 +334,9 @@ struct xe_device {
 		/** @info.skip_pcode: skip access to PCODE uC */
 		u8 skip_pcode:1;
 	} info;
+
+	/** @survivability: survivability information for device */
+	struct xe_survivability survivability;
 
 	/** @irq: device interrupt state */
 	struct {
@@ -514,6 +511,9 @@ struct xe_device {
 	/** @oa: oa observation subsystem */
 	struct xe_oa oa;
 
+	/** @pxp: Encapsulate Protected Xe Path support */
+	struct xe_pxp *pxp;
+
 	/** @needs_flr_on_fini: requests function-reset on fini */
 	bool needs_flr_on_fini;
 
@@ -524,6 +524,9 @@ struct xe_device {
 		/** @wedged.mode: Mode controlled by kernel parameter and debugfs */
 		int mode;
 	} wedged;
+
+	/** @pmu: performance monitoring unit */
+	struct xe_pmu pmu;
 
 #ifdef TEST_VM_OPS_ERROR
 	/**
@@ -586,8 +589,6 @@ struct xe_device {
 		unsigned int czclk_freq;
 		unsigned int fsb_freq, mem_freq, is_ddr3;
 	};
-
-	void *pxp;
 #endif
 };
 
