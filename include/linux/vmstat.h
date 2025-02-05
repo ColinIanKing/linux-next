@@ -135,8 +135,13 @@ static inline void vm_events_fold_cpu(int cpu)
 #define count_vm_vma_lock_event(x) do {} while (0)
 #endif
 
+/*
+ * item##_NORMAL has type enum vm_event_item while ZONE_NORMAL and zid have
+ * type enum zone_type. Suppress compiler warnings about mixing different
+ * enumeration types by converting item##_NORMAL into an int with '+ 0'.
+ */
 #define __count_zid_vm_events(item, zid, delta) \
-	__count_vm_events(item##_NORMAL - ZONE_NORMAL + zid, delta)
+	__count_vm_events((item##_NORMAL + 0) - ZONE_NORMAL + zid, delta)
 
 /*
  * Zone and node-based page accounting with per cpu differentials.
@@ -515,7 +520,7 @@ static inline const char *node_stat_name(enum node_stat_item item)
 
 static inline const char *lru_list_name(enum lru_list lru)
 {
-	return node_stat_name(NR_LRU_BASE + (enum node_stat_item)lru) + 3; // skip "nr_"
+	return node_stat_name(NR_LRU_BASE + lru) + 3; // skip "nr_"
 }
 
 #if defined(CONFIG_VM_EVENT_COUNTERS) || defined(CONFIG_MEMCG)
