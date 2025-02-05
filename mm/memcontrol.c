@@ -4179,6 +4179,17 @@ static int memory_max_show(struct seq_file *m, void *v)
 		READ_ONCE(mem_cgroup_from_seq(m)->memory.max));
 }
 
+static int memory_max_effective_show(struct seq_file *m, void *v)
+{
+	unsigned long max = PAGE_COUNTER_MAX;
+	struct mem_cgroup *memcg = mem_cgroup_from_seq(m);
+
+	for (; memcg; memcg = parent_mem_cgroup(memcg))
+		max = min(max, READ_ONCE(memcg->memory.max));
+
+	return seq_puts_memcg_tunable(m, max);
+}
+
 static ssize_t memory_max_write(struct kernfs_open_file *of,
 				char *buf, size_t nbytes, loff_t off)
 {
@@ -4456,6 +4467,11 @@ static struct cftype memory_files[] = {
 		.flags = CFTYPE_NOT_ON_ROOT,
 		.seq_show = memory_max_show,
 		.write = memory_max_write,
+	},
+	{
+		.name = "max.effective",
+		.flags = CFTYPE_NOT_ON_ROOT,
+		.seq_show = memory_max_effective_show,
 	},
 	{
 		.name = "events",
@@ -5136,6 +5152,17 @@ static int swap_max_show(struct seq_file *m, void *v)
 		READ_ONCE(mem_cgroup_from_seq(m)->swap.max));
 }
 
+static int swap_max_effective_show(struct seq_file *m, void *v)
+{
+	unsigned long max = PAGE_COUNTER_MAX;
+	struct mem_cgroup *memcg = mem_cgroup_from_seq(m);
+
+	for (; memcg; memcg = parent_mem_cgroup(memcg))
+		max = min(max, READ_ONCE(memcg->swap.max));
+
+	return seq_puts_memcg_tunable(m, max);
+}
+
 static ssize_t swap_max_write(struct kernfs_open_file *of,
 			      char *buf, size_t nbytes, loff_t off)
 {
@@ -5184,6 +5211,11 @@ static struct cftype swap_files[] = {
 		.flags = CFTYPE_NOT_ON_ROOT,
 		.seq_show = swap_max_show,
 		.write = swap_max_write,
+	},
+	{
+		.name = "swap.max.effective",
+		.flags = CFTYPE_NOT_ON_ROOT,
+		.seq_show = swap_max_effective_show,
 	},
 	{
 		.name = "swap.peak",
@@ -5327,6 +5359,17 @@ static int zswap_max_show(struct seq_file *m, void *v)
 		READ_ONCE(mem_cgroup_from_seq(m)->zswap_max));
 }
 
+static int zswap_max_effective_show(struct seq_file *m, void *v)
+{
+	unsigned long max = PAGE_COUNTER_MAX;
+	struct mem_cgroup *memcg = mem_cgroup_from_seq(m);
+
+	for (; memcg; memcg = parent_mem_cgroup(memcg))
+		max = min(max, READ_ONCE(memcg->zswap_max));
+
+	return seq_puts_memcg_tunable(m, max);
+}
+
 static ssize_t zswap_max_write(struct kernfs_open_file *of,
 			       char *buf, size_t nbytes, loff_t off)
 {
@@ -5380,6 +5423,11 @@ static struct cftype zswap_files[] = {
 		.flags = CFTYPE_NOT_ON_ROOT,
 		.seq_show = zswap_max_show,
 		.write = zswap_max_write,
+	},
+	{
+		.name = "zswap.max.effective",
+		.flags = CFTYPE_NOT_ON_ROOT,
+		.seq_show = zswap_max_effective_show,
 	},
 	{
 		.name = "zswap.writeback",
