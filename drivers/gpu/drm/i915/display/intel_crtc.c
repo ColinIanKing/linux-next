@@ -96,7 +96,7 @@ u32 intel_crtc_max_vblank_count(const struct intel_crtc_state *crtc_state)
 	struct drm_i915_private *dev_priv = to_i915(crtc_state->uapi.crtc->dev);
 
 	/*
-	 * From Gen 11, In case of dsi cmd mode, frame counter wouldnt
+	 * From Gen 11, in case of dsi cmd mode, frame counter wouldn't
 	 * have updated at the beginning of TE, if we want to use
 	 * the hw counter, then we would find it updated in only
 	 * the next TE, hence switching to sw counter.
@@ -714,7 +714,7 @@ void intel_pipe_update_end(struct intel_atomic_state *state,
 	 * which would cause the next frame to terminate already at vmin
 	 * vblank start instead of vmax vblank start.
 	 */
-	intel_vrr_send_push(new_crtc_state);
+	intel_vrr_send_push(NULL, new_crtc_state);
 
 	local_irq_enable();
 

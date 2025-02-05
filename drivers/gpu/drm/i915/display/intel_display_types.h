@@ -711,6 +711,8 @@ struct intel_initial_plane_config {
 struct intel_scaler {
 	u32 mode;
 	bool in_use;
+	int hscale;
+	int vscale;
 };
 
 struct intel_crtc_scaler_state {
@@ -732,7 +734,7 @@ struct intel_crtc_scaler_state {
 	 *
 	 * intel_atomic_setup_scalers will setup available scalers to users
 	 * requesting scalers. It will gracefully fail if request exceeds
-	 * avilability.
+	 * availability.
 	 */
 #define SKL_CRTC_INDEX 31
 	unsigned scaler_users;
@@ -1113,7 +1115,7 @@ struct intel_crtc_state {
 	u16 su_y_granularity;
 
 	/*
-	 * Frequence the dpll for the port should run at. Differs from the
+	 * Frequency the dpll for the port should run at. Differs from the
 	 * adjusted dotclock e.g. for DP or 10/12bpc hdmi mode. This is also
 	 * already multiplied by pixel_multiplier.
 	 */
@@ -1474,6 +1476,7 @@ struct intel_plane {
 	unsigned int (*max_stride)(struct intel_plane *plane,
 				   u32 pixel_format, u64 modifier,
 				   unsigned int rotation);
+	bool (*can_async_flip)(u64 modifier);
 	/* Write all non-self arming plane registers */
 	void (*update_noarm)(struct intel_dsb *dsb,
 			     struct intel_plane *plane,

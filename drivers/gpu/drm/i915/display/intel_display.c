@@ -1013,7 +1013,7 @@ static void intel_async_flip_vtd_wa(struct drm_i915_private *i915,
 {
 	if (DISPLAY_VER(i915) == 9) {
 		/*
-		 * "Plane N strech max must be programmed to 11b (x1)
+		 * "Plane N stretch max must be programmed to 11b (x1)
 		 *  when Async flips are enabled on that plane."
 		 */
 		intel_de_rmw(i915, CHICKEN_PIPESL_1(pipe),
@@ -2610,14 +2610,59 @@ static int intel_crtc_compute_pipe_mode(struct intel_crtc_state *crtc_state)
 	return 0;
 }
 
-static bool intel_crtc_needs_wa_14015401596(struct intel_crtc_state *crtc_state)
+static bool intel_crtc_needs_wa_14015401596(const struct intel_crtc_state *crtc_state)
 {
 	struct intel_display *display = to_intel_display(crtc_state);
-	const struct drm_display_mode *adjusted_mode = &crtc_state->hw.adjusted_mode;
 
 	return intel_vrr_possible(crtc_state) && crtc_state->has_psr &&
-		adjusted_mode->crtc_vblank_start == adjusted_mode->crtc_vdisplay &&
 		IS_DISPLAY_VER(display, 13, 14);
+}
+
+static int intel_crtc_vblank_delay(const struct intel_crtc_state *crtc_state)
+{
+	struct intel_display *display = to_intel_display(crtc_state);
+	int vblank_delay = 0;
+
+	if (!HAS_DSB(display))
+		return 0;
+
+	/* Wa_14015401596 */
+	if (intel_crtc_needs_wa_14015401596(crtc_state))
+		vblank_delay = max(vblank_delay, 1);
+
+	/*
+	 * Add a minimal vblank delay to make sure the push
+	 * doesn't race with the "wait for safe window" used
+	 * for frame completion with DSB.
+	 */
+	if (intel_vrr_possible(crtc_state))
+		vblank_delay = max(vblank_delay, 1);
+
+	return vblank_delay;
+}
+
+static int intel_crtc_compute_vblank_delay(struct intel_atomic_state *state,
+					   struct intel_crtc *crtc)
+{
+	struct intel_display *display = to_intel_display(state);
+	struct intel_crtc_state *crtc_state =
+		intel_atomic_get_new_crtc_state(state, crtc);
+	struct drm_display_mode *adjusted_mode =
+		&crtc_state->hw.adjusted_mode;
+	int vblank_delay, max_vblank_delay;
+
+	vblank_delay = intel_crtc_vblank_delay(crtc_state);
+	max_vblank_delay = adjusted_mode->crtc_vblank_end - adjusted_mode->crtc_vblank_start - 1;
+
+	if (vblank_delay > max_vblank_delay) {
+		drm_dbg_kms(display->drm, "[CRTC:%d:%s] vblank delay (%d) exceeds max (%d)\n",
+			    crtc->base.base.id, crtc->base.name, vblank_delay, max_vblank_delay);
+		return -EINVAL;
+	}
+
+	adjusted_mode->crtc_vblank_start += vblank_delay;
+
+	return 0;
 }
 
 static int intel_crtc_compute_config(struct intel_atomic_state *state,
@@ -2625,13 +2670,11 @@ static int intel_crtc_compute_config(struct intel_atomic_state *state,
 {
 	struct intel_crtc_state *crtc_state =
 		intel_atomic_get_new_crtc_state(state, crtc);
-	struct drm_display_mode *adjusted_mode =
-		&crtc_state->hw.adjusted_mode;
 	int ret;
 
-	/* Wa_14015401596 */
-	if (intel_crtc_needs_wa_14015401596(crtc_state))
-		adjusted_mode->crtc_vblank_start += 1;
+	ret = intel_crtc_compute_vblank_delay(state, crtc);
+	if (ret)
+		return ret;
 
 	ret = intel_dpll_crtc_compute_clock(state, crtc);
 	if (ret)
@@ -2802,6 +2845,8 @@ static void intel_set_transcoder_timings(const struct intel_crtc_state *crtc_sta
 	u32 crtc_vdisplay, crtc_vtotal, crtc_vblank_start, crtc_vblank_end;
 	int vsyncshift = 0;
 
+	drm_WARN_ON(&dev_priv->drm, transcoder_is_dsi(cpu_transcoder));
+
 	/* We need to be careful not to changed the adjusted mode, for otherwise
 	 * the hw state checker will get angry at the mismatch. */
 	crtc_vdisplay = adjusted_mode->crtc_vdisplay;
@@ -2883,12 +2928,30 @@ static void intel_set_transcoder_timings_lrr(const struct intel_crtc_state *crtc
 	const struct drm_display_mode *adjusted_mode = &crtc_state->hw.adjusted_mode;
 	u32 crtc_vdisplay, crtc_vtotal, crtc_vblank_start, crtc_vblank_end;
 
+	drm_WARN_ON(&dev_priv->drm, transcoder_is_dsi(cpu_transcoder));
+
 	crtc_vdisplay = adjusted_mode->crtc_vdisplay;
 	crtc_vtotal = adjusted_mode->crtc_vtotal;
 	crtc_vblank_start = adjusted_mode->crtc_vblank_start;
 	crtc_vblank_end = adjusted_mode->crtc_vblank_end;
 
-	drm_WARN_ON(&dev_priv->drm, adjusted_mode->flags & DRM_MODE_FLAG_INTERLACE);
+	if (adjusted_mode->flags & DRM_MODE_FLAG_INTERLACE) {
+		/* the chip adds 2 halflines automatically */
+		crtc_vtotal -= 1;
+		crtc_vblank_end -= 1;
+	}
+
+	if (DISPLAY_VER(dev_priv) >= 13) {
+		intel_de_write(dev_priv,
+			       TRANS_SET_CONTEXT_LATENCY(dev_priv, cpu_transcoder),
+			       crtc_vblank_start - crtc_vdisplay);
+
+		/*
+		 * VBLANK_START not used by hw, just clear it
+		 * to make it stand out in register dumps.
+		 */
+		crtc_vblank_start = 1;
+	}
 
 	/*
 	 * The hardware actually ignores TRANS_VBLANK.VBLANK_END in DP mode.
@@ -3529,7 +3592,7 @@ static void ilk_get_pfit_config(struct intel_crtc_state *crtc_state)
 		      REG_FIELD_GET(PF_WIN_YSIZE_MASK, size));
 
 	/*
-	 * We currently do not free assignements of panel fitters on
+	 * We currently do not free assignments of panel fitters on
 	 * ivb/hsw (since we don't use the higher upscaling modes which
 	 * differentiates them) so just WARN about this case for now.
 	 */
@@ -4229,7 +4292,7 @@ int intel_dotclock_calculate(int link_freq,
 	/*
 	 * The calculation for the data clock -> pixel clock is:
 	 * pixel_clock = ((m/n)*(link_clock * nr_lanes))/bpp
-	 * But we want to avoid losing precison if possible, so:
+	 * But we want to avoid losing precision if possible, so:
 	 * pixel_clock = ((m * link_clock * nr_lanes)/(n*bpp))
 	 *
 	 * and for link freq (10kbs units) -> pixel clock it is:
@@ -5303,6 +5366,19 @@ pipe_config_cx0pll_mismatch(struct drm_printer *p, bool fastset,
 	intel_cx0pll_dump_hw_state(display, b);
 }
 
+static bool allow_vblank_delay_fastset(const struct intel_crtc_state *old_crtc_state)
+{
+	struct intel_display *display = to_intel_display(old_crtc_state);
+
+	/*
+	 * Allow fastboot to fix up vblank delay (handled via LRR
+	 * codepaths), a bit dodgy as the registers aren't
+	 * double buffered but seems to be working more or less...
+	 */
+	return HAS_LRR(display) && old_crtc_state->inherited &&
+		!intel_crtc_has_type(old_crtc_state, INTEL_OUTPUT_DSI);
+}
+
 bool
 intel_pipe_config_compare(const struct intel_crtc_state *current_config,
 			  const struct intel_crtc_state *pipe_config,
@@ -5435,7 +5511,8 @@ intel_pipe_config_compare(const struct intel_crtc_state *current_config,
 	PIPE_CONF_CHECK_I(name.crtc_hsync_start); \
 	PIPE_CONF_CHECK_I(name.crtc_hsync_end); \
 	PIPE_CONF_CHECK_I(name.crtc_vdisplay); \
-	PIPE_CONF_CHECK_I(name.crtc_vblank_start); \
+	if (!fastset || !allow_vblank_delay_fastset(current_config)) \
+		PIPE_CONF_CHECK_I(name.crtc_vblank_start); \
 	PIPE_CONF_CHECK_I(name.crtc_vsync_start); \
 	PIPE_CONF_CHECK_I(name.crtc_vsync_end); \
 	if (!fastset || !pipe_config->update_lrr) { \
@@ -5638,20 +5715,6 @@ intel_pipe_config_compare(const struct intel_crtc_state *current_config,
 		PIPE_CONF_CHECK_CSC(output_csc);
 	}
 
-	/*
-	 * Panel replay has to be enabled before link training. PSR doesn't have
-	 * this requirement -> check these only if using panel replay
-	 */
-	if (current_config->active_planes &&
-	    (current_config->has_panel_replay ||
-	     pipe_config->has_panel_replay)) {
-		PIPE_CONF_CHECK_BOOL(has_psr);
-		PIPE_CONF_CHECK_BOOL(has_sel_update);
-		PIPE_CONF_CHECK_BOOL(enable_psr2_sel_fetch);
-		PIPE_CONF_CHECK_BOOL(enable_psr2_su_region_et);
-		PIPE_CONF_CHECK_BOOL(has_panel_replay);
-	}
-
 	PIPE_CONF_CHECK_BOOL(double_wide);
 
 	if (dev_priv->display.dpll.mgr)
@@ -5689,10 +5752,11 @@ intel_pipe_config_compare(const struct intel_crtc_state *current_config,
 	PIPE_CONF_CHECK_INFOFRAME(avi);
 	PIPE_CONF_CHECK_INFOFRAME(spd);
 	PIPE_CONF_CHECK_INFOFRAME(hdmi);
-	if (!fastset)
+	if (!fastset) {
 		PIPE_CONF_CHECK_INFOFRAME(drm);
+		PIPE_CONF_CHECK_DP_AS_SDP(as_sdp);
+	}
 	PIPE_CONF_CHECK_DP_VSC_SDP(vsc);
-	PIPE_CONF_CHECK_DP_AS_SDP(as_sdp);
 
 	PIPE_CONF_CHECK_X(sync_mode_slaves_mask);
 	PIPE_CONF_CHECK_I(master_transcoder);
@@ -6026,6 +6090,14 @@ static int intel_modeset_checks(struct intel_atomic_state *state)
 	return 0;
 }
 
+static bool lrr_params_changed(const struct drm_display_mode *old_adjusted_mode,
+			       const struct drm_display_mode *new_adjusted_mode)
+{
+	return old_adjusted_mode->crtc_vblank_start != new_adjusted_mode->crtc_vblank_start ||
+		old_adjusted_mode->crtc_vblank_end != new_adjusted_mode->crtc_vblank_end ||
+		old_adjusted_mode->crtc_vtotal != new_adjusted_mode->crtc_vtotal;
+}
+
 static void intel_crtc_check_fastset(const struct intel_crtc_state *old_crtc_state,
 				     struct intel_crtc_state *new_crtc_state)
 {
@@ -6036,18 +6108,21 @@ static void intel_crtc_check_fastset(const struct intel_crtc_state *old_crtc_sta
 	if (old_crtc_state->vrr.in_range != new_crtc_state->vrr.in_range)
 		new_crtc_state->update_lrr = false;
 
-	if (!intel_pipe_config_compare(old_crtc_state, new_crtc_state, true))
+	if (!intel_pipe_config_compare(old_crtc_state, new_crtc_state, true)) {
 		drm_dbg_kms(&i915->drm, "[CRTC:%d:%s] fastset requirement not met, forcing full modeset\n",
 			    crtc->base.base.id, crtc->base.name);
-	else
+	} else {
+		if (allow_vblank_delay_fastset(old_crtc_state))
+			new_crtc_state->update_lrr = true;
 		new_crtc_state->uapi.mode_changed = false;
+	}
 
 	if (intel_compare_link_m_n(&old_crtc_state->dp_m_n,
 				   &new_crtc_state->dp_m_n))
 		new_crtc_state->update_m_n = false;
 
-	if ((old_crtc_state->hw.adjusted_mode.crtc_vtotal == new_crtc_state->hw.adjusted_mode.crtc_vtotal &&
-	     old_crtc_state->hw.adjusted_mode.crtc_vblank_end == new_crtc_state->hw.adjusted_mode.crtc_vblank_end))
+	if (!lrr_params_changed(&old_crtc_state->hw.adjusted_mode,
+				&new_crtc_state->hw.adjusted_mode))
 		new_crtc_state->update_lrr = false;
 
 	if (intel_crtc_needs_modeset(new_crtc_state))
@@ -6359,7 +6434,7 @@ static void kill_joiner_secondaries(struct intel_atomic_state *state,
  * the intel_crtc_enable_flip_done() function.
  *
  * As soon as the surface address register is written, flip done interrupt is
- * generated and the requested events are sent to the usersapce in the interrupt
+ * generated and the requested events are sent to the userspace in the interrupt
  * handler itself. The timestamp and sequence sent during the flip done event
  * correspond to the last vblank and have no relation to the actual time when
  * the flip done event was sent.
@@ -6493,36 +6568,7 @@ static int intel_async_flip_check_hw(struct intel_atomic_state *state, struct in
 		if (!plane->async_flip)
 			continue;
 
-		/*
-		 * FIXME: This check is kept generic for all platforms.
-		 * Need to verify this for all gen9 platforms to enable
-		 * this selectively if required.
-		 */
-		switch (new_plane_state->hw.fb->modifier) {
-		case DRM_FORMAT_MOD_LINEAR:
-			/*
-			 * FIXME: Async on Linear buffer is supported on ICL as
-			 * but with additional alignment and fbc restrictions
-			 * need to be taken care of. These aren't applicable for
-			 * gen12+.
-			 */
-			if (DISPLAY_VER(i915) < 12) {
-				drm_dbg_kms(&i915->drm,
-					    "[PLANE:%d:%s] Modifier 0x%llx does not support async flip on display ver %d\n",
-					    plane->base.base.id, plane->base.name,
-					    new_plane_state->hw.fb->modifier, DISPLAY_VER(i915));
-				return -EINVAL;
-			}
-			break;
-
-		case I915_FORMAT_MOD_X_TILED:
-		case I915_FORMAT_MOD_Y_TILED:
-		case I915_FORMAT_MOD_Yf_TILED:
-		case I915_FORMAT_MOD_4_TILED:
-		case I915_FORMAT_MOD_4_TILED_BMG_CCS:
-		case I915_FORMAT_MOD_4_TILED_LNL_CCS:
-			break;
-		default:
+		if (!intel_plane_can_async_flip(plane, new_plane_state->hw.fb->modifier)) {
 			drm_dbg_kms(&i915->drm,
 				    "[PLANE:%d:%s] Modifier 0x%llx does not support async flip\n",
 				    plane->base.base.id, plane->base.name,
@@ -6530,7 +6576,8 @@ static int intel_async_flip_check_hw(struct intel_atomic_state *state, struct in
 			return -EINVAL;
 		}
 
-		if (new_plane_state->hw.fb->format->num_planes > 1) {
+		if (intel_format_info_is_yuv_semiplanar(new_plane_state->hw.fb->format,
+							new_plane_state->hw.fb->modifier)) {
 			drm_dbg_kms(&i915->drm,
 				    "[PLANE:%d:%s] Planar formats do not support async flips\n",
 				    plane->base.base.id, plane->base.name);
@@ -6572,6 +6619,14 @@ static int intel_async_flip_check_hw(struct intel_atomic_state *state, struct in
 		    new_plane_state->hw.rotation) {
 			drm_dbg_kms(&i915->drm,
 				    "[PLANE:%d:%s] Rotation cannot be changed in async flip\n",
+				    plane->base.base.id, plane->base.name);
+			return -EINVAL;
+		}
+
+		if (skl_plane_aux_dist(old_plane_state, 0) !=
+		    skl_plane_aux_dist(new_plane_state, 0)) {
+			drm_dbg_kms(&i915->drm,
+				    "[PLANE:%d:%s] AUX_DIST cannot be changed in async flip\n",
 				    plane->base.base.id, plane->base.name);
 			return -EINVAL;
 		}
@@ -7640,7 +7695,6 @@ static void intel_atomic_dsb_finish(struct intel_atomic_state *state,
 	/* FIXME deal with everything */
 	new_crtc_state->use_dsb =
 		new_crtc_state->update_planes &&
-		!new_crtc_state->vrr.enable &&
 		!new_crtc_state->do_async_flip &&
 		!new_crtc_state->has_psr &&
 		!new_crtc_state->scaler_state.scaler_users &&
@@ -7680,6 +7734,8 @@ static void intel_atomic_dsb_finish(struct intel_atomic_state *state,
 				  new_crtc_state);
 		intel_crtc_planes_update_arm(new_crtc_state->dsb_commit,
 					     state, crtc);
+
+		intel_vrr_send_push(new_crtc_state->dsb_commit, new_crtc_state);
 
 		if (!new_crtc_state->dsb_color_vblank) {
 			intel_dsb_wait_vblanks(new_crtc_state->dsb_commit, 1);
@@ -8728,5 +8784,5 @@ void intel_hpd_poll_fini(struct drm_i915_private *i915)
 
 bool intel_scanout_needs_vtd_wa(struct drm_i915_private *i915)
 {
-	return DISPLAY_VER(i915) >= 6 && i915_vtd_active(i915);
+	return IS_DISPLAY_VER(i915, 6, 11) && i915_vtd_active(i915);
 }
