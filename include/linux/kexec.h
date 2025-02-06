@@ -490,12 +490,24 @@ enum kho_event {
 };
 
 struct notifier_block;
+struct kho_mem;
 
 #ifdef CONFIG_KEXEC_HANDOVER
+void kho_populate(phys_addr_t dt_phys, phys_addr_t scratch_phys,
+		  u64 scratch_len);
+const void *kho_get_fdt(void);
+void kho_return_mem(const struct kho_mem *mem);
+void *kho_claim_mem(const struct kho_mem *mem);
 int register_kho_notifier(struct notifier_block *nb);
 int unregister_kho_notifier(struct notifier_block *nb);
 void kho_memory_init(void);
 #else
+static inline void kho_populate(phys_addr_t dt_phys, phys_addr_t scratch_phys,
+				u64 scratch_len) {}
+static inline void *kho_get_fdt(void) { return NULL; }
+static inline void kho_return_mem(const struct kho_mem *mem) { }
+static inline void *kho_claim_mem(const struct kho_mem *mem) { return NULL; }
+
 static inline int register_kho_notifier(struct notifier_block *nb) { return 0; }
 static inline int unregister_kho_notifier(struct notifier_block *nb) { return 0; }
 static inline void kho_memory_init(void) {}
