@@ -2121,9 +2121,20 @@ void intel_ddi_sanitize_encoder_pll_mapping(struct intel_encoder *encoder)
 }
 
 static void
+tgl_dkl_phy_check_and_rewrite(struct drm_i915_private *dev_priv,
+			      enum tc_port tc_port, u32 ln0, u32 ln1)
+{
+	if (ln0 != intel_dkl_phy_read(dev_priv, DKL_DP_MODE(tc_port, 0)))
+		intel_dkl_phy_write(dev_priv, DKL_DP_MODE(tc_port, 0), ln0);
+	if (ln1 != intel_dkl_phy_read(dev_priv, DKL_DP_MODE(tc_port, 1)))
+		intel_dkl_phy_write(dev_priv, DKL_DP_MODE(tc_port, 1), ln1);
+}
+
+static void
 icl_program_mg_dp_mode(struct intel_digital_port *dig_port,
 		       const struct intel_crtc_state *crtc_state)
 {
+	struct intel_display *display = to_intel_display(crtc_state);
 	struct drm_i915_private *dev_priv = to_i915(dig_port->base.base.dev);
 	enum tc_port tc_port = intel_encoder_to_tc(&dig_port->base);
 	u32 ln0, ln1, pin_assignment;
@@ -2201,6 +2212,10 @@ icl_program_mg_dp_mode(struct intel_digital_port *dig_port,
 	if (DISPLAY_VER(dev_priv) >= 12) {
 		intel_dkl_phy_write(dev_priv, DKL_DP_MODE(tc_port, 0), ln0);
 		intel_dkl_phy_write(dev_priv, DKL_DP_MODE(tc_port, 1), ln1);
+		 /* WA_14018221282 */
+		if (IS_DISPLAY_VER(display, 12, 13))
+			tgl_dkl_phy_check_and_rewrite(dev_priv, tc_port, ln0, ln1);
+
 	} else {
 		intel_de_write(dev_priv, MG_DP_MODE(0, tc_port), ln0);
 		intel_de_write(dev_priv, MG_DP_MODE(1, tc_port), ln1);
@@ -2927,8 +2942,7 @@ static void intel_ddi_pre_enable_dp(struct intel_atomic_state *state,
 					    crtc_state);
 
 	/* Panel replay has to be enabled in sink dpcd before link training. */
-	if (crtc_state->has_panel_replay)
-		intel_psr_enable_sink(enc_to_intel_dp(encoder), crtc_state);
+	intel_psr_panel_replay_enable_sink(enc_to_intel_dp(encoder));
 
 	if (DISPLAY_VER(display) >= 14)
 		mtl_ddi_pre_enable_dp(state, encoder, crtc_state, conn_state);
@@ -2985,7 +2999,7 @@ static void intel_ddi_pre_enable_hdmi(struct intel_atomic_state *state,
  * - crtc_state will be the state of the first stream to be activated on this
  *   port, and it may not be the same stream that will be deactivated last, but
  *   each stream should have a state that is identical when it comes to the DP
- *   link parameteres
+ *   link parameters.
  */
 static void intel_ddi_pre_enable(struct intel_atomic_state *state,
 				 struct intel_encoder *encoder,
@@ -3011,7 +3025,7 @@ static void intel_ddi_pre_enable(struct intel_atomic_state *state,
 
 		/* FIXME precompute everything properly */
 		/* FIXME how do we turn infoframes off again? */
-		if (dig_port->lspcon.active && intel_dp_has_hdmi_sink(&dig_port->dp))
+		if (intel_lspcon_active(dig_port) && intel_dp_has_hdmi_sink(&dig_port->dp))
 			dig_port->set_infoframes(encoder,
 						 crtc_state->has_infoframe,
 						 crtc_state, conn_state);
@@ -3285,7 +3299,7 @@ static void intel_ddi_post_disable(struct intel_atomic_state *state,
 	 *   be deactivated on this port, and it may not be the same
 	 *   stream that was activated last, but each stream
 	 *   should have a state that is identical when it comes to
-	 *   the DP link parameteres
+	 *   the DP link parameters
 	 */
 
 	if (intel_crtc_has_type(old_crtc_state, INTEL_OUTPUT_HDMI))
@@ -3367,7 +3381,7 @@ static void intel_ddi_enable_dp(struct intel_atomic_state *state,
 	drm_connector_update_privacy_screen(conn_state);
 	intel_edp_backlight_on(crtc_state, conn_state);
 
-	if (!dig_port->lspcon.active || intel_dp_has_hdmi_sink(&dig_port->dp))
+	if (!intel_lspcon_active(dig_port) || intel_dp_has_hdmi_sink(&dig_port->dp))
 		intel_dp_set_infoframes(encoder, true, crtc_state, conn_state);
 
 	trans_port_sync_stop_link_train(state, encoder, crtc_state);
@@ -4068,7 +4082,7 @@ static void intel_ddi_read_func_ctl_dp_sst(struct intel_encoder *encoder,
 			intel_de_read(display,
 				      dp_tp_ctl_reg(encoder, crtc_state)) & DP_TP_CTL_FEC_ENABLE;
 
-	if (dig_port->lspcon.active && intel_dp_has_hdmi_sink(&dig_port->dp))
+	if (intel_lspcon_active(dig_port) && intel_dp_has_hdmi_sink(&dig_port->dp))
 		crtc_state->infoframes.enable |=
 			intel_lspcon_infoframes_enabled(encoder, crtc_state);
 	else
