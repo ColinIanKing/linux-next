@@ -483,6 +483,24 @@ void set_kexec_sig_enforced(void);
 static inline void set_kexec_sig_enforced(void) {}
 #endif
 
+/* KHO Notifier index */
+enum kho_event {
+	KEXEC_KHO_DUMP = 0,
+	KEXEC_KHO_ABORT = 1,
+};
+
+struct notifier_block;
+
+#ifdef CONFIG_KEXEC_HANDOVER
+int register_kho_notifier(struct notifier_block *nb);
+int unregister_kho_notifier(struct notifier_block *nb);
+void kho_memory_init(void);
+#else
+static inline int register_kho_notifier(struct notifier_block *nb) { return 0; }
+static inline int unregister_kho_notifier(struct notifier_block *nb) { return 0; }
+static inline void kho_memory_init(void) {}
+#endif /* CONFIG_KEXEC_HANDOVER */
+
 #endif /* !defined(__ASSEBMLY__) */
 
 #endif /* LINUX_KEXEC_H */
