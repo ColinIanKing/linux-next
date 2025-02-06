@@ -1558,6 +1558,12 @@ void cifsFileInfo_put(struct cifsFileInfo *cifs_file);
 #define CIFS_CACHE_HANDLE(cinode) (cinode->oplock & CIFS_CACHE_HANDLE_FLG)
 #define CIFS_CACHE_WRITE(cinode) ((cinode->oplock & CIFS_CACHE_WRITE_FLG) || (CIFS_SB(cinode->netfs.inode.i_sb)->mnt_cifs_flags & CIFS_MOUNT_RW_CACHE))
 
+#define IS_SAME_EPOCH(new, cur) ((__u16)new == (__u16)cur)
+#define IS_NEWER_EPOCH(new, cur) (((short)((__u16)new - (__u16)cur) <= (short)32767) && ((__u16)new != (__u16)cur))
+
+bool validate_lease_state_change(__u32 old_state, __u32 new_state,
+				__u16 old_epoch, __u16 new_epoch);
+
 /*
  * One of these for each file inode
  */
