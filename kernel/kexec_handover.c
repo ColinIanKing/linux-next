@@ -51,6 +51,15 @@ static struct kho_out kho_out = {
 	.dt_max = 10 * SZ_1M,
 };
 
+struct kho_in {
+	struct kobject *kobj;
+	phys_addr_t kho_scratch_phys;
+	phys_addr_t handover_phys;
+	u32 handover_len;
+};
+
+static struct kho_in kho_in;
+
 int register_kho_notifier(struct notifier_block *nb)
 {
 	return blocking_notifier_chain_register(&kho_out.chain_head, nb);
@@ -62,6 +71,89 @@ int unregister_kho_notifier(struct notifier_block *nb)
 	return blocking_notifier_chain_unregister(&kho_out.chain_head, nb);
 }
 EXPORT_SYMBOL_GPL(unregister_kho_notifier);
+
+const void *kho_get_fdt(void)
+{
+	if (!kho_in.handover_phys)
+		return NULL;
+
+	return __va(kho_in.handover_phys);
+}
+EXPORT_SYMBOL_GPL(kho_get_fdt);
+
+static void kho_return_pfn(ulong pfn)
+{
+	struct page *page = pfn_to_online_page(pfn);
+
+	if (WARN_ON(!page))
+		return;
+	__free_page(page);
+}
+
+/**
+ * kho_return_mem - Notify the kernel that initially reserved memory is no
+ * longer needed.
+ * @mem: memory range that was preserved during kexec handover
+ *
+ * When the last consumer of a page returns their memory, kho returns the page
+ * to the buddy allocator as free page.
+ */
+void kho_return_mem(const struct kho_mem *mem)
+{
+	unsigned long start_pfn, end_pfn, pfn;
+
+	start_pfn = PFN_DOWN(mem->addr);
+	end_pfn = PFN_UP(mem->addr + mem->size);
+
+	for (pfn = start_pfn; pfn < end_pfn; pfn++)
+		kho_return_pfn(pfn);
+}
+EXPORT_SYMBOL_GPL(kho_return_mem);
+
+static int kho_claim_pfn(ulong pfn)
+{
+	struct page *page = pfn_to_online_page(pfn);
+
+	if (!page)
+		return -ENOMEM;
+
+	/* almost as free_reserved_page(), just don't free the page */
+	ClearPageReserved(page);
+	init_page_count(page);
+	adjust_managed_page_count(page, 1);
+
+	return 0;
+}
+
+/**
+ * kho_claim_mem - Notify the kernel that a handed over memory range is now
+ * in use
+ * @mem: memory range that was preserved during kexec handover
+ *
+ * A kernel subsystem preserved that range during handover and it is going
+ * to reuse this range after kexec. The pages in the range are treated as
+ * allocated, but not %PG_reserved.
+ *
+ * Return: virtual address of the preserved memory range
+ */
+void *kho_claim_mem(const struct kho_mem *mem)
+{
+	unsigned long start_pfn, end_pfn, pfn;
+	void *va = __va(mem->addr);
+
+	start_pfn = PFN_DOWN(mem->addr);
+	end_pfn = PFN_UP(mem->addr + mem->size);
+
+	for (pfn = start_pfn; pfn < end_pfn; pfn++) {
+		int err = kho_claim_pfn(pfn);
+
+		if (err)
+			return NULL;
+	}
+
+	return va;
+}
+EXPORT_SYMBOL_GPL(kho_claim_mem);
 
 static ssize_t dt_read(struct file *file, struct kobject *kobj,
 		       struct bin_attribute *attr, char *buf,
@@ -273,6 +365,30 @@ static const struct attribute *kho_out_attrs[] = {
 	NULL,
 };
 
+/* Handling for /sys/firmware/kho */
+static BIN_ATTR_SIMPLE_RO(dt_fw);
+
+static __init int kho_in_sysfs_init(const void *fdt)
+{
+	int err;
+
+	kho_in.kobj = kobject_create_and_add("kho", firmware_kobj);
+	if (!kho_in.kobj)
+		return -ENOMEM;
+
+	bin_attr_dt_fw.size = fdt_totalsize(fdt);
+	bin_attr_dt_fw.private = (void *)fdt;
+	err = sysfs_create_bin_file(kho_in.kobj, &bin_attr_dt_fw);
+	if (err)
+		goto err_put_kobj;
+
+	return 0;
+
+err_put_kobj:
+	kobject_put(kho_in.kobj);
+	return err;
+}
+
 static __init int kho_out_sysfs_init(void)
 {
 	int err;
@@ -294,6 +410,7 @@ err_put_kobj:
 
 static __init int kho_init(void)
 {
+	const void *fdt = kho_get_fdt();
 	int err;
 
 	if (!kho_enable)
@@ -302,6 +419,21 @@ static __init int kho_init(void)
 	err = kho_out_sysfs_init();
 	if (err)
 		return err;
+
+	if (fdt) {
+		err = kho_in_sysfs_init(fdt);
+		/*
+		 * Failure to create /sys/firmware/kho/dt does not prevent
+		 * reviving state from KHO and setting up KHO for the next
+		 * kexec.
+		 */
+		if (err)
+			pr_err("failed exposing handover FDT in sysfs\n");
+
+		kho_scratch = __va(kho_in.kho_scratch_phys);
+
+		return 0;
+	}
 
 	for (int i = 0; i < kho_scratch_cnt; i++) {
 		unsigned long base_pfn = PHYS_PFN(kho_scratch[i].addr);
@@ -444,7 +576,141 @@ err_disable_kho:
 	kho_enable = false;
 }
 
+/*
+ * Scan the DT for any memory ranges and make sure they are reserved in
+ * memblock, otherwise they will end up in a weird state on free lists.
+ */
+static void kho_init_reserved_pages(void)
+{
+	const void *fdt = kho_get_fdt();
+	int offset = 0, depth = 0, initial_depth = 0, len;
+
+	if (!fdt)
+		return;
+
+	/* Go through the mem list and add 1 for each reference */
+	for (offset = 0;
+	     offset >= 0 && depth >= initial_depth;
+	     offset = fdt_next_node(fdt, offset, &depth)) {
+		const struct kho_mem *mems;
+		u32 i;
+
+		mems = fdt_getprop(fdt, offset, "mem", &len);
+		if (!mems || len & (sizeof(*mems) - 1))
+			continue;
+
+		for (i = 0; i < len; i += sizeof(*mems)) {
+			const struct kho_mem *mem = &mems[i];
+
+			memblock_reserve(mem->addr, mem->size);
+		}
+	}
+}
+
+static void __init kho_release_scratch(void)
+{
+	phys_addr_t start, end;
+	u64 i;
+
+	memmap_init_kho_scratch_pages();
+
+	/*
+	 * Mark scratch mem as CMA before we return it. That way we
+	 * ensure that no kernel allocations happen on it. That means
+	 * we can reuse it as scratch memory again later.
+	 */
+	__for_each_mem_range(i, &memblock.memory, NULL, NUMA_NO_NODE,
+			     MEMBLOCK_KHO_SCRATCH, &start, &end, NULL) {
+		ulong start_pfn = pageblock_start_pfn(PFN_DOWN(start));
+		ulong end_pfn = pageblock_align(PFN_UP(end));
+		ulong pfn;
+
+		for (pfn = start_pfn; pfn < end_pfn; pfn += pageblock_nr_pages)
+			set_pageblock_migratetype(pfn_to_page(pfn), MIGRATE_CMA);
+	}
+}
+
 void __init kho_memory_init(void)
 {
-	kho_reserve_scratch();
+	if (!kho_get_fdt()) {
+		kho_reserve_scratch();
+	} else {
+		kho_init_reserved_pages();
+		kho_release_scratch();
+	}
+}
+
+void __init kho_populate(phys_addr_t handover_dt_phys, phys_addr_t scratch_phys,
+			 u64 scratch_len)
+{
+	void *handover_dt;
+	struct kho_mem *scratch;
+
+	/* Determine the real size of the DT */
+	handover_dt = early_memremap(handover_dt_phys, sizeof(struct fdt_header));
+	if (!handover_dt) {
+		pr_warn("setup: failed to memremap kexec FDT (0x%llx)\n", handover_dt_phys);
+		return;
+	}
+
+	if (fdt_check_header(handover_dt)) {
+		pr_warn("setup: kexec handover FDT is invalid (0x%llx)\n", handover_dt_phys);
+		early_memunmap(handover_dt, PAGE_SIZE);
+		return;
+	}
+
+	kho_in.handover_len = fdt_totalsize(handover_dt);
+	kho_in.handover_phys = handover_dt_phys;
+
+	early_memunmap(handover_dt, sizeof(struct fdt_header));
+
+	/* Reserve the DT so we can still access it in late boot */
+	memblock_reserve(kho_in.handover_phys, kho_in.handover_len);
+
+	kho_in.kho_scratch_phys = scratch_phys;
+	kho_scratch_cnt = scratch_len / sizeof(*kho_scratch);
+	scratch = early_memremap(scratch_phys, scratch_len);
+	if (!scratch) {
+		pr_warn("setup: failed to memremap kexec scratch (0x%llx)\n", scratch_phys);
+		return;
+	}
+
+	/*
+	 * We pass a safe contiguous blocks of memory to use for early boot
+	 * purporses from the previous kernel so that we can resize the
+	 * memblock array as needed.
+	 */
+	for (int i = 0; i < kho_scratch_cnt; i++) {
+		struct kho_mem *area = &scratch[i];
+		u64 size = area->size;
+
+		memblock_add(area->addr, size);
+
+		if (WARN_ON(memblock_mark_kho_scratch(area->addr, size))) {
+			pr_err("Kexec failed to mark the scratch region. Disabling KHO revival.");
+			kho_in.handover_len = 0;
+			kho_in.handover_phys = 0;
+			scratch = NULL;
+			break;
+		}
+		pr_debug("Marked 0x%pa+0x%pa as scratch", &area->addr, &size);
+	}
+
+	early_memunmap(scratch, scratch_len);
+
+	if (!scratch)
+		return;
+
+	memblock_reserve(scratch_phys, scratch_len);
+
+	/*
+	 * Now that we have a viable region of scratch memory, let's tell
+	 * the memblocks allocator to only use that for any allocations.
+	 * That way we ensure that nothing scribbles over in use data while
+	 * we initialize the page tables which we will need to ingest all
+	 * memory reservations from the previous kernel.
+	 */
+	memblock_set_kho_scratch_only();
+
+	pr_info("setup: Found kexec handover data. Will skip init for some devices\n");
 }
