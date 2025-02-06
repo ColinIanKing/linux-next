@@ -25,6 +25,7 @@
 #include <linux/pti.h>
 #include <linux/pgtable.h>
 #include <linux/stackdepot.h>
+#include <linux/kexec.h>
 #include <linux/swap.h>
 #include <linux/cma.h>
 #include <linux/crash_dump.h>
@@ -2722,6 +2723,13 @@ void __init mm_core_init(void)
 	report_meminit();
 	kmsan_init_shadow();
 	stack_depot_early_init();
+
+	/*
+	 * KHO memory setup must happen while memblock is still active, but
+	 * as close as possible to buddy initialization
+	 */
+	kho_memory_init();
+
 	mem_init();
 	kmem_cache_init();
 	/*
