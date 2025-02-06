@@ -12830,6 +12830,7 @@ S:	Maintained
 W:	http://kernel.org/pub/linux/utils/kernel/kexec/
 F:	Documentation/ABI/testing/sysfs-firmware-kho
 F:	Documentation/ABI/testing/sysfs-kernel-kho
+F:	Documentation/kho/
 F:	include/linux/kexec.h
 F:	include/uapi/linux/kexec.h
 F:	kernel/kexec*
