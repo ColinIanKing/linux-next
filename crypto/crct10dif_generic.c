@@ -116,7 +116,7 @@ static int chksum_digest_arch(struct shash_desc *desc, const u8 *data,
 }
 
 static struct shash_alg algs[] = {{
-	.digestsize		= CRC_T10DIF_DIGEST_SIZE,
+	.digestsize		= sizeof(u16),
 	.init			= chksum_init,
 	.update			= chksum_update,
 	.final			= chksum_final,
@@ -126,10 +126,10 @@ static struct shash_alg algs[] = {{
 	.base.cra_name		= "crct10dif",
 	.base.cra_driver_name	= "crct10dif-generic",
 	.base.cra_priority	= 100,
-	.base.cra_blocksize	= CRC_T10DIF_BLOCK_SIZE,
+	.base.cra_blocksize	= 1,
 	.base.cra_module	= THIS_MODULE,
 }, {
-	.digestsize		= CRC_T10DIF_DIGEST_SIZE,
+	.digestsize		= sizeof(u16),
 	.init			= chksum_init,
 	.update			= chksum_update_arch,
 	.final			= chksum_final,
@@ -139,7 +139,7 @@ static struct shash_alg algs[] = {{
 	.base.cra_name		= "crct10dif",
 	.base.cra_driver_name	= "crct10dif-" __stringify(ARCH),
 	.base.cra_priority	= 150,
-	.base.cra_blocksize	= CRC_T10DIF_BLOCK_SIZE,
+	.base.cra_blocksize	= 1,
 	.base.cra_module	= THIS_MODULE,
 }};
 
