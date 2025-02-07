@@ -1804,7 +1804,7 @@ static ssize_t vector_madvise(struct mm_struct *mm, struct iov_iter *iter,
 		 * the operation in aggregate, and would be surprising to the
 		 * user.
 		 *
-		 * As we have already dropped locks, it is safe to just loop and
+		 * We drop and reacquire locks so it is safe to just loop and
 		 * try again. We check for fatal signals in case we need exit
 		 * early anyway.
 		 */
