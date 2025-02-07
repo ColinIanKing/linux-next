@@ -23,6 +23,7 @@
 #define FB_SPACE          FBINFO_VIRTFB
 #define FB_SPACE_NAME     "virtual"
 #define FB_SCREEN_BASE(a) ((a)->screen_buffer)
+#define FB_REV_PIXELS_IN_BYTE CONFIG_FB_SYS_REV_PIXELS_IN_BYTE
 #include "fb_fillrect.h"
 
 EXPORT_SYMBOL(sys_fillrect);

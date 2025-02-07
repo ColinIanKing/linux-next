@@ -19,6 +19,7 @@
 #define FB_SPACE          0
 #define FB_SPACE_NAME     "I/O"
 #define FB_SCREEN_BASE(a) ((a)->screen_base)
+#define FB_REV_PIXELS_IN_BYTE CONFIG_FB_CFB_REV_PIXELS_IN_BYTE
 #include "fb_imageblit.h"
 
 EXPORT_SYMBOL(cfb_imageblit);
