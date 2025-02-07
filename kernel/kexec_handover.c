@@ -396,7 +396,7 @@ static phys_addr_t __init scratch_size(int nid)
  * active. This CMA region will only be used for movable pages which are not a
  * problem for us during KHO because we can just move them somewhere else.
  */
-static void kho_reserve_scratch(void)
+static void __init kho_reserve_scratch(void)
 {
 	phys_addr_t addr, size;
 	int nid, i = 1;
