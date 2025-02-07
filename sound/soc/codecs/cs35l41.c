@@ -1150,28 +1150,19 @@ err_dsp:
 
 static int cs35l41_acpi_get_name(struct cs35l41_private *cs35l41)
 {
-	struct acpi_device *adev = ACPI_COMPANION(cs35l41->dev);
-	acpi_handle handle = acpi_device_handle(adev);
-	const char *hid;
+	acpi_handle handle = ACPI_HANDLE(cs35l41->dev);
 	const char *sub;
 
-	/* If there is no acpi_device, there is no ACPI for this system, return 0 */
-	if (!adev)
+	/* If there is no ACPI_HANDLE, there is no ACPI for this system, return 0 */
+	if (!handle)
 		return 0;
 
 	sub = acpi_get_subsystem_id(handle);
 	if (IS_ERR(sub)) {
-		/* If no _SUB, fallback to _HID, otherwise fail */
-		if (PTR_ERR(sub) == -ENODATA) {
-			hid = acpi_device_hid(adev);
-			/* If dummy hid, return 0 and fallback to legacy firmware path */
-			if (!strcmp(hid, "device"))
-				return 0;
-			sub = kstrdup(hid, GFP_KERNEL);
-			if (!sub)
-				sub = ERR_PTR(-ENOMEM);
-
-		} else
+		/* If bad ACPI, return 0 and fallback to legacy firmware path, otherwise fail */
+		if (PTR_ERR(sub) == -ENODATA)
+			return 0;
+		else
 			return PTR_ERR(sub);
 	}
 
