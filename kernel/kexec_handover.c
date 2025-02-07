@@ -74,7 +74,7 @@ static ssize_t dt_read(struct file *file, struct kobject *kobj,
 	return count;
 }
 
-struct bin_attribute bin_attr_dt_kern = __BIN_ATTR(dt, 0400, dt_read, NULL, 0);
+static struct bin_attribute bin_attr_dt_kern = __BIN_ATTR(dt, 0400, dt_read, NULL, 0);
 
 static int kho_expose_dt(void *fdt)
 {
