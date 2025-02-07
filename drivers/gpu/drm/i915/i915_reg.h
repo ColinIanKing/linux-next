@@ -84,7 +84,7 @@
  * Try to name registers according to the specs. If the register name changes in
  * the specs from platform to another, stick to the original name.
  *
- * Try to re-use existing register macro definitions. Only add new macros for
+ * Try to reuse existing register macro definitions. Only add new macros for
  * new register offsets, or when the register contents have changed enough to
  * warrant a full redefinition.
  *
@@ -492,8 +492,9 @@
 #define MBUS_ABOX_BT_CREDIT_POOL1_MASK	(0x1F << 0)
 #define MBUS_ABOX_BT_CREDIT_POOL1(x)	((x) << 0)
 
-/* Make render/texture TLB fetches lower priorty than associated data
- *   fetches. This is not turned on by default
+/*
+ * Make render/texture TLB fetches lower priority than associated data
+ * fetches. This is not turned on by default.
  */
 #define   MI_ARB_RENDER_TLB_LOW_PRIORITY	(1 << 15)
 
@@ -3197,6 +3198,10 @@
 #define _TRANS_DP2_VFREQLOW_D			0x630a8
 #define TRANS_DP2_VFREQLOW(trans)		_MMIO_TRANS(trans, _TRANS_DP2_VFREQLOW_A, _TRANS_DP2_VFREQLOW_B)
 
+#define _DP_MIN_HBLANK_CTL_A			0x600ac
+#define _DP_MIN_HBLANK_CTL_B			0x610ac
+#define DP_MIN_HBLANK_CTL(trans)		_MMIO_TRANS(trans, _DP_MIN_HBLANK_CTL_A, _DP_MIN_HBLANK_CTL_B)
+
 /* SNB eDP training params */
 /* SNB A-stepping */
 #define  EDP_LINK_TRAIN_400MV_0DB_SNB_A		(0x38 << 22)
@@ -3565,6 +3570,7 @@ enum skl_power_gate {
 #define _TRANS_DDI_FUNC_CTL2_DSI1	0x6bc04
 #define TRANS_DDI_FUNC_CTL2(dev_priv, tran)	_MMIO_TRANS2(dev_priv, tran, _TRANS_DDI_FUNC_CTL2_A)
 #define  PORT_SYNC_MODE_ENABLE			REG_BIT(4)
+#define  CMTG_SECONDARY_MODE			REG_BIT(3)
 #define  PORT_SYNC_MODE_MASTER_SELECT_MASK	REG_GENMASK(2, 0)
 #define  PORT_SYNC_MODE_MASTER_SELECT(x)	REG_FIELD_PREP(PORT_SYNC_MODE_MASTER_SELECT_MASK, (x))
 

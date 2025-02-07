@@ -1660,6 +1660,22 @@ static unsigned int intel_fb_min_alignment(const struct drm_framebuffer *fb)
 	return min_alignment;
 }
 
+static unsigned int intel_fb_vtd_guard(const struct drm_framebuffer *fb)
+{
+	struct drm_i915_private *i915 = to_i915(fb->dev);
+	struct intel_plane *plane;
+	unsigned int vtd_guard = 0;
+
+	for_each_intel_plane(&i915->drm, plane) {
+		if (!drm_plane_has_format(&plane->base, fb->format->format, fb->modifier))
+			continue;
+
+		vtd_guard = max_t(unsigned int, vtd_guard, plane->vtd_guard);
+	}
+
+	return vtd_guard;
+}
+
 int intel_fill_fb_info(struct drm_i915_private *i915, struct intel_framebuffer *fb)
 {
 	struct drm_gem_object *obj = intel_fb_bo(&fb->base);
@@ -1694,10 +1710,24 @@ int intel_fill_fb_info(struct drm_i915_private *i915, struct intel_framebuffer *
 		 * arithmetic related to alignment and offset calculation.
 		 */
 		if (is_gen12_ccs_cc_plane(&fb->base, i)) {
-			if (IS_ALIGNED(fb->base.offsets[i], 64))
-				continue;
-			else
+			unsigned int end;
+
+			if (!IS_ALIGNED(fb->base.offsets[i], 64)) {
+				drm_dbg_kms(&i915->drm,
+					    "fb misaligned clear color plane %d offset (0x%x)\n",
+					    i, fb->base.offsets[i]);
 				return -EINVAL;
+			}
+
+			if (check_add_overflow(fb->base.offsets[i], 64, &end)) {
+				drm_dbg_kms(&i915->drm,
+					    "fb bad clear color plane %d offset (0x%x)\n",
+					    i, fb->base.offsets[i]);
+				return -EINVAL;
+			}
+
+			max_size = max(max_size, DIV_ROUND_UP(end, tile_size));
+			continue;
 		}
 
 		intel_fb_plane_dims(fb, i, &width, &height);
@@ -1743,8 +1773,40 @@ int intel_fill_fb_info(struct drm_i915_private *i915, struct intel_framebuffer *
 	}
 
 	fb->min_alignment = intel_fb_min_alignment(&fb->base);
+	fb->vtd_guard = intel_fb_vtd_guard(&fb->base);
 
 	return 0;
+}
+
+unsigned int intel_fb_view_vtd_guard(const struct drm_framebuffer *fb,
+				     const struct intel_fb_view *view,
+				     unsigned int rotation)
+{
+	unsigned int vtd_guard;
+	int color_plane;
+
+	vtd_guard = to_intel_framebuffer(fb)->vtd_guard;
+	if (!vtd_guard)
+		return 0;
+
+	for (color_plane = 0; color_plane < fb->format->num_planes; color_plane++) {
+		unsigned int stride, tile;
+
+		if (intel_fb_is_ccs_aux_plane(fb, color_plane) ||
+		    is_gen12_ccs_cc_plane(fb, color_plane))
+			continue;
+
+		stride = view->color_plane[color_plane].mapping_stride;
+
+		if (drm_rotation_90_or_270(rotation))
+			tile = intel_tile_height(fb, color_plane);
+		else
+			tile = intel_tile_width_bytes(fb, color_plane);
+
+		vtd_guard = max(vtd_guard, DIV_ROUND_UP(stride, tile));
+	}
+
+	return vtd_guard;
 }
 
 static void intel_plane_remap_gtt(struct intel_plane_state *plane_state)

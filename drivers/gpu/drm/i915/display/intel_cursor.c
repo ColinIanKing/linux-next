@@ -372,6 +372,11 @@ static unsigned int i9xx_cursor_min_alignment(struct intel_plane *plane,
 					      const struct drm_framebuffer *fb,
 					      int color_plane)
 {
+	struct drm_i915_private *i915 = to_i915(plane->base.dev);
+
+	if (intel_scanout_needs_vtd_wa(i915))
+		return 64 * 1024;
+
 	return 4 * 1024; /* physical for i915/i945 */
 }
 
@@ -680,7 +685,7 @@ static void i9xx_cursor_update_arm(struct intel_dsb *dsb,
 	 * CURPOS.
 	 *
 	 * On other platforms CURPOS always requires the
-	 * CURBASE write to arm the update. Additonally
+	 * CURBASE write to arm the update. Additionally
 	 * a write to any of the cursor register will cancel
 	 * an already armed cursor update. Thus leaving out
 	 * the CURBASE write after CURPOS could lead to a
@@ -865,7 +870,7 @@ intel_legacy_cursor_update(struct drm_plane *_plane,
 	if (ret)
 		goto out_free;
 
-	ret = intel_plane_pin_fb(new_plane_state);
+	ret = intel_plane_pin_fb(new_plane_state, old_plane_state);
 	if (ret)
 		goto out_free;
 
@@ -1013,6 +1018,9 @@ intel_cursor_plane_create(struct drm_i915_private *dev_priv,
 			cursor->min_alignment = i85x_cursor_min_alignment;
 		else
 			cursor->min_alignment = i9xx_cursor_min_alignment;
+
+		if (intel_scanout_needs_vtd_wa(dev_priv))
+			cursor->vtd_guard = 2;
 
 		cursor->update_arm = i9xx_cursor_update_arm;
 		cursor->disable_arm = i9xx_cursor_disable_arm;
