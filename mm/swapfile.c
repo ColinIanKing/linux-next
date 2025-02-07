@@ -3798,7 +3798,7 @@ outer:
  * when the original swap_map count is decremented from 0 with continuation,
  * borrow from the continuation and report whether it still holds more.
  * Called while __swap_duplicate() or caller of __swap_entry_free_locked()
- * holds swap or cluster lock.
+ * holds cluster lock.
  */
 static bool swap_count_continued(struct swap_info_struct *si,
 				 pgoff_t offset, unsigned char count)
