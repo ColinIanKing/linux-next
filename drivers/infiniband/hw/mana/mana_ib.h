@@ -11,8 +11,10 @@
 #include <rdma/ib_umem.h>
 #include <rdma/mana-abi.h>
 #include <rdma/uverbs_ioctl.h>
+#include <linux/dmapool.h>
 
 #include <net/mana/mana.h>
+#include "shadow_queue.h"
 
 #define PAGE_SZ_BM                                                             \
 	(SZ_4K | SZ_8K | SZ_16K | SZ_32K | SZ_64K | SZ_128K | SZ_256K |        \
@@ -20,6 +22,9 @@
 
 /* MANA doesn't have any limit for MR size */
 #define MANA_IB_MAX_MR_SIZE	U64_MAX
+
+/* Send queue ID mask */
+#define MANA_SENDQ_MASK	BIT(31)
 
 /*
  * The hardware limit of number of MRs is greater than maximum number of MRs
@@ -31,6 +36,11 @@
  * The CA timeout is approx. 260ms (4us * 2^(DELAY))
  */
 #define MANA_CA_ACK_DELAY	16
+
+/*
+ * The buffer used for writing AV
+ */
+#define MANA_AV_BUFFER_SIZE	64
 
 struct mana_ib_adapter_caps {
 	u32 max_sq_id;
@@ -52,6 +62,7 @@ struct mana_ib_adapter_caps {
 
 struct mana_ib_queue {
 	struct ib_umem *umem;
+	struct gdma_queue *kmem;
 	u64 gdma_region;
 	u64 id;
 };
@@ -64,6 +75,7 @@ struct mana_ib_dev {
 	struct gdma_queue **eqs;
 	struct xarray qp_table_wq;
 	struct mana_ib_adapter_caps adapter_caps;
+	struct dma_pool *av_pool;
 };
 
 struct mana_ib_wq {
@@ -87,6 +99,25 @@ struct mana_ib_pd {
 	u32 tx_vp_offset;
 };
 
+struct mana_ib_av {
+	u8 dest_ip[16];
+	u8 dest_mac[ETH_ALEN];
+	u16 udp_src_port;
+	u8 src_ip[16];
+	u32 hop_limit	: 8;
+	u32 reserved1	: 12;
+	u32 dscp	: 6;
+	u32 reserved2	: 5;
+	u32 is_ipv6	: 1;
+	u32 reserved3	: 32;
+};
+
+struct mana_ib_ah {
+	struct ib_ah ibah;
+	struct mana_ib_av *av;
+	dma_addr_t dma_handle;
+};
+
 struct mana_ib_mr {
 	struct ib_mr ibmr;
 	struct ib_umem *umem;
@@ -96,6 +127,10 @@ struct mana_ib_mr {
 struct mana_ib_cq {
 	struct ib_cq ibcq;
 	struct mana_ib_queue queue;
+	/* protects CQ polling */
+	spinlock_t cq_lock;
+	struct list_head list_send_qp;
+	struct list_head list_recv_qp;
 	int cqe;
 	u32 comp_vector;
 	mana_handle_t  cq_handle;
@@ -114,6 +149,17 @@ struct mana_ib_rc_qp {
 	struct mana_ib_queue queues[MANA_RC_QUEUE_TYPE_MAX];
 };
 
+enum mana_ud_queue_type {
+	MANA_UD_SEND_QUEUE = 0,
+	MANA_UD_RECV_QUEUE,
+	MANA_UD_QUEUE_TYPE_MAX,
+};
+
+struct mana_ib_ud_qp {
+	struct mana_ib_queue queues[MANA_UD_QUEUE_TYPE_MAX];
+	u32 sq_psn;
+};
+
 struct mana_ib_qp {
 	struct ib_qp ibqp;
 
@@ -121,10 +167,16 @@ struct mana_ib_qp {
 	union {
 		struct mana_ib_queue raw_sq;
 		struct mana_ib_rc_qp rc_qp;
+		struct mana_ib_ud_qp ud_qp;
 	};
 
 	/* The port on the IB device, starting with 1 */
 	u32 port;
+
+	struct list_head cq_send_list;
+	struct list_head cq_recv_list;
+	struct shadow_queue shadow_rq;
+	struct shadow_queue shadow_sq;
 
 	refcount_t		refcount;
 	struct completion	free;
@@ -145,6 +197,8 @@ enum mana_ib_command_code {
 	MANA_IB_DESTROY_ADAPTER = 0x30003,
 	MANA_IB_CONFIG_IP_ADDR	= 0x30004,
 	MANA_IB_CONFIG_MAC_ADDR	= 0x30005,
+	MANA_IB_CREATE_UD_QP	= 0x30006,
+	MANA_IB_DESTROY_UD_QP	= 0x30007,
 	MANA_IB_CREATE_CQ       = 0x30008,
 	MANA_IB_DESTROY_CQ      = 0x30009,
 	MANA_IB_CREATE_RC_QP    = 0x3000a,
@@ -296,6 +350,37 @@ struct mana_rnic_destroy_rc_qp_resp {
 	struct gdma_resp_hdr hdr;
 }; /* HW Data */
 
+struct mana_rnic_create_udqp_req {
+	struct gdma_req_hdr hdr;
+	mana_handle_t adapter;
+	mana_handle_t pd_handle;
+	mana_handle_t send_cq_handle;
+	mana_handle_t recv_cq_handle;
+	u64 dma_region[MANA_UD_QUEUE_TYPE_MAX];
+	u32 qp_type;
+	u32 doorbell_page;
+	u32 max_send_wr;
+	u32 max_recv_wr;
+	u32 max_send_sge;
+	u32 max_recv_sge;
+}; /* HW Data */
+
+struct mana_rnic_create_udqp_resp {
+	struct gdma_resp_hdr hdr;
+	mana_handle_t qp_handle;
+	u32 queue_ids[MANA_UD_QUEUE_TYPE_MAX];
+}; /* HW Data*/
+
+struct mana_rnic_destroy_udqp_req {
+	struct gdma_req_hdr hdr;
+	mana_handle_t adapter;
+	mana_handle_t qp_handle;
+}; /* HW Data */
+
+struct mana_rnic_destroy_udqp_resp {
+	struct gdma_resp_hdr hdr;
+}; /* HW Data */
+
 struct mana_ib_ah_attr {
 	u8 src_addr[16];
 	u8 dest_addr[16];
@@ -332,16 +417,68 @@ struct mana_rnic_set_qp_state_resp {
 	struct gdma_resp_hdr hdr;
 }; /* HW Data */
 
+enum WQE_OPCODE_TYPES {
+	WQE_TYPE_UD_SEND = 0,
+	WQE_TYPE_UD_RECV = 8,
+}; /* HW DATA */
+
+struct rdma_send_oob {
+	u32 wqe_type	: 5;
+	u32 fence	: 1;
+	u32 signaled	: 1;
+	u32 solicited	: 1;
+	u32 psn		: 24;
+
+	u32 ssn_or_rqpn	: 24;
+	u32 reserved1	: 8;
+	union {
+		struct {
+			u32 remote_qkey;
+			u32 immediate;
+			u32 reserved1;
+			u32 reserved2;
+		} ud_send;
+	};
+}; /* HW DATA */
+
+struct mana_rdma_cqe {
+	union {
+		struct {
+			u8 cqe_type;
+			u8 data[GDMA_COMP_DATA_SIZE - 1];
+		};
+		struct {
+			u32 cqe_type		: 8;
+			u32 vendor_error	: 9;
+			u32 reserved1		: 15;
+			u32 sge_offset		: 5;
+			u32 tx_wqe_offset	: 27;
+		} ud_send;
+		struct {
+			u32 cqe_type		: 8;
+			u32 reserved1		: 24;
+			u32 msg_len;
+			u32 src_qpn		: 24;
+			u32 reserved2		: 8;
+			u32 imm_data;
+			u32 rx_wqe_offset;
+		} ud_recv;
+	};
+}; /* HW DATA */
+
 static inline struct gdma_context *mdev_to_gc(struct mana_ib_dev *mdev)
 {
 	return mdev->gdma_dev->gdma_context;
 }
 
 static inline struct mana_ib_qp *mana_get_qp_ref(struct mana_ib_dev *mdev,
-						 uint32_t qid)
+						 u32 qid, bool is_sq)
 {
 	struct mana_ib_qp *qp;
 	unsigned long flag;
+
+	if (is_sq)
+		qid |= MANA_SENDQ_MASK;
 
 	xa_lock_irqsave(&mdev->qp_table_wq, flag);
 	qp = xa_load(&mdev->qp_table_wq, qid);
@@ -388,6 +525,8 @@ int mana_ib_create_dma_region(struct mana_ib_dev *dev, struct ib_umem *umem,
 int mana_ib_gd_destroy_dma_region(struct mana_ib_dev *dev,
 				  mana_handle_t gdma_region);
 
+int mana_ib_create_kernel_queue(struct mana_ib_dev *mdev, u32 size, enum gdma_queue_type type,
+				struct mana_ib_queue *queue);
 int mana_ib_create_queue(struct mana_ib_dev *mdev, u64 addr, u32 size,
 			 struct mana_ib_queue *queue);
 void mana_ib_destroy_queue(struct mana_ib_dev *mdev, struct mana_ib_queue *queue);
@@ -480,4 +619,20 @@ int mana_ib_gd_destroy_cq(struct mana_ib_dev *mdev, struct mana_ib_cq *cq);
 int mana_ib_gd_create_rc_qp(struct mana_ib_dev *mdev, struct mana_ib_qp *qp,
 			    struct ib_qp_init_attr *attr, u32 doorbell, u64 flags);
 int mana_ib_gd_destroy_rc_qp(struct mana_ib_dev *mdev, struct mana_ib_qp *qp);
+
+int mana_ib_gd_create_ud_qp(struct mana_ib_dev *mdev, struct mana_ib_qp *qp,
+			    struct ib_qp_init_attr *attr, u32 doorbell, u32 type);
+int mana_ib_gd_destroy_ud_qp(struct mana_ib_dev *mdev, struct mana_ib_qp *qp);
+
+int mana_ib_create_ah(struct ib_ah *ibah, struct rdma_ah_init_attr *init_attr,
+		      struct ib_udata *udata);
+int mana_ib_destroy_ah(struct ib_ah *ah, u32 flags);
+
+int mana_ib_post_recv(struct ib_qp *ibqp, const struct ib_recv_wr *wr,
+		      const struct ib_recv_wr **bad_wr);
+int mana_ib_post_send(struct ib_qp *ibqp, const struct ib_send_wr *wr,
+		      const struct ib_send_wr **bad_wr);
+
+int mana_ib_poll_cq(struct ib_cq *ibcq, int num_entries, struct ib_wc *wc);
+int mana_ib_arm_cq(struct ib_cq *ibcq, enum ib_cq_notify_flags flags);
 #endif
