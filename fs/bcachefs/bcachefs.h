@@ -444,6 +444,7 @@ BCH_DEBUG_PARAMS_DEBUG()
 	x(btree_node_sort)			\
 	x(btree_node_read)			\
 	x(btree_node_read_done)			\
+	x(btree_node_write)			\
 	x(btree_interior_update_foreground)	\
 	x(btree_interior_update_total)		\
 	x(btree_gc)				\
@@ -456,6 +457,7 @@ BCH_DEBUG_PARAMS_DEBUG()
 	x(blocked_journal_low_on_space)		\
 	x(blocked_journal_low_on_pin)		\
 	x(blocked_journal_max_in_flight)	\
+	x(blocked_journal_max_open)		\
 	x(blocked_key_cache_flush)		\
 	x(blocked_allocate)			\
 	x(blocked_allocate_open_bucket)		\
@@ -687,7 +689,8 @@ struct btree_trans_buf {
 	x(gc_gens)							\
 	x(snapshot_delete_pagecache)					\
 	x(sysfs)							\
-	x(btree_write_buffer)
+	x(btree_write_buffer)						\
+	x(btree_node_scrub)
 
 enum bch_write_ref {
 #define x(n) BCH_WRITE_REF_##n,
