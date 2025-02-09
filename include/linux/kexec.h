@@ -205,6 +205,15 @@ static inline int arch_kimage_file_post_load_cleanup(struct kimage *image)
 }
 #endif
 
+#ifndef arch_check_excluded_range
+static inline int arch_check_excluded_range(struct kimage *image,
+					    unsigned long start,
+					    unsigned long end)
+{
+	return 0;
+}
+#endif
+
 #ifdef CONFIG_KEXEC_SIG
 #ifdef CONFIG_SIGNED_PE_FILE_VERIFICATION
 int kexec_kernel_verify_pe_sig(const char *kernel, unsigned long kernel_len);
@@ -364,6 +373,13 @@ struct kimage {
 	size_t ima_buffer_size;
 #endif
 
+#ifdef CONFIG_KEXEC_HANDOVER
+	struct {
+		struct kexec_buf dt;
+		struct kexec_buf scratch;
+	} kho;
+#endif
+
 	/* Core ELF header buffer */
 	void *elf_headers;
 	unsigned long elf_headers_sz;
@@ -482,6 +498,36 @@ void set_kexec_sig_enforced(void);
 #else
 static inline void set_kexec_sig_enforced(void) {}
 #endif
+
+/* KHO Notifier index */
+enum kho_event {
+	KEXEC_KHO_DUMP = 0,
+	KEXEC_KHO_ABORT = 1,
+};
+
+struct notifier_block;
+struct kho_mem;
+
+#ifdef CONFIG_KEXEC_HANDOVER
+void kho_populate(phys_addr_t dt_phys, phys_addr_t scratch_phys,
+		  u64 scratch_len);
+const void *kho_get_fdt(void);
+void kho_return_mem(const struct kho_mem *mem);
+void *kho_claim_mem(const struct kho_mem *mem);
+int register_kho_notifier(struct notifier_block *nb);
+int unregister_kho_notifier(struct notifier_block *nb);
+void kho_memory_init(void);
+#else
+static inline void kho_populate(phys_addr_t dt_phys, phys_addr_t scratch_phys,
+				u64 scratch_len) {}
+static inline void *kho_get_fdt(void) { return NULL; }
+static inline void kho_return_mem(const struct kho_mem *mem) { }
+static inline void *kho_claim_mem(const struct kho_mem *mem) { return NULL; }
+
+static inline int register_kho_notifier(struct notifier_block *nb) { return 0; }
+static inline int unregister_kho_notifier(struct notifier_block *nb) { return 0; }
+static inline void kho_memory_init(void) {}
+#endif /* CONFIG_KEXEC_HANDOVER */
 
 #endif /* !defined(__ASSEBMLY__) */
 

@@ -1,0 +1,41 @@
+# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
+%YAML 1.2
+---
+$id: http://devicetree.org/schemas/memblock/reserve_mem.yaml#
+$schema: http://devicetree.org/meta-schemas/core.yaml#
+
+title: Memblock reserved memory
+
+maintainers:
+  - Mike Rapoport <rppt@kernel.org>
+
+description: |
+  Memblock can serialize its current memory reservations created with
+  reserve_mem command line option across kexec through KHO.
+  The post-KHO kernel can then consume these reservations and they are
+  guaranteed to have the same physical address.
+
+properties:
+  compatible:
+    enum:
+      - reserve_mem-v1
+
+patternProperties:
+  "$[0-9a-f_]+^":
+    $ref: reserve_mem_map.yaml#
+    description: reserved memory regions
+
+required:
+  - compatible
+
+additionalProperties: false
+
+examples:
+  - |
+    reserve_mem {
+      compatible = "reserve_mem-v1";
+        r1 {
+          compatible = "reserve_mem_map-v1";
+          mem = <0xc07c 0x2000000 0x01 0x00>;
+        };
+    };
