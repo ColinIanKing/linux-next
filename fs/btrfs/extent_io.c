@@ -939,7 +939,6 @@ static int btrfs_do_readpage(struct folio *folio, struct extent_map **em_cached,
 	u64 cur = start;
 	u64 extent_offset;
 	u64 last_byte = i_size_read(inode);
-	u64 block_start;
 	struct extent_map *em;
 	int ret = 0;
 	size_t pg_offset = 0;
@@ -966,6 +965,7 @@ static int btrfs_do_readpage(struct folio *folio, struct extent_map **em_cached,
 		enum btrfs_compression_type compress_type = BTRFS_COMPRESS_NONE;
 		bool force_bio_submit = false;
 		u64 disk_bytenr;
+		u64 block_start;
 
 		ASSERT(IS_ALIGNED(cur, fs_info->sectorsize));
 		if (cur >= last_byte) {
@@ -991,9 +991,11 @@ static int btrfs_do_readpage(struct folio *folio, struct extent_map **em_cached,
 			disk_bytenr = em->disk_bytenr;
 		else
 			disk_bytenr = extent_map_block_start(em) + extent_offset;
-		block_start = extent_map_block_start(em);
+
 		if (em->flags & EXTENT_FLAG_PREALLOC)
 			block_start = EXTENT_MAP_HOLE;
+		else
+			block_start = extent_map_block_start(em);
 
 		/*
 		 * If we have a file range that points to a compressed extent
@@ -2192,10 +2194,8 @@ retry:
 			done_index = folio_next_index(folio);
 			/*
 			 * At this point we hold neither the i_pages lock nor
-			 * the page lock: the page may be truncated or
-			 * invalidated (changing page->mapping to NULL),
-			 * or even swizzled back from swapper_space to
-			 * tmpfs file mapping
+			 * the folio lock: the folio may be truncated or
+			 * invalidated (changing folio->mapping to NULL).
 			 */
 			if (!folio_trylock(folio)) {
 				submit_write_bio(bio_ctrl, 0);
@@ -3233,7 +3233,7 @@ out:
 	}
 	/*
 	 * Now all pages of that extent buffer is unmapped, set UNMAPPED flag,
-	 * so it can be cleaned up without utilizing page->mapping.
+	 * so it can be cleaned up without utilizing folio->mapping.
 	 */
 	set_bit(EXTENT_BUFFER_UNMAPPED, &eb->bflags);
 
@@ -3507,10 +3507,7 @@ static void clear_extent_buffer_reading(struct extent_buffer *eb)
 static void end_bbio_meta_read(struct btrfs_bio *bbio)
 {
 	struct extent_buffer *eb = bbio->private;
-	struct btrfs_fs_info *fs_info = eb->fs_info;
 	bool uptodate = !bbio->bio.bi_status;
-	struct folio_iter fi;
-	u32 bio_offset = 0;
 
 	/*
 	 * If the extent buffer is marked UPTODATE before the read operation
@@ -3530,19 +3527,6 @@ static void end_bbio_meta_read(struct btrfs_bio *bbio)
 	} else {
 		clear_extent_buffer_uptodate(eb);
 		set_bit(EXTENT_BUFFER_READ_ERR, &eb->bflags);
-	}
-
-	bio_for_each_folio_all(fi, &bbio->bio) {
-		struct folio *folio = fi.folio;
-		u64 start = eb->start + bio_offset;
-		u32 len = fi.length;
-
-		if (uptodate)
-			btrfs_folio_set_uptodate(fs_info, folio, start, len);
-		else
-			btrfs_folio_clear_uptodate(fs_info, folio, start, len);
-
-		bio_offset += len;
 	}
 
 	clear_extent_buffer_reading(eb);
