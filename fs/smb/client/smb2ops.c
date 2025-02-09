@@ -3922,7 +3922,7 @@ smb3_downgrade_oplock(struct TCP_Server_Info *server,
 	__u16 old_epoch = cinode->epoch;
 	unsigned int new_state;
 
-	if (epoch > old_epoch) {
+	if (IS_NEWER_EPOCH(epoch, old_epoch)) {
 		smb21_set_oplock_level(cinode, oplock, 0, NULL);
 		cinode->epoch = epoch;
 	}
@@ -3998,39 +3998,92 @@ smb21_set_oplock_level(struct cifsInodeInfo *cinode, __u32 oplock,
 		 &cinode->netfs.inode);
 }
 
+/* helper function to ascertain that the incoming lease state is valid */
+bool
+validate_lease_state_change(__u32 old_state, __u32 new_state,
+				__u16 old_epoch, __u16 new_epoch)
+{
+	if (new_state == 0)
+		return true;
+
+	if (old_state == CIFS_CACHE_RH_FLG && new_state == CIFS_CACHE_READ_FLG)
+		return false;
+
+	if (old_state == CIFS_CACHE_RHW_FLG) {
+		if (new_state == CIFS_CACHE_READ_FLG || new_state == CIFS_CACHE_RH_FLG)
+			return false;
+	}
+
+	// lease state changes should not be possible without a valid epoch change
+	if (old_state != new_state) {
+		if (IS_SAME_EPOCH(new_epoch, old_epoch))
+			return false;
+	} else {
+		if ((old_state & new_state) == CIFS_CACHE_RHW_FLG) {
+			if (!IS_SAME_EPOCH(new_epoch, old_epoch))
+				return false;
+		}
+	}
+
+	return true;
+}
+
 static void
 smb3_set_oplock_level(struct cifsInodeInfo *cinode, __u32 oplock,
 		      __u16 epoch, bool *purge_cache)
 {
 	unsigned int old_oplock = cinode->oplock;
+	unsigned int new_oplock = oplock;
 
-	smb21_set_oplock_level(cinode, oplock, epoch, purge_cache);
+	if (!validate_lease_state_change(cinode->oplock, oplock, cinode->epoch, epoch)) {
+		cifs_dbg(FYI, "Invalid lease state change on inode %p\n", &cinode->netfs.inode);
+		return;
+	}
 
-	if (purge_cache) {
+	/* if the epoch returned by the server is older than the current one,
+	 * the new lease state is stale.
+	 * In this case, just retain the existing lease level.
+	 */
+	if (IS_NEWER_EPOCH(cinode->epoch, epoch)) {
+		cifs_dbg(FYI,
+			 "Stale lease epoch received for inode %p, ignoring state change\n",
+			 &cinode->netfs.inode);
+		return;
+	}
+
+	if (purge_cache && old_oplock != 0) {
 		*purge_cache = false;
-		if (old_oplock == CIFS_CACHE_READ_FLG) {
-			if (cinode->oplock == CIFS_CACHE_READ_FLG &&
-			    (epoch - cinode->epoch > 0))
-				*purge_cache = true;
-			else if (cinode->oplock == CIFS_CACHE_RH_FLG &&
-				 (epoch - cinode->epoch > 1))
-				*purge_cache = true;
-			else if (cinode->oplock == CIFS_CACHE_RHW_FLG &&
-				 (epoch - cinode->epoch > 1))
-				*purge_cache = true;
-			else if (cinode->oplock == 0 &&
-				 (epoch - cinode->epoch > 0))
-				*purge_cache = true;
-		} else if (old_oplock == CIFS_CACHE_RH_FLG) {
-			if (cinode->oplock == CIFS_CACHE_RH_FLG &&
-			    (epoch - cinode->epoch > 0))
-				*purge_cache = true;
-			else if (cinode->oplock == CIFS_CACHE_RHW_FLG &&
-				 (epoch - cinode->epoch > 1))
+
+		/* case 1: lease state remained the same,
+		 * - if epoch change is 0, no action
+		 * - if epoch change is > 0, purge cache
+		 */
+		if (old_oplock == new_oplock) {
+			if (IS_NEWER_EPOCH(epoch, cinode->epoch))
 				*purge_cache = true;
 		}
-		cinode->epoch = epoch;
+
+		/* case 2: lease state upgraded,
+		 * - if epoch change is 1, upgrade
+		 * - if epoch change is > 1, upgrade and purge cache
+		 * we do not handle lease upgrades, so just purging the cache is ok.
+		 */
+		else if (old_oplock == (new_oplock & old_oplock)) {
+			if (IS_NEWER_EPOCH(epoch-1, cinode->epoch))
+				*purge_cache = true;
+		}
+
+		/* case 3: lease state downgraded,
+		 * - if epoch change > 0, purge cache
+		 */
+		else {
+			if (IS_NEWER_EPOCH(epoch, cinode->epoch))
+				*purge_cache = true;
+		}
 	}
+
+	smb21_set_oplock_level(cinode, new_oplock, epoch, purge_cache);
+	cinode->epoch = epoch;
 }
 
 #ifdef CONFIG_CIFS_ALLOW_INSECURE_LEGACY
