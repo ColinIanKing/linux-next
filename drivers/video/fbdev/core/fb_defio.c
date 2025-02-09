@@ -265,15 +265,15 @@ static void fb_deferred_io_work(struct work_struct *work)
 
 	/* here we wrprotect the page's mappings, then do all deferred IO. */
 	mutex_lock(&fbdefio->lock);
+#ifdef CONFIG_MMU
 	list_for_each_entry(pageref, &fbdefio->pagereflist, list) {
 		struct page *page = pageref->page;
 		pgoff_t pgoff = pageref->offset >> PAGE_SHIFT;
 
-#ifdef CONFIG_MMU
 		mapping_wrprotect_range(fbdefio->mapping, pgoff,
 					page_to_pfn(page), 1);
-#endif
 	}
+#endif
 
 	/* driver's callback with pagereflist */
 	fbdefio->deferred_io(info, &fbdefio->pagereflist);
