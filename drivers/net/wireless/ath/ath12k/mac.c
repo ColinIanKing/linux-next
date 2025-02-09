@@ -15,6 +15,7 @@
 #include "hw.h"
 #include "dp_tx.h"
 #include "dp_rx.h"
+#include "testmode.h"
 #include "peer.h"
 #include "debugfs.h"
 #include "hif.h"
@@ -337,6 +338,82 @@ static const char *ath12k_mac_phymode_str(enum wmi_phy_mode mode)
 	return "<unknown>";
 }
 
+u16 ath12k_mac_he_convert_tones_to_ru_tones(u16 tones)
+{
+	switch (tones) {
+	case 26:
+		return RU_26;
+	case 52:
+		return RU_52;
+	case 106:
+		return RU_106;
+	case 242:
+		return RU_242;
+	case 484:
+		return RU_484;
+	case 996:
+		return RU_996;
+	case (996 * 2):
+		return RU_2X996;
+	default:
+		return RU_26;
+	}
+}
+
+enum nl80211_eht_gi ath12k_mac_eht_gi_to_nl80211_eht_gi(u8 sgi)
+{
+	switch (sgi) {
+	case RX_MSDU_START_SGI_0_8_US:
+		return NL80211_RATE_INFO_EHT_GI_0_8;
+	case RX_MSDU_START_SGI_1_6_US:
+		return NL80211_RATE_INFO_EHT_GI_1_6;
+	case RX_MSDU_START_SGI_3_2_US:
+		return NL80211_RATE_INFO_EHT_GI_3_2;
+	default:
+		return NL80211_RATE_INFO_EHT_GI_0_8;
+	}
+}
+
+enum nl80211_eht_ru_alloc ath12k_mac_eht_ru_tones_to_nl80211_eht_ru_alloc(u16 ru_tones)
+{
+	switch (ru_tones) {
+	case 26:
+		return NL80211_RATE_INFO_EHT_RU_ALLOC_26;
+	case 52:
+		return NL80211_RATE_INFO_EHT_RU_ALLOC_52;
+	case (52 + 26):
+		return NL80211_RATE_INFO_EHT_RU_ALLOC_52P26;
+	case 106:
+		return NL80211_RATE_INFO_EHT_RU_ALLOC_106;
+	case (106 + 26):
+		return NL80211_RATE_INFO_EHT_RU_ALLOC_106P26;
+	case 242:
+		return NL80211_RATE_INFO_EHT_RU_ALLOC_242;
+	case 484:
+		return NL80211_RATE_INFO_EHT_RU_ALLOC_484;
+	case (484 + 242):
+		return NL80211_RATE_INFO_EHT_RU_ALLOC_484P242;
+	case 996:
+		return NL80211_RATE_INFO_EHT_RU_ALLOC_996;
+	case (996 + 484):
+		return NL80211_RATE_INFO_EHT_RU_ALLOC_996P484;
+	case (996 + 484 + 242):
+		return NL80211_RATE_INFO_EHT_RU_ALLOC_996P484P242;
+	case (2 * 996):
+		return NL80211_RATE_INFO_EHT_RU_ALLOC_2x996;
+	case (2 * 996 + 484):
+		return NL80211_RATE_INFO_EHT_RU_ALLOC_2x996P484;
+	case (3 * 996):
+		return NL80211_RATE_INFO_EHT_RU_ALLOC_3x996;
+	case (3 * 996 + 484):
+		return NL80211_RATE_INFO_EHT_RU_ALLOC_3x996P484;
+	case (4 * 996):
+		return NL80211_RATE_INFO_EHT_RU_ALLOC_4x996;
+	default:
+		return NL80211_RATE_INFO_EHT_RU_ALLOC_26;
+	}
+}
+
 enum rate_info_bw
 ath12k_mac_bw_to_mac80211_bw(enum ath12k_supported_bw bw)
 {
@@ -502,7 +579,7 @@ static int ath12k_mac_vif_link_chan(struct ieee80211_vif *vif, u8 link_id,
 	return 0;
 }
 
-static struct ieee80211_bss_conf *
+struct ieee80211_bss_conf *
 ath12k_mac_get_link_bss_conf(struct ath12k_link_vif *arvif)
 {
 	struct ieee80211_vif *vif = arvif->ahvif->vif;
@@ -675,7 +752,10 @@ struct ath12k *ath12k_mac_get_ar_by_pdev_id(struct ath12k_base *ab, u32 pdev_id)
 		return NULL;
 
 	for (i = 0; i < ab->num_radios; i++) {
-		pdev = rcu_dereference(ab->pdevs_active[i]);
+		if (ab->fw_mode == ATH12K_FIRMWARE_MODE_FTM)
+			pdev = &ab->pdevs[i];
+		else
+			pdev = rcu_dereference(ab->pdevs_active[i]);
 
 		if (pdev && pdev->pdev_id == pdev_id)
 			return (pdev->ar ? pdev->ar : NULL);
@@ -1591,8 +1671,7 @@ static int ath12k_mac_setup_bcn_tmpl_ema(struct ath12k_link_vif *arvif)
 
 		ema_args.bcn_cnt = beacons->cnt;
 		ema_args.bcn_index = i;
-		ret = ath12k_wmi_bcn_tmpl(tx_arvif->ar, tx_arvif->vdev_id,
-					  &beacons->bcn[i].offs,
+		ret = ath12k_wmi_bcn_tmpl(tx_arvif, &beacons->bcn[i].offs,
 					  beacons->bcn[i].skb, &ema_args);
 		if (ret) {
 			ath12k_warn(tx_arvif->ar->ab,
@@ -1686,7 +1765,7 @@ static int ath12k_mac_setup_bcn_tmpl(struct ath12k_link_vif *arvif)
 		}
 	}
 
-	ret = ath12k_wmi_bcn_tmpl(ar, arvif->vdev_id, &offs, bcn, NULL);
+	ret = ath12k_wmi_bcn_tmpl(arvif, &offs, bcn, NULL);
 
 	if (ret)
 		ath12k_warn(ab, "failed to submit beacon template command: %d\n",
@@ -3116,6 +3195,7 @@ static void ath12k_peer_assoc_prepare(struct ath12k *ar,
 	ath12k_peer_assoc_h_smps(arsta, arg);
 	ath12k_peer_assoc_h_mlo(arsta, arg);
 
+	arsta->peer_nss = arg->peer_nss;
 	/* TODO: amsdu_disable req? */
 }
 
@@ -3136,6 +3216,37 @@ static int ath12k_setup_peer_smps(struct ath12k *ar, struct ath12k_link_vif *arv
 	return ath12k_wmi_set_peer_param(ar, addr, arvif->vdev_id,
 					 WMI_PEER_MIMO_PS_STATE,
 					 ath12k_smps_map[smps]);
+}
+
+static u32 ath12k_mac_ieee80211_sta_bw_to_wmi(struct ath12k *ar,
+					      struct ieee80211_link_sta *link_sta)
+{
+	u32 bw;
+
+	switch (link_sta->bandwidth) {
+	case IEEE80211_STA_RX_BW_20:
+		bw = WMI_PEER_CHWIDTH_20MHZ;
+		break;
+	case IEEE80211_STA_RX_BW_40:
+		bw = WMI_PEER_CHWIDTH_40MHZ;
+		break;
+	case IEEE80211_STA_RX_BW_80:
+		bw = WMI_PEER_CHWIDTH_80MHZ;
+		break;
+	case IEEE80211_STA_RX_BW_160:
+		bw = WMI_PEER_CHWIDTH_160MHZ;
+		break;
+	case IEEE80211_STA_RX_BW_320:
+		bw = WMI_PEER_CHWIDTH_320MHZ;
+		break;
+	default:
+		ath12k_warn(ar->ab, "Invalid bandwidth %d for link station %pM\n",
+			    link_sta->bandwidth, link_sta->addr);
+		bw = WMI_PEER_CHWIDTH_20MHZ;
+		break;
+	}
+
+	return bw;
 }
 
 static void ath12k_bss_assoc(struct ath12k *ar,
@@ -4909,6 +5020,11 @@ static int ath12k_mac_station_assoc(struct ath12k *ar,
 		return -EINVAL;
 	}
 
+	spin_lock_bh(&ar->data_lock);
+	arsta->bw = ath12k_mac_ieee80211_sta_bw_to_wmi(ar, link_sta);
+	arsta->bw_prev = link_sta->bandwidth;
+	spin_unlock_bh(&ar->data_lock);
+
 	if (link_sta->vht_cap.vht_supported && num_vht_rates == 1) {
 		ret = ath12k_mac_set_peer_vht_fixed_rate(arvif, arsta, mask,
 							 band);
@@ -5415,37 +5531,6 @@ exit:
 	return ret;
 }
 
-static u32 ath12k_mac_ieee80211_sta_bw_to_wmi(struct ath12k *ar,
-					      struct ieee80211_sta *sta)
-{
-	u32 bw = WMI_PEER_CHWIDTH_20MHZ;
-
-	switch (sta->deflink.bandwidth) {
-	case IEEE80211_STA_RX_BW_20:
-		bw = WMI_PEER_CHWIDTH_20MHZ;
-		break;
-	case IEEE80211_STA_RX_BW_40:
-		bw = WMI_PEER_CHWIDTH_40MHZ;
-		break;
-	case IEEE80211_STA_RX_BW_80:
-		bw = WMI_PEER_CHWIDTH_80MHZ;
-		break;
-	case IEEE80211_STA_RX_BW_160:
-		bw = WMI_PEER_CHWIDTH_160MHZ;
-		break;
-	case IEEE80211_STA_RX_BW_320:
-		bw = WMI_PEER_CHWIDTH_320MHZ;
-		break;
-	default:
-		ath12k_warn(ar->ab, "Invalid bandwidth %d in rc update for %pM\n",
-			    sta->deflink.bandwidth, sta->addr);
-		bw = WMI_PEER_CHWIDTH_20MHZ;
-		break;
-	}
-
-	return bw;
-}
-
 static int ath12k_mac_assign_link_sta(struct ath12k_hw *ah,
 				      struct ath12k_sta *ahsta,
 				      struct ath12k_link_sta *arsta,
@@ -5529,7 +5614,6 @@ static int ath12k_mac_handle_link_sta_state(struct ieee80211_hw *hw,
 					    enum ieee80211_sta_state new_state)
 {
 	struct ieee80211_vif *vif = ath12k_ahvif_to_vif(arvif->ahvif);
-	struct ieee80211_sta *sta = ath12k_ahsta_to_sta(arsta->ahsta);
 	struct ath12k *ar = arvif->ar;
 	int ret = 0;
 
@@ -5571,13 +5655,6 @@ static int ath12k_mac_handle_link_sta_state(struct ieee80211_hw *hw,
 		if (ret)
 			ath12k_warn(ar->ab, "Failed to associate station: %pM\n",
 				    arsta->addr);
-
-		spin_lock_bh(&ar->data_lock);
-
-		arsta->bw = ath12k_mac_ieee80211_sta_bw_to_wmi(ar, sta);
-		arsta->bw_prev = sta->deflink.bandwidth;
-
-		spin_unlock_bh(&ar->data_lock);
 
 	/* IEEE80211_STA_ASSOC -> IEEE80211_STA_AUTHORIZED: set peer status as
 	 * authorized
@@ -5846,7 +5923,7 @@ static void ath12k_mac_op_link_sta_rc_update(struct ieee80211_hw *hw,
 	spin_lock_bh(&ar->data_lock);
 
 	if (changed & IEEE80211_RC_BW_CHANGED) {
-		bw = ath12k_mac_ieee80211_sta_bw_to_wmi(ar, sta);
+		bw = ath12k_mac_ieee80211_sta_bw_to_wmi(ar, link_sta);
 		arsta->bw_prev = arsta->bw;
 		arsta->bw = bw;
 	}
@@ -6674,7 +6751,8 @@ static void ath12k_mac_copy_eht_cap(struct ath12k *ar,
 
 	memset(eht_cap, 0, sizeof(struct ieee80211_sta_eht_cap));
 
-	if (!(test_bit(WMI_TLV_SERVICE_11BE, ar->ab->wmi_ab.svc_map)))
+	if (!(test_bit(WMI_TLV_SERVICE_11BE, ar->ab->wmi_ab.svc_map)) ||
+	    ath12k_acpi_get_disable_11be(ar->ab))
 		return;
 
 	eht_cap->has_eht = true;
@@ -7255,8 +7333,36 @@ void ath12k_mac_drain_tx(struct ath12k *ar)
 
 static int ath12k_mac_config_mon_status_default(struct ath12k *ar, bool enable)
 {
-	return -EOPNOTSUPP;
-	/* TODO: Need to support new monitor mode */
+	struct htt_rx_ring_tlv_filter tlv_filter = {};
+	struct ath12k_base *ab = ar->ab;
+	u32 ring_id, i;
+	int ret = 0;
+
+	lockdep_assert_wiphy(ath12k_ar_to_hw(ar)->wiphy);
+
+	if (!ab->hw_params->rxdma1_enable)
+		return ret;
+
+	if (enable)
+		tlv_filter = ath12k_mac_mon_status_filter_default;
+	else
+		tlv_filter.rxmon_disable = true;
+
+	for (i = 0; i < ab->hw_params->num_rxdma_per_pdev; i++) {
+		ring_id = ar->dp.rxdma_mon_dst_ring[i].ring_id;
+		ret = ath12k_dp_tx_htt_rx_filter_setup(ab, ring_id,
+						       ar->dp.mac_id + i,
+						       HAL_RXDMA_MONITOR_DST,
+						       DP_RXDMA_REFILL_RING_SIZE,
+						       &tlv_filter);
+		if (ret) {
+			ath12k_err(ab,
+				   "failed to setup filter for monitor buf %d\n",
+				   ret);
+		}
+	}
+
+	return ret;
 }
 
 static int ath12k_mac_start(struct ath12k *ar)
@@ -7363,8 +7469,13 @@ err:
 
 static void ath12k_drain_tx(struct ath12k_hw *ah)
 {
-	struct ath12k *ar;
+	struct ath12k *ar = ah->radio;
 	int i;
+
+	if (ath12k_ftm_mode) {
+		ath12k_err(ar->ab, "fail to start mac operations in ftm mode\n");
+		return;
+	}
 
 	lockdep_assert_wiphy(ah->hw->wiphy);
 
@@ -7394,6 +7505,7 @@ static int ath12k_mac_op_start(struct ieee80211_hw *hw)
 	case ATH12K_HW_STATE_RESTARTED:
 	case ATH12K_HW_STATE_WEDGED:
 	case ATH12K_HW_STATE_ON:
+	case ATH12K_HW_STATE_TM:
 		ah->state = ATH12K_HW_STATE_OFF;
 
 		WARN_ON(1);
@@ -8381,29 +8493,6 @@ static void ath12k_mac_op_remove_interface(struct ieee80211_hw *hw,
 	FIF_PROBE_REQ |				\
 	FIF_FCSFAIL)
 
-static void ath12k_mac_configure_filter(struct ath12k *ar,
-					unsigned int total_flags)
-{
-	bool reset_flag;
-	int ret;
-
-	lockdep_assert_wiphy(ath12k_ar_to_hw(ar)->wiphy);
-
-	ar->filter_flags = total_flags;
-
-	/* For monitor mode */
-	reset_flag = !(ar->filter_flags & FIF_BCN_PRBRESP_PROMISC);
-
-	ret = ath12k_dp_tx_htt_monitor_mode_ring_config(ar, reset_flag);
-	if (ret)
-		ath12k_warn(ar->ab,
-			    "fail to set monitor filter: %d\n", ret);
-
-	ath12k_dbg(ar->ab, ATH12K_DBG_MAC,
-		   "total_flags:0x%x, reset_flag:%d\n",
-		   total_flags, reset_flag);
-}
-
 static void ath12k_mac_op_configure_filter(struct ieee80211_hw *hw,
 					   unsigned int changed_flags,
 					   unsigned int *total_flags,
@@ -8417,7 +8506,7 @@ static void ath12k_mac_op_configure_filter(struct ieee80211_hw *hw,
 	ar = ath12k_ah_to_ar(ah, 0);
 
 	*total_flags &= SUPPORTED_FILTERS;
-	ath12k_mac_configure_filter(ar, *total_flags);
+	ar->filter_flags = *total_flags;
 }
 
 static int ath12k_mac_op_get_antenna(struct ieee80211_hw *hw, u32 *tx_ant, u32 *rx_ant)
@@ -10017,6 +10106,40 @@ static int ath12k_mac_op_get_survey(struct ieee80211_hw *hw, int idx,
 	return 0;
 }
 
+static int ath12k_mac_get_fw_stats(struct ath12k *ar, u32 pdev_id,
+				   u32 vdev_id, u32 stats_id)
+{
+	struct ath12k_base *ab = ar->ab;
+	struct ath12k_hw *ah = ath12k_ar_to_ah(ar);
+	unsigned long time_left;
+	int ret;
+
+	guard(mutex)(&ah->hw_mutex);
+
+	if (ah->state != ATH12K_HW_STATE_ON)
+		return -ENETDOWN;
+
+	reinit_completion(&ar->fw_stats_complete);
+
+	ret = ath12k_wmi_send_stats_request_cmd(ar, stats_id, vdev_id, pdev_id);
+
+	if (ret) {
+		ath12k_warn(ab, "failed to request fw stats: %d\n", ret);
+		return ret;
+	}
+
+	ath12k_dbg(ab, ATH12K_DBG_WMI,
+		   "get fw stat pdev id %d vdev id %d stats id 0x%x\n",
+		   pdev_id, vdev_id, stats_id);
+
+	time_left = wait_for_completion_timeout(&ar->fw_stats_complete, 1 * HZ);
+
+	if (!time_left)
+		ath12k_warn(ab, "time out while waiting for get fw stats\n");
+
+	return ret;
+}
+
 static void ath12k_mac_op_sta_statistics(struct ieee80211_hw *hw,
 					 struct ieee80211_vif *vif,
 					 struct ieee80211_sta *sta,
@@ -10024,10 +10147,19 @@ static void ath12k_mac_op_sta_statistics(struct ieee80211_hw *hw,
 {
 	struct ath12k_sta *ahsta = ath12k_sta_to_ahsta(sta);
 	struct ath12k_link_sta *arsta;
+	struct ath12k *ar;
+	s8 signal;
+	bool db2dbm;
 
 	lockdep_assert_wiphy(hw->wiphy);
 
 	arsta = &ahsta->deflink;
+	ar = ath12k_get_ar_by_vif(hw, vif, arsta->link_id);
+	if (!ar)
+		return;
+
+	db2dbm = test_bit(WMI_TLV_SERVICE_HW_DB2DBM_CONVERSION_SUPPORT,
+			  ar->ab->wmi_ab.svc_map);
 
 	sinfo->rx_duration = arsta->rx_duration;
 	sinfo->filled |= BIT_ULL(NL80211_STA_INFO_RX_DURATION);
@@ -10035,25 +10167,36 @@ static void ath12k_mac_op_sta_statistics(struct ieee80211_hw *hw,
 	sinfo->tx_duration = arsta->tx_duration;
 	sinfo->filled |= BIT_ULL(NL80211_STA_INFO_TX_DURATION);
 
-	if (!arsta->txrate.legacy && !arsta->txrate.nss)
-		return;
-
-	if (arsta->txrate.legacy) {
-		sinfo->txrate.legacy = arsta->txrate.legacy;
-	} else {
-		sinfo->txrate.mcs = arsta->txrate.mcs;
-		sinfo->txrate.nss = arsta->txrate.nss;
-		sinfo->txrate.bw = arsta->txrate.bw;
-		sinfo->txrate.he_gi = arsta->txrate.he_gi;
-		sinfo->txrate.he_dcm = arsta->txrate.he_dcm;
-		sinfo->txrate.he_ru_alloc = arsta->txrate.he_ru_alloc;
+	if (arsta->txrate.legacy || arsta->txrate.nss) {
+		if (arsta->txrate.legacy) {
+			sinfo->txrate.legacy = arsta->txrate.legacy;
+		} else {
+			sinfo->txrate.mcs = arsta->txrate.mcs;
+			sinfo->txrate.nss = arsta->txrate.nss;
+			sinfo->txrate.bw = arsta->txrate.bw;
+			sinfo->txrate.he_gi = arsta->txrate.he_gi;
+			sinfo->txrate.he_dcm = arsta->txrate.he_dcm;
+			sinfo->txrate.he_ru_alloc = arsta->txrate.he_ru_alloc;
+			sinfo->txrate.eht_gi = arsta->txrate.eht_gi;
+			sinfo->txrate.eht_ru_alloc = arsta->txrate.eht_ru_alloc;
+		}
+		sinfo->txrate.flags = arsta->txrate.flags;
+		sinfo->filled |= BIT_ULL(NL80211_STA_INFO_TX_BITRATE);
 	}
-	sinfo->txrate.flags = arsta->txrate.flags;
-	sinfo->filled |= BIT_ULL(NL80211_STA_INFO_TX_BITRATE);
 
 	/* TODO: Use real NF instead of default one. */
-	sinfo->signal = arsta->rssi_comb + ATH12K_DEFAULT_NOISE_FLOOR;
-	sinfo->filled |= BIT_ULL(NL80211_STA_INFO_SIGNAL);
+	signal = arsta->rssi_comb;
+
+	if (!signal &&
+	    ahsta->ahvif->vdev_type == WMI_VDEV_TYPE_STA &&
+	    !(ath12k_mac_get_fw_stats(ar, ar->pdev->pdev_id, 0,
+				      WMI_REQUEST_VDEV_STAT)))
+		signal = arsta->rssi_beacon;
+
+	if (signal) {
+		sinfo->signal = db2dbm ? signal : signal + ATH12K_DEFAULT_NOISE_FLOOR;
+		sinfo->filled |= BIT_ULL(NL80211_STA_INFO_SIGNAL);
+	}
 }
 
 static int ath12k_mac_op_cancel_remain_on_channel(struct ieee80211_hw *hw,
@@ -10299,6 +10442,7 @@ static const struct ieee80211_ops ath12k_ops = {
 	.resume				= ath12k_wow_op_resume,
 	.set_wakeup			= ath12k_wow_op_set_wakeup,
 #endif
+	CFG80211_TESTMODE_CMD(ath12k_tm_cmd)
 };
 
 static void ath12k_mac_update_ch_list(struct ath12k *ar,
@@ -11032,6 +11176,8 @@ static int ath12k_mac_hw_register(struct ath12k_hw *ah)
 
 		ath12k_debugfs_register(ar);
 	}
+
+	init_completion(&ar->fw_stats_complete);
 
 	return 0;
 

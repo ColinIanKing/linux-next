@@ -87,6 +87,7 @@ enum wme_ac {
 #define ATH12K_HT_MCS_MAX	7
 #define ATH12K_VHT_MCS_MAX	9
 #define ATH12K_HE_MCS_MAX	11
+#define ATH12K_EHT_MCS_MAX	15
 
 enum ath12k_crypt_mode {
 	/* Only use hardware crypto engine */
@@ -141,6 +142,7 @@ struct ath12k_skb_rxcb {
 	u8 is_frag;
 	u8 tid;
 	u16 peer_id;
+	bool is_end_of_ppdu;
 };
 
 enum ath12k_hw_rev {
@@ -166,6 +168,7 @@ struct ath12k_ext_irq_grp {
 	u32 num_irq;
 	u32 grp_id;
 	u64 timestamp;
+	bool napi_enabled;
 	struct napi_struct napi;
 	struct net_device *napi_ndev;
 };
@@ -235,6 +238,7 @@ enum ath12k_dev_flags {
 	ATH12K_FLAG_CE_IRQ_ENABLED,
 	ATH12K_FLAG_EXT_IRQ_ENABLED,
 	ATH12K_FLAG_QMI_FW_READY_COMPLETE,
+	ATH12K_FLAG_FTM_SEGMENTED,
 };
 
 struct ath12k_tx_conf {
@@ -298,6 +302,8 @@ struct ath12k_link_vif {
 	u8 link_id;
 	struct ath12k_vif *ahvif;
 	struct ath12k_rekey_data rekey_data;
+
+	u8 current_cntdown_counter;
 };
 
 struct ath12k_vif {
@@ -500,6 +506,8 @@ struct ath12k_link_sta {
 	struct ath12k_rx_peer_stats *rx_stats;
 	struct ath12k_wbm_tx_stats *wbm_tx_stats;
 	u32 bw_prev;
+	u32 peer_nss;
+	s8 rssi_beacon;
 
 	/* For now the assoc link will be considered primary */
 	bool is_assoc_link;
@@ -534,11 +542,18 @@ enum ath12k_hw_state {
 	ATH12K_HW_STATE_RESTARTING,
 	ATH12K_HW_STATE_RESTARTED,
 	ATH12K_HW_STATE_WEDGED,
+	ATH12K_HW_STATE_TM,
 	/* Add other states as required */
 };
 
 /* Antenna noise floor */
 #define ATH12K_DEFAULT_NOISE_FLOOR -95
+
+struct ath12k_ftm_event_obj {
+	u32 data_pos;
+	u32 expected_seq;
+	u8 *eventdata;
+};
 
 struct ath12k_fw_stats {
 	u32 pdev_id;
@@ -546,6 +561,7 @@ struct ath12k_fw_stats {
 	struct list_head pdevs;
 	struct list_head vdevs;
 	struct list_head bcn;
+	bool fw_stats_done;
 };
 
 struct ath12k_dbg_htt_stats {
@@ -559,6 +575,10 @@ struct ath12k_debug {
 	struct dentry *debugfs_pdev;
 	struct dentry *debugfs_pdev_symlink;
 	struct ath12k_dbg_htt_stats htt_stats;
+	enum wmi_halphy_ctrl_path_stats_id tpc_stats_type;
+	bool tpc_request;
+	struct completion tpc_complete;
+	struct wmi_tpc_stats_arg *tpc_stats;
 };
 
 struct ath12k_per_peer_tx_stats {
@@ -712,8 +732,12 @@ struct ath12k {
 
 	bool nlo_enabled;
 
+	struct completion fw_stats_complete;
+
 	struct completion mlo_setup_done;
 	u32 mlo_setup_status;
+	u8 ftm_msgref;
+	struct ath12k_fw_stats fw_stats;
 };
 
 struct ath12k_hw {
@@ -1038,6 +1062,13 @@ struct ath12k_base {
 		u32 func_bit;
 		bool acpi_tas_enable;
 		bool acpi_bios_sar_enable;
+		bool acpi_disable_11be;
+		bool acpi_disable_rfkill;
+		bool acpi_cca_enable;
+		bool acpi_band_edge_enable;
+		bool acpi_enable_bdf;
+		u32 bit_flag;
+		char bdf_string[ATH12K_ACPI_BDF_MAX_LEN];
 		u8 tas_cfg[ATH12K_ACPI_DSM_TAS_CFG_SIZE];
 		u8 tas_sar_power_table[ATH12K_ACPI_DSM_TAS_DATA_SIZE];
 		u8 bios_sar_data[ATH12K_ACPI_DSM_BIOS_SAR_DATA_SIZE];
@@ -1052,6 +1083,8 @@ struct ath12k_base {
 
 	struct ath12k_hw_group *ag;
 	struct ath12k_wsi_info wsi_info;
+	enum ath12k_firmware_mode fw_mode;
+	struct ath12k_ftm_event_obj ftm_event_obj;
 
 	/* must be last */
 	u8 drv_priv[] __aligned(sizeof(void *));
@@ -1060,6 +1093,93 @@ struct ath12k_base {
 struct ath12k_pdev_map {
 	struct ath12k_base *ab;
 	u8 pdev_idx;
+};
+
+struct ath12k_fw_stats_vdev {
+	struct list_head list;
+
+	u32 vdev_id;
+	u32 beacon_snr;
+	u32 data_snr;
+	u32 num_tx_frames[WLAN_MAX_AC];
+	u32 num_rx_frames;
+	u32 num_tx_frames_retries[WLAN_MAX_AC];
+	u32 num_tx_frames_failures[WLAN_MAX_AC];
+	u32 num_rts_fail;
+	u32 num_rts_success;
+	u32 num_rx_err;
+	u32 num_rx_discard;
+	u32 num_tx_not_acked;
+	u32 tx_rate_history[MAX_TX_RATE_VALUES];
+	u32 beacon_rssi_history[MAX_TX_RATE_VALUES];
+};
+
+struct ath12k_fw_stats_bcn {
+	struct list_head list;
+
+	u32 vdev_id;
+	u32 tx_bcn_succ_cnt;
+	u32 tx_bcn_outage_cnt;
+};
+
+struct ath12k_fw_stats_pdev {
+	struct list_head list;
+
+	/* PDEV stats */
+	s32 ch_noise_floor;
+	u32 tx_frame_count;
+	u32 rx_frame_count;
+	u32 rx_clear_count;
+	u32 cycle_count;
+	u32 phy_err_count;
+	u32 chan_tx_power;
+	u32 ack_rx_bad;
+	u32 rts_bad;
+	u32 rts_good;
+	u32 fcs_bad;
+	u32 no_beacons;
+	u32 mib_int_count;
+
+	/* PDEV TX stats */
+	s32 comp_queued;
+	s32 comp_delivered;
+	s32 msdu_enqued;
+	s32 mpdu_enqued;
+	s32 wmm_drop;
+	s32 local_enqued;
+	s32 local_freed;
+	s32 hw_queued;
+	s32 hw_reaped;
+	s32 underrun;
+	s32 tx_abort;
+	s32 mpdus_requed;
+	u32 tx_ko;
+	u32 data_rc;
+	u32 self_triggers;
+	u32 sw_retry_failure;
+	u32 illgl_rate_phy_err;
+	u32 pdev_cont_xretry;
+	u32 pdev_tx_timeout;
+	u32 pdev_resets;
+	u32 stateless_tid_alloc_failure;
+	u32 phy_underrun;
+	u32 txop_ovf;
+
+	/* PDEV RX stats */
+	s32 mid_ppdu_route_change;
+	s32 status_rcvd;
+	s32 r0_frags;
+	s32 r1_frags;
+	s32 r2_frags;
+	s32 r3_frags;
+	s32 htt_msdus;
+	s32 htt_mpdus;
+	s32 loc_msdus;
+	s32 loc_mpdus;
+	s32 oversize_amsdu;
+	s32 phy_errs;
+	s32 phy_err_drop;
+	s32 mpdu_errs;
 };
 
 int ath12k_core_qmi_firmware_ready(struct ath12k_base *ab);

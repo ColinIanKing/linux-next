@@ -563,13 +563,17 @@ static void ath12k_dp_mon_parse_he_sig_su(const struct hal_rx_he_sig_a_su_info *
 }
 
 static enum hal_rx_mon_status
-ath12k_dp_mon_rx_parse_status_tlv(struct ath12k_base *ab,
+ath12k_dp_mon_rx_parse_status_tlv(struct ath12k *ar,
 				  struct ath12k_mon_data *pmon,
-				  u32 tlv_tag, const void *tlv_data,
-				  u32 userid)
+				  const struct hal_tlv_64_hdr *tlv)
 {
 	struct hal_rx_mon_ppdu_info *ppdu_info = &pmon->mon_ppdu_info;
-	u32 info[7];
+	const void *tlv_data = tlv->value;
+	u32 info[7], userid;
+	u16 tlv_tag;
+
+	tlv_tag = le64_get_bits(tlv->tl, HAL_TLV_64_HDR_TAG);
+	userid = le64_get_bits(tlv->tl, HAL_TLV_64_USR_ID);
 
 	switch (tlv_tag) {
 	case HAL_RX_PPDU_START: {
@@ -743,7 +747,6 @@ ath12k_dp_mon_rx_parse_status_tlv(struct ath12k_base *ab,
 	}
 	case HAL_RX_MPDU_START: {
 		const struct hal_rx_mpdu_start *mpdu_start = tlv_data;
-		struct dp_mon_mpdu *mon_mpdu = pmon->mon_mpdu;
 		u16 peer_id;
 
 		info[1] = __le32_to_cpu(mpdu_start->info1);
@@ -760,65 +763,17 @@ ath12k_dp_mon_rx_parse_status_tlv(struct ath12k_base *ab,
 				u32_get_bits(info[0], HAL_RX_MPDU_START_INFO1_PEERID);
 		}
 
-		mon_mpdu = kzalloc(sizeof(*mon_mpdu), GFP_ATOMIC);
-		if (!mon_mpdu)
-			return HAL_RX_MON_STATUS_PPDU_NOT_DONE;
-
 		break;
 	}
 	case HAL_RX_MSDU_START:
 		/* TODO: add msdu start parsing logic */
 		break;
-	case HAL_MON_BUF_ADDR: {
-		struct dp_rxdma_mon_ring *buf_ring = &ab->dp.rxdma_mon_buf_ring;
-		const struct dp_mon_packet_info *packet_info = tlv_data;
-		int buf_id = u32_get_bits(packet_info->cookie,
-					  DP_RXDMA_BUF_COOKIE_BUF_ID);
-		struct sk_buff *msdu;
-		struct dp_mon_mpdu *mon_mpdu = pmon->mon_mpdu;
-		struct ath12k_skb_rxcb *rxcb;
-
-		spin_lock_bh(&buf_ring->idr_lock);
-		msdu = idr_remove(&buf_ring->bufs_idr, buf_id);
-		spin_unlock_bh(&buf_ring->idr_lock);
-
-		if (unlikely(!msdu)) {
-			ath12k_warn(ab, "monitor destination with invalid buf_id %d\n",
-				    buf_id);
-			return HAL_RX_MON_STATUS_PPDU_NOT_DONE;
-		}
-
-		rxcb = ATH12K_SKB_RXCB(msdu);
-		dma_unmap_single(ab->dev, rxcb->paddr,
-				 msdu->len + skb_tailroom(msdu),
-				 DMA_FROM_DEVICE);
-
-		if (mon_mpdu->tail)
-			mon_mpdu->tail->next = msdu;
-		else
-			mon_mpdu->tail = msdu;
-
-		ath12k_dp_mon_buf_replenish(ab, buf_ring, 1);
-
-		break;
-	}
-	case HAL_RX_MSDU_END: {
-		const struct rx_msdu_end_qcn9274 *msdu_end = tlv_data;
-		bool is_first_msdu_in_mpdu;
-		u16 msdu_end_info;
-
-		msdu_end_info = __le16_to_cpu(msdu_end->info5);
-		is_first_msdu_in_mpdu = u32_get_bits(msdu_end_info,
-						     RX_MSDU_END_INFO5_FIRST_MSDU);
-		if (is_first_msdu_in_mpdu) {
-			pmon->mon_mpdu->head = pmon->mon_mpdu->tail;
-			pmon->mon_mpdu->tail = NULL;
-		}
-		break;
-	}
+	case HAL_MON_BUF_ADDR:
+		return HAL_RX_MON_STATUS_BUF_ADDR;
+	case HAL_RX_MSDU_END:
+		return HAL_RX_MON_STATUS_MSDU_END;
 	case HAL_RX_MPDU_END:
-		list_add_tail(&pmon->mon_mpdu->list, &pmon->dp_rx_mon_mpdu_list);
-		break;
+		return HAL_RX_MON_STATUS_MPDU_END;
 	case HAL_DUMMY:
 		return HAL_RX_MON_STATUS_BUF_DONE;
 	case HAL_RX_PPDU_END_STATUS_DONE:
@@ -844,7 +799,7 @@ static void ath12k_dp_mon_rx_msdus_set_payload(struct ath12k *ar,
 }
 
 static struct sk_buff *
-ath12k_dp_mon_rx_merg_msdus(struct ath12k *ar, u32 mac_id,
+ath12k_dp_mon_rx_merg_msdus(struct ath12k *ar,
 			    struct sk_buff *head_msdu, struct sk_buff *tail_msdu,
 			    struct ieee80211_rx_status *rxs, bool *fcs_err)
 {
@@ -1125,7 +1080,7 @@ static void ath12k_dp_mon_rx_deliver_msdu(struct ath12k *ar, struct napi_struct 
 	ieee80211_rx_napi(ath12k_ar_to_hw(ar), pubsta, msdu, napi);
 }
 
-static int ath12k_dp_mon_rx_deliver(struct ath12k *ar, u32 mac_id,
+static int ath12k_dp_mon_rx_deliver(struct ath12k *ar,
 				    struct sk_buff *head_msdu, struct sk_buff *tail_msdu,
 				    struct hal_rx_mon_ppdu_info *ppduinfo,
 				    struct napi_struct *napi)
@@ -1135,7 +1090,7 @@ static int ath12k_dp_mon_rx_deliver(struct ath12k *ar, u32 mac_id,
 	struct ieee80211_rx_status *rxs = &dp->rx_status;
 	bool fcs_err = false;
 
-	mon_skb = ath12k_dp_mon_rx_merg_msdus(ar, mac_id,
+	mon_skb = ath12k_dp_mon_rx_merg_msdus(ar,
 					      head_msdu, tail_msdu,
 					      rxs, &fcs_err);
 	if (!mon_skb)
@@ -1180,24 +1135,18 @@ mon_deliver_fail:
 }
 
 static enum hal_rx_mon_status
-ath12k_dp_mon_parse_rx_dest(struct ath12k_base *ab, struct ath12k_mon_data *pmon,
+ath12k_dp_mon_parse_rx_dest(struct ath12k *ar, struct ath12k_mon_data *pmon,
 			    struct sk_buff *skb)
 {
-	struct hal_rx_mon_ppdu_info *ppdu_info = &pmon->mon_ppdu_info;
 	struct hal_tlv_64_hdr *tlv;
+	struct ath12k_skb_rxcb *rxcb;
 	enum hal_rx_mon_status hal_status;
-	u32 tlv_userid;
 	u16 tlv_tag, tlv_len;
 	u8 *ptr = skb->data;
-
-	memset(ppdu_info, 0, sizeof(struct hal_rx_mon_ppdu_info));
 
 	do {
 		tlv = (struct hal_tlv_64_hdr *)ptr;
 		tlv_tag = le64_get_bits(tlv->tl, HAL_TLV_64_HDR_TAG);
-		tlv_len = le64_get_bits(tlv->tl, HAL_TLV_64_HDR_LEN);
-		tlv_userid = le64_get_bits(tlv->tl, HAL_TLV_64_USR_ID);
-		ptr += sizeof(*tlv);
 
 		/* The actual length of PPDU_END is the combined length of many PHY
 		 * TLVs that follow. Skip the TLV header and
@@ -1207,16 +1156,24 @@ ath12k_dp_mon_parse_rx_dest(struct ath12k_base *ab, struct ath12k_mon_data *pmon
 
 		if (tlv_tag == HAL_RX_PPDU_END)
 			tlv_len = sizeof(struct hal_rx_rxpcu_classification_overview);
+		else
+			tlv_len = le64_get_bits(tlv->tl, HAL_TLV_64_HDR_LEN);
 
-		hal_status = ath12k_dp_mon_rx_parse_status_tlv(ab, pmon,
-							       tlv_tag, ptr, tlv_userid);
-		ptr += tlv_len;
+		hal_status = ath12k_dp_mon_rx_parse_status_tlv(ar, pmon, tlv);
+		ptr += sizeof(*tlv) + tlv_len;
 		ptr = PTR_ALIGN(ptr, HAL_TLV_64_ALIGN);
 
 		if ((ptr - skb->data) >= DP_RX_BUFFER_SIZE)
 			break;
 
-	} while (hal_status == HAL_RX_MON_STATUS_PPDU_NOT_DONE);
+	} while ((hal_status == HAL_RX_MON_STATUS_PPDU_NOT_DONE) ||
+		 (hal_status == HAL_RX_MON_STATUS_BUF_ADDR) ||
+		 (hal_status == HAL_RX_MON_STATUS_MPDU_END) ||
+		 (hal_status == HAL_RX_MON_STATUS_MSDU_END));
+
+	rxcb = ATH12K_SKB_RXCB(skb);
+	if (rxcb->is_end_of_ppdu)
+		hal_status = HAL_RX_MON_STATUS_PPDU_DONE;
 
 	return hal_status;
 }
@@ -1224,18 +1181,16 @@ ath12k_dp_mon_parse_rx_dest(struct ath12k_base *ab, struct ath12k_mon_data *pmon
 enum hal_rx_mon_status
 ath12k_dp_mon_rx_parse_mon_status(struct ath12k *ar,
 				  struct ath12k_mon_data *pmon,
-				  int mac_id,
 				  struct sk_buff *skb,
 				  struct napi_struct *napi)
 {
-	struct ath12k_base *ab = ar->ab;
 	struct hal_rx_mon_ppdu_info *ppdu_info = &pmon->mon_ppdu_info;
 	struct dp_mon_mpdu *tmp;
 	struct dp_mon_mpdu *mon_mpdu = pmon->mon_mpdu;
 	struct sk_buff *head_msdu, *tail_msdu;
 	enum hal_rx_mon_status hal_status = HAL_RX_MON_STATUS_BUF_DONE;
 
-	ath12k_dp_mon_parse_rx_dest(ab, pmon, skb);
+	ath12k_dp_mon_parse_rx_dest(ar, pmon, skb);
 
 	list_for_each_entry_safe(mon_mpdu, tmp, &pmon->dp_rx_mon_mpdu_list, list) {
 		list_del(&mon_mpdu->list);
@@ -1243,7 +1198,7 @@ ath12k_dp_mon_rx_parse_mon_status(struct ath12k *ar,
 		tail_msdu = mon_mpdu->tail;
 
 		if (head_msdu && tail_msdu) {
-			ath12k_dp_mon_rx_deliver(ar, mac_id, head_msdu,
+			ath12k_dp_mon_rx_deliver(ar, head_msdu,
 						 tail_msdu, ppdu_info, napi);
 		}
 
@@ -1924,7 +1879,7 @@ ath12k_dp_mon_tx_status_get_num_user(u16 tlv_tag,
 }
 
 static void
-ath12k_dp_mon_tx_process_ppdu_info(struct ath12k *ar, int mac_id,
+ath12k_dp_mon_tx_process_ppdu_info(struct ath12k *ar,
 				   struct napi_struct *napi,
 				   struct dp_mon_tx_ppdu_info *tx_ppdu_info)
 {
@@ -1938,7 +1893,7 @@ ath12k_dp_mon_tx_process_ppdu_info(struct ath12k *ar, int mac_id,
 		tail_msdu = mon_mpdu->tail;
 
 		if (head_msdu)
-			ath12k_dp_mon_rx_deliver(ar, mac_id, head_msdu, tail_msdu,
+			ath12k_dp_mon_rx_deliver(ar, head_msdu, tail_msdu,
 						 &tx_ppdu_info->rx_status, napi);
 
 		kfree(mon_mpdu);
@@ -1948,7 +1903,6 @@ ath12k_dp_mon_tx_process_ppdu_info(struct ath12k *ar, int mac_id,
 enum hal_rx_mon_status
 ath12k_dp_mon_tx_parse_mon_status(struct ath12k *ar,
 				  struct ath12k_mon_data *pmon,
-				  int mac_id,
 				  struct sk_buff *skb,
 				  struct napi_struct *napi,
 				  u32 ppdu_id)
@@ -1995,119 +1949,10 @@ ath12k_dp_mon_tx_parse_mon_status(struct ath12k *ar,
 			break;
 	} while (tlv_status != DP_MON_TX_FES_STATUS_END);
 
-	ath12k_dp_mon_tx_process_ppdu_info(ar, mac_id, napi, tx_data_ppdu_info);
-	ath12k_dp_mon_tx_process_ppdu_info(ar, mac_id, napi, tx_prot_ppdu_info);
+	ath12k_dp_mon_tx_process_ppdu_info(ar, napi, tx_data_ppdu_info);
+	ath12k_dp_mon_tx_process_ppdu_info(ar, napi, tx_prot_ppdu_info);
 
 	return tlv_status;
-}
-
-int ath12k_dp_mon_srng_process(struct ath12k *ar, int mac_id, int *budget,
-			       enum dp_monitor_mode monitor_mode,
-			       struct napi_struct *napi)
-{
-	struct hal_mon_dest_desc *mon_dst_desc;
-	struct ath12k_pdev_dp *pdev_dp = &ar->dp;
-	struct ath12k_mon_data *pmon = (struct ath12k_mon_data *)&pdev_dp->mon_data;
-	struct ath12k_base *ab = ar->ab;
-	struct ath12k_dp *dp = &ab->dp;
-	struct sk_buff *skb;
-	struct ath12k_skb_rxcb *rxcb;
-	struct dp_srng *mon_dst_ring;
-	struct hal_srng *srng;
-	struct dp_rxdma_mon_ring *buf_ring;
-	u64 cookie;
-	u32 ppdu_id;
-	int num_buffs_reaped = 0, srng_id, buf_id;
-	u8 dest_idx = 0, i;
-	bool end_of_ppdu;
-	struct hal_rx_mon_ppdu_info *ppdu_info;
-	struct ath12k_peer *peer = NULL;
-
-	ppdu_info = &pmon->mon_ppdu_info;
-	memset(ppdu_info, 0, sizeof(*ppdu_info));
-	ppdu_info->peer_id = HAL_INVALID_PEERID;
-
-	srng_id = ath12k_hw_mac_id_to_srng_id(ab->hw_params, mac_id);
-
-	if (monitor_mode == ATH12K_DP_RX_MONITOR_MODE) {
-		mon_dst_ring = &pdev_dp->rxdma_mon_dst_ring[srng_id];
-		buf_ring = &dp->rxdma_mon_buf_ring;
-	} else {
-		return 0;
-	}
-
-	srng = &ab->hal.srng_list[mon_dst_ring->ring_id];
-
-	spin_lock_bh(&srng->lock);
-	ath12k_hal_srng_access_begin(ab, srng);
-
-	while (likely(*budget)) {
-		*budget -= 1;
-		mon_dst_desc = ath12k_hal_srng_dst_peek(ab, srng);
-		if (unlikely(!mon_dst_desc))
-			break;
-
-		cookie = le32_to_cpu(mon_dst_desc->cookie);
-		buf_id = u32_get_bits(cookie, DP_RXDMA_BUF_COOKIE_BUF_ID);
-
-		spin_lock_bh(&buf_ring->idr_lock);
-		skb = idr_remove(&buf_ring->bufs_idr, buf_id);
-		spin_unlock_bh(&buf_ring->idr_lock);
-
-		if (unlikely(!skb)) {
-			ath12k_warn(ab, "monitor destination with invalid buf_id %d\n",
-				    buf_id);
-			goto move_next;
-		}
-
-		rxcb = ATH12K_SKB_RXCB(skb);
-		dma_unmap_single(ab->dev, rxcb->paddr,
-				 skb->len + skb_tailroom(skb),
-				 DMA_FROM_DEVICE);
-
-		pmon->dest_skb_q[dest_idx] = skb;
-		dest_idx++;
-		ppdu_id = le32_to_cpu(mon_dst_desc->ppdu_id);
-		end_of_ppdu = le32_get_bits(mon_dst_desc->info0,
-					    HAL_MON_DEST_INFO0_END_OF_PPDU);
-		if (!end_of_ppdu)
-			continue;
-
-		for (i = 0; i < dest_idx; i++) {
-			skb = pmon->dest_skb_q[i];
-
-			if (monitor_mode == ATH12K_DP_RX_MONITOR_MODE)
-				ath12k_dp_mon_rx_parse_mon_status(ar, pmon, mac_id,
-								  skb, napi);
-			else
-				ath12k_dp_mon_tx_parse_mon_status(ar, pmon, mac_id,
-								  skb, napi, ppdu_id);
-
-			peer = ath12k_peer_find_by_id(ab, ppdu_info->peer_id);
-
-			if (!peer || !peer->sta) {
-				ath12k_dbg(ab, ATH12K_DBG_DATA,
-					   "failed to find the peer with peer_id %d\n",
-					   ppdu_info->peer_id);
-				dev_kfree_skb_any(skb);
-				continue;
-			}
-
-			dev_kfree_skb_any(skb);
-			pmon->dest_skb_q[i] = NULL;
-		}
-
-		dest_idx = 0;
-move_next:
-		ath12k_dp_mon_buf_replenish(ab, buf_ring, 1);
-		ath12k_hal_srng_src_get_next_entry(ab, srng);
-		num_buffs_reaped++;
-	}
-
-	ath12k_hal_srng_access_end(ab, srng);
-	spin_unlock_bh(&srng->lock);
-
-	return num_buffs_reaped;
 }
 
 static void
@@ -2415,8 +2260,15 @@ ath12k_dp_mon_rx_update_peer_mu_stats(struct ath12k *ar,
 		ath12k_dp_mon_rx_update_user_stats(ar, ppdu_info, i);
 }
 
-int ath12k_dp_mon_rx_process_stats(struct ath12k *ar, int mac_id,
-				   struct napi_struct *napi, int *budget)
+static void
+ath12k_dp_mon_rx_memset_ppdu_info(struct hal_rx_mon_ppdu_info *ppdu_info)
+{
+	memset(ppdu_info, 0, sizeof(*ppdu_info));
+	ppdu_info->peer_id = HAL_INVALID_PEERID;
+}
+
+int ath12k_dp_mon_srng_process(struct ath12k *ar, int *budget,
+			       struct napi_struct *napi)
 {
 	struct ath12k_base *ab = ar->ab;
 	struct ath12k_pdev_dp *pdev_dp = &ar->dp;
@@ -2432,13 +2284,14 @@ int ath12k_dp_mon_rx_process_stats(struct ath12k *ar, int mac_id,
 	struct ath12k_sta *ahsta = NULL;
 	struct ath12k_link_sta *arsta;
 	struct ath12k_peer *peer;
+	struct sk_buff_head skb_list;
 	u64 cookie;
 	int num_buffs_reaped = 0, srng_id, buf_id;
-	u8 dest_idx = 0, i;
-	bool end_of_ppdu;
-	u32 hal_status;
+	u32 hal_status, end_offset, info0, end_reason;
+	u8 pdev_idx = ath12k_hw_mac_id_to_pdev_id(ab->hw_params, ar->pdev_idx);
 
-	srng_id = ath12k_hw_mac_id_to_srng_id(ab->hw_params, mac_id);
+	__skb_queue_head_init(&skb_list);
+	srng_id = ath12k_hw_mac_id_to_srng_id(ab->hw_params, pdev_idx);
 	mon_dst_ring = &pdev_dp->rxdma_mon_dst_ring[srng_id];
 	buf_ring = &dp->rxdma_mon_buf_ring;
 
@@ -2451,6 +2304,15 @@ int ath12k_dp_mon_rx_process_stats(struct ath12k *ar, int mac_id,
 		mon_dst_desc = ath12k_hal_srng_dst_peek(ab, srng);
 		if (unlikely(!mon_dst_desc))
 			break;
+
+		/* In case of empty descriptor, the cookie in the ring descriptor
+		 * is invalid. Therefore, this entry is skipped, and ring processing
+		 * continues.
+		 */
+		info0 = le32_to_cpu(mon_dst_desc->info0);
+		if (u32_get_bits(info0, HAL_MON_DEST_INFO0_EMPTY_DESC))
+			goto move_next;
+
 		cookie = le32_to_cpu(mon_dst_desc->cookie);
 		buf_id = u32_get_bits(cookie, DP_RXDMA_BUF_COOKIE_BUF_ID);
 
@@ -2468,63 +2330,102 @@ int ath12k_dp_mon_rx_process_stats(struct ath12k *ar, int mac_id,
 		dma_unmap_single(ab->dev, rxcb->paddr,
 				 skb->len + skb_tailroom(skb),
 				 DMA_FROM_DEVICE);
-		pmon->dest_skb_q[dest_idx] = skb;
-		dest_idx++;
-		end_of_ppdu = le32_get_bits(mon_dst_desc->info0,
-					    HAL_MON_DEST_INFO0_END_OF_PPDU);
-		if (!end_of_ppdu)
-			continue;
 
-		for (i = 0; i < dest_idx; i++) {
-			skb = pmon->dest_skb_q[i];
-			hal_status = ath12k_dp_mon_parse_rx_dest(ab, pmon, skb);
+		end_reason = u32_get_bits(info0, HAL_MON_DEST_INFO0_END_REASON);
 
-			if (ppdu_info->peer_id == HAL_INVALID_PEERID ||
-			    hal_status != HAL_RX_MON_STATUS_PPDU_DONE) {
-				dev_kfree_skb_any(skb);
-				continue;
-			}
-
-			rcu_read_lock();
-			spin_lock_bh(&ab->base_lock);
-			peer = ath12k_peer_find_by_id(ab, ppdu_info->peer_id);
-			if (!peer || !peer->sta) {
-				ath12k_dbg(ab, ATH12K_DBG_DATA,
-					   "failed to find the peer with peer_id %d\n",
-					   ppdu_info->peer_id);
-				spin_unlock_bh(&ab->base_lock);
-				rcu_read_unlock();
-				dev_kfree_skb_any(skb);
-				continue;
-			}
-
-			if (ppdu_info->reception_type == HAL_RX_RECEPTION_TYPE_SU) {
-				ahsta = ath12k_sta_to_ahsta(peer->sta);
-				arsta = &ahsta->deflink;
-				ath12k_dp_mon_rx_update_peer_su_stats(ar, arsta,
-								      ppdu_info);
-			} else if ((ppdu_info->fc_valid) &&
-				   (ppdu_info->ast_index != HAL_AST_IDX_INVALID)) {
-				ath12k_dp_mon_rx_process_ulofdma(ppdu_info);
-				ath12k_dp_mon_rx_update_peer_mu_stats(ar, ppdu_info);
-			}
-
-			spin_unlock_bh(&ab->base_lock);
-			rcu_read_unlock();
+		/* HAL_MON_FLUSH_DETECTED implies that an rx flush received at the end of
+		 * rx PPDU and HAL_MON_PPDU_TRUNCATED implies that the PPDU got
+		 * truncated due to a system level error. In both the cases, buffer data
+		 * can be discarded
+		 */
+		if ((end_reason == HAL_MON_FLUSH_DETECTED) ||
+		    (end_reason == HAL_MON_PPDU_TRUNCATED)) {
+			ath12k_dbg(ab, ATH12K_DBG_DATA,
+				   "Monitor dest descriptor end reason %d", end_reason);
 			dev_kfree_skb_any(skb);
-			memset(ppdu_info, 0, sizeof(*ppdu_info));
-			ppdu_info->peer_id = HAL_INVALID_PEERID;
+			goto move_next;
 		}
 
-		dest_idx = 0;
+		/* Calculate the budget when the ring descriptor with the
+		 * HAL_MON_END_OF_PPDU to ensure that one PPDU worth of data is always
+		 * reaped. This helps to efficiently utilize the NAPI budget.
+		 */
+		if (end_reason == HAL_MON_END_OF_PPDU) {
+			*budget -= 1;
+			rxcb->is_end_of_ppdu = true;
+		}
+
+		end_offset = u32_get_bits(info0, HAL_MON_DEST_INFO0_END_OFFSET);
+		if (likely(end_offset <= DP_RX_BUFFER_SIZE)) {
+			skb_put(skb, end_offset);
+		} else {
+			ath12k_warn(ab,
+				    "invalid offset on mon stats destination %u\n",
+				    end_offset);
+			skb_put(skb, DP_RX_BUFFER_SIZE);
+		}
+
+		__skb_queue_tail(&skb_list, skb);
+
 move_next:
 		ath12k_dp_mon_buf_replenish(ab, buf_ring, 1);
-		ath12k_hal_srng_src_get_next_entry(ab, srng);
+		ath12k_hal_srng_dst_get_next_entry(ab, srng);
 		num_buffs_reaped++;
 	}
 
 	ath12k_hal_srng_access_end(ab, srng);
 	spin_unlock_bh(&srng->lock);
+
+	if (!num_buffs_reaped)
+		return 0;
+
+	/* In some cases, one PPDU worth of data can be spread across multiple NAPI
+	 * schedules, To avoid losing existing parsed ppdu_info information, skip
+	 * the memset of the ppdu_info structure and continue processing it.
+	 */
+	if (!ppdu_info->ppdu_continuation)
+		ath12k_dp_mon_rx_memset_ppdu_info(ppdu_info);
+
+	while ((skb = __skb_dequeue(&skb_list))) {
+		hal_status = ath12k_dp_mon_parse_rx_dest(ar, pmon, skb);
+		if (hal_status != HAL_RX_MON_STATUS_PPDU_DONE) {
+			ppdu_info->ppdu_continuation = true;
+			dev_kfree_skb_any(skb);
+			continue;
+		}
+
+		if (ppdu_info->peer_id == HAL_INVALID_PEERID)
+			goto free_skb;
+
+		rcu_read_lock();
+		spin_lock_bh(&ab->base_lock);
+		peer = ath12k_peer_find_by_id(ab, ppdu_info->peer_id);
+		if (!peer || !peer->sta) {
+			ath12k_dbg(ab, ATH12K_DBG_DATA,
+				   "failed to find the peer with monitor peer_id %d\n",
+				   ppdu_info->peer_id);
+			goto next_skb;
+		}
+
+		if (ppdu_info->reception_type == HAL_RX_RECEPTION_TYPE_SU) {
+			ahsta = ath12k_sta_to_ahsta(peer->sta);
+			arsta = &ahsta->deflink;
+			ath12k_dp_mon_rx_update_peer_su_stats(ar, arsta,
+							      ppdu_info);
+		} else if ((ppdu_info->fc_valid) &&
+			   (ppdu_info->ast_index != HAL_AST_IDX_INVALID)) {
+			ath12k_dp_mon_rx_process_ulofdma(ppdu_info);
+			ath12k_dp_mon_rx_update_peer_mu_stats(ar, ppdu_info);
+		}
+
+next_skb:
+		spin_unlock_bh(&ab->base_lock);
+		rcu_read_unlock();
+free_skb:
+		dev_kfree_skb_any(skb);
+		ath12k_dp_mon_rx_memset_ppdu_info(ppdu_info);
+	}
+
 	return num_buffs_reaped;
 }
 
@@ -2535,11 +2436,10 @@ int ath12k_dp_mon_process_ring(struct ath12k_base *ab, int mac_id,
 	struct ath12k *ar = ath12k_ab_to_ar(ab, mac_id);
 	int num_buffs_reaped = 0;
 
-	if (!ar->monitor_started)
-		ath12k_dp_mon_rx_process_stats(ar, mac_id, napi, &budget);
-	else
-		num_buffs_reaped = ath12k_dp_mon_srng_process(ar, mac_id, &budget,
-							      monitor_mode, napi);
+	if (ab->hw_params->rxdma1_enable) {
+		if (monitor_mode == ATH12K_DP_RX_MONITOR_MODE)
+			num_buffs_reaped = ath12k_dp_mon_srng_process(ar, &budget, napi);
+	}
 
 	return num_buffs_reaped;
 }
