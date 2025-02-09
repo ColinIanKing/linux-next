@@ -1484,6 +1484,19 @@ struct scx_event_stats {
 	u64		SCX_EV_ENQ_SKIP_EXITING;
 
 	/*
+	 * If SCX_OPS_ENQ_MIGRATION_DISABLED is not set, the number of times a
+	 * migration disabled task skips ops.enqueue() and is dispatched to its
+	 * local DSQ.
+	 */
+	u64		SCX_EV_ENQ_SKIP_MIGRATION_DISABLED;
+
+	/*
+	 * The total number of tasks enqueued (or pick_task-ed) with a
+	 * default time slice (SCX_SLICE_DFL).
+	 */
+	u64		SCX_EV_ENQ_SLICE_DFL;
+
+	/*
 	 * The total duration of bypass modes in nanoseconds.
 	 */
 	u64		SCX_EV_BYPASS_DURATION;
@@ -2113,8 +2126,10 @@ static void do_enqueue_task(struct rq *rq, struct task_struct *p, u64 enq_flags,
 
 	/* see %SCX_OPS_ENQ_MIGRATION_DISABLED */
 	if (!static_branch_unlikely(&scx_ops_enq_migration_disabled) &&
-	    is_migration_disabled(p))
+	    is_migration_disabled(p)) {
+		__scx_add_event(SCX_EV_ENQ_SKIP_MIGRATION_DISABLED, 1);
 		goto local;
+	}
 
 	if (!SCX_HAS_OP(enqueue))
 		goto global;
@@ -2154,6 +2169,7 @@ local:
 	 */
 	touch_core_sched(rq, p);
 	p->scx.slice = SCX_SLICE_DFL;
+	__scx_add_event(SCX_EV_ENQ_SLICE_DFL, 1);
 local_norefill:
 	dispatch_enqueue(&rq->scx.local_dsq, p, enq_flags);
 	return;
@@ -2161,6 +2177,7 @@ local_norefill:
 global:
 	touch_core_sched(rq, p);	/* see the comment in local: */
 	p->scx.slice = SCX_SLICE_DFL;
+	__scx_add_event(SCX_EV_ENQ_SLICE_DFL, 1);
 	dispatch_enqueue(find_global_dsq(p), p, enq_flags);
 }
 
@@ -2423,7 +2440,7 @@ static void move_remote_task_to_local_dsq(struct task_struct *p, u64 enq_flags,
  * The caller must ensure that @p and @rq are on different CPUs.
  */
 static bool task_can_run_on_remote_rq(struct task_struct *p, struct rq *rq,
-				      bool trigger_error)
+				      bool enforce)
 {
 	int cpu = cpu_of(rq);
 
@@ -2436,7 +2453,7 @@ static bool task_can_run_on_remote_rq(struct task_struct *p, struct rq *rq,
 	 * picked CPU is outside the allowed mask.
 	 */
 	if (!task_allowed_on_cpu(p, cpu)) {
-		if (trigger_error)
+		if (enforce)
 			scx_ops_error("SCX_DSQ_LOCAL[_ON] verdict target cpu %d not allowed for %s[%d]",
 				      cpu_of(rq), p->comm, p->pid);
 		return false;
@@ -2448,8 +2465,11 @@ static bool task_can_run_on_remote_rq(struct task_struct *p, struct rq *rq,
 	 */
 	SCHED_WARN_ON(is_migration_disabled(p));
 
-	if (!scx_rq_online(rq))
+	if (!scx_rq_online(rq)) {
+		if (enforce)
+			__scx_add_event(SCX_EV_DISPATCH_LOCAL_DSQ_OFFLINE, 1);
 		return false;
+	}
 
 	return true;
 }
@@ -2519,7 +2539,7 @@ static bool consume_remote_task(struct rq *this_rq, struct task_struct *p,
 }
 #else	/* CONFIG_SMP */
 static inline void move_remote_task_to_local_dsq(struct task_struct *p, u64 enq_flags, struct rq *src_rq, struct rq *dst_rq) { WARN_ON_ONCE(1); }
-static inline bool task_can_run_on_remote_rq(struct task_struct *p, struct rq *rq, bool trigger_error) { return false; }
+static inline bool task_can_run_on_remote_rq(struct task_struct *p, struct rq *rq, bool enforce) { return false; }
 static inline bool consume_remote_task(struct rq *this_rq, struct task_struct *p, struct scx_dispatch_q *dsq, struct rq *task_rq) { return false; }
 #endif	/* CONFIG_SMP */
 
@@ -2709,7 +2729,6 @@ static void dispatch_to_local_dsq(struct rq *rq, struct scx_dispatch_q *dst_dsq,
 	    unlikely(!task_can_run_on_remote_rq(p, dst_rq, true))) {
 		dispatch_enqueue(find_global_dsq(p), p,
 				 enq_flags | SCX_ENQ_CLEAR_OPSS);
-		__scx_add_event(SCX_EV_DISPATCH_LOCAL_DSQ_OFFLINE, 1);
 		return;
 	}
 
@@ -3231,8 +3250,10 @@ static struct task_struct *pick_task_scx(struct rq *rq)
 	 */
 	if (keep_prev) {
 		p = prev;
-		if (!p->scx.slice)
+		if (!p->scx.slice) {
 			p->scx.slice = SCX_SLICE_DFL;
+			__scx_add_event(SCX_EV_ENQ_SLICE_DFL, 1);
+		}
 	} else {
 		p = first_local_task(rq);
 		if (!p) {
@@ -3248,6 +3269,7 @@ static struct task_struct *pick_task_scx(struct rq *rq)
 				scx_warned_zero_slice = true;
 			}
 			p->scx.slice = SCX_SLICE_DFL;
+			__scx_add_event(SCX_EV_ENQ_SLICE_DFL, 1);
 		}
 	}
 
@@ -3335,6 +3357,7 @@ static int select_task_rq_scx(struct task_struct *p, int prev_cpu, int wake_flag
 		if (found) {
 			p->scx.slice = SCX_SLICE_DFL;
 			p->scx.ddsp_dsq_id = SCX_DSQ_LOCAL;
+			__scx_add_event(SCX_EV_ENQ_SLICE_DFL, 1);
 		}
 
 		if (rq_bypass)
@@ -5053,6 +5076,8 @@ static void scx_dump_state(struct scx_exit_info *ei, size_t dump_len)
 	scx_dump_event(s, &events, SCX_EV_DISPATCH_LOCAL_DSQ_OFFLINE);
 	scx_dump_event(s, &events, SCX_EV_DISPATCH_KEEP_LAST);
 	scx_dump_event(s, &events, SCX_EV_ENQ_SKIP_EXITING);
+	scx_dump_event(s, &events, SCX_EV_ENQ_SKIP_MIGRATION_DISABLED);
+	scx_dump_event(s, &events, SCX_EV_ENQ_SLICE_DFL);
 	scx_dump_event(s, &events, SCX_EV_BYPASS_DURATION);
 	scx_dump_event(s, &events, SCX_EV_BYPASS_DISPATCH);
 	scx_dump_event(s, &events, SCX_EV_BYPASS_ACTIVATE);
@@ -7195,6 +7220,8 @@ __bpf_kfunc void scx_bpf_events(struct scx_event_stats *events,
 		scx_agg_event(&e_sys, e_cpu, SCX_EV_DISPATCH_LOCAL_DSQ_OFFLINE);
 		scx_agg_event(&e_sys, e_cpu, SCX_EV_DISPATCH_KEEP_LAST);
 		scx_agg_event(&e_sys, e_cpu, SCX_EV_ENQ_SKIP_EXITING);
+		scx_agg_event(&e_sys, e_cpu, SCX_EV_ENQ_SKIP_MIGRATION_DISABLED);
+		scx_agg_event(&e_sys, e_cpu, SCX_EV_ENQ_SLICE_DFL);
 		scx_agg_event(&e_sys, e_cpu, SCX_EV_BYPASS_DURATION);
 		scx_agg_event(&e_sys, e_cpu, SCX_EV_BYPASS_DISPATCH);
 		scx_agg_event(&e_sys, e_cpu, SCX_EV_BYPASS_ACTIVATE);
