@@ -1897,7 +1897,10 @@ commit:
 	if (ret)
 		goto out;
 
-	count_event(c, bucket_discard);
+	if (!fastpath)
+		count_event(c, bucket_discard);
+	else
+		count_event(c, bucket_discard_fast);
 out:
 fsck_err:
 	if (discard_locked)
@@ -2090,6 +2093,13 @@ static int invalidate_one_bucket(struct btree_trans *trans,
 	if (lru_pos_time(lru_iter->pos) != alloc_lru_idx_read(a->v))
 		goto out;
 
+	/*
+	 * Impossible since alloc_lru_idx_read() only returns nonzero if the
+	 * bucket is supposed to be on the cached bucket LRU (i.e.
+	 * BCH_DATA_cached)
+	 *
+	 * bch2_lru_validate() also disallows lru keys with lru_pos_time() == 0
+	 */
 	BUG_ON(a->v.data_type != BCH_DATA_cached);
 	BUG_ON(a->v.dirty_sectors);
 

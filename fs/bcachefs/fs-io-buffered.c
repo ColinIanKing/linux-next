@@ -149,12 +149,10 @@ static void bchfs_read(struct btree_trans *trans,
 	struct bch_fs *c = trans->c;
 	struct btree_iter iter;
 	struct bkey_buf sk;
-	int flags = BCH_READ_RETRY_IF_STALE|
-		BCH_READ_MAY_PROMOTE;
+	int flags = BCH_READ_retry_if_stale|
+		BCH_READ_may_promote;
 	int ret = 0;
 
-	rbio->c = c;
-	rbio->start_time = local_clock();
 	rbio->subvol = inum.subvol;
 
 	bch2_bkey_buf_init(&sk);
@@ -211,14 +209,14 @@ static void bchfs_read(struct btree_trans *trans,
 		swap(rbio->bio.bi_iter.bi_size, bytes);
 
 		if (rbio->bio.bi_iter.bi_size == bytes)
-			flags |= BCH_READ_LAST_FRAGMENT;
+			flags |= BCH_READ_last_fragment;
 
 		bch2_bio_page_state_set(&rbio->bio, k);
 
 		bch2_read_extent(trans, rbio, iter.pos,
 				 data_btree, k, offset_into_extent, flags);
 
-		if (flags & BCH_READ_LAST_FRAGMENT)
+		if (flags & BCH_READ_last_fragment)
 			break;
 
 		swap(rbio->bio.bi_iter.bi_size, bytes);
@@ -232,7 +230,8 @@ err:
 
 	if (ret) {
 		struct printbuf buf = PRINTBUF;
-		bch2_inum_offset_err_msg_trans(trans, &buf, inum, iter.pos.offset << 9);
+		lockrestart_do(trans,
+			bch2_inum_offset_err_msg_trans(trans, &buf, inum, iter.pos.offset << 9));
 		prt_printf(&buf, "read error %i from btree lookup", ret);
 		bch_err_ratelimited(c, "%s", buf.buf);
 		printbuf_exit(&buf);
@@ -280,12 +279,13 @@ void bch2_readahead(struct readahead_control *ractl)
 		struct bch_read_bio *rbio =
 			rbio_init(bio_alloc_bioset(NULL, n, REQ_OP_READ,
 						   GFP_KERNEL, &c->bio_read),
-				  opts);
+				  c,
+				  opts,
+				  bch2_readpages_end_io);
 
 		readpage_iter_advance(&readpages_iter);
 
 		rbio->bio.bi_iter.bi_sector = folio_sector(folio);
-		rbio->bio.bi_end_io = bch2_readpages_end_io;
 		BUG_ON(!bio_add_folio(&rbio->bio, folio, folio_size(folio), 0));
 
 		bchfs_read(trans, rbio, inode_inum(inode),
@@ -323,10 +323,10 @@ int bch2_read_single_folio(struct folio *folio, struct address_space *mapping)
 	bch2_inode_opts_get(&opts, c, &inode->ei_inode);
 
 	rbio = rbio_init(bio_alloc_bioset(NULL, 1, REQ_OP_READ, GFP_KERNEL, &c->bio_read),
-			 opts);
+			 c,
+			 opts,
+			 bch2_read_single_folio_end_io);
 	rbio->bio.bi_private = &done;
-	rbio->bio.bi_end_io = bch2_read_single_folio_end_io;
-
 	rbio->bio.bi_opf = REQ_OP_READ|REQ_SYNC;
 	rbio->bio.bi_iter.bi_sector = folio_sector(folio);
 	BUG_ON(!bio_add_folio(&rbio->bio, folio, folio_size(folio), 0));
@@ -420,7 +420,7 @@ static void bch2_writepage_io_done(struct bch_write_op *op)
 		}
 	}
 
-	if (io->op.flags & BCH_WRITE_WROTE_DATA_INLINE) {
+	if (io->op.flags & BCH_WRITE_wrote_data_inline) {
 		bio_for_each_folio_all(fi, bio) {
 			struct bch_folio *s;
 
