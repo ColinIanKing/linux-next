@@ -253,21 +253,6 @@ int vlv_plane_min_cdclk(const struct intel_crtc_state *crtc_state,
 	return DIV_ROUND_UP(pixel_rate * num, den);
 }
 
-static unsigned int vlv_sprite_min_alignment(struct intel_plane *plane,
-					     const struct drm_framebuffer *fb,
-					     int color_plane)
-{
-	switch (fb->modifier) {
-	case I915_FORMAT_MOD_X_TILED:
-		return 4 * 1024;
-	case DRM_FORMAT_MOD_LINEAR:
-		return 128 * 1024;
-	default:
-		MISSING_CASE(fb->modifier);
-		return 0;
-	}
-}
-
 static u32 vlv_sprite_ctl_crtc(const struct intel_crtc_state *crtc_state)
 {
 	u32 sprctl = 0;
@@ -995,6 +980,11 @@ static unsigned int g4x_sprite_min_alignment(struct intel_plane *plane,
 					     const struct drm_framebuffer *fb,
 					     int color_plane)
 {
+	struct drm_i915_private *i915 = to_i915(plane->base.dev);
+
+	if (intel_scanout_needs_vtd_wa(i915))
+		return 128 * 1024;
+
 	return 4 * 1024;
 }
 
@@ -1616,8 +1606,12 @@ intel_sprite_plane_create(struct drm_i915_private *dev_priv,
 		plane->get_hw_state = vlv_sprite_get_hw_state;
 		plane->check_plane = vlv_sprite_check;
 		plane->max_stride = i965_plane_max_stride;
-		plane->min_alignment = vlv_sprite_min_alignment;
+		plane->min_alignment = vlv_plane_min_alignment;
 		plane->min_cdclk = vlv_plane_min_cdclk;
+
+		/* FIXME undocumented for VLV/CHV so not sure what's actually needed */
+		if (intel_scanout_needs_vtd_wa(dev_priv))
+			plane->vtd_guard = 128;
 
 		if (IS_CHERRYVIEW(dev_priv) && pipe == PIPE_B) {
 			formats = chv_pipe_b_sprite_formats;
@@ -1645,6 +1639,9 @@ intel_sprite_plane_create(struct drm_i915_private *dev_priv,
 
 		plane->min_alignment = g4x_sprite_min_alignment;
 
+		if (intel_scanout_needs_vtd_wa(dev_priv))
+			plane->vtd_guard = 64;
+
 		formats = snb_sprite_formats;
 		num_formats = ARRAY_SIZE(snb_sprite_formats);
 
@@ -1658,6 +1655,9 @@ intel_sprite_plane_create(struct drm_i915_private *dev_priv,
 		plane->max_stride = g4x_sprite_max_stride;
 		plane->min_alignment = g4x_sprite_min_alignment;
 		plane->min_cdclk = g4x_sprite_min_cdclk;
+
+		if (intel_scanout_needs_vtd_wa(dev_priv))
+			plane->vtd_guard = 64;
 
 		if (IS_SANDYBRIDGE(dev_priv)) {
 			formats = snb_sprite_formats;
