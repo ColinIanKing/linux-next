@@ -9,6 +9,16 @@
 #include "ivpu_hw_ip.h"
 
 #include <linux/dmi.h>
+#include <linux/fault-inject.h>
+#include <linux/pm_runtime.h>
+
+#ifdef CONFIG_FAULT_INJECTION
+DECLARE_FAULT_ATTR(ivpu_hw_failure);
+
+static char *ivpu_fail_hw;
+module_param_named_unsafe(fail_hw, ivpu_fail_hw, charp, 0444);
+MODULE_PARM_DESC(fail_hw, "<interval>,<probability>,<space>,<times>");
+#endif
 
 static char *platform_to_str(u32 platform)
 {
@@ -19,43 +29,36 @@ static char *platform_to_str(u32 platform)
 		return "SIMICS";
 	case IVPU_PLATFORM_FPGA:
 		return "FPGA";
+	case IVPU_PLATFORM_HSLE:
+		return "HSLE";
 	default:
 		return "Invalid platform";
 	}
 }
 
-static const struct dmi_system_id dmi_platform_simulation[] = {
-	{
-		.ident = "Intel Simics",
-		.matches = {
-			DMI_MATCH(DMI_BOARD_NAME, "lnlrvp"),
-			DMI_MATCH(DMI_BOARD_VERSION, "1.0"),
-			DMI_MATCH(DMI_BOARD_SERIAL, "123456789"),
-		},
-	},
-	{
-		.ident = "Intel Simics",
-		.matches = {
-			DMI_MATCH(DMI_BOARD_NAME, "Simics"),
-		},
-	},
-	{ }
-};
-
 static void platform_init(struct ivpu_device *vdev)
 {
-	if (dmi_check_system(dmi_platform_simulation))
-		vdev->platform = IVPU_PLATFORM_SIMICS;
-	else
-		vdev->platform = IVPU_PLATFORM_SILICON;
+	int platform = ivpu_hw_btrs_platform_read(vdev);
 
-	ivpu_dbg(vdev, MISC, "Platform type: %s (%d)\n",
-		 platform_to_str(vdev->platform), vdev->platform);
+	ivpu_dbg(vdev, MISC, "Platform type: %s (%d)\n", platform_to_str(platform), platform);
+
+	switch (platform) {
+	case IVPU_PLATFORM_SILICON:
+	case IVPU_PLATFORM_SIMICS:
+	case IVPU_PLATFORM_FPGA:
+	case IVPU_PLATFORM_HSLE:
+		vdev->platform = platform;
+		break;
+
+	default:
+		ivpu_err(vdev, "Invalid platform type: %d\n", platform);
+		break;
+	}
 }
 
 static void wa_init(struct ivpu_device *vdev)
 {
-	vdev->wa.punit_disabled = ivpu_is_fpga(vdev);
+	vdev->wa.punit_disabled = false;
 	vdev->wa.clear_runtime_mem = false;
 
 	if (ivpu_hw_btrs_gen(vdev) == IVPU_HW_BTRS_MTL)
@@ -84,12 +87,12 @@ static void timeouts_init(struct ivpu_device *vdev)
 		vdev->timeout.autosuspend = -1;
 		vdev->timeout.d0i3_entry_msg = -1;
 	} else if (ivpu_is_fpga(vdev)) {
-		vdev->timeout.boot = 100000;
-		vdev->timeout.jsm = 50000;
-		vdev->timeout.tdr = 2000000;
+		vdev->timeout.boot = 50;
+		vdev->timeout.jsm = 15000;
+		vdev->timeout.tdr = 30000;
 		vdev->timeout.autosuspend = -1;
 		vdev->timeout.d0i3_entry_msg = 500;
-		vdev->timeout.state_dump_msg = 10;
+		vdev->timeout.state_dump_msg = 10000;
 	} else if (ivpu_is_simics(vdev)) {
 		vdev->timeout.boot = 50;
 		vdev->timeout.jsm = 500;
@@ -254,6 +257,11 @@ int ivpu_hw_init(struct ivpu_device *vdev)
 	timeouts_init(vdev);
 	atomic_set(&vdev->hw->firewall_irq_counter, 0);
 
+#ifdef CONFIG_FAULT_INJECTION
+	if (ivpu_fail_hw)
+		setup_fault_attr(&ivpu_hw_failure, ivpu_fail_hw);
+#endif
+
 	return 0;
 }
 
@@ -285,8 +293,6 @@ void ivpu_hw_profiling_freq_drive(struct ivpu_device *vdev, bool enable)
 
 void ivpu_irq_handlers_init(struct ivpu_device *vdev)
 {
-	INIT_KFIFO(vdev->hw->irq.fifo);
-
 	if (ivpu_hw_ip_gen(vdev) == IVPU_HW_IP_37XX)
 		vdev->hw->irq.ip_irq_handler = ivpu_hw_ip_irq_handler_37xx;
 	else
@@ -300,7 +306,6 @@ void ivpu_irq_handlers_init(struct ivpu_device *vdev)
 
 void ivpu_hw_irq_enable(struct ivpu_device *vdev)
 {
-	kfifo_reset(&vdev->hw->irq.fifo);
 	ivpu_hw_ip_irq_enable(vdev);
 	ivpu_hw_btrs_irq_enable(vdev);
 }
@@ -327,9 +332,9 @@ irqreturn_t ivpu_hw_irq_handler(int irq, void *ptr)
 	/* Re-enable global interrupts to re-trigger MSI for pending interrupts */
 	ivpu_hw_btrs_global_int_enable(vdev);
 
-	if (!kfifo_is_empty(&vdev->hw->irq.fifo))
-		return IRQ_WAKE_THREAD;
-	if (ip_handled || btrs_handled)
-		return IRQ_HANDLED;
-	return IRQ_NONE;
+	if (!ip_handled && !btrs_handled)
+		return IRQ_NONE;
+
+	pm_runtime_mark_last_busy(vdev->drm.dev);
+	return IRQ_HANDLED;
 }

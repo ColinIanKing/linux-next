@@ -58,6 +58,7 @@
 #define IVPU_PLATFORM_SILICON 0
 #define IVPU_PLATFORM_SIMICS  2
 #define IVPU_PLATFORM_FPGA    3
+#define IVPU_PLATFORM_HSLE    4
 #define IVPU_PLATFORM_INVALID 8
 
 #define IVPU_SCHED_MODE_AUTO -1
@@ -142,9 +143,14 @@ struct ivpu_device {
 	struct xa_limit db_limit;
 	u32 db_next;
 
+	struct work_struct irq_ipc_work;
+	struct work_struct irq_dct_work;
+	struct work_struct context_abort_work;
+
 	struct mutex bo_list_lock; /* Protects bo_list */
 	struct list_head bo_list;
 
+	struct mutex submitted_jobs_lock; /* Protects submitted_jobs */
 	struct xarray submitted_jobs_xa;
 	struct ivpu_ipc_consumer job_done_consumer;
 
@@ -208,6 +214,7 @@ void ivpu_file_priv_put(struct ivpu_file_priv **link);
 int ivpu_boot(struct ivpu_device *vdev);
 int ivpu_shutdown(struct ivpu_device *vdev);
 void ivpu_prepare_for_reset(struct ivpu_device *vdev);
+bool ivpu_is_capable(struct ivpu_device *vdev, u32 capability);
 
 static inline u8 ivpu_revision(struct ivpu_device *vdev)
 {
@@ -282,7 +289,8 @@ static inline bool ivpu_is_simics(struct ivpu_device *vdev)
 
 static inline bool ivpu_is_fpga(struct ivpu_device *vdev)
 {
-	return ivpu_get_platform(vdev) == IVPU_PLATFORM_FPGA;
+	return ivpu_get_platform(vdev) == IVPU_PLATFORM_FPGA ||
+	       ivpu_get_platform(vdev) == IVPU_PLATFORM_HSLE;
 }
 
 static inline bool ivpu_is_force_snoop_enabled(struct ivpu_device *vdev)
