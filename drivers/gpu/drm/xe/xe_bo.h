@@ -75,6 +75,8 @@
 
 #define XE_BO_PROPS_INVALID	(-1)
 
+#define XE_PCI_BARRIER_MMAP_OFFSET	(0x50 << XE_PTE_SHIFT)
+
 struct sg_table;
 
 struct xe_bo *xe_bo_alloc(void);
@@ -182,6 +184,11 @@ int xe_bo_validate(struct xe_bo *bo, struct xe_vm *vm, bool allow_res_evict);
 static inline bool xe_bo_is_pinned(struct xe_bo *bo)
 {
 	return bo->ttm.pin_count;
+}
+
+static inline bool xe_bo_is_protected(const struct xe_bo *bo)
+{
+	return bo->pxp_key_instance;
 }
 
 static inline void xe_bo_unpin_map_no_vm(struct xe_bo *bo)
