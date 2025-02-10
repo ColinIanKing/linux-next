@@ -92,6 +92,8 @@
 #define AD4695_T_REFBUF_MS		100
 #define AD4695_T_REGCONFIG_NS		20
 #define AD4695_T_SCK_CNV_DELAY_NS	80
+#define AD4695_T_CNVL_NS		80
+#define AD4695_T_CNVH_NS		10
 #define AD4695_REG_ACCESS_SCLK_HZ	(10 * MEGA)
 
 /* Max number of voltage input channels. */
@@ -148,6 +150,8 @@ struct ad4695_state {
 	/* Commands to send for single conversion. */
 	u16 cnv_cmd;
 	u8 cnv_cmd2;
+	/* Buffer for storing data from regmap bus reads/writes */
+	u8 regmap_bus_data[4];
 };
 
 static const struct regmap_range ad4695_regmap_rd_ranges[] = {
@@ -192,7 +196,6 @@ static const struct regmap_config ad4695_regmap_config = {
 	.max_register = AD4695_REG_AS_SLOT(127),
 	.rd_table = &ad4695_regmap_rd_table,
 	.wr_table = &ad4695_regmap_wr_table,
-	.can_multi_write = true,
 };
 
 static const struct regmap_range ad4695_regmap16_rd_ranges[] = {
@@ -224,7 +227,67 @@ static const struct regmap_config ad4695_regmap16_config = {
 	.max_register = AD4695_REG_GAIN_IN(15),
 	.rd_table = &ad4695_regmap16_rd_table,
 	.wr_table = &ad4695_regmap16_wr_table,
-	.can_multi_write = true,
+};
+
+static int ad4695_regmap_bus_reg_write(void *context, const void *data,
+				       size_t count)
+{
+	struct ad4695_state *st = context;
+	struct spi_transfer xfer = {
+			.speed_hz = AD4695_REG_ACCESS_SCLK_HZ,
+			.len = count,
+			.tx_buf = st->regmap_bus_data,
+	};
+
+	if (count > ARRAY_SIZE(st->regmap_bus_data))
+		return -EINVAL;
+
+	memcpy(st->regmap_bus_data, data, count);
+
+	return spi_sync_transfer(st->spi, &xfer, 1);
+}
+
+static int ad4695_regmap_bus_reg_read(void *context, const void *reg,
+				      size_t reg_size, void *val,
+				      size_t val_size)
+{
+	struct ad4695_state *st = context;
+	struct spi_transfer xfers[] = {
+		{
+			.speed_hz = AD4695_REG_ACCESS_SCLK_HZ,
+			.len = reg_size,
+			.tx_buf = &st->regmap_bus_data[0],
+		}, {
+			.speed_hz = AD4695_REG_ACCESS_SCLK_HZ,
+			.len = val_size,
+			.rx_buf = &st->regmap_bus_data[2],
+		},
+	};
+	int ret;
+
+	if (reg_size > 2)
+		return -EINVAL;
+
+	if (val_size > 2)
+		return -EINVAL;
+
+	memcpy(&st->regmap_bus_data[0], reg, reg_size);
+
+	ret = spi_sync_transfer(st->spi, xfers, ARRAY_SIZE(xfers));
+	if (ret)
+		return ret;
+
+	memcpy(val, &st->regmap_bus_data[2], val_size);
+
+	return 0;
+}
+
+static const struct regmap_bus ad4695_regmap_bus = {
+	.write = ad4695_regmap_bus_reg_write,
+	.read = ad4695_regmap_bus_reg_read,
+	.read_flag_mask = 0x80,
+	.reg_format_endian_default = REGMAP_ENDIAN_BIG,
+	.val_format_endian_default = REGMAP_ENDIAN_BIG,
 };
 
 static const struct iio_chan_spec ad4695_channel_template = {
@@ -364,11 +427,31 @@ static int ad4695_enter_advanced_sequencer_mode(struct ad4695_state *st, u32 n)
  */
 static int ad4695_exit_conversion_mode(struct ad4695_state *st)
 {
-	struct spi_transfer xfer = {
-		.tx_buf = &st->cnv_cmd2,
-		.len = 1,
-		.delay.value = AD4695_T_REGCONFIG_NS,
-		.delay.unit = SPI_DELAY_UNIT_NSECS,
+	/*
+	 * An extra transfer is needed to trigger a conversion here so
+	 * that we can be 100% sure the command will be processed by the
+	 * ADC, rather than relying on it to be in the correct state
+	 * when this function is called (this chip has a quirk where the
+	 * command only works when reading a conversion, and if the
+	 * previous conversion was already read then it won't work). The
+	 * actual conversion command is then run at the slower
+	 * AD4695_REG_ACCESS_SCLK_HZ speed to guarantee this works.
+	 */
+	struct spi_transfer xfers[] = {
+		{
+			.delay.value = AD4695_T_CNVL_NS,
+			.delay.unit = SPI_DELAY_UNIT_NSECS,
+			.cs_change = 1,
+			.cs_change_delay.value = AD4695_T_CNVH_NS,
+			.cs_change_delay.unit = SPI_DELAY_UNIT_NSECS,
+		},
+		{
+			.speed_hz = AD4695_REG_ACCESS_SCLK_HZ,
+			.tx_buf = &st->cnv_cmd2,
+			.len = 1,
+			.delay.value = AD4695_T_REGCONFIG_NS,
+			.delay.unit = SPI_DELAY_UNIT_NSECS,
+		},
 	};
 
 	/*
@@ -377,7 +460,7 @@ static int ad4695_exit_conversion_mode(struct ad4695_state *st)
 	 */
 	st->cnv_cmd2 = AD4695_CMD_EXIT_CNV_MODE << 3;
 
-	return spi_sync_transfer(st->spi, &xfer, 1);
+	return spi_sync_transfer(st->spi, xfers, ARRAY_SIZE(xfers));
 }
 
 static int ad4695_set_ref_voltage(struct ad4695_state *st, int vref_mv)
@@ -1039,15 +1122,14 @@ static int ad4695_probe(struct spi_device *spi)
 	if (!st->chip_info)
 		return -EINVAL;
 
-	/* Registers cannot be read at the max allowable speed */
-	spi->max_speed_hz = AD4695_REG_ACCESS_SCLK_HZ;
-
-	st->regmap = devm_regmap_init_spi(spi, &ad4695_regmap_config);
+	st->regmap = devm_regmap_init(dev, &ad4695_regmap_bus, st,
+				      &ad4695_regmap_config);
 	if (IS_ERR(st->regmap))
 		return dev_err_probe(dev, PTR_ERR(st->regmap),
 				     "Failed to initialize regmap\n");
 
-	st->regmap16 = devm_regmap_init_spi(spi, &ad4695_regmap16_config);
+	st->regmap16 = devm_regmap_init(dev, &ad4695_regmap_bus, st,
+					&ad4695_regmap16_config);
 	if (IS_ERR(st->regmap16))
 		return dev_err_probe(dev, PTR_ERR(st->regmap16),
 				     "Failed to initialize regmap16\n");
