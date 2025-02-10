@@ -75,7 +75,7 @@ pixel_to_pat( u32 bpp, u32 pixel)
 }
 #endif
 
-#ifdef CONFIG_FB_CFB_REV_PIXELS_IN_BYTE
+#ifdef FB_REV_PIXELS_IN_BYTE
 #if BITS_PER_LONG == 64
 #define REV_PIXELS_MASK1 0x5555555555555555ul
 #define REV_PIXELS_MASK2 0x3333333333333333ul
@@ -157,7 +157,7 @@ static inline u32 fb_compute_bswapmask(struct fb_info *info)
 	return bswapmask;
 }
 
-#else /* CONFIG_FB_CFB_REV_PIXELS_IN_BYTE */
+#else /* FB_REV_PIXELS_IN_BYTE */
 
 static inline unsigned long fb_rev_pixels_in_long(unsigned long val,
 						  u32 bswapmask)
@@ -169,7 +169,7 @@ static inline unsigned long fb_rev_pixels_in_long(unsigned long val,
 #define fb_shifted_pixels_mask_long(p, i, b) FB_SHIFT_HIGH((p), ~0UL, (i))
 #define fb_compute_bswapmask(...) 0
 
-#endif  /* CONFIG_FB_CFB_REV_PIXELS_IN_BYTE */
+#endif  /* FB_REV_PIXELS_IN_BYTE */
 
 #define cpu_to_le_long _cpu_to_le_long(BITS_PER_LONG)
 #define _cpu_to_le_long(x) __cpu_to_le_long(x)
