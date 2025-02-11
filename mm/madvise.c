@@ -1596,7 +1596,7 @@ static bool is_memory_failure(int behavior)
 static int madvise_lock(struct mm_struct *mm, int behavior)
 {
 	if (is_memory_failure(behavior))
-	    return 0;
+		return 0;
 
 	if (madvise_need_mmap_write(behavior)) {
 		if (mmap_write_lock_killable(mm))
@@ -1610,7 +1610,7 @@ static int madvise_lock(struct mm_struct *mm, int behavior)
 static void madvise_unlock(struct mm_struct *mm, int behavior)
 {
 	if (is_memory_failure(behavior))
-	    return;
+		return;
 
 	if (madvise_need_mmap_write(behavior))
 		mmap_write_unlock(mm);
