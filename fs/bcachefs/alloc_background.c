@@ -889,26 +889,20 @@ int bch2_trigger_alloc(struct btree_trans *trans,
 		    !new_a->io_time[READ])
 			new_a->io_time[READ] = bch2_current_io_time(c, READ);
 
-		u64 old_lru = alloc_lru_idx_read(*old_a);
-		u64 new_lru = alloc_lru_idx_read(*new_a);
-		if (old_lru != new_lru) {
-			ret = bch2_lru_change(trans, new.k->p.inode,
-					      bucket_to_u64(new.k->p),
-					      old_lru, new_lru);
-			if (ret)
-				goto err;
-		}
+		ret = bch2_lru_change(trans, new.k->p.inode,
+				      bucket_to_u64(new.k->p),
+				      alloc_lru_idx_read(*old_a),
+				      alloc_lru_idx_read(*new_a));
+		if (ret)
+			goto err;
 
-		old_lru = alloc_lru_idx_fragmentation(*old_a, ca);
-		new_lru = alloc_lru_idx_fragmentation(*new_a, ca);
-		if (old_lru != new_lru) {
-			ret = bch2_lru_change(trans,
-					BCH_LRU_FRAGMENTATION_START,
-					bucket_to_u64(new.k->p),
-					old_lru, new_lru);
-			if (ret)
-				goto err;
-		}
+		ret = bch2_lru_change(trans,
+				      BCH_LRU_BUCKET_FRAGMENTATION,
+				      bucket_to_u64(new.k->p),
+				      alloc_lru_idx_fragmentation(*old_a, ca),
+				      alloc_lru_idx_fragmentation(*new_a, ca));
+		if (ret)
+			goto err;
 
 		if (old_a->gen != new_a->gen) {
 			ret = bch2_bucket_gen_update(trans, new.k->p, new_a->gen);
@@ -1705,7 +1699,8 @@ static int bch2_check_alloc_to_lru_ref(struct btree_trans *trans,
 
 	u64 lru_idx = alloc_lru_idx_fragmentation(*a, ca);
 	if (lru_idx) {
-		ret = bch2_lru_check_set(trans, BCH_LRU_FRAGMENTATION_START,
+		ret = bch2_lru_check_set(trans, BCH_LRU_BUCKET_FRAGMENTATION,
+					 bucket_to_u64(alloc_k.k->p),
 					 lru_idx, alloc_k, last_flushed);
 		if (ret)
 			goto err;
@@ -1735,7 +1730,9 @@ static int bch2_check_alloc_to_lru_ref(struct btree_trans *trans,
 		a = &a_mut->v;
 	}
 
-	ret = bch2_lru_check_set(trans, alloc_k.k->p.inode, a->io_time[READ],
+	ret = bch2_lru_check_set(trans, alloc_k.k->p.inode,
+				 bucket_to_u64(alloc_k.k->p),
+				 a->io_time[READ],
 				 alloc_k, last_flushed);
 	if (ret)
 		goto err;
@@ -1897,7 +1894,10 @@ commit:
 	if (ret)
 		goto out;
 
-	count_event(c, bucket_discard);
+	if (!fastpath)
+		count_event(c, bucket_discard);
+	else
+		count_event(c, bucket_discard_fast);
 out:
 fsck_err:
 	if (discard_locked)
@@ -2090,6 +2090,13 @@ static int invalidate_one_bucket(struct btree_trans *trans,
 	if (lru_pos_time(lru_iter->pos) != alloc_lru_idx_read(a->v))
 		goto out;
 
+	/*
+	 * Impossible since alloc_lru_idx_read() only returns nonzero if the
+	 * bucket is supposed to be on the cached bucket LRU (i.e.
+	 * BCH_DATA_cached)
+	 *
+	 * bch2_lru_validate() also disallows lru keys with lru_pos_time() == 0
+	 */
 	BUG_ON(a->v.data_type != BCH_DATA_cached);
 	BUG_ON(a->v.dirty_sectors);
 

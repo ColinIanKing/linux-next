@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-#ifndef _BCACHEFS_BACKPOINTERS_BACKGROUND_H
-#define _BCACHEFS_BACKPOINTERS_BACKGROUND_H
+#ifndef _BCACHEFS_BACKPOINTERS_H
+#define _BCACHEFS_BACKPOINTERS_H
 
 #include "btree_cache.h"
 #include "btree_iter.h"
@@ -123,7 +123,12 @@ static inline enum bch_data_type bch2_bkey_ptr_data_type(struct bkey_s_c k,
 		return BCH_DATA_btree;
 	case KEY_TYPE_extent:
 	case KEY_TYPE_reflink_v:
-		return p.has_ec ? BCH_DATA_stripe : BCH_DATA_user;
+		if (p.has_ec)
+			return BCH_DATA_stripe;
+		if (p.ptr.cached)
+			return BCH_DATA_cached;
+		else
+			return BCH_DATA_user;
 	case KEY_TYPE_stripe: {
 		const struct bch_extent_ptr *ptr = &entry->ptr;
 		struct bkey_s_c_stripe s = bkey_s_c_to_stripe(k);
