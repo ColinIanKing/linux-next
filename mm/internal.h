@@ -658,6 +658,8 @@ static inline struct page *pageblock_pfn_to_page(unsigned long start_pfn,
 }
 
 void set_zone_contiguous(struct zone *zone);
+bool pfn_range_intersects_zones(int nid, unsigned long start_pfn,
+			   unsigned long nr_pages);
 
 static inline void clear_zone_contiguous(struct zone *zone)
 {
@@ -734,8 +736,6 @@ static inline void prep_compound_tail(struct page *head, int tail_idx)
 	set_compound_head(p, head);
 	set_page_private(p, 0);
 }
-
-extern void prep_compound_page(struct page *page, unsigned int order);
 
 void post_alloc_hook(struct page *page, unsigned int order, gfp_t gfp_flags);
 extern bool free_pages_prepare(struct page *page, unsigned int order);
@@ -841,10 +841,23 @@ int
 isolate_migratepages_range(struct compact_control *cc,
 			   unsigned long low_pfn, unsigned long end_pfn);
 
-/* Free whole pageblock and set its migration type to MIGRATE_CMA. */
-void init_cma_reserved_pageblock(struct page *page);
-
 #endif /* CONFIG_COMPACTION || CONFIG_CMA */
+
+struct cma;
+
+#ifdef CONFIG_CMA
+void *cma_reserve_early(struct cma *cma, unsigned long size);
+void init_cma_pageblock(struct page *page);
+#else
+static inline void *cma_reserve_early(struct cma *cma, unsigned long size)
+{
+	return NULL;
+}
+static inline void init_cma_pageblock(struct page *page)
+{
+}
+#endif
+
 
 int find_suitable_fallback(struct free_area *area, unsigned int order,
 			int migratetype, bool only_stealable, bool *can_steal);
@@ -1052,6 +1065,8 @@ DECLARE_STATIC_KEY_TRUE(deferred_pages);
 
 bool __init deferred_grow_zone(struct zone *zone, unsigned int order);
 #endif /* CONFIG_DEFERRED_STRUCT_PAGE_INIT */
+
+void init_deferred_page(unsigned long pfn, int nid);
 
 enum mminit_level {
 	MMINIT_WARNING,
@@ -1448,6 +1463,7 @@ static inline bool pte_needs_soft_dirty_wp(struct vm_area_struct *vma, pte_t pte
 
 void __meminit __init_single_page(struct page *page, unsigned long pfn,
 				unsigned long zone, int nid);
+void __meminit __init_reserved_page_zone(unsigned long pfn, int nid);
 
 /* shrinker related functions */
 unsigned long shrink_slab(gfp_t gfp_mask, int nid, struct mem_cgroup *memcg,

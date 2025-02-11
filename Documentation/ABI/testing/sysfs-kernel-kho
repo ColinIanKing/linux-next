@@ -1,0 +1,53 @@
+What:		/sys/kernel/kho/active
+Date:		December 2023
+Contact:	Alexander Graf <graf@amazon.com>
+Description:
+		Kexec HandOver (KHO) allows Linux to transition the state of
+		compatible drivers into the next kexec'ed kernel. To do so,
+		device drivers will serialize their current state into a DT.
+		While the state is serialized, they are unable to perform
+		any modifications to state that was serialized, such as
+		handed over memory allocations.
+
+		When this file contains "1", the system is in the transition
+		state. When contains "0", it is not. To switch between the
+		two states, echo the respective number into this file.
+
+What:		/sys/kernel/kho/dt_max
+Date:		December 2023
+Contact:	Alexander Graf <graf@amazon.com>
+Description:
+		KHO needs to allocate a buffer for the DT that gets
+		generated before it knows the final size. By default, it
+		will allocate 10 MiB for it. You can write to this file
+		to modify the size of that allocation.
+
+What:		/sys/kernel/kho/dt
+Date:		December 2023
+Contact:	Alexander Graf <graf@amazon.com>
+Description:
+		When KHO is active, the kernel exposes the generated DT that
+		carries its current KHO state in this file. Kexec user space
+		tooling can use this as input file for the KHO payload image.
+
+What:		/sys/kernel/kho/scratch_len
+Date:		December 2023
+Contact:	Alexander Graf <graf@amazon.com>
+Description:
+		To support continuous KHO kexecs, we need to reserve
+		physically contiguous memory regions that will always stay
+		available for future kexec allocations. This file describes
+		the length of these memory regions. Kexec user space tooling
+		can use this to determine where it should place its payload
+		images.
+
+What:		/sys/kernel/kho/scratch_phys
+Date:		December 2023
+Contact:	Alexander Graf <graf@amazon.com>
+Description:
+		To support continuous KHO kexecs, we need to reserve
+		physically contiguous memory regions that will always stay
+		available for future kexec allocations. This file describes
+		the physical location of these memory regions. Kexec user space
+		tooling can use this to determine where it should place its
+		payload images.
