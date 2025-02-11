@@ -317,7 +317,7 @@ $output_rolestats = 1 if ($interactive);
 $output_roles = 1 if ($output_rolestats);
 
 if (!defined $output_substatus) {
-    $output_substatus = $email && $output_roles;
+    $output_substatus = $email && $output_roles && -t STDOUT;
 }
 
 if ($sections || $letters ne "") {
@@ -1086,7 +1086,7 @@ MAINTAINER field selection options:
     --remove-duplicates => minimize duplicate email names/addresses
     --roles => show roles (status:subsystem, git-signer, list, etc...)
     --rolestats => show roles and statistics (commits/total_commits, %)
-    --substatus => show subsystem status if not Maintained (default: match --roles)"
+    --substatus => show subsystem status if not Maintained (default: match --roles when output is tty)"
     --file-emails => add email addresses found in -f file (default: 0 (off))
     --fixes => for patches, add signatures of commits with 'Fixes: <commit>' (default: 1 (on))
   --scm => print SCM tree(s) if any
