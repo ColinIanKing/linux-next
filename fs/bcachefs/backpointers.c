@@ -11,6 +11,7 @@
 #include "checksum.h"
 #include "disk_accounting.h"
 #include "error.h"
+#include "progress.h"
 
 #include <linux/mm.h>
 
@@ -244,27 +245,31 @@ struct bkey_s_c bch2_backpointer_get_key(struct btree_trans *trans,
 	if (unlikely(bp.v->btree_id >= btree_id_nr_alive(c)))
 		return bkey_s_c_null;
 
-	if (likely(!bp.v->level)) {
-		bch2_trans_node_iter_init(trans, iter,
-					  bp.v->btree_id,
-					  bp.v->pos,
-					  0, 0,
-					  iter_flags);
-		struct bkey_s_c k = bch2_btree_iter_peek_slot(iter);
-		if (bkey_err(k)) {
-			bch2_trans_iter_exit(trans, iter);
-			return k;
-		}
-
-		if (k.k &&
-		    extent_matches_bp(c, bp.v->btree_id, bp.v->level, k, bp))
-			return k;
-
+	bch2_trans_node_iter_init(trans, iter,
+				  bp.v->btree_id,
+				  bp.v->pos,
+				  0,
+				  bp.v->level,
+				  iter_flags);
+	struct bkey_s_c k = bch2_btree_iter_peek_slot(iter);
+	if (bkey_err(k)) {
 		bch2_trans_iter_exit(trans, iter);
+		return k;
+	}
+
+	if (k.k &&
+	    extent_matches_bp(c, bp.v->btree_id, bp.v->level, k, bp))
+		return k;
+
+	bch2_trans_iter_exit(trans, iter);
+
+	if (!bp.v->level) {
 		int ret = backpointer_target_not_found(trans, bp, k, last_flushed);
 		return ret ? bkey_s_c_err(ret) : bkey_s_c_null;
 	} else {
 		struct btree *b = bch2_backpointer_get_node(trans, bp, iter, last_flushed);
+		if (b == ERR_PTR(-BCH_ERR_backpointer_to_overwritten_btree_node))
+			return bkey_s_c_null;
 		if (IS_ERR_OR_NULL(b))
 			return ((struct bkey_s_c) { .k = ERR_CAST(b) });
 
@@ -514,6 +519,22 @@ check_existing_bp:
 	if (!other_extent.k)
 		goto missing;
 
+	rcu_read_lock();
+	struct bch_dev *ca = bch2_dev_rcu_noerror(c, bp->k.p.inode);
+	if (ca) {
+		struct bkey_ptrs_c other_extent_ptrs = bch2_bkey_ptrs_c(other_extent);
+		bkey_for_each_ptr(other_extent_ptrs, ptr)
+			if (ptr->dev == bp->k.p.inode &&
+			    dev_ptr_stale_rcu(ca, ptr)) {
+				ret = drop_dev_and_update(trans, other_bp.v->btree_id,
+							  other_extent, bp->k.p.inode);
+				if (ret)
+					goto err;
+				goto out;
+			}
+	}
+	rcu_read_unlock();
+
 	if (bch2_extents_match(orig_k, other_extent)) {
 		printbuf_reset(&buf);
 		prt_printf(&buf, "duplicate versions of same extent, deleting smaller\n  ");
@@ -715,71 +736,6 @@ static int bch2_get_btree_in_memory_pos(struct btree_trans *trans,
 	return ret;
 }
 
-struct progress_indicator_state {
-	unsigned long		next_print;
-	u64			nodes_seen;
-	u64			nodes_total;
-	struct btree		*last_node;
-};
-
-static inline void progress_init(struct progress_indicator_state *s,
-				 struct bch_fs *c,
-				 u64 btree_id_mask)
-{
-	memset(s, 0, sizeof(*s));
-
-	s->next_print = jiffies + HZ * 10;
-
-	for (unsigned i = 0; i < BTREE_ID_NR; i++) {
-		if (!(btree_id_mask & BIT_ULL(i)))
-			continue;
-
-		struct disk_accounting_pos acc = {
-			.type		= BCH_DISK_ACCOUNTING_btree,
-			.btree.id	= i,
-		};
-
-		u64 v;
-		bch2_accounting_mem_read(c, disk_accounting_pos_to_bpos(&acc), &v, 1);
-		s->nodes_total += div64_ul(v, btree_sectors(c));
-	}
-}
-
-static inline bool progress_update_p(struct progress_indicator_state *s)
-{
-	bool ret = time_after_eq(jiffies, s->next_print);
-
-	if (ret)
-		s->next_print = jiffies + HZ * 10;
-	return ret;
-}
-
-static void progress_update_iter(struct btree_trans *trans,
-				 struct progress_indicator_state *s,
-				 struct btree_iter *iter,
-				 const char *msg)
-{
-	struct bch_fs *c = trans->c;
-	struct btree *b = path_l(btree_iter_path(trans, iter))->b;
-
-	s->nodes_seen += b != s->last_node;
-	s->last_node = b;
-
-	if (progress_update_p(s)) {
-		struct printbuf buf = PRINTBUF;
-		unsigned percent = s->nodes_total
-			? div64_u64(s->nodes_seen * 100, s->nodes_total)
-			: 0;
-
-		prt_printf(&buf, "%s: %d%%, done %llu/%llu nodes, at ",
-			   msg, percent, s->nodes_seen, s->nodes_total);
-		bch2_bbpos_to_text(&buf, BBPOS(iter->btree_id, iter->pos));
-
-		bch_info(c, "%s", buf.buf);
-		printbuf_exit(&buf);
-	}
-}
-
 static int bch2_check_extents_to_backpointers_pass(struct btree_trans *trans,
 						   struct extents_to_bp_state *s)
 {
@@ -787,7 +743,7 @@ static int bch2_check_extents_to_backpointers_pass(struct btree_trans *trans,
 	struct progress_indicator_state progress;
 	int ret = 0;
 
-	progress_init(&progress, trans->c, BIT_ULL(BTREE_ID_extents)|BIT_ULL(BTREE_ID_reflink));
+	bch2_progress_init(&progress, trans->c, BIT_ULL(BTREE_ID_extents)|BIT_ULL(BTREE_ID_reflink));
 
 	for (enum btree_id btree_id = 0;
 	     btree_id < btree_id_nr_alive(c);
@@ -806,7 +762,7 @@ static int bch2_check_extents_to_backpointers_pass(struct btree_trans *trans,
 						  BTREE_ITER_prefetch);
 
 			ret = for_each_btree_key_continue(trans, iter, 0, k, ({
-				progress_update_iter(trans, &progress, &iter, "extents_to_backpointers");
+				bch2_progress_update_iter(trans, &progress, &iter, "extents_to_backpointers");
 				check_extent_to_backpointers(trans, s, btree_id, level, k) ?:
 				bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc);
 			}));
@@ -1206,11 +1162,11 @@ static int bch2_check_backpointers_to_extents_pass(struct btree_trans *trans,
 
 	bch2_bkey_buf_init(&last_flushed);
 	bkey_init(&last_flushed.k->k);
-	progress_init(&progress, trans->c, BIT_ULL(BTREE_ID_backpointers));
+	bch2_progress_init(&progress, trans->c, BIT_ULL(BTREE_ID_backpointers));
 
 	int ret = for_each_btree_key(trans, iter, BTREE_ID_backpointers,
 				     POS_MIN, BTREE_ITER_prefetch, k, ({
-			progress_update_iter(trans, &progress, &iter, "backpointers_to_extents");
+			bch2_progress_update_iter(trans, &progress, &iter, "backpointers_to_extents");
 			check_one_backpointer(trans, start, end, k, &last_flushed);
 	}));
 
