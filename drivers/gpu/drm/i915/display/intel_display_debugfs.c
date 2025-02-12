@@ -86,10 +86,11 @@ static int i915_frontbuffer_tracking(struct seq_file *m, void *unused)
 static int i915_sr_status(struct seq_file *m, void *unused)
 {
 	struct drm_i915_private *dev_priv = node_to_i915(m->private);
+	struct intel_display *display = &dev_priv->display;
 	intel_wakeref_t wakeref;
 	bool sr_enabled = false;
 
-	wakeref = intel_display_power_get(dev_priv, POWER_DOMAIN_INIT);
+	wakeref = intel_display_power_get(display, POWER_DOMAIN_INIT);
 
 	if (DISPLAY_VER(dev_priv) >= 9)
 		/* no global SR status; inspect per-plane WM */;
@@ -105,7 +106,7 @@ static int i915_sr_status(struct seq_file *m, void *unused)
 	else if (IS_VALLEYVIEW(dev_priv) || IS_CHERRYVIEW(dev_priv))
 		sr_enabled = intel_de_read(dev_priv, FW_BLC_SELF_VLV) & FW_CSPWRDWNEN;
 
-	intel_display_power_put(dev_priv, POWER_DOMAIN_INIT, wakeref);
+	intel_display_power_put(display, POWER_DOMAIN_INIT, wakeref);
 
 	seq_printf(m, "self-refresh: %s\n", str_enabled_disabled(sr_enabled));
 
@@ -157,8 +158,9 @@ static int i915_gem_framebuffer_info(struct seq_file *m, void *data)
 static int i915_power_domain_info(struct seq_file *m, void *unused)
 {
 	struct drm_i915_private *i915 = node_to_i915(m->private);
+	struct intel_display *display = &i915->display;
 
-	intel_display_power_debug(i915, m);
+	intel_display_power_debug(display, m);
 
 	return 0;
 }
@@ -211,38 +213,6 @@ static void intel_panel_info(struct seq_file *m,
 
 	list_for_each_entry(fixed_mode, &connector->panel.fixed_modes, head)
 		intel_seq_print_mode(m, 2, fixed_mode);
-}
-
-static void intel_hdcp_info(struct seq_file *m,
-			    struct intel_connector *intel_connector,
-			    bool remote_req)
-{
-	bool hdcp_cap = false, hdcp2_cap = false;
-
-	if (!intel_connector->hdcp.shim) {
-		seq_puts(m, "No Connector Support");
-		goto out;
-	}
-
-	if (remote_req) {
-		intel_hdcp_get_remote_capability(intel_connector,
-						 &hdcp_cap,
-						 &hdcp2_cap);
-	} else {
-		hdcp_cap = intel_hdcp_get_capability(intel_connector);
-		hdcp2_cap = intel_hdcp2_get_capability(intel_connector);
-	}
-
-	if (hdcp_cap)
-		seq_puts(m, "HDCP1.4 ");
-	if (hdcp2_cap)
-		seq_puts(m, "HDCP2.2 ");
-
-	if (!hdcp_cap && !hdcp2_cap)
-		seq_puts(m, "None");
-
-out:
-	seq_puts(m, "\n");
 }
 
 static void intel_dp_info(struct seq_file *m, struct intel_connector *connector)
@@ -309,12 +279,7 @@ static void intel_connector_info(struct seq_file *m,
 		break;
 	}
 
-	seq_puts(m, "\tHDCP version: ");
-	if (intel_connector->mst_port) {
-		intel_hdcp_info(m, intel_connector, true);
-		seq_puts(m, "\tMST Hub HDCP version: ");
-	}
-	intel_hdcp_info(m, intel_connector, false);
+	intel_hdcp_info(m, intel_connector);
 
 	seq_printf(m, "\tmax bpc: %u\n", connector->display_info.bpc);
 
@@ -893,33 +858,6 @@ void intel_display_debugfs_register(struct drm_i915_private *i915)
 	intel_display_debugfs_params(display);
 }
 
-static int i915_hdcp_sink_capability_show(struct seq_file *m, void *data)
-{
-	struct intel_connector *connector = m->private;
-	struct drm_i915_private *i915 = to_i915(connector->base.dev);
-	int ret;
-
-	ret = drm_modeset_lock_single_interruptible(&i915->drm.mode_config.connection_mutex);
-	if (ret)
-		return ret;
-
-	if (!connector->base.encoder ||
-	    connector->base.status != connector_status_connected) {
-		ret = -ENODEV;
-		goto out;
-	}
-
-	seq_printf(m, "%s:%d HDCP version: ", connector->base.name,
-		   connector->base.base.id);
-	intel_hdcp_info(m, connector, false);
-
-out:
-	drm_modeset_unlock(&i915->drm.mode_config.connection_mutex);
-
-	return ret;
-}
-DEFINE_SHOW_ATTRIBUTE(i915_hdcp_sink_capability);
-
 static int i915_lpsp_capability_show(struct seq_file *m, void *data)
 {
 	struct intel_connector *connector = m->private;
@@ -940,7 +878,7 @@ static int i915_lpsp_capability_show(struct seq_file *m, void *data)
 		/*
 		 * Actually TGL can drive LPSP on port till DDI_C
 		 * but there is no physical connected DDI_C on TGL sku's,
-		 * even driver is not initilizing DDI_C port for gen12.
+		 * even driver is not initializing DDI_C port for gen12.
 		 */
 		lpsp_capable = encoder->port <= PORT_B;
 	else if (DISPLAY_VER(i915) == 11)
@@ -1401,17 +1339,11 @@ void intel_connector_debugfs_add(struct intel_connector *connector)
 		return;
 
 	intel_drrs_connector_debugfs_add(connector);
+	intel_hdcp_connector_debugfs_add(connector);
 	intel_pps_connector_debugfs_add(connector);
 	intel_psr_connector_debugfs_add(connector);
 	intel_alpm_lobf_debugfs_add(connector);
 	intel_dp_link_training_debugfs_add(connector);
-
-	if (connector_type == DRM_MODE_CONNECTOR_DisplayPort ||
-	    connector_type == DRM_MODE_CONNECTOR_HDMIA ||
-	    connector_type == DRM_MODE_CONNECTOR_HDMIB) {
-		debugfs_create_file("i915_hdcp_sink_capability", 0444, root,
-				    connector, &i915_hdcp_sink_capability_fops);
-	}
 
 	if (DISPLAY_VER(i915) >= 11 &&
 	    ((connector_type == DRM_MODE_CONNECTOR_DisplayPort && !connector->mst_port) ||
