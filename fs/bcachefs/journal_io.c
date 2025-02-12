@@ -1611,7 +1611,6 @@ static CLOSURE_CALLBACK(journal_write_done)
 	struct journal *j = container_of(w, struct journal, buf[w->idx]);
 	struct bch_fs *c = container_of(j, struct bch_fs, journal);
 	struct bch_replicas_padded replicas;
-	union journal_res_state old, new;
 	u64 seq = le64_to_cpu(w->data->seq);
 	int err = 0;
 
@@ -1641,6 +1640,21 @@ static CLOSURE_CALLBACK(journal_write_done)
 		j->err_seq	= seq;
 	w->write_done = true;
 
+	if (!j->free_buf || j->free_buf_size < w->buf_size) {
+		swap(j->free_buf,	w->data);
+		swap(j->free_buf_size,	w->buf_size);
+	}
+
+	if (w->data) {
+		void *buf = w->data;
+		w->data = NULL;
+		w->buf_size = 0;
+
+		spin_unlock(&j->lock);
+		kvfree(buf);
+		spin_lock(&j->lock);
+	}
+
 	bool completed = false;
 
 	for (seq = journal_last_unwritten_seq(j);
@@ -1650,7 +1664,7 @@ static CLOSURE_CALLBACK(journal_write_done)
 		if (!w->write_done)
 			break;
 
-		if (!j->err_seq && !JSET_NO_FLUSH(w->data)) {
+		if (!j->err_seq && !w->noflush) {
 			j->flushed_seq_ondisk = seq;
 			j->last_seq_ondisk = w->last_seq;
 
@@ -1671,16 +1685,6 @@ static CLOSURE_CALLBACK(journal_write_done)
 		if (j->watermark != BCH_WATERMARK_stripe)
 			journal_reclaim_kick(&c->journal);
 
-		old.v = atomic64_read(&j->reservations.counter);
-		do {
-			new.v = old.v;
-			BUG_ON(journal_state_count(new, new.unwritten_idx));
-			BUG_ON(new.unwritten_idx != (seq & JOURNAL_BUF_MASK));
-
-			new.unwritten_idx++;
-		} while (!atomic64_try_cmpxchg(&j->reservations.counter,
-					       &old.v, new.v));
-
 		closure_wake_up(&w->wait);
 		completed = true;
 	}
@@ -1695,7 +1699,7 @@ static CLOSURE_CALLBACK(journal_write_done)
 	}
 
 	if (journal_last_unwritten_seq(j) == journal_cur_seq(j) &&
-		   new.cur_entry_offset < JOURNAL_ENTRY_CLOSED_VAL) {
+	    j->reservations.cur_entry_offset < JOURNAL_ENTRY_CLOSED_VAL) {
 		struct journal_buf *buf = journal_cur_buf(j);
 		long delta = buf->expires - jiffies;
 

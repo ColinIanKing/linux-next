@@ -12,7 +12,11 @@
 /* btree write buffer steals 8 bits for its own purposes: */
 #define JOURNAL_SEQ_MAX		((1ULL << 56) - 1)
 
-#define JOURNAL_BUF_BITS	2
+#define JOURNAL_STATE_BUF_BITS	2
+#define JOURNAL_STATE_BUF_NR	(1U << JOURNAL_STATE_BUF_BITS)
+#define JOURNAL_STATE_BUF_MASK	(JOURNAL_STATE_BUF_NR - 1)
+
+#define JOURNAL_BUF_BITS	4
 #define JOURNAL_BUF_NR		(1U << JOURNAL_BUF_BITS)
 #define JOURNAL_BUF_MASK	(JOURNAL_BUF_NR - 1)
 
@@ -53,7 +57,10 @@ struct journal_buf {
  */
 
 enum journal_pin_type {
-	JOURNAL_PIN_TYPE_btree,
+	JOURNAL_PIN_TYPE_btree3,
+	JOURNAL_PIN_TYPE_btree2,
+	JOURNAL_PIN_TYPE_btree1,
+	JOURNAL_PIN_TYPE_btree0,
 	JOURNAL_PIN_TYPE_key_cache,
 	JOURNAL_PIN_TYPE_other,
 	JOURNAL_PIN_TYPE_NR,
@@ -79,7 +86,6 @@ struct journal_entry_pin {
 
 struct journal_res {
 	bool			ref;
-	u8			idx;
 	u16			u64s;
 	u32			offset;
 	u64			seq;
@@ -95,9 +101,8 @@ union journal_res_state {
 	};
 
 	struct {
-		u64		cur_entry_offset:20,
+		u64		cur_entry_offset:22,
 				idx:2,
-				unwritten_idx:2,
 				buf0_count:10,
 				buf1_count:10,
 				buf2_count:10,
@@ -107,13 +112,13 @@ union journal_res_state {
 
 /* bytes: */
 #define JOURNAL_ENTRY_SIZE_MIN		(64U << 10) /* 64k */
-#define JOURNAL_ENTRY_SIZE_MAX		(4U  << 20) /* 4M */
+#define JOURNAL_ENTRY_SIZE_MAX		(4U  << 22) /* 16M */
 
 /*
  * We stash some journal state as sentinal values in cur_entry_offset:
  * note - cur_entry_offset is in units of u64s
  */
-#define JOURNAL_ENTRY_OFFSET_MAX	((1U << 20) - 1)
+#define JOURNAL_ENTRY_OFFSET_MAX	((1U << 22) - 1)
 
 #define JOURNAL_ENTRY_BLOCKED_VAL	(JOURNAL_ENTRY_OFFSET_MAX - 2)
 #define JOURNAL_ENTRY_CLOSED_VAL	(JOURNAL_ENTRY_OFFSET_MAX - 1)
@@ -152,9 +157,11 @@ enum journal_flags {
 	x(retry)			\
 	x(blocked)			\
 	x(max_in_flight)		\
+	x(max_open)			\
 	x(journal_full)			\
 	x(journal_pin_full)		\
 	x(journal_stuck)		\
+	x(enomem)			\
 	x(insufficient_devices)
 
 enum journal_errors {
@@ -217,6 +224,8 @@ struct journal {
 	 * other is possibly being written out.
 	 */
 	struct journal_buf	buf[JOURNAL_BUF_NR];
+	void			*free_buf;
+	unsigned		free_buf_size;
 
 	spinlock_t		lock;
 
@@ -234,6 +243,7 @@ struct journal {
 	/* Sequence number of most recent journal entry (last entry in @pin) */
 	atomic64_t		seq;
 
+	u64			seq_write_started;
 	/* seq, last_seq from the most recent journal entry successfully written */
 	u64			seq_ondisk;
 	u64			flushed_seq_ondisk;
