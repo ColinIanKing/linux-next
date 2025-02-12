@@ -1508,7 +1508,6 @@ struct cifs_io_parms {
 struct cifs_io_request {
 	struct netfs_io_request		rreq;
 	struct cifsFileInfo		*cfile;
-	struct TCP_Server_Info		*server;
 	pid_t				pid;
 };
 
@@ -2325,8 +2324,8 @@ struct smb2_compound_vars {
 	struct kvec io_iov[SMB2_IOCTL_IOV_SIZE];
 	struct kvec si_iov[SMB2_SET_INFO_IOV_SIZE];
 	struct kvec close_iov;
-	struct smb2_file_rename_info rename_info;
-	struct smb2_file_link_info link_info;
+	struct smb2_file_rename_info_hdr rename_info;
+	struct smb2_file_link_info_hdr link_info;
 	struct kvec ea_iov;
 };
 
