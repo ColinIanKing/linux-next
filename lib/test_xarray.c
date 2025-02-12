@@ -1869,7 +1869,7 @@ static void check_split_2(struct xarray *xa, unsigned long index,
 	xa_set_mark(xa, index, XA_MARK_1);
 
 	xas_lock(&xas);
-	xas_try_halve(&xas, xa, order, GFP_KERNEL);
+	xas_try_split(&xas, xa, order, GFP_KERNEL);
 	if (((new_order / XA_CHUNK_SHIFT) < (order / XA_CHUNK_SHIFT)) &&
 	    new_order < order - 1) {
 		XA_BUG_ON(xa, !xas_error(&xas) || xas_error(&xas) != -EINVAL);
