@@ -26,6 +26,7 @@
 #include <linux/slab.h>
 #include <linux/srcu.h>
 #include <linux/string.h>
+#include <linux/string_choices.h>
 
 #include <linux/gpio.h>
 #include <linux/gpio/driver.h>
@@ -4711,10 +4712,10 @@ int gpiod_hog(struct gpio_desc *desc, const char *name,
 		return ret;
 	}
 
-	gpiod_dbg(desc, "hogged as %s%s\n",
+	gpiod_dbg(desc, "hogged as %s/%s\n",
 		(dflags & GPIOD_FLAGS_BIT_DIR_OUT) ? "output" : "input",
 		(dflags & GPIOD_FLAGS_BIT_DIR_OUT) ?
-		  (dflags & GPIOD_FLAGS_BIT_DIR_VAL) ? "/high" : "/low" : "");
+		  str_high_low(dflags & GPIOD_FLAGS_BIT_DIR_VAL) : "?");
 
 	return 0;
 }
@@ -5007,7 +5008,7 @@ static void gpiolib_dbg_show(struct seq_file *s, struct gpio_device *gdev)
 			seq_printf(s, " gpio-%-3u (%-20.20s|%-20.20s) %s %s %s%s\n",
 				   gpio, desc->name ?: "", gpiod_get_label(desc),
 				   is_out ? "out" : "in ",
-				   value >= 0 ? (value ? "hi" : "lo") : "?  ",
+				   value >= 0 ? str_hi_lo(value) : "?  ",
 				   is_irq ? "IRQ " : "",
 				   active_low ? "ACTIVE LOW" : "");
 		} else if (desc->name) {
