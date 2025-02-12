@@ -222,10 +222,23 @@ static inline void alloc_tag_sub(union codetag_ref *ref, size_t bytes) {}
 
 #endif /* CONFIG_MEM_ALLOC_PROFILING */
 
+/* See https://lore.kernel.org/all/202501310832.kiAeOt2z-lkp@intel.com/ */
+#if defined(CONFIG_CC_IS_CLANG) && CONFIG_CLANG_VERSION >= 140000 && CONFIG_CLANG_VERSION < 150000
+static inline bool store_current_tag(void)
+{
+	return true;
+}
+#else
+static inline bool store_current_tag(void)
+{
+	return mem_alloc_profiling_enabled();
+}
+#endif
+
 #define alloc_hooks_tag(_tag, _do_alloc)				\
 ({									\
 	typeof(_do_alloc) _res;						\
-	if (mem_alloc_profiling_enabled()) {				\
+	if (store_current_tag()) {					\
 		struct alloc_tag * __maybe_unused _old;			\
 		_old = alloc_tag_save(_tag);				\
 		_res = _do_alloc;					\
