@@ -218,11 +218,6 @@ struct filename *getname_uflags(const char __user *filename, int uflags)
 	return getname_flags(filename, flags);
 }
 
-struct filename *getname(const char __user * filename)
-{
-	return getname_flags(filename, 0);
-}
-
 struct filename *__getname_maybe_null(const char __user *pathname)
 {
 	struct filename *name;
@@ -3415,6 +3410,8 @@ static int may_open(struct mnt_idmap *idmap, const struct path *path,
 		if ((acc_mode & MAY_EXEC) && path_noexec(path))
 			return -EACCES;
 		break;
+	default:
+		VFS_BUG_ON_INODE(1, inode);
 	}
 
 	error = inode_permission(idmap, inode, MAY_OPEN | acc_mode);
