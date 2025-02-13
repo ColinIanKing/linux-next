@@ -224,7 +224,7 @@ static void ilk_edp_pll_on(struct intel_dp *intel_dp,
 	 * 2. Program DP PLL enable
 	 */
 	if (IS_IRONLAKE(dev_priv))
-		intel_wait_for_vblank_if_active(dev_priv, !crtc->pipe);
+		intel_wait_for_vblank_if_active(display, !crtc->pipe);
 
 	intel_dp->DP |= DP_PLL_ENABLE;
 
@@ -305,12 +305,13 @@ bool g4x_dp_port_enabled(struct drm_i915_private *dev_priv,
 static bool intel_dp_get_hw_state(struct intel_encoder *encoder,
 				  enum pipe *pipe)
 {
+	struct intel_display *display = to_intel_display(encoder);
 	struct drm_i915_private *dev_priv = to_i915(encoder->base.dev);
 	struct intel_dp *intel_dp = enc_to_intel_dp(encoder);
 	intel_wakeref_t wakeref;
 	bool ret;
 
-	wakeref = intel_display_power_get_if_enabled(dev_priv,
+	wakeref = intel_display_power_get_if_enabled(display,
 						     encoder->power_domain);
 	if (!wakeref)
 		return false;
@@ -318,7 +319,7 @@ static bool intel_dp_get_hw_state(struct intel_encoder *encoder,
 	ret = g4x_dp_port_enabled(dev_priv, intel_dp->output_reg,
 				  encoder->port, pipe);
 
-	intel_display_power_put(dev_priv, encoder->power_domain, wakeref);
+	intel_display_power_put(display, encoder->power_domain, wakeref);
 
 	return ret;
 }
@@ -471,7 +472,7 @@ intel_dp_link_down(struct intel_encoder *encoder,
 		intel_de_write(display, intel_dp->output_reg, intel_dp->DP);
 		intel_de_posting_read(display, intel_dp->output_reg);
 
-		intel_wait_for_vblank_if_active(dev_priv, PIPE_A);
+		intel_wait_for_vblank_if_active(display, PIPE_A);
 		intel_set_cpu_fifo_underrun_reporting(dev_priv, PIPE_A, true);
 		intel_set_pch_fifo_underrun_reporting(dev_priv, PIPE_A, true);
 	}
@@ -1388,7 +1389,7 @@ bool g4x_dp_init(struct drm_i915_private *dev_priv,
 	dig_port->max_lanes = 4;
 
 	intel_encoder->type = INTEL_OUTPUT_DP;
-	intel_encoder->power_domain = intel_display_power_ddi_lanes_domain(dev_priv, port);
+	intel_encoder->power_domain = intel_display_power_ddi_lanes_domain(display, port);
 	if (IS_CHERRYVIEW(dev_priv)) {
 		if (port == PORT_D)
 			intel_encoder->pipe_mask = BIT(PIPE_C);

@@ -1741,8 +1741,8 @@ static void intel_sdvo_get_config(struct intel_encoder *encoder,
 	 * pixel multiplier readout is tricky: Only on i915g/gm it is stored in
 	 * the sdvo port register, on all other platforms it is part of the dpll
 	 * state. Since the general pipe state readout happens before the
-	 * encoder->get_config we so already have a valid pixel multplier on all
-	 * other platfroms.
+	 * encoder->get_config we so already have a valid pixel multiplier on all
+	 * other platforms.
 	 */
 	if (IS_I915G(dev_priv) || IS_I915GM(dev_priv)) {
 		pipe_config->pixel_multiplier =
@@ -1838,6 +1838,7 @@ static void intel_disable_sdvo(struct intel_atomic_state *state,
 			       const struct intel_crtc_state *old_crtc_state,
 			       const struct drm_connector_state *conn_state)
 {
+	struct intel_display *display = to_intel_display(encoder);
 	struct drm_i915_private *dev_priv = to_i915(encoder->base.dev);
 	struct intel_sdvo *intel_sdvo = to_sdvo(encoder);
 	struct intel_crtc *crtc = to_intel_crtc(old_crtc_state->uapi.crtc);
@@ -1873,7 +1874,7 @@ static void intel_disable_sdvo(struct intel_atomic_state *state,
 		temp &= ~SDVO_ENABLE;
 		intel_sdvo_write_sdvox(intel_sdvo, temp);
 
-		intel_wait_for_vblank_if_active(dev_priv, PIPE_A);
+		intel_wait_for_vblank_if_active(display, PIPE_A);
 		intel_set_cpu_fifo_underrun_reporting(dev_priv, PIPE_A, true);
 		intel_set_pch_fifo_underrun_reporting(dev_priv, PIPE_A, true);
 	}

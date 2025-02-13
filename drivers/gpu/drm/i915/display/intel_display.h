@@ -421,7 +421,7 @@ void intel_link_compute_m_n(u16 bpp, int nlanes,
 			    int pixel_clock, int link_clock,
 			    int bw_overhead,
 			    struct intel_link_m_n *m_n);
-u32 intel_plane_fb_max_stride(struct drm_i915_private *dev_priv,
+u32 intel_plane_fb_max_stride(struct drm_device *drm,
 			      u32 pixel_format, u64 modifier);
 enum drm_mode_status
 intel_mode_valid_max_plane_size(struct drm_i915_private *dev_priv,
@@ -596,7 +596,7 @@ bool assert_port_valid(struct drm_i915_private *i915, enum port port);
 	unlikely(__ret_warn_on);					\
 })
 
-bool intel_scanout_needs_vtd_wa(struct drm_i915_private *i915);
+bool intel_scanout_needs_vtd_wa(struct intel_display *display);
 int intel_crtc_num_joined_pipes(const struct intel_crtc_state *crtc_state);
 
 #endif
