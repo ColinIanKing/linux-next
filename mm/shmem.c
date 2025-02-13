@@ -2162,14 +2162,14 @@ static int shmem_split_large_entry(struct inode *inode, pgoff_t index,
 {
 	struct address_space *mapping = inode->i_mapping;
 	XA_STATE_ORDER(xas, &mapping->i_pages, index, 0);
-	void *alloced_shadow = NULL;
-	int alloced_order = 0, i;
+	int split_order = 0;
+	int i;
 
 	/* Convert user data gfp flags to xarray node gfp flags */
 	gfp &= GFP_RECLAIM_MASK;
 
 	for (;;) {
-		int order = -1, split_order = 0;
+		int order = -1;
 		void *old = NULL;
 
 		xas_lock_irq(&xas);
@@ -2181,20 +2181,21 @@ static int shmem_split_large_entry(struct inode *inode, pgoff_t index,
 
 		order = xas_get_order(&xas);
 
-		/* Swap entry may have changed before we re-acquire the lock */
-		if (alloced_order &&
-		    (old != alloced_shadow || order != alloced_order)) {
-			xas_destroy(&xas);
-			alloced_order = 0;
-		}
-
 		/* Try to split large swap entry in pagecache */
 		if (order > 0) {
-			if (!alloced_order) {
-				split_order = order;
-				goto unlock;
+			int cur_order = order;
+
+			split_order = xas_try_split_min_order(cur_order);
+
+			while (cur_order > 0) {
+				xas_set_order(&xas, index, split_order);
+				xas_try_split(&xas, old, cur_order, GFP_NOWAIT);
+				if (xas_error(&xas))
+					goto unlock;
+				cur_order = split_order;
+				split_order =
+					xas_try_split_min_order(split_order);
 			}
-			xas_split(&xas, old, order);
 
 			/*
 			 * Re-set the swap entry after splitting, and the swap
@@ -2213,26 +2214,14 @@ static int shmem_split_large_entry(struct inode *inode, pgoff_t index,
 unlock:
 		xas_unlock_irq(&xas);
 
-		/* split needed, alloc here and retry. */
-		if (split_order) {
-			xas_split_alloc(&xas, old, split_order, gfp);
-			if (xas_error(&xas))
-				goto error;
-			alloced_shadow = old;
-			alloced_order = split_order;
-			xas_reset(&xas);
-			continue;
-		}
-
 		if (!xas_nomem(&xas, gfp))
 			break;
 	}
 
-error:
 	if (xas_error(&xas))
 		return xas_error(&xas);
 
-	return alloced_order;
+	return split_order;
 }
 
 /*
