@@ -421,14 +421,14 @@ void intel_link_compute_m_n(u16 bpp, int nlanes,
 			    int pixel_clock, int link_clock,
 			    int bw_overhead,
 			    struct intel_link_m_n *m_n);
-u32 intel_plane_fb_max_stride(struct drm_i915_private *dev_priv,
+u32 intel_plane_fb_max_stride(struct drm_device *drm,
 			      u32 pixel_format, u64 modifier);
 enum drm_mode_status
-intel_mode_valid_max_plane_size(struct drm_i915_private *dev_priv,
+intel_mode_valid_max_plane_size(struct intel_display *display,
 				const struct drm_display_mode *mode,
 				int num_joined_pipes);
 enum drm_mode_status
-intel_cpu_transcoder_mode_valid(struct drm_i915_private *i915,
+intel_cpu_transcoder_mode_valid(struct intel_display *display,
 				const struct drm_display_mode *mode);
 enum phy intel_port_to_phy(struct drm_i915_private *i915, enum port port);
 bool is_trans_port_sync_mode(const struct intel_crtc_state *state);
@@ -476,7 +476,7 @@ struct drm_display_mode *
 intel_encoder_current_mode(struct intel_encoder *encoder);
 void intel_encoder_get_config(struct intel_encoder *encoder,
 			      struct intel_crtc_state *crtc_state);
-bool intel_phy_is_combo(struct drm_i915_private *dev_priv, enum phy phy);
+bool intel_phy_is_combo(struct intel_display *display, enum phy phy);
 bool intel_phy_is_tc(struct drm_i915_private *dev_priv, enum phy phy);
 bool intel_phy_is_snps(struct drm_i915_private *dev_priv, enum phy phy);
 enum tc_port intel_port_to_tc(struct drm_i915_private *dev_priv,
@@ -574,12 +574,12 @@ int intel_atomic_commit(struct drm_device *dev, struct drm_atomic_state *_state,
 void intel_hpd_poll_fini(struct drm_i915_private *i915);
 
 /* modesetting asserts */
-void assert_transcoder(struct drm_i915_private *dev_priv,
+void assert_transcoder(struct intel_display *display,
 		       enum transcoder cpu_transcoder, bool state);
 #define assert_transcoder_enabled(d, t) assert_transcoder(d, t, true)
 #define assert_transcoder_disabled(d, t) assert_transcoder(d, t, false)
 
-bool assert_port_valid(struct drm_i915_private *i915, enum port port);
+bool assert_port_valid(struct intel_display *display, enum port port);
 
 /*
  * Use INTEL_DISPLAY_STATE_WARN(x) (rather than WARN() and WARN_ON()) for hw
@@ -596,7 +596,7 @@ bool assert_port_valid(struct drm_i915_private *i915, enum port port);
 	unlikely(__ret_warn_on);					\
 })
 
-bool intel_scanout_needs_vtd_wa(struct drm_i915_private *i915);
+bool intel_scanout_needs_vtd_wa(struct intel_display *display);
 int intel_crtc_num_joined_pipes(const struct intel_crtc_state *crtc_state);
 
 #endif

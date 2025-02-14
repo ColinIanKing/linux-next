@@ -82,15 +82,13 @@
 
 /**
  * intel_hpd_pin_default - return default pin associated with certain port.
- * @dev_priv: private driver data pointer
  * @port: the hpd port to get associated pin
  *
  * It is only valid and used by digital port encoder.
  *
  * Return pin that is associatade with @port.
  */
-enum hpd_pin intel_hpd_pin_default(struct drm_i915_private *dev_priv,
-				   enum port port)
+enum hpd_pin intel_hpd_pin_default(enum port port)
 {
 	return HPD_PORT_A + port - PORT_A;
 }
@@ -732,6 +730,7 @@ static void i915_hpd_poll_init_work(struct work_struct *work)
 	struct drm_i915_private *dev_priv =
 		container_of(work, struct drm_i915_private,
 			     display.hotplug.poll_init_work);
+	struct intel_display *display = &dev_priv->display;
 	struct drm_connector_list_iter conn_iter;
 	struct intel_connector *connector;
 	intel_wakeref_t wakeref;
@@ -747,7 +746,7 @@ static void i915_hpd_poll_init_work(struct work_struct *work)
 	 * and so risk an endless loop of this same sequence.
 	 */
 	if (!enabled) {
-		wakeref = intel_display_power_get(dev_priv,
+		wakeref = intel_display_power_get(display,
 						  POWER_DOMAIN_DISPLAY_CORE);
 		drm_WARN_ON(&dev_priv->drm,
 			    READ_ONCE(dev_priv->display.hotplug.poll_enabled));
@@ -789,7 +788,7 @@ static void i915_hpd_poll_init_work(struct work_struct *work)
 	if (!enabled) {
 		i915_hpd_poll_detect_connectors(dev_priv);
 
-		intel_display_power_put(dev_priv,
+		intel_display_power_put(display,
 					POWER_DOMAIN_DISPLAY_CORE,
 					wakeref);
 	}
@@ -806,7 +805,7 @@ static void i915_hpd_poll_init_work(struct work_struct *work)
  * of the powerwells.
  *
  * Since this function can get called in contexts where we're already holding
- * dev->mode_config.mutex, we do the actual hotplug enabling in a seperate
+ * dev->mode_config.mutex, we do the actual hotplug enabling in a separate
  * worker.
  *
  * Also see: intel_hpd_init() and intel_hpd_poll_disable().
@@ -823,7 +822,7 @@ void intel_hpd_poll_enable(struct drm_i915_private *dev_priv)
 
 	/*
 	 * We might already be holding dev->mode_config.mutex, so do this in a
-	 * seperate worker
+	 * separate worker
 	 * As well, there's no issue if we race here since we always reschedule
 	 * this worker anyway
 	 */
@@ -844,7 +843,7 @@ void intel_hpd_poll_enable(struct drm_i915_private *dev_priv)
  * of the powerwells.
  *
  * Since this function can get called in contexts where we're already holding
- * dev->mode_config.mutex, we do the actual hotplug enabling in a seperate
+ * dev->mode_config.mutex, we do the actual hotplug enabling in a separate
  * worker.
  *
  * Also used during driver init to initialize connector->polled
