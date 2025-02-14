@@ -5950,12 +5950,18 @@ static void rb_clear_buffer_page(struct buffer_page *page)
 static void rb_update_meta_page(struct ring_buffer_per_cpu *cpu_buffer)
 {
 	struct trace_buffer_meta *meta = cpu_buffer->meta_page;
+	struct page *page;
 
 	if (!meta)
 		return;
 
 	meta->reader.read = cpu_buffer->reader_page->read;
-	meta->reader.id = cpu_buffer->reader_page->id;
+	/* For boot buffers, the id is the index */
+	if (cpu_buffer->ring_meta)
+		meta->reader.id = rb_meta_subbuf_idx(cpu_buffer->ring_meta,
+						     cpu_buffer->reader_page->page);
+	else
+		meta->reader.id = cpu_buffer->reader_page->id;
 	meta->reader.lost_events = cpu_buffer->lost_events;
 
 	meta->entries = local_read(&cpu_buffer->entries);
@@ -5963,7 +5969,12 @@ static void rb_update_meta_page(struct ring_buffer_per_cpu *cpu_buffer)
 	meta->read = cpu_buffer->read;
 
 	/* Some archs do not have data cache coherency between kernel and user-space */
-	flush_dcache_folio(virt_to_folio(cpu_buffer->meta_page));
+	if (virt_addr_valid(cpu_buffer->meta_page))
+		page = virt_to_page(cpu_buffer->meta_page);
+	else
+		page = vmalloc_to_page(cpu_buffer->meta_page);
+
+	flush_dcache_folio(page_folio(page));
 }
 
 static void
@@ -6883,22 +6894,37 @@ static void rb_setup_ids_meta_page(struct ring_buffer_per_cpu *cpu_buffer,
 	struct trace_buffer_meta *meta = cpu_buffer->meta_page;
 	unsigned int nr_subbufs = cpu_buffer->nr_pages + 1;
 	struct buffer_page *first_subbuf, *subbuf;
+	int cnt = 0;
 	int id = 0;
 
-	subbuf_ids[id] = (unsigned long)cpu_buffer->reader_page->page;
-	cpu_buffer->reader_page->id = id++;
+	if (cpu_buffer->ring_meta)
+		id = rb_meta_subbuf_idx(cpu_buffer->ring_meta,
+					cpu_buffer->reader_page->page);
+	else
+		cpu_buffer->reader_page->id = id;
+
+	subbuf_ids[id++] = (unsigned long)cpu_buffer->reader_page->page;
+	cnt++;
 
 	first_subbuf = subbuf = rb_set_head_page(cpu_buffer);
 	do {
+		if (cpu_buffer->ring_meta)
+			id = rb_meta_subbuf_idx(cpu_buffer->ring_meta,
+						subbuf->page);
+		else
+			subbuf->id = id;
+
 		if (WARN_ON(id >= nr_subbufs))
 			break;
 
 		subbuf_ids[id] = (unsigned long)subbuf->page;
-		subbuf->id = id;
 
 		rb_inc_page(&subbuf);
 		id++;
+		cnt++;
 	} while (subbuf != first_subbuf);
+
+	WARN_ON(cnt != nr_subbufs);
 
 	/* install subbuf ID to kern VA translation */
 	cpu_buffer->subbuf_ids = subbuf_ids;
@@ -7064,7 +7090,10 @@ static int __rb_map_vma(struct ring_buffer_per_cpu *cpu_buffer,
 			goto out;
 		}
 
-		page = virt_to_page((void *)cpu_buffer->subbuf_ids[s]);
+		if (virt_addr_valid(cpu_buffer->subbuf_ids[s]))
+			page = virt_to_page((void *)cpu_buffer->subbuf_ids[s]);
+		else
+			page = vmalloc_to_page((void *)cpu_buffer->subbuf_ids[s]);
 
 		for (; off < (1 << (subbuf_order)); off++, page++) {
 			if (p >= nr_pages)
@@ -7210,6 +7239,7 @@ int ring_buffer_map_get_reader(struct trace_buffer *buffer, int cpu)
 	unsigned long missed_events;
 	unsigned long reader_size;
 	unsigned long flags;
+	struct page *page;
 
 	cpu_buffer = rb_get_mapped_buffer(buffer, cpu);
 	if (IS_ERR(cpu_buffer))
@@ -7278,7 +7308,12 @@ consume:
 
 out:
 	/* Some archs do not have data cache coherency between kernel and user-space */
-	flush_dcache_folio(virt_to_folio(cpu_buffer->reader_page->page));
+	if (virt_addr_valid(cpu_buffer->meta_page))
+		page = virt_to_page(cpu_buffer->meta_page);
+	else
+		page = vmalloc_to_page(cpu_buffer->meta_page);
+
+	flush_dcache_folio(page_folio(page));
 
 	rb_update_meta_page(cpu_buffer);
 
