@@ -26,6 +26,7 @@
 #include <linux/slab.h>
 #include <linux/srcu.h>
 #include <linux/string.h>
+#include <linux/string_choices.h>
 
 #include <linux/gpio.h>
 #include <linux/gpio/driver.h>
@@ -2872,19 +2873,15 @@ int gpiod_direction_output_nonotify(struct gpio_desc *desc, int value)
 		if (!ret)
 			goto set_output_value;
 		/* Emulate open drain by not actively driving the line high */
-		if (value) {
-			ret = gpiod_direction_input_nonotify(desc);
+		if (value)
 			goto set_output_flag;
-		}
 	} else if (test_bit(FLAG_OPEN_SOURCE, &flags)) {
 		ret = gpio_set_config(desc, PIN_CONFIG_DRIVE_OPEN_SOURCE);
 		if (!ret)
 			goto set_output_value;
 		/* Emulate open source by not actively driving the line low */
-		if (!value) {
-			ret = gpiod_direction_input_nonotify(desc);
+		if (!value)
 			goto set_output_flag;
-		}
 	} else {
 		gpio_set_config(desc, PIN_CONFIG_DRIVE_PUSH_PULL);
 	}
@@ -2896,15 +2893,17 @@ set_output_value:
 	return gpiod_direction_output_raw_commit(desc, value);
 
 set_output_flag:
+	ret = gpiod_direction_input_nonotify(desc);
+	if (ret)
+		return ret;
 	/*
 	 * When emulating open-source or open-drain functionalities by not
 	 * actively driving the line (setting mode to input) we still need to
 	 * set the IS_OUT flag or otherwise we won't be able to set the line
 	 * value anymore.
 	 */
-	if (ret == 0)
-		set_bit(FLAG_IS_OUT, &desc->flags);
-	return ret;
+	set_bit(FLAG_IS_OUT, &desc->flags);
+	return 0;
 }
 
 /**
@@ -4727,10 +4726,10 @@ int gpiod_hog(struct gpio_desc *desc, const char *name,
 		return ret;
 	}
 
-	gpiod_dbg(desc, "hogged as %s%s\n",
+	gpiod_dbg(desc, "hogged as %s/%s\n",
 		(dflags & GPIOD_FLAGS_BIT_DIR_OUT) ? "output" : "input",
 		(dflags & GPIOD_FLAGS_BIT_DIR_OUT) ?
-		  (dflags & GPIOD_FLAGS_BIT_DIR_VAL) ? "/high" : "/low" : "");
+		  str_high_low(dflags & GPIOD_FLAGS_BIT_DIR_VAL) : "?");
 
 	return 0;
 }
@@ -5025,7 +5024,7 @@ static void gpiolib_dbg_show(struct seq_file *s, struct gpio_device *gdev)
 			seq_printf(s, " gpio-%-3u (%-20.20s|%-20.20s) %s %s %s%s\n",
 				   gpio, desc->name ?: "", gpiod_get_label(desc),
 				   is_out ? "out" : "in ",
-				   value >= 0 ? (value ? "hi" : "lo") : "?  ",
+				   value >= 0 ? str_hi_lo(value) : "?  ",
 				   is_irq ? "IRQ " : "",
 				   active_low ? "ACTIVE LOW" : "");
 		} else if (desc->name) {
