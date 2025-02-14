@@ -3386,15 +3386,11 @@ bool can_split_folio(struct folio *folio, int caller_pins, int *pextra_pins)
  * It splits @folio into @new_order folios and copies the @folio metadata to
  * all the resulting folios.
  */
-static int __split_folio_to_order(struct folio *folio, int new_order)
+static void __split_folio_to_order(struct folio *folio, int new_order)
 {
-	int curr_order = folio_order(folio);
 	long nr_pages = folio_nr_pages(folio);
 	long new_nr_pages = 1 << new_order;
 	long index;
-
-	if (curr_order <= new_order)
-		return -EINVAL;
 
 	/*
 	 * Skip the first new_nr_pages, since the new folio from them have all
@@ -3490,8 +3486,6 @@ static int __split_folio_to_order(struct folio *folio, int new_order)
 
 	if (!new_order)
 		ClearPageCompound(&folio->page);
-
-	return 0;
 }
 
 /*
@@ -3585,7 +3579,6 @@ static int __split_unmapped_folio(struct folio *folio, int new_order,
 		int old_order = folio_order(folio);
 		struct folio *release;
 		struct folio *end_folio = folio_next(folio);
-		int status;
 
 		/* order-1 anonymous folio is not supported */
 		if (folio_test_anon(folio) && split_order == 1)
@@ -3618,12 +3611,7 @@ static int __split_unmapped_folio(struct folio *folio, int new_order,
 		split_page_owner(&folio->page, old_order, split_order);
 		pgalloc_tag_split(folio, old_order, split_order);
 
-		status = __split_folio_to_order(folio, split_order);
-
-		if (status < 0) {
-			stop_split = true;
-			ret = -EINVAL;
-		}
+		__split_folio_to_order(folio, split_order);
 
 after_split:
 		/*
@@ -3661,8 +3649,10 @@ after_split:
 				     folio_test_swapcache(origin_folio)) ?
 					     folio_nr_pages(release) : 0));
 
-			if (release != origin_folio)
-				lru_add_page_tail(origin_folio, &release->page,
+			if (release == origin_folio)
+				continue;
+			
+			lru_add_page_tail(origin_folio, &release->page,
 						lruvec, list);
 
 			/* Some pages can be beyond EOF: drop them from page cache */
