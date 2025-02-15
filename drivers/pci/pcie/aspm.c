@@ -35,15 +35,13 @@ void pci_save_ltr_state(struct pci_dev *dev)
 	if (!pci_is_pcie(dev))
 		return;
 
+	save_state = pci_find_saved_ext_cap(dev, PCI_EXT_CAP_ID_LTR);
+	if (!save_state)
+		return;
+
 	ltr = pci_find_ext_capability(dev, PCI_EXT_CAP_ID_LTR);
 	if (!ltr)
 		return;
-
-	save_state = pci_find_saved_ext_cap(dev, PCI_EXT_CAP_ID_LTR);
-	if (!save_state) {
-		pci_err(dev, "no suspend buffer for LTR; ASPM issues possible after resume\n");
-		return;
-	}
 
 	/* Some broken devices only support dword access to LTR */
 	cap = &save_state->cap.data[0];
@@ -57,8 +55,11 @@ void pci_restore_ltr_state(struct pci_dev *dev)
 	u32 *cap;
 
 	save_state = pci_find_saved_ext_cap(dev, PCI_EXT_CAP_ID_LTR);
+	if (!save_state)
+		return;
+
 	ltr = pci_find_ext_capability(dev, PCI_EXT_CAP_ID_LTR);
-	if (!save_state || !ltr)
+	if (!ltr)
 		return;
 
 	/* Some broken devices only support dword access to LTR */
