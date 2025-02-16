@@ -302,7 +302,7 @@ void phy_ethtool_ksettings_get(struct phy_device *phydev,
 		cmd->base.port = PORT_BNC;
 	else
 		cmd->base.port = phydev->port;
-	cmd->base.transceiver = phy_is_internal(phydev) ?
+	cmd->base.transceiver = phydev->is_internal ?
 				XCVR_INTERNAL : XCVR_EXTERNAL;
 	cmd->base.phy_address = phydev->mdio.addr;
 	cmd->base.autoneg = phydev->autoneg;
@@ -520,12 +520,12 @@ int __phy_hwtstamp_set(struct phy_device *phydev,
  * @phydev: the phy_device struct
  * @jiffies: Run the state machine after these jiffies
  */
-void phy_queue_state_machine(struct phy_device *phydev, unsigned long jiffies)
+static void phy_queue_state_machine(struct phy_device *phydev,
+				    unsigned long jiffies)
 {
 	mod_delayed_work(system_power_efficient_wq, &phydev->state_queue,
 			 jiffies);
 }
-EXPORT_SYMBOL(phy_queue_state_machine);
 
 /**
  * phy_trigger_machine - Trigger the state machine to run now
@@ -1501,6 +1501,24 @@ void phy_free_interrupt(struct phy_device *phydev)
 }
 EXPORT_SYMBOL(phy_free_interrupt);
 
+/**
+ * phy_get_next_update_time - Determine the next PHY update time
+ * @phydev: Pointer to the phy_device structure
+ *
+ * This function queries the PHY driver to get the time for the next polling
+ * event. If the driver does not implement the callback, a default value is
+ * used.
+ *
+ * Return: The time for the next polling event in jiffies
+ */
+static unsigned int phy_get_next_update_time(struct phy_device *phydev)
+{
+	if (phydev->drv && phydev->drv->get_next_update_time)
+		return phydev->drv->get_next_update_time(phydev);
+
+	return PHY_STATE_TIME;
+}
+
 enum phy_state_work {
 	PHY_STATE_WORK_NONE,
 	PHY_STATE_WORK_ANEG,
@@ -1580,7 +1598,8 @@ static enum phy_state_work _phy_state_machine(struct phy_device *phydev)
 	 * called from phy_disconnect() synchronously.
 	 */
 	if (phy_polling_mode(phydev) && phy_is_started(phydev))
-		phy_queue_state_machine(phydev, PHY_STATE_TIME);
+		phy_queue_state_machine(phydev,
+					phy_get_next_update_time(phydev));
 
 	return state_work;
 }
