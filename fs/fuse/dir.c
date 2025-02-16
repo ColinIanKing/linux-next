@@ -1123,6 +1123,9 @@ static int fuse_link(struct dentry *entry, struct inode *newdir,
 	struct fuse_mount *fm = get_fuse_mount(inode);
 	FUSE_ARGS(args);
 
+	if (fm->fc->no_link)
+		goto out;
+
 	memset(&inarg, 0, sizeof(inarg));
 	inarg.oldnodeid = get_node_id(inode);
 	args.opcode = FUSE_LINK;
@@ -1136,6 +1139,12 @@ static int fuse_link(struct dentry *entry, struct inode *newdir,
 		fuse_update_ctime_in_cache(inode);
 	else if (err == -EINTR)
 		fuse_invalidate_attr(inode);
+
+	if (err == -ENOSYS)
+		fm->fc->no_link = 1;
+out:
+	if (fm->fc->no_link)
+		return -EPERM;
 
 	return err;
 }
