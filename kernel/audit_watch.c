@@ -350,11 +350,10 @@ static int audit_get_nd(struct audit_watch *watch, struct path *parent)
 	struct dentry *d = kern_path_locked(watch->path, parent);
 	if (IS_ERR(d))
 		return PTR_ERR(d);
-	if (d_is_positive(d)) {
-		/* update watch filter fields */
-		watch->dev = d->d_sb->s_dev;
-		watch->ino = d_backing_inode(d)->i_ino;
-	}
+	/* update watch filter fields */
+	watch->dev = d->d_sb->s_dev;
+	watch->ino = d_backing_inode(d)->i_ino;
+
 	inode_unlock(d_backing_inode(parent->dentry));
 	dput(d);
 	return 0;
@@ -419,7 +418,7 @@ int audit_add_watch(struct audit_krule *krule, struct list_head **list)
 	/* caller expects mutex locked */
 	mutex_lock(&audit_filter_mutex);
 
-	if (ret) {
+	if (ret && ret != -ENOENT) {
 		audit_put_watch(watch);
 		return ret;
 	}
@@ -438,6 +437,7 @@ int audit_add_watch(struct audit_krule *krule, struct list_head **list)
 
 	h = audit_hash_ino((u32)watch->ino);
 	*list = &audit_inode_hash[h];
+	ret = 0;
 error:
 	path_put(&parent_path);
 	audit_put_watch(watch);
