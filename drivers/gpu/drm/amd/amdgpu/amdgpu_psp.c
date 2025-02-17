@@ -44,7 +44,7 @@
 #include "amdgpu_securedisplay.h"
 #include "amdgpu_atomfirmware.h"
 
-#define AMD_VBIOS_FILE_MAX_SIZE_B      (1024*1024*3)
+#define AMD_VBIOS_FILE_MAX_SIZE_B      (1024*1024*16)
 
 static int psp_load_smu_fw(struct psp_context *psp);
 static int psp_rap_terminate(struct psp_context *psp);
@@ -193,6 +193,7 @@ static int psp_early_init(struct amdgpu_ip_block *ip_block)
 	case IP_VERSION(11, 0, 9):
 	case IP_VERSION(11, 0, 11):
 	case IP_VERSION(11, 5, 0):
+	case IP_VERSION(11, 5, 2):
 	case IP_VERSION(11, 0, 12):
 	case IP_VERSION(11, 0, 13):
 		psp_v11_0_set_psp_funcs(psp);
@@ -208,10 +209,14 @@ static int psp_early_init(struct amdgpu_ip_block *ip_block)
 		psp->boot_time_tmr = false;
 		fallthrough;
 	case IP_VERSION(13, 0, 6):
-	case IP_VERSION(13, 0, 12):
 	case IP_VERSION(13, 0, 14):
 		psp_v13_0_set_psp_funcs(psp);
 		psp->autoload_supported = false;
+		break;
+	case IP_VERSION(13, 0, 12):
+		psp_v13_0_set_psp_funcs(psp);
+		psp->autoload_supported = false;
+		adev->psp.sup_ifwi_up = !amdgpu_sriov_vf(adev);
 		break;
 	case IP_VERSION(13, 0, 1):
 	case IP_VERSION(13, 0, 3):
@@ -245,6 +250,10 @@ static int psp_early_init(struct amdgpu_ip_block *ip_block)
 	case IP_VERSION(14, 0, 2):
 	case IP_VERSION(14, 0, 3):
 		psp_v14_0_set_psp_funcs(psp);
+		break;
+	case IP_VERSION(14, 0, 5):
+		psp_v14_0_set_psp_funcs(psp);
+		psp->boot_time_tmr = false;
 		break;
 	default:
 		return -EINVAL;
@@ -533,7 +542,6 @@ static int psp_sw_fini(struct amdgpu_ip_block *ip_block)
 {
 	struct amdgpu_device *adev = ip_block->adev;
 	struct psp_context *psp = &adev->psp;
-	struct psp_gfx_cmd_resp *cmd = psp->cmd;
 
 	psp_memory_training_fini(psp);
 
@@ -543,8 +551,8 @@ static int psp_sw_fini(struct amdgpu_ip_block *ip_block)
 	amdgpu_ucode_release(&psp->cap_fw);
 	amdgpu_ucode_release(&psp->toc_fw);
 
-	kfree(cmd);
-	cmd = NULL;
+	kfree(psp->cmd);
+	psp->cmd = NULL;
 
 	psp_free_shared_bufs(psp);
 
