@@ -84,7 +84,7 @@
  * Try to name registers according to the specs. If the register name changes in
  * the specs from platform to another, stick to the original name.
  *
- * Try to re-use existing register macro definitions. Only add new macros for
+ * Try to reuse existing register macro definitions. Only add new macros for
  * new register offsets, or when the register contents have changed enough to
  * warrant a full redefinition.
  *
@@ -492,8 +492,9 @@
 #define MBUS_ABOX_BT_CREDIT_POOL1_MASK	(0x1F << 0)
 #define MBUS_ABOX_BT_CREDIT_POOL1(x)	((x) << 0)
 
-/* Make render/texture TLB fetches lower priorty than associated data
- *   fetches. This is not turned on by default
+/*
+ * Make render/texture TLB fetches lower priority than associated data
+ * fetches. This is not turned on by default.
  */
 #define   MI_ARB_RENDER_TLB_LOW_PRIORITY	(1 << 15)
 
@@ -3197,6 +3198,10 @@
 #define _TRANS_DP2_VFREQLOW_D			0x630a8
 #define TRANS_DP2_VFREQLOW(trans)		_MMIO_TRANS(trans, _TRANS_DP2_VFREQLOW_A, _TRANS_DP2_VFREQLOW_B)
 
+#define _DP_MIN_HBLANK_CTL_A			0x600ac
+#define _DP_MIN_HBLANK_CTL_B			0x610ac
+#define DP_MIN_HBLANK_CTL(trans)		_MMIO_TRANS(trans, _DP_MIN_HBLANK_CTL_A, _DP_MIN_HBLANK_CTL_B)
+
 /* SNB eDP training params */
 /* SNB A-stepping */
 #define  EDP_LINK_TRAIN_400MV_0DB_SNB_A		(0x38 << 22)
@@ -3565,6 +3570,7 @@ enum skl_power_gate {
 #define _TRANS_DDI_FUNC_CTL2_DSI1	0x6bc04
 #define TRANS_DDI_FUNC_CTL2(dev_priv, tran)	_MMIO_TRANS2(dev_priv, tran, _TRANS_DDI_FUNC_CTL2_A)
 #define  PORT_SYNC_MODE_ENABLE			REG_BIT(4)
+#define  CMTG_SECONDARY_MODE			REG_BIT(3)
 #define  PORT_SYNC_MODE_MASTER_SELECT_MASK	REG_GENMASK(2, 0)
 #define  PORT_SYNC_MODE_MASTER_SELECT(x)	REG_FIELD_PREP(PORT_SYNC_MODE_MASTER_SELECT_MASK, (x))
 
@@ -3619,24 +3625,29 @@ enum skl_power_gate {
 #define _DDI_BUF_CTL_B				0x64100
 /* Known as DDI_CTL_DE in MTL+ */
 #define DDI_BUF_CTL(port) _MMIO_PORT(port, _DDI_BUF_CTL_A, _DDI_BUF_CTL_B)
-#define  DDI_BUF_CTL_ENABLE			(1 << 31)
+#define  DDI_BUF_CTL_ENABLE			REG_BIT(31)
 #define  XE2LPD_DDI_BUF_D2D_LINK_ENABLE		REG_BIT(29)
 #define  XE2LPD_DDI_BUF_D2D_LINK_STATE		REG_BIT(28)
-#define  DDI_BUF_TRANS_SELECT(n)	((n) << 24)
-#define  DDI_BUF_EMP_MASK			(0xf << 24)
-#define  DDI_BUF_PHY_LINK_RATE(r)		((r) << 20)
+#define  DDI_BUF_EMP_MASK			REG_GENMASK(27, 24)
+#define  DDI_BUF_TRANS_SELECT(n)		REG_FIELD_PREP(DDI_BUF_EMP_MASK, (n))
+#define  DDI_BUF_PHY_LINK_RATE_MASK		REG_GENMASK(23, 20)
+#define  DDI_BUF_PHY_LINK_RATE(r)		REG_FIELD_PREP(DDI_BUF_PHY_LINK_RATE_MASK, (r))
 #define  DDI_BUF_PORT_DATA_MASK			REG_GENMASK(19, 18)
 #define  DDI_BUF_PORT_DATA_10BIT		REG_FIELD_PREP(DDI_BUF_PORT_DATA_MASK, 0)
 #define  DDI_BUF_PORT_DATA_20BIT		REG_FIELD_PREP(DDI_BUF_PORT_DATA_MASK, 1)
 #define  DDI_BUF_PORT_DATA_40BIT		REG_FIELD_PREP(DDI_BUF_PORT_DATA_MASK, 2)
-#define  DDI_BUF_PORT_REVERSAL			(1 << 16)
-#define  DDI_BUF_IS_IDLE			(1 << 7)
+#define  DDI_BUF_PORT_REVERSAL			REG_BIT(16)
+#define  DDI_BUF_LANE_STAGGER_DELAY_MASK	REG_GENMASK(15, 8)
+#define  DDI_BUF_LANE_STAGGER_DELAY(symbols)	REG_FIELD_PREP(DDI_BUF_LANE_STAGGER_DELAY_MASK, \
+							       (symbols))
+#define  DDI_BUF_IS_IDLE			REG_BIT(7)
 #define  DDI_BUF_CTL_TC_PHY_OWNERSHIP		REG_BIT(6)
-#define  DDI_A_4_LANES				(1 << 4)
-#define  DDI_PORT_WIDTH(width)			(((width) - 1) << 1)
-#define  DDI_PORT_WIDTH_MASK			(7 << 1)
+#define  DDI_A_4_LANES				REG_BIT(4)
+#define  DDI_PORT_WIDTH_MASK			REG_GENMASK(3, 1)
+#define  DDI_PORT_WIDTH(width)			REG_FIELD_PREP(DDI_PORT_WIDTH_MASK, \
+							       ((width) == 3 ? 4 : (width) - 1))
 #define  DDI_PORT_WIDTH_SHIFT			1
-#define  DDI_INIT_DISPLAY_DETECTED		(1 << 0)
+#define  DDI_INIT_DISPLAY_DETECTED		REG_BIT(0)
 
 /* DDI Buffer Translations */
 #define _DDI_BUF_TRANS_A		0x64E00
