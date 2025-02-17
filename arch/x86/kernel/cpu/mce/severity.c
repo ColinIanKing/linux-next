@@ -16,6 +16,7 @@
 #include <asm/traps.h>
 #include <asm/insn.h>
 #include <asm/insn-eval.h>
+#include <linux/extable.h>
 
 #include "internal.h"
 
@@ -285,7 +286,8 @@ static bool is_copy_from_user(struct pt_regs *regs)
  */
 static noinstr int error_context(struct mce *m, struct pt_regs *regs)
 {
-	int fixup_type;
+	const struct exception_table_entry *e;
+	int fixup_type, imm;
 	bool copy_user;
 
 	if ((m->cs & 3) == 3)
@@ -294,9 +296,14 @@ static noinstr int error_context(struct mce *m, struct pt_regs *regs)
 	if (!mc_recoverable(m->mcgstatus))
 		return IN_KERNEL;
 
+	e = search_exception_tables(m->ip);
+	if (!e)
+		return IN_KERNEL;
+
 	/* Allow instrumentation around external facilities usage. */
 	instrumentation_begin();
-	fixup_type = ex_get_fixup_type(m->ip);
+	fixup_type = FIELD_GET(EX_DATA_TYPE_MASK, e->data);
+	imm  = FIELD_GET(EX_DATA_IMM_MASK,  e->data);
 	copy_user  = is_copy_from_user(regs);
 	instrumentation_end();
 
@@ -304,9 +311,13 @@ static noinstr int error_context(struct mce *m, struct pt_regs *regs)
 	case EX_TYPE_UACCESS:
 		if (!copy_user)
 			return IN_KERNEL;
-		m->kflags |= MCE_IN_KERNEL_COPYIN;
-		fallthrough;
-
+		m->kflags |= MCE_IN_KERNEL_COPYIN | MCE_IN_KERNEL_RECOV;
+		return IN_KERNEL_RECOV;
+	case EX_TYPE_IMM_REG:
+		if (!copy_user || imm != -EFAULT)
+			return IN_KERNEL;
+		m->kflags |= MCE_IN_KERNEL_COPYIN | MCE_IN_KERNEL_RECOV;
+		return IN_KERNEL_RECOV;
 	case EX_TYPE_FAULT_MCE_SAFE:
 	case EX_TYPE_DEFAULT_MCE_SAFE:
 		m->kflags |= MCE_IN_KERNEL_RECOV;
