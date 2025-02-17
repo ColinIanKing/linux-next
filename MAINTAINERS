@@ -11470,6 +11470,13 @@ L:	linux-crypto@vger.kernel.org
 S:	Maintained
 F:	drivers/crypto/inside-secure/
 
+INSIDE SECURE EIP93 CRYPTO DRIVER
+M:	Christian Marangi <ansuelsmth@gmail.com>
+L:	linux-crypto@vger.kernel.org
+S:	Maintained
+F:	Documentation/devicetree/bindings/crypto/inside-secure,safexcel-eip93.yaml
+F:	drivers/crypto/inside-secure/eip93/
+
 INTEGRITY MEASUREMENT ARCHITECTURE (IMA)
 M:	Mimi Zohar <zohar@linux.ibm.com>
 M:	Roberto Sassu <roberto.sassu@huawei.com>
@@ -11673,6 +11680,7 @@ F:	drivers/dma/ioat*
 
 INTEL IAA CRYPTO DRIVER
 M:	Kristen Accardi <kristen.c.accardi@intel.com>
+M:	Vinicius Costa Gomes <vinicius.gomes@intel.com>
 L:	linux-crypto@vger.kernel.org
 S:	Supported
 F:	Documentation/driver-api/crypto/iaa/iaa-crypto.rst
@@ -20500,8 +20508,10 @@ F:	include/uapi/linux/rkisp1-config.h
 ROCKCHIP RK3568 RANDOM NUMBER GENERATOR SUPPORT
 M:	Daniel Golle <daniel@makrotopia.org>
 M:	Aurelien Jarno <aurelien@aurel32.net>
+M:	Nicolas Frattaroli <nicolas.frattaroli@collabora.com>
 S:	Maintained
 F:	Documentation/devicetree/bindings/rng/rockchip,rk3568-rng.yaml
+F:	Documentation/devicetree/bindings/rng/rockchip,rk3588-rng.yaml
 F:	drivers/char/hw_random/rockchip-rng.c
 
 ROCKCHIP RASTER 2D GRAPHIC ACCELERATION UNIT DRIVER
