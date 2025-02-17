@@ -925,12 +925,13 @@ static __always_inline void quirk_zen_ifu(int bank, struct mce *m, struct pt_reg
  * Do a quick check if any of the events requires a panic.
  * This decides if we keep the events around or clear them.
  */
-static __always_inline int mce_no_way_out(struct mce_hw_err *err, char **msg, unsigned long *validp,
-					  struct pt_regs *regs)
+static __always_inline bool mce_no_way_out(struct mce_hw_err *err, char **msg,
+					   unsigned long *validp,
+					   struct pt_regs *regs)
 {
 	struct mce *m = &err->m;
 	char *tmp = *msg;
-	int i;
+	int i, cur_sev = MCE_NO_SEVERITY, sev;
 
 	for (i = 0; i < this_cpu_read(mce_num_banks); i++) {
 		m->status = mce_rdmsrl(mca_msr_reg(i, MCA_STATUS));
@@ -945,13 +946,17 @@ static __always_inline int mce_no_way_out(struct mce_hw_err *err, char **msg, un
 			quirk_zen_ifu(i, m, regs);
 
 		m->bank = i;
-		if (mce_severity(m, regs, &tmp, true) >= MCE_PANIC_SEVERITY) {
+		sev = mce_severity(m, regs, &tmp, true);
+		if (sev >= cur_sev) {
 			mce_read_aux(err, i);
 			*msg = tmp;
-			return 1;
+			cur_sev = sev;
 		}
+
+		if (cur_sev == MCE_PANIC_SEVERITY)
+			return true;
 	}
-	return 0;
+	return false;
 }
 
 /*
