@@ -1456,6 +1456,8 @@ static void queue_task_work(struct mce_hw_err *err, char *msg, void (*func)(stru
 	if (count > 1)
 		return;
 
+	if (msg)
+		pr_err("%s\n", msg);
 	task_work_add(current, &current->mce_kill_me, TWA_RESUME);
 }
 
