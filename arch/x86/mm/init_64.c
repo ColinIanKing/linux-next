@@ -844,6 +844,17 @@ void __init paging_init(void)
  */
 static unsigned long unused_pmd_start __meminitdata;
 
+static void * __meminit vmemmap_va_to_kaddr(unsigned long vmemmap_va)
+{
+	void *kaddr = (void *)vmemmap_va;
+	pgd_t *pgd = __va(read_cr3_pa());
+
+	if (init_mm.pgd != pgd)
+		kaddr = __va(slow_virt_to_phys(kaddr));
+
+	return kaddr;
+}
+
 static void __meminit vmemmap_flush_unused_pmd(void)
 {
 	if (!unused_pmd_start)
@@ -851,7 +862,7 @@ static void __meminit vmemmap_flush_unused_pmd(void)
 	/*
 	 * Clears (unused_pmd_start, PMD_END]
 	 */
-	memset((void *)unused_pmd_start, PAGE_UNUSED,
+	memset(vmemmap_va_to_kaddr(unused_pmd_start), PAGE_UNUSED,
 	       ALIGN(unused_pmd_start, PMD_SIZE) - unused_pmd_start);
 	unused_pmd_start = 0;
 }
@@ -882,7 +893,7 @@ static void __meminit __vmemmap_use_sub_pmd(unsigned long start)
 	 * case the first memmap never gets initialized e.g., because the memory
 	 * block never gets onlined).
 	 */
-	memset((void *)start, 0, sizeof(struct page));
+	memset(vmemmap_va_to_kaddr(start), 0, sizeof(struct page));
 }
 
 static void __meminit vmemmap_use_sub_pmd(unsigned long start, unsigned long end)
@@ -924,7 +935,7 @@ static void __meminit vmemmap_use_new_sub_pmd(unsigned long start, unsigned long
 	 * Mark with PAGE_UNUSED the unused parts of the new memmap range
 	 */
 	if (!IS_ALIGNED(start, PMD_SIZE))
-		memset((void *)page, PAGE_UNUSED, start - page);
+		memset(vmemmap_va_to_kaddr(page), PAGE_UNUSED, start - page);
 
 	/*
 	 * We want to avoid memset(PAGE_UNUSED) when populating the vmemmap of
