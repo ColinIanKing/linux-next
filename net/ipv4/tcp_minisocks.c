@@ -264,7 +264,7 @@ kill:
 	inet_twsk_put(tw);
 	return TCP_TW_SUCCESS;
 }
-EXPORT_SYMBOL(tcp_timewait_state_process);
+EXPORT_IPV6_MOD(tcp_timewait_state_process);
 
 static void tcp_time_wait_init(struct sock *sk, struct tcp_timewait_sock *tcptw)
 {
@@ -398,7 +398,7 @@ void tcp_twsk_destructor(struct sock *sk)
 #endif
 	tcp_ao_destroy_sock(sk, true);
 }
-EXPORT_SYMBOL_GPL(tcp_twsk_destructor);
+EXPORT_IPV6_MOD_GPL(tcp_twsk_destructor);
 
 void tcp_twsk_purge(struct list_head *net_exit_list)
 {
@@ -457,7 +457,6 @@ void tcp_openreq_init_rwin(struct request_sock *req,
 		rcv_wnd);
 	ireq->rcv_wscale = rcv_wscale;
 }
-EXPORT_SYMBOL(tcp_openreq_init_rwin);
 
 static void tcp_ecn_openreq_child(struct tcp_sock *tp,
 				  const struct request_sock *req)
@@ -492,7 +491,7 @@ void tcp_ca_openreq_child(struct sock *sk, const struct dst_entry *dst)
 
 	tcp_set_ca_state(sk, TCP_CA_Open);
 }
-EXPORT_SYMBOL_GPL(tcp_ca_openreq_child);
+EXPORT_IPV6_MOD_GPL(tcp_ca_openreq_child);
 
 static void smc_check_reset_syn_req(const struct tcp_sock *oldtp,
 				    struct request_sock *req,
@@ -566,8 +565,7 @@ struct sock *tcp_create_openreq_child(const struct sock *sk,
 	WRITE_ONCE(newtp->write_seq, newtp->pushed_seq = treq->snt_isn + 1);
 
 	if (sock_flag(newsk, SOCK_KEEPOPEN))
-		inet_csk_reset_keepalive_timer(newsk,
-					       keepalive_time_when(newtp));
+		tcp_reset_keepalive_timer(newsk, keepalive_time_when(newtp));
 
 	newtp->rx_opt.tstamp_ok = ireq->tstamp_ok;
 	newtp->rx_opt.sack_ok = ireq->sack_ok;
@@ -910,7 +908,7 @@ embryonic_reset:
 	}
 	return NULL;
 }
-EXPORT_SYMBOL(tcp_check_req);
+EXPORT_IPV6_MOD(tcp_check_req);
 
 /*
  * Queue segment on the new socket if the new socket is active,
@@ -952,4 +950,4 @@ enum skb_drop_reason tcp_child_process(struct sock *parent, struct sock *child,
 	sock_put(child);
 	return reason;
 }
-EXPORT_SYMBOL(tcp_child_process);
+EXPORT_IPV6_MOD(tcp_child_process);
