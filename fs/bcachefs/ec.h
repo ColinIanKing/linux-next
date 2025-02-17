@@ -92,6 +92,31 @@ static inline void stripe_csum_set(struct bch_stripe *s,
 	memcpy(stripe_csum(s, block, csum_idx), &csum, bch_crc_bytes[s->csum_type]);
 }
 
+#define STRIPE_LRU_POS_EMPTY	1
+
+static inline u64 stripe_lru_pos(const struct bch_stripe *s)
+{
+	if (!s)
+		return 0;
+
+	unsigned blocks_empty = 0, blocks_nonempty = 0;
+
+	for (unsigned i = 0; i < s->nr_blocks; i++) {
+		blocks_empty	+=  !stripe_blockcount_get(s, i);
+		blocks_nonempty	+= !!stripe_blockcount_get(s, i);
+	}
+
+	/* Will be picked up by the stripe_delete worker */
+	if (!blocks_nonempty)
+		return STRIPE_LRU_POS_EMPTY;
+
+	if (!blocks_empty)
+		return 0;
+
+	/* invert: more blocks empty = reuse first */
+	return LRU_TIME_MAX - blocks_empty;
+}
+
 static inline bool __bch2_ptr_matches_stripe(const struct bch_extent_ptr *stripe_ptr,
 					     const struct bch_extent_ptr *data_ptr,
 					     unsigned sectors)
@@ -130,6 +155,20 @@ static inline bool bch2_ptr_matches_stripe_m(const struct gc_stripe *m,
 
 	return __bch2_ptr_matches_stripe(&m->ptrs[p.ec.block], &p.ptr,
 					 m->sectors);
+}
+
+static inline void gc_stripe_unlock(struct gc_stripe *s)
+{
+	BUILD_BUG_ON(!((union ulong_byte_assert) { .ulong = 1UL << BUCKET_LOCK_BITNR }).byte);
+
+	clear_bit_unlock(BUCKET_LOCK_BITNR, (void *) &s->lock);
+	wake_up_bit((void *) &s->lock, BUCKET_LOCK_BITNR);
+}
+
+static inline void gc_stripe_lock(struct gc_stripe *s)
+{
+	wait_on_bit_lock((void *) &s->lock, BUCKET_LOCK_BITNR,
+			 TASK_UNINTERRUPTIBLE);
 }
 
 struct bch_read_bio;
@@ -267,5 +306,7 @@ void bch2_new_stripes_to_text(struct printbuf *, struct bch_fs *);
 void bch2_fs_ec_exit(struct bch_fs *);
 void bch2_fs_ec_init_early(struct bch_fs *);
 int bch2_fs_ec_init(struct bch_fs *);
+
+int bch2_check_stripe_to_lru_refs(struct bch_fs *);
 
 #endif /* _BCACHEFS_EC_H */
