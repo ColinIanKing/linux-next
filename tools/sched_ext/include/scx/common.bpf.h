@@ -7,6 +7,13 @@
 #ifndef __SCX_COMMON_BPF_H
 #define __SCX_COMMON_BPF_H
 
+/*
+ * The generated kfunc prototypes in vmlinux.h are missing address space
+ * attributes which cause build failures. For now, suppress the generated
+ * prototypes. See https://github.com/sched-ext/scx/issues/1111.
+ */
+#define BPF_NO_KFUNC_PROTOTYPES
+
 #ifdef LSP
 #define __bpf__
 #include "../vmlinux.h"
@@ -18,6 +25,7 @@
 #include <bpf/bpf_tracing.h>
 #include <asm-generic/errno.h>
 #include "user_exit_info.h"
+#include "enum_defs.autogen.h"
 
 #define PF_WQ_WORKER			0x00000020	/* I'm a workqueue worker */
 #define PF_KTHREAD			0x00200000	/* I am a kernel thread */
@@ -77,12 +85,16 @@ s32 scx_bpf_task_cpu(const struct task_struct *p) __ksym;
 struct rq *scx_bpf_cpu_rq(s32 cpu) __ksym;
 struct cgroup *scx_bpf_task_cgroup(struct task_struct *p) __ksym __weak;
 u64 scx_bpf_now(void) __ksym __weak;
+void scx_bpf_events(struct scx_event_stats *events, size_t events__sz) __ksym __weak;
 
 /*
  * Use the following as @it__iter when calling scx_bpf_dsq_move[_vtime]() from
  * within bpf_for_each() loops.
  */
 #define BPF_FOR_EACH_ITER	(&___it)
+
+#define scx_read_event(e, name)							\
+	(bpf_core_field_exists((e)->name) ? (e)->name : 0)
 
 static inline __attribute__((format(printf, 1, 2)))
 void ___scx_bpf_bstr_format_checker(const char *fmt, ...) {}
@@ -582,6 +594,22 @@ static __always_inline void __write_once_size(volatile void *p, void *res, int s
 		{ .__val = (val) }; 			\
 	__write_once_size(&(x), __u.__c, sizeof(x));	\
 	__u.__val;					\
+})
+
+#define READ_ONCE_ARENA(type, x)				\
+({								\
+	union { type __val; char __c[1]; } __u =		\
+		{ .__c = { 0 } };				\
+	__read_once_size((void *)&(x), __u.__c, sizeof(x));	\
+	__u.__val;						\
+})
+
+#define WRITE_ONCE_ARENA(type, x, val)				\
+({								\
+	union { type __val; char __c[1]; } __u =		\
+		{ .__val = (val) }; 				\
+	__write_once_size((void *)&(x), __u.__c, sizeof(x));	\
+	__u.__val;						\
 })
 
 /*
