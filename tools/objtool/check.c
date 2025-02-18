@@ -2472,12 +2472,13 @@ static void mark_rodata(struct objtool_file *file)
 	 *
 	 * - .rodata: can contain GCC switch tables
 	 * - .rodata.<func>: same, if -fdata-sections is being used
-	 * - .rodata..c_jump_table: contains C annotated jump tables
+	 * - ..rodata.c_jump_table: contains C annotated jump tables
 	 *
 	 * .rodata.str1.* sections are ignored; they don't contain jump tables.
 	 */
 	for_each_sec(file, sec) {
-		if (!strncmp(sec->name, ".rodata", 7) &&
+		if ((!strncmp(sec->name, ".rodata", 7) ||
+		    !strncmp(sec->name, "..rodata", 8)) &&
 		    !strstr(sec->name, ".str1.")) {
 			sec->rodata = true;
 			found = true;
