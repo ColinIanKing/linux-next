@@ -231,7 +231,6 @@ void arch_cpu_idle_enter(void)
 int arch_freq_get_on_cpu(int cpu)
 {
 	struct amu_cntr_sample *amu_sample;
-	unsigned int start_cpu = cpu;
 	unsigned long last_update;
 	unsigned int freq = 0;
 	u64 scale;
@@ -267,8 +266,7 @@ int arch_freq_get_on_cpu(int cpu)
 
 
 			do {
-				ref_cpu = cpumask_next_wrap(ref_cpu, policy->cpus,
-							    start_cpu, false);
+				ref_cpu = cpumask_next_wrap(ref_cpu, policy->cpus);
 
 			} while (ref_cpu < nr_cpu_ids && idle_cpu(ref_cpu));
 
