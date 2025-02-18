@@ -254,7 +254,7 @@ int arch_freq_get_on_cpu(int cpu)
 		if (!housekeeping_cpu(cpu, HK_TYPE_TICK) ||
 		    time_is_before_jiffies(last_update + msecs_to_jiffies(AMU_SAMPLE_EXP_MS))) {
 			struct cpufreq_policy *policy = cpufreq_cpu_get(cpu);
-			int ref_cpu = cpu;
+			int ref_cpu;
 
 			if (!policy)
 				return -EINVAL;
@@ -265,11 +265,10 @@ int arch_freq_get_on_cpu(int cpu)
 				return -EOPNOTSUPP;
 			}
 
-			do {
-				ref_cpu = cpumask_next_wrap(ref_cpu, policy->cpus,
-							    start_cpu, true);
-
-			} while (ref_cpu < nr_cpu_ids && idle_cpu(ref_cpu));
+			for_each_cpu_wrap(ref_cpu, policy->cpus, start_cpu) {
+				if (!idle_cpu(ref_cpu))
+					break;
+			}
 
 			cpufreq_cpu_put(policy);
 
