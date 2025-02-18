@@ -298,7 +298,7 @@ Permission checking in the overlay filesystem follows these principles:
 
  2) task creating the overlay mount MUST NOT gain additional privileges
 
- 3) non-mounting task MAY gain additional privileges through the overlay,
+ 3) non-mounting task[*] MAY gain additional privileges through the overlay,
     compared to direct access on underlying lower or upper filesystems
 
 This is achieved by performing two permission checks on each access:
@@ -331,6 +331,12 @@ and::
 
 The resulting access permissions should be the same.  The difference is in
 the time of copy (on-demand vs. up-front).
+
+[*] In the old mount api the credentials of the task issuing the mount
+syscall were used hence "mounting task" is used. The new mount api
+either takes the credentials of the task issuing the FSCONFIG_CMD_CREATE
+command via the fsconfig syscall or since kernel v6.15 the credentials
+of the task which set the override_creds mount option.
 
 
 Multiple lower layers
