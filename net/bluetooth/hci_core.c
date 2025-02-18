@@ -3564,6 +3564,7 @@ static void hci_sched_sco(struct hci_dev *hdev)
 			BT_DBG("skb %p len %d", skb, skb->len);
 			hci_send_frame(hdev, skb);
 
+			hdev->sco_cnt--;
 			conn->sent++;
 			if (conn->sent == ~0)
 				conn->sent = 0;
@@ -3588,6 +3589,7 @@ static void hci_sched_esco(struct hci_dev *hdev)
 			BT_DBG("skb %p len %d", skb, skb->len);
 			hci_send_frame(hdev, skb);
 
+			hdev->sco_cnt--;
 			conn->sent++;
 			if (conn->sent == ~0)
 				conn->sent = 0;
