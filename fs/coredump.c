@@ -63,6 +63,7 @@ static void free_vma_snapshot(struct coredump_params *cprm);
 
 static int core_uses_pid;
 static unsigned int core_pipe_limit;
+static unsigned int core_sort_vma;
 static char core_pattern[CORENAME_MAX_SIZE] = "core";
 static int core_name_size = CORENAME_MAX_SIZE;
 unsigned int core_file_note_size_limit = CORE_FILE_NOTE_SIZE_DEFAULT;
@@ -1026,6 +1027,15 @@ static const struct ctl_table coredump_sysctls[] = {
 		.extra1		= (unsigned int *)&core_file_note_size_min,
 		.extra2		= (unsigned int *)&core_file_note_size_max,
 	},
+	{
+		.procname	= "core_sort_vma",
+		.data		= &core_sort_vma,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_douintvec_minmax,
+		.extra1		= SYSCTL_ZERO,
+		.extra2		= SYSCTL_ONE,
+	},
 };
 
 static int __init init_fs_coredump_sysctls(void)
@@ -1204,6 +1214,7 @@ static bool dump_vma_snapshot(struct coredump_params *cprm)
 	struct mm_struct *mm = current->mm;
 	VMA_ITERATOR(vmi, mm, 0);
 	int i = 0;
+	size_t sparse_vma_dump_size = 0;
 
 	/*
 	 * Once the stack expansion code is fixed to not change VMA bounds
@@ -1241,6 +1252,7 @@ static bool dump_vma_snapshot(struct coredump_params *cprm)
 
 	for (i = 0; i < cprm->vma_count; i++) {
 		struct core_vma_metadata *m = cprm->vma_meta + i;
+		unsigned long addr;
 
 		if (m->dump_size == DUMP_SIZE_MAYBE_ELFHDR_PLACEHOLDER) {
 			char elfmag[SELFMAG];
@@ -1254,10 +1266,27 @@ static bool dump_vma_snapshot(struct coredump_params *cprm)
 		}
 
 		cprm->vma_data_size += m->dump_size;
+		sparse_vma_dump_size += m->dump_size;
+
+		/* Subtract zero pages from the sparse_vma_dump_size. */
+		for (addr = m->start; addr < m->start + m->dump_size; addr += PAGE_SIZE) {
+			struct page *page = get_dump_page(addr);
+
+			if (!page)
+				sparse_vma_dump_size -= PAGE_SIZE;
+			else
+				put_page(page);
+		}
 	}
 
-	sort(cprm->vma_meta, cprm->vma_count, sizeof(*cprm->vma_meta),
-		cmp_vma_size, NULL);
+	/*
+	 * Only sort the vmas by size if:
+	 * a) the sysctl is set to do so, or
+	 * b) the vmas don't all fit in within the core dump size limit.
+	 */
+	if (core_sort_vma || sparse_vma_dump_size >= cprm->limit)
+		sort(cprm->vma_meta, cprm->vma_count, sizeof(*cprm->vma_meta),
+		     cmp_vma_size, NULL);
 
 	return true;
 }
