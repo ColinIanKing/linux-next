@@ -388,8 +388,9 @@ int io_register_zcrx_ifq(struct io_ring_ctx *ctx,
 		goto err;
 
 	ifq->dev = ifq->netdev->dev.parent;
+	ret = -EOPNOTSUPP;
 	if (!ifq->dev)
-		return -EOPNOTSUPP;
+		goto err;
 	get_device(ifq->dev);
 
 	ret = io_zcrx_map_area(ifq, ifq->area);
@@ -489,9 +490,9 @@ void io_shutdown_zcrx_ifqs(struct io_ring_ctx *ctx)
 {
 	lockdep_assert_held(&ctx->uring_lock);
 
-	if (ctx->ifq)
-		io_zcrx_scrub(ctx->ifq);
-
+	if (!ctx->ifq)
+		return;
+	io_zcrx_scrub(ctx->ifq);
 	io_close_queue(ctx->ifq);
 }
 
