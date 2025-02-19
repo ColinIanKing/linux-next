@@ -1051,13 +1051,7 @@ static bool is_valid_guard_vma(struct vm_area_struct *vma, bool allow_locked)
 	if (!allow_locked)
 		disallowed |= VM_LOCKED;
 
-	if (!vma_is_anonymous(vma))
-		return false;
-
-	if ((vma->vm_flags & (VM_MAYWRITE | disallowed)) != VM_MAYWRITE)
-		return false;
-
-	return true;
+	return !(vma->vm_flags & disallowed);
 }
 
 static bool is_guard_pte_marker(pte_t ptent)
@@ -1574,6 +1568,100 @@ int madvise_set_anon_name(struct mm_struct *mm, unsigned long start,
 				 madvise_vma_anon_name);
 }
 #endif /* CONFIG_ANON_VMA_NAME */
+
+#ifdef CONFIG_MEMORY_FAILURE
+static bool is_memory_failure(int behavior)
+{
+	switch (behavior) {
+	case MADV_HWPOISON:
+	case MADV_SOFT_OFFLINE:
+		return true;
+	default:
+		return false;
+	}
+}
+#else
+static bool is_memory_failure(int behavior)
+{
+	return false;
+}
+#endif
+
+static int madvise_lock(struct mm_struct *mm, int behavior)
+{
+	if (is_memory_failure(behavior))
+		return 0;
+
+	if (madvise_need_mmap_write(behavior)) {
+		if (mmap_write_lock_killable(mm))
+			return -EINTR;
+	} else {
+		mmap_read_lock(mm);
+	}
+	return 0;
+}
+
+static void madvise_unlock(struct mm_struct *mm, int behavior)
+{
+	if (is_memory_failure(behavior))
+		return;
+
+	if (madvise_need_mmap_write(behavior))
+		mmap_write_unlock(mm);
+	else
+		mmap_read_unlock(mm);
+}
+
+static bool is_valid_madvise(unsigned long start, size_t len_in, int behavior)
+{
+	size_t len;
+
+	if (!madvise_behavior_valid(behavior))
+		return false;
+
+	if (!PAGE_ALIGNED(start))
+		return false;
+	len = PAGE_ALIGN(len_in);
+
+	/* Check to see whether len was rounded up from small -ve to zero */
+	if (len_in && !len)
+		return false;
+
+	if (start + len < start)
+		return false;
+
+	return true;
+}
+
+static int madvise_do_behavior(struct mm_struct *mm,
+		unsigned long start, size_t len_in, size_t len, int behavior)
+{
+	struct blk_plug plug;
+	unsigned long end;
+	int error;
+
+#ifdef CONFIG_MEMORY_FAILURE
+	if (behavior == MADV_HWPOISON || behavior == MADV_SOFT_OFFLINE)
+		return madvise_inject_error(behavior, start, start + len_in);
+#endif
+	start = untagged_addr_remote(mm, start);
+	end = start + len;
+
+	blk_start_plug(&plug);
+	switch (behavior) {
+	case MADV_POPULATE_READ:
+	case MADV_POPULATE_WRITE:
+		error = madvise_populate(mm, start, end, behavior);
+		break;
+	default:
+		error = madvise_walk_vmas(mm, start, end, behavior,
+					  madvise_vma_behavior);
+		break;
+	}
+	blk_finish_plug(&plug);
+	return error;
+}
+
 /*
  * The madvise(2) system call.
  *
@@ -1650,61 +1738,22 @@ int do_madvise(struct mm_struct *mm, unsigned long start, size_t len_in, int beh
 {
 	unsigned long end;
 	int error;
-	int write;
 	size_t len;
-	struct blk_plug plug;
 
-	if (!madvise_behavior_valid(behavior))
+	if (!is_valid_madvise(start, len_in, behavior))
 		return -EINVAL;
 
-	if (!PAGE_ALIGNED(start))
-		return -EINVAL;
 	len = PAGE_ALIGN(len_in);
-
-	/* Check to see whether len was rounded up from small -ve to zero */
-	if (len_in && !len)
-		return -EINVAL;
-
 	end = start + len;
-	if (end < start)
-		return -EINVAL;
 
 	if (end == start)
 		return 0;
 
-#ifdef CONFIG_MEMORY_FAILURE
-	if (behavior == MADV_HWPOISON || behavior == MADV_SOFT_OFFLINE)
-		return madvise_inject_error(behavior, start, start + len_in);
-#endif
-
-	write = madvise_need_mmap_write(behavior);
-	if (write) {
-		if (mmap_write_lock_killable(mm))
-			return -EINTR;
-	} else {
-		mmap_read_lock(mm);
-	}
-
-	start = untagged_addr_remote(mm, start);
-	end = start + len;
-
-	blk_start_plug(&plug);
-	switch (behavior) {
-	case MADV_POPULATE_READ:
-	case MADV_POPULATE_WRITE:
-		error = madvise_populate(mm, start, end, behavior);
-		break;
-	default:
-		error = madvise_walk_vmas(mm, start, end, behavior,
-					  madvise_vma_behavior);
-		break;
-	}
-	blk_finish_plug(&plug);
-
-	if (write)
-		mmap_write_unlock(mm);
-	else
-		mmap_read_unlock(mm);
+	error = madvise_lock(mm, behavior);
+	if (error)
+		return error;
+	error = madvise_do_behavior(mm, start, len_in, len, behavior);
+	madvise_unlock(mm, behavior);
 
 	return error;
 }
@@ -1723,16 +1772,33 @@ static ssize_t vector_madvise(struct mm_struct *mm, struct iov_iter *iter,
 
 	total_len = iov_iter_count(iter);
 
+	ret = madvise_lock(mm, behavior);
+	if (ret)
+		return ret;
+
 	while (iov_iter_count(iter)) {
-		ret = do_madvise(mm, (unsigned long)iter_iov_addr(iter),
-				 iter_iov_len(iter), behavior);
+		unsigned long start = (unsigned long)iter_iov_addr(iter);
+		size_t len_in = iter_iov_len(iter);
+		size_t len;
+
+		if (!is_valid_madvise(start, len_in, behavior)) {
+			ret = -EINVAL;
+			break;
+		}
+
+		len = PAGE_ALIGN(len_in);
+		if (start + len == start)
+			ret = 0;
+		else
+			ret = madvise_do_behavior(mm, start, len_in, len,
+					behavior);
 		/*
 		 * An madvise operation is attempting to restart the syscall,
 		 * but we cannot proceed as it would not be correct to repeat
 		 * the operation in aggregate, and would be surprising to the
 		 * user.
 		 *
-		 * As we have already dropped locks, it is safe to just loop and
+		 * We drop and reacquire locks so it is safe to just loop and
 		 * try again. We check for fatal signals in case we need exit
 		 * early anyway.
 		 */
@@ -1741,12 +1807,17 @@ static ssize_t vector_madvise(struct mm_struct *mm, struct iov_iter *iter,
 				ret = -EINTR;
 				break;
 			}
+
+			/* Drop and reacquire lock to unwind race. */
+			madvise_unlock(mm, behavior);
+			madvise_lock(mm, behavior);
 			continue;
 		}
 		if (ret < 0)
 			break;
 		iov_iter_advance(iter, iter_iov_len(iter));
 	}
+	madvise_unlock(mm, behavior);
 
 	ret = (total_len - iov_iter_count(iter)) ? : ret;
 
