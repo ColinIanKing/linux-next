@@ -18,6 +18,7 @@
 #include "intel_hdmi.h"
 #include "intel_panel.h"
 #include "intel_psr.h"
+#include "intel_snps_hdmi_pll.h"
 #include "intel_tc.h"
 
 #define MB_WRITE_COMMITTED      true
@@ -33,13 +34,13 @@
 
 bool intel_encoder_is_c10phy(struct intel_encoder *encoder)
 {
-	struct drm_i915_private *i915 = to_i915(encoder->base.dev);
+	struct intel_display *display = to_intel_display(encoder);
 	enum phy phy = intel_encoder_to_phy(encoder);
 
-	if (IS_PANTHERLAKE(i915) && phy == PHY_A)
+	if (display->platform.pantherlake && phy == PHY_A)
 		return true;
 
-	if ((IS_LUNARLAKE(i915) || IS_METEORLAKE(i915)) && phy < PHY_C)
+	if ((display->platform.lunarlake || display->platform.meteorlake) && phy < PHY_C)
 		return true;
 
 	return false;
@@ -72,10 +73,9 @@ static u8 intel_cx0_get_owned_lane_mask(struct intel_encoder *encoder)
 static void
 assert_dc_off(struct intel_display *display)
 {
-	struct drm_i915_private *i915 = to_i915(display->drm);
 	bool enabled;
 
-	enabled = intel_display_power_is_enabled(i915, POWER_DOMAIN_DC_OFF);
+	enabled = intel_display_power_is_enabled(display, POWER_DOMAIN_DC_OFF);
 	drm_WARN_ON(display->drm, !enabled);
 }
 
@@ -102,12 +102,12 @@ static void intel_cx0_program_msgbus_timer(struct intel_encoder *encoder)
  */
 static intel_wakeref_t intel_cx0_phy_transaction_begin(struct intel_encoder *encoder)
 {
-	intel_wakeref_t wakeref;
-	struct drm_i915_private *i915 = to_i915(encoder->base.dev);
+	struct intel_display *display = to_intel_display(encoder);
 	struct intel_dp *intel_dp = enc_to_intel_dp(encoder);
+	intel_wakeref_t wakeref;
 
 	intel_psr_pause(intel_dp);
-	wakeref = intel_display_power_get(i915, POWER_DOMAIN_DC_OFF);
+	wakeref = intel_display_power_get(display, POWER_DOMAIN_DC_OFF);
 	intel_cx0_program_msgbus_timer(encoder);
 
 	return wakeref;
@@ -115,11 +115,11 @@ static intel_wakeref_t intel_cx0_phy_transaction_begin(struct intel_encoder *enc
 
 static void intel_cx0_phy_transaction_end(struct intel_encoder *encoder, intel_wakeref_t wakeref)
 {
-	struct drm_i915_private *i915 = to_i915(encoder->base.dev);
+	struct intel_display *display = to_intel_display(encoder);
 	struct intel_dp *intel_dp = enc_to_intel_dp(encoder);
 
 	intel_psr_resume(intel_dp);
-	intel_display_power_put(i915, POWER_DOMAIN_DC_OFF, wakeref);
+	intel_display_power_put(display, POWER_DOMAIN_DC_OFF, wakeref);
 }
 
 static void intel_clear_response_ready_flag(struct intel_encoder *encoder,
@@ -2003,19 +2003,6 @@ static const struct intel_c20pll_state * const mtl_c20_hdmi_tables[] = {
 	NULL,
 };
 
-static int intel_c10_phy_check_hdmi_link_rate(int clock)
-{
-	const struct intel_c10pll_state * const *tables = mtl_c10_hdmi_tables;
-	int i;
-
-	for (i = 0; tables[i]; i++) {
-		if (clock == tables[i]->clock)
-			return MODE_OK;
-	}
-
-	return MODE_CLOCK_RANGE;
-}
-
 static const struct intel_c10pll_state * const *
 intel_c10pll_tables_get(struct intel_crtc_state *crtc_state,
 			struct intel_encoder *encoder)
@@ -2033,21 +2020,27 @@ intel_c10pll_tables_get(struct intel_crtc_state *crtc_state,
 	return NULL;
 }
 
+static void intel_cx0pll_update_ssc(struct intel_crtc_state *crtc_state,
+				    struct intel_encoder *encoder)
+{
+	struct intel_display *display = to_intel_display(encoder);
+	struct intel_cx0pll_state *pll_state = &crtc_state->dpll_hw_state.cx0pll;
+
+	if (intel_crtc_has_dp_encoder(crtc_state)) {
+		if (intel_panel_use_ssc(display)) {
+			struct intel_dp *intel_dp = enc_to_intel_dp(encoder);
+			pll_state->ssc_enabled =
+				(intel_dp->dpcd[DP_MAX_DOWNSPREAD] & DP_MAX_DOWNSPREAD_0_5);
+		}
+	}
+}
+
 static void intel_c10pll_update_pll(struct intel_crtc_state *crtc_state,
 				    struct intel_encoder *encoder)
 {
 	struct intel_display *display = to_intel_display(encoder);
 	struct intel_cx0pll_state *pll_state = &crtc_state->dpll_hw_state.cx0pll;
 	int i;
-
-	if (intel_crtc_has_dp_encoder(crtc_state)) {
-		if (intel_panel_use_ssc(display)) {
-			struct intel_dp *intel_dp = enc_to_intel_dp(encoder);
-
-			pll_state->ssc_enabled =
-				(intel_dp->dpcd[DP_MAX_DOWNSPREAD] & DP_MAX_DOWNSPREAD_0_5);
-		}
-	}
 
 	if (pll_state->ssc_enabled)
 		return;
@@ -2070,11 +2063,22 @@ static int intel_c10pll_calc_state(struct intel_crtc_state *crtc_state,
 	for (i = 0; tables[i]; i++) {
 		if (crtc_state->port_clock == tables[i]->clock) {
 			crtc_state->dpll_hw_state.cx0pll.c10 = *tables[i];
+			intel_cx0pll_update_ssc(crtc_state, encoder);
 			intel_c10pll_update_pll(crtc_state, encoder);
 			crtc_state->dpll_hw_state.cx0pll.use_c10 = true;
 
 			return 0;
 		}
+	}
+
+	/* For HDMI PLLs try SNPS PHY algorithm, if there are no precomputed tables */
+	if (intel_crtc_has_type(crtc_state, INTEL_OUTPUT_HDMI)) {
+		intel_snps_hdmi_pll_compute_c10pll(&crtc_state->dpll_hw_state.cx0pll.c10,
+						   crtc_state->port_clock);
+		intel_c10pll_update_pll(crtc_state, encoder);
+		crtc_state->dpll_hw_state.cx0pll.use_c10 = true;
+
+		return 0;
 	}
 
 	return -EINVAL;
@@ -2173,9 +2177,47 @@ static void intel_c10pll_dump_hw_state(struct intel_display *display,
 			    i + 2, hw_state->pll[i + 2], i + 3, hw_state->pll[i + 3]);
 }
 
-static int intel_c20_compute_hdmi_tmds_pll(struct intel_crtc_state *crtc_state)
+/*
+ * Some ARLs SoCs have the same drm PCI IDs, so need a helper to differentiate based
+ * on the host bridge device ID to get the correct txx_mics value.
+ */
+static bool is_arrowlake_s_by_host_bridge(void)
+{
+	struct pci_dev *pdev = NULL;
+	u16 host_bridge_pci_dev_id;
+
+	while ((pdev = pci_get_class(PCI_CLASS_BRIDGE_HOST << 8, pdev)))
+		host_bridge_pci_dev_id = pdev->device;
+
+	return pdev && IS_ARROWLAKE_S_BY_HOST_BRIDGE_ID(host_bridge_pci_dev_id);
+}
+
+static u16 intel_c20_hdmi_tmds_tx_cgf_1(struct intel_crtc_state *crtc_state)
 {
 	struct intel_display *display = to_intel_display(crtc_state);
+	u16 tx_misc;
+	u16 tx_dcc_cal_dac_ctrl_range = 8;
+	u16 tx_term_ctrl = 2;
+
+	if (DISPLAY_VER(display) >= 20) {
+		tx_misc = 5;
+		tx_term_ctrl = 4;
+	} else if (display->platform.battlemage) {
+		tx_misc = 0;
+	} else if (display->platform.meteorlake_u ||
+		   is_arrowlake_s_by_host_bridge()) {
+		tx_misc = 3;
+	} else {
+		tx_misc = 7;
+	}
+
+	return (C20_PHY_TX_MISC(tx_misc) |
+		C20_PHY_TX_DCC_CAL_RANGE(tx_dcc_cal_dac_ctrl_range) |
+		C20_PHY_TX_DCC_BYPASS | C20_PHY_TX_TERM_CTL(tx_term_ctrl));
+}
+
+static int intel_c20_compute_hdmi_tmds_pll(struct intel_crtc_state *crtc_state)
+{
 	struct intel_c20pll_state *pll_state = &crtc_state->dpll_hw_state.cx0pll.c20;
 	u64 datarate;
 	u64 mpll_tx_clk_div;
@@ -2185,7 +2227,6 @@ static int intel_c20_compute_hdmi_tmds_pll(struct intel_crtc_state *crtc_state)
 	u64 mpll_multiplier;
 	u64 mpll_fracn_quot;
 	u64 mpll_fracn_rem;
-	u16 tx_misc;
 	u8  mpllb_ana_freq_vco;
 	u8  mpll_div_multiplier;
 
@@ -2205,11 +2246,6 @@ static int intel_c20_compute_hdmi_tmds_pll(struct intel_crtc_state *crtc_state)
 	mpll_div_multiplier = min_t(u8, div64_u64((vco_freq * 16 + (datarate >> 1)),
 						  datarate), 255);
 
-	if (DISPLAY_VER(display) >= 20)
-		tx_misc = 0x5;
-	else
-		tx_misc = 0x0;
-
 	if (vco_freq <= DATARATE_3000000000)
 		mpllb_ana_freq_vco = MPLLB_ANA_FREQ_VCO_3;
 	else if (vco_freq <= DATARATE_3500000000)
@@ -2221,7 +2257,7 @@ static int intel_c20_compute_hdmi_tmds_pll(struct intel_crtc_state *crtc_state)
 
 	pll_state->clock	= crtc_state->port_clock;
 	pll_state->tx[0]	= 0xbe88;
-	pll_state->tx[1]	= 0x9800 | C20_PHY_TX_MISC(tx_misc);
+	pll_state->tx[1]	= intel_c20_hdmi_tmds_tx_cgf_1(crtc_state);
 	pll_state->tx[2]	= 0x0000;
 	pll_state->cmn[0]	= 0x0500;
 	pll_state->cmn[1]	= 0x0005;
@@ -2247,31 +2283,6 @@ static int intel_c20_compute_hdmi_tmds_pll(struct intel_crtc_state *crtc_state)
 	pll_state->mpllb[10]	= HDMI_DIV(HDMI_DIV_1);
 
 	return 0;
-}
-
-static int intel_c20_phy_check_hdmi_link_rate(int clock)
-{
-	const struct intel_c20pll_state * const *tables = mtl_c20_hdmi_tables;
-	int i;
-
-	for (i = 0; tables[i]; i++) {
-		if (clock == tables[i]->clock)
-			return MODE_OK;
-	}
-
-	if (clock >= 25175 && clock <= 594000)
-		return MODE_OK;
-
-	return MODE_CLOCK_RANGE;
-}
-
-int intel_cx0_phy_check_hdmi_link_rate(struct intel_hdmi *hdmi, int clock)
-{
-	struct intel_digital_port *dig_port = hdmi_to_dig_port(hdmi);
-
-	if (intel_encoder_is_c10phy(&dig_port->base))
-		return intel_c10_phy_check_hdmi_link_rate(clock);
-	return intel_c20_phy_check_hdmi_link_rate(clock);
 }
 
 static const struct intel_c20pll_state * const *
@@ -2322,6 +2333,7 @@ static int intel_c20pll_calc_state(struct intel_crtc_state *crtc_state,
 	for (i = 0; tables[i]; i++) {
 		if (crtc_state->port_clock == tables[i]->clock) {
 			crtc_state->dpll_hw_state.cx0pll.c20 = *tables[i];
+			intel_cx0pll_update_ssc(crtc_state, encoder);
 			crtc_state->dpll_hw_state.cx0pll.use_c10 = false;
 			return 0;
 		}
@@ -3203,12 +3215,11 @@ void intel_mtl_pll_enable(struct intel_encoder *encoder,
 static u8 cx0_power_control_disable_val(struct intel_encoder *encoder)
 {
 	struct intel_display *display = to_intel_display(encoder);
-	struct drm_i915_private *i915 = to_i915(encoder->base.dev);
 
 	if (intel_encoder_is_c10phy(encoder))
 		return CX0_P2PG_STATE_DISABLE;
 
-	if ((IS_BATTLEMAGE(i915) && encoder->port == PORT_A) ||
+	if ((display->platform.battlemage && encoder->port == PORT_A) ||
 	    (DISPLAY_VER(display) >= 30 && encoder->type == INTEL_OUTPUT_EDP))
 		return CX0_P2PG_STATE_DISABLE;
 
