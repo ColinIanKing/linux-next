@@ -1585,8 +1585,6 @@ int unmap_poisoned_folio(struct folio *folio, unsigned long pfn, bool must_kill)
 	}
 
 	if (folio_test_hugetlb(folio) && !folio_test_anon(folio)) {
-		struct address_space *mapping;
-
 		/*
 		 * For hugetlb folios in shared mappings, try_to_unmap
 		 * could potentially call huge_pmd_unshare.  Because of
