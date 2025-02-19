@@ -630,7 +630,7 @@ void tcp_initialize_rcv_mss(struct sock *sk)
 
 	inet_csk(sk)->icsk_ack.rcv_mss = hint;
 }
-EXPORT_SYMBOL(tcp_initialize_rcv_mss);
+EXPORT_IPV6_MOD(tcp_initialize_rcv_mss);
 
 /* Receiver "autotuning" code.
  *
@@ -2252,8 +2252,7 @@ static bool tcp_check_sack_reneging(struct sock *sk, int *ack_flag)
 		unsigned long delay = max(usecs_to_jiffies(tp->srtt_us >> 4),
 					  msecs_to_jiffies(10));
 
-		inet_csk_reset_xmit_timer(sk, ICSK_TIME_RETRANS,
-					  delay, TCP_RTO_MAX);
+		tcp_reset_xmit_timer(sk, ICSK_TIME_RETRANS, delay, false);
 		*ack_flag &= ~FLAG_SET_XMIT_TIMER;
 		return true;
 	}
@@ -2710,6 +2709,8 @@ void tcp_cwnd_reduction(struct sock *sk, int newly_acked_sacked, int newly_lost,
 	if (newly_acked_sacked <= 0 || WARN_ON_ONCE(!tp->prior_cwnd))
 		return;
 
+	trace_tcp_cwnd_reduction_tp(sk, newly_acked_sacked, newly_lost, flag);
+
 	tp->prr_delivered += newly_acked_sacked;
 	if (delta < 0) {
 		u64 dividend = (u64)tp->snd_ssthresh * tp->prr_delivered +
@@ -2892,7 +2893,7 @@ void tcp_simple_retransmit(struct sock *sk)
 	 */
 	tcp_non_congestion_loss_retransmit(sk);
 }
-EXPORT_SYMBOL(tcp_simple_retransmit);
+EXPORT_IPV6_MOD(tcp_simple_retransmit);
 
 void tcp_enter_recovery(struct sock *sk, bool ece_ack)
 {
@@ -3282,8 +3283,7 @@ void tcp_rearm_rto(struct sock *sk)
 			 */
 			rto = usecs_to_jiffies(max_t(int, delta_us, 1));
 		}
-		tcp_reset_xmit_timer(sk, ICSK_TIME_RETRANS, rto,
-				     TCP_RTO_MAX);
+		tcp_reset_xmit_timer(sk, ICSK_TIME_RETRANS, rto, true);
 	}
 }
 
@@ -3560,10 +3560,10 @@ static void tcp_ack_probe(struct sock *sk)
 		 * This function is not for random using!
 		 */
 	} else {
-		unsigned long when = tcp_probe0_when(sk, TCP_RTO_MAX);
+		unsigned long when = tcp_probe0_when(sk, tcp_rto_max(sk));
 
 		when = tcp_clamp_probe0_to_user_timeout(sk, when);
-		tcp_reset_xmit_timer(sk, ICSK_TIME_PROBE0, when, TCP_RTO_MAX);
+		tcp_reset_xmit_timer(sk, ICSK_TIME_PROBE0, when, true);
 	}
 }
 
@@ -4174,7 +4174,6 @@ u16 tcp_parse_mss_option(const struct tcphdr *th, u16 user_mss)
 	}
 	return mss;
 }
-EXPORT_SYMBOL_GPL(tcp_parse_mss_option);
 
 /* Look for tcp options. Normally only called on SYN and SYNACK packets.
  * But, this can also be called on packets in the established flow when
@@ -4524,7 +4523,7 @@ void tcp_done_with_error(struct sock *sk, int err)
 	if (!sock_flag(sk, SOCK_DEAD))
 		sk_error_report(sk);
 }
-EXPORT_SYMBOL(tcp_done_with_error);
+EXPORT_IPV6_MOD(tcp_done_with_error);
 
 /* When we get a reset we do this. */
 void tcp_reset(struct sock *sk, struct sk_buff *skb)
@@ -6294,7 +6293,7 @@ csum_error:
 discard:
 	tcp_drop_reason(sk, skb, reason);
 }
-EXPORT_SYMBOL(tcp_rcv_established);
+EXPORT_IPV6_MOD(tcp_rcv_established);
 
 void tcp_init_transfer(struct sock *sk, int bpf_op, struct sk_buff *skb)
 {
@@ -6347,7 +6346,7 @@ void tcp_finish_connect(struct sock *sk, struct sk_buff *skb)
 	tp->lsndtime = tcp_jiffies32;
 
 	if (sock_flag(sk, SOCK_KEEPOPEN))
-		inet_csk_reset_keepalive_timer(sk, keepalive_time_when(tp));
+		tcp_reset_keepalive_timer(sk, keepalive_time_when(tp));
 
 	if (!tp->rx_opt.snd_wscale)
 		__tcp_fast_path_on(tp, tp->snd_wnd);
@@ -6470,9 +6469,8 @@ static int tcp_rcv_synsent_state_process(struct sock *sk, struct sk_buff *skb,
 		    after(TCP_SKB_CB(skb)->ack_seq, tp->snd_nxt)) {
 			/* Previous FIN/ACK or RST/ACK might be ignored. */
 			if (icsk->icsk_retransmits == 0)
-				inet_csk_reset_xmit_timer(sk,
-						ICSK_TIME_RETRANS,
-						TCP_TIMEOUT_MIN, TCP_RTO_MAX);
+				tcp_reset_xmit_timer(sk, ICSK_TIME_RETRANS,
+						     TCP_TIMEOUT_MIN, false);
 			SKB_DR_SET(reason, TCP_INVALID_ACK_SEQUENCE);
 			goto reset_and_undo;
 		}
@@ -6587,8 +6585,8 @@ consume:
 			 */
 			inet_csk_schedule_ack(sk);
 			tcp_enter_quickack_mode(sk, TCP_MAX_QUICKACKS);
-			inet_csk_reset_xmit_timer(sk, ICSK_TIME_DACK,
-						  TCP_DELACK_MAX, TCP_RTO_MAX);
+			tcp_reset_xmit_timer(sk, ICSK_TIME_DACK,
+					     TCP_DELACK_MAX, false);
 			goto consume;
 		}
 		tcp_send_ack(sk);
@@ -6922,7 +6920,7 @@ tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 
 		tmo = tcp_fin_time(sk);
 		if (tmo > TCP_TIMEWAIT_LEN) {
-			inet_csk_reset_keepalive_timer(sk, tmo - TCP_TIMEWAIT_LEN);
+			tcp_reset_keepalive_timer(sk, tmo - TCP_TIMEWAIT_LEN);
 		} else if (th->fin || sock_owned_by_user(sk)) {
 			/* Bad case. We could lose such FIN otherwise.
 			 * It is not a big problem, but it looks confusing
@@ -6930,7 +6928,7 @@ tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 			 * if it spins in bh_lock_sock(), but it is really
 			 * marginal case.
 			 */
-			inet_csk_reset_keepalive_timer(sk, tmo);
+			tcp_reset_keepalive_timer(sk, tmo);
 		} else {
 			tcp_time_wait(sk, TCP_FIN_WAIT2, tmo);
 			goto consume;
@@ -7008,7 +7006,7 @@ consume:
 	__kfree_skb(skb);
 	return 0;
 }
-EXPORT_SYMBOL(tcp_rcv_state_process);
+EXPORT_IPV6_MOD(tcp_rcv_state_process);
 
 static inline void pr_drop_req(struct request_sock *req, __u16 port, int family)
 {
@@ -7190,7 +7188,7 @@ u16 tcp_get_syncookie_mss(struct request_sock_ops *rsk_ops,
 
 	return mss;
 }
-EXPORT_SYMBOL_GPL(tcp_get_syncookie_mss);
+EXPORT_IPV6_MOD_GPL(tcp_get_syncookie_mss);
 
 int tcp_conn_request(struct request_sock_ops *rsk_ops,
 		     const struct tcp_request_sock_ops *af_ops,
@@ -7371,4 +7369,4 @@ drop:
 	tcp_listendrop(sk);
 	return 0;
 }
-EXPORT_SYMBOL(tcp_conn_request);
+EXPORT_IPV6_MOD(tcp_conn_request);

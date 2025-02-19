@@ -143,8 +143,9 @@ static_assert((1 << ATO_BITS) > TCP_DELACK_MAX);
 #define TCP_DELACK_MIN	4U
 #define TCP_ATO_MIN	4U
 #endif
-#define TCP_RTO_MAX	((unsigned)(120*HZ))
-#define TCP_RTO_MIN	((unsigned)(HZ/5))
+#define TCP_RTO_MAX_SEC 120
+#define TCP_RTO_MAX	((unsigned)(TCP_RTO_MAX_SEC * HZ))
+#define TCP_RTO_MIN	((unsigned)(HZ / 5))
 #define TCP_TIMEOUT_MIN	(2U) /* Min timeout for TCP timers in jiffies */
 
 #define TCP_TIMEOUT_MIN_US (2*USEC_PER_MSEC) /* Min TCP timeout in microsecs */
@@ -415,6 +416,7 @@ int do_tcp_setsockopt(struct sock *sk, int level, int optname,
 		      sockptr_t optval, unsigned int optlen);
 int tcp_setsockopt(struct sock *sk, int level, int optname, sockptr_t optval,
 		   unsigned int optlen);
+void tcp_reset_keepalive_timer(struct sock *sk, unsigned long timeout);
 void tcp_set_keepalive(struct sock *sk, int val);
 void tcp_syn_ack_timeout(const struct request_sock *req);
 int tcp_recvmsg(struct sock *sk, struct msghdr *msg, size_t len,
@@ -742,10 +744,14 @@ int tcp_mtu_to_mss(struct sock *sk, int pmtu);
 int tcp_mss_to_mtu(struct sock *sk, int mss);
 void tcp_mtup_init(struct sock *sk);
 
+static inline unsigned int tcp_rto_max(const struct sock *sk)
+{
+	return READ_ONCE(inet_csk(sk)->icsk_rto_max);
+}
+
 static inline void tcp_bound_rto(struct sock *sk)
 {
-	if (inet_csk(sk)->icsk_rto > TCP_RTO_MAX)
-		inet_csk(sk)->icsk_rto = TCP_RTO_MAX;
+	inet_csk(sk)->icsk_rto = min(inet_csk(sk)->icsk_rto, tcp_rto_max(sk));
 }
 
 static inline u32 __tcp_set_rto(const struct tcp_sock *tp)
@@ -1426,10 +1432,12 @@ static inline unsigned long tcp_pacing_delay(const struct sock *sk)
 static inline void tcp_reset_xmit_timer(struct sock *sk,
 					const int what,
 					unsigned long when,
-					const unsigned long max_when)
+					bool pace_delay)
 {
-	inet_csk_reset_xmit_timer(sk, what, when + tcp_pacing_delay(sk),
-				  max_when);
+	if (pace_delay)
+		when += tcp_pacing_delay(sk);
+	inet_csk_reset_xmit_timer(sk, what, when,
+				  tcp_rto_max(sk));
 }
 
 /* Something is really bad, we could not queue an additional packet,
@@ -1458,7 +1466,7 @@ static inline void tcp_check_probe_timer(struct sock *sk)
 {
 	if (!tcp_sk(sk)->packets_out && !inet_csk(sk)->icsk_pending)
 		tcp_reset_xmit_timer(sk, ICSK_TIME_PROBE0,
-				     tcp_probe0_base(sk), TCP_RTO_MAX);
+				     tcp_probe0_base(sk), true);
 }
 
 static inline void tcp_init_wl(struct tcp_sock *tp, u32 seq)

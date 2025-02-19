@@ -54,11 +54,6 @@ extern __ETHTOOL_DECLARE_LINK_MODE_MASK(phy_eee_cap2_features) __ro_after_init;
 #define PHY_EEE_CAP2_FEATURES ((unsigned long *)&phy_eee_cap2_features)
 
 extern const int phy_basic_ports_array[3];
-extern const int phy_10_100_features_array[4];
-extern const int phy_basic_t1_features_array[3];
-extern const int phy_basic_t1s_p2mp_features_array[2];
-extern const int phy_gbit_features_array[2];
-extern const int phy_10gbit_features_array[1];
 
 /*
  * Set phydev->irq to PHY_POLL if interrupts are not supported,
@@ -302,9 +297,6 @@ static inline long rgmii_clock(int speed)
 		return -EINVAL;
 	}
 }
-
-#define PHY_INIT_TIMEOUT	100000
-#define PHY_FORCE_TIMEOUT	10
 
 #define PHY_MAX_ADDR	32
 
@@ -611,7 +603,7 @@ struct macsec_ops;
  * @eee_cfg: User configuration of EEE
  * @lp_advertising: Current link partner advertised linkmodes
  * @host_interfaces: PHY interface modes supported by host
- * @eee_broken_modes: Energy efficient ethernet modes which should be prohibited
+ * @eee_disabled_modes: Energy efficient ethernet modes not to be advertised
  * @autoneg: Flag autoneg being used
  * @rate_matching: Current rate matching mode
  * @link: Current link state
@@ -727,7 +719,7 @@ struct phy_device {
 	__ETHTOOL_DECLARE_LINK_MODE_MASK(supported_eee);
 	__ETHTOOL_DECLARE_LINK_MODE_MASK(advertising_eee);
 	/* Energy efficient ethernet modes which should be prohibited */
-	__ETHTOOL_DECLARE_LINK_MODE_MASK(eee_broken_modes);
+	__ETHTOOL_DECLARE_LINK_MODE_MASK(eee_disabled_modes);
 	bool enable_tx_lpi;
 	bool eee_active;
 	struct eee_config eee_cfg;
@@ -1273,12 +1265,22 @@ struct phy_driver {
 	 */
 	int (*led_polarity_set)(struct phy_device *dev, int index,
 				unsigned long modes);
+
+	/**
+	 * @get_next_update_time: Get the time until the next update event
+	 * @dev: PHY device
+	 *
+	 * Callback to determine the time (in jiffies) until the next
+	 * update event for the PHY state  machine. Allows PHY drivers to
+	 * dynamically adjust polling intervals based on link state or other
+	 * conditions.
+	 *
+	 * Returns the time in jiffies until the next update event.
+	 */
+	unsigned int (*get_next_update_time)(struct phy_device *dev);
 };
 #define to_phy_driver(d) container_of_const(to_mdio_common_driver(d),		\
 				      struct phy_driver, mdiodrv)
-
-#define PHY_ANY_ID "MATCH ANY PHY"
-#define PHY_ANY_UID 0xffffffff
 
 #define PHY_ID_MATCH_EXACT(id) .phy_id = (id), .phy_id_mask = GENMASK(31, 0)
 #define PHY_ID_MATCH_MODEL(id) .phy_id = (id), .phy_id_mask = GENMASK(31, 4)
@@ -1312,15 +1314,6 @@ static inline bool phydev_id_compare(struct phy_device *phydev, u32 id)
 	return phy_id_compare(id, phydev->phy_id, phydev->drv->phy_id_mask);
 }
 
-/* A Structure for boards to register fixups with the PHY Lib */
-struct phy_fixup {
-	struct list_head list;
-	char bus_id[MII_BUS_ID_SIZE + 3];
-	u32 phy_uid;
-	u32 phy_uid_mask;
-	int (*run)(struct phy_device *phydev);
-};
-
 const char *phy_speed_to_str(int speed);
 const char *phy_duplex_to_str(unsigned int duplex);
 const char *phy_rate_matching_to_str(int rate_matching);
@@ -1347,13 +1340,13 @@ void of_set_phy_timing_role(struct phy_device *phydev);
 int phy_speed_down_core(struct phy_device *phydev);
 
 /**
- * phy_set_eee_broken - Mark an EEE mode as broken so that it isn't advertised.
+ * phy_disable_eee_mode - Don't advertise an EEE mode.
  * @phydev: The phy_device struct
- * @link_mode: The broken EEE mode
+ * @link_mode: The EEE mode to be disabled
  */
-static inline void phy_set_eee_broken(struct phy_device *phydev, u32 link_mode)
+static inline void phy_disable_eee_mode(struct phy_device *phydev, u32 link_mode)
 {
-	linkmode_set_bit(link_mode, phydev->eee_broken_modes);
+	linkmode_set_bit(link_mode, phydev->eee_disabled_modes);
 }
 
 /**
@@ -1747,15 +1740,6 @@ static inline bool phy_is_default_hwtstamp(struct phy_device *phydev)
 }
 
 /**
- * phy_is_internal - Convenience function for testing if a PHY is internal
- * @phydev: the phy_device struct
- */
-static inline bool phy_is_internal(struct phy_device *phydev)
-{
-	return phydev->is_internal;
-}
-
-/**
  * phy_on_sfp - Convenience function for testing if a PHY is on an SFP module
  * @phydev: the phy_device struct
  */
@@ -2078,7 +2062,6 @@ int phy_drivers_register(struct phy_driver *new_driver, int n,
 			 struct module *owner);
 void phy_error(struct phy_device *phydev);
 void phy_state_machine(struct work_struct *work);
-void phy_queue_state_machine(struct phy_device *phydev, unsigned long jiffies);
 void phy_trigger_machine(struct phy_device *phydev);
 void phy_mac_interrupt(struct phy_device *phydev);
 void phy_start_machine(struct phy_device *phydev);
@@ -2114,11 +2097,13 @@ void phy_get_pause(struct phy_device *phydev, bool *tx_pause, bool *rx_pause);
 s32 phy_get_internal_delay(struct phy_device *phydev, struct device *dev,
 			   const int *delay_values, int size, bool is_rx);
 
+int phy_get_tx_amplitude_gain(struct phy_device *phydev, struct device *dev,
+			      enum ethtool_link_mode_bit_indices linkmode,
+			      u32 *val);
+
 void phy_resolve_pause(unsigned long *local_adv, unsigned long *partner_adv,
 		       bool *tx_pause, bool *rx_pause);
 
-int phy_register_fixup(const char *bus_id, u32 phy_uid, u32 phy_uid_mask,
-		       int (*run)(struct phy_device *));
 int phy_register_fixup_for_id(const char *bus_id,
 			      int (*run)(struct phy_device *));
 int phy_register_fixup_for_uid(u32 phy_uid, u32 phy_uid_mask,
