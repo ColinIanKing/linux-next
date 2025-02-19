@@ -14,6 +14,7 @@
 #include <linux/property.h>
 #include <linux/spinlock_types.h>
 #include <linux/types.h>
+#include <linux/util_macros.h>
 
 #ifdef CONFIG_GENERIC_MSI_IRQ
 #include <asm/msi.h>
@@ -550,19 +551,29 @@ DEFINE_CLASS(_gpiochip_for_each_data,
 	     const char **label, int *i)
 
 /**
+ * for_each_hwgpio_in_range - Iterates over all GPIOs in a given range
+ * @_chip: Chip to iterate over.
+ * @_i: Loop counter.
+ * @_base: First GPIO in the ranger.
+ * @_size: Amount of GPIOs to check starting from @base.
+ * @_label: Place to store the address of the label if the GPIO is requested.
+ *          Set to NULL for unused GPIOs.
+ */
+#define for_each_hwgpio_in_range(_chip, _i, _base, _size, _label)			\
+	for (CLASS(_gpiochip_for_each_data, _data)(&_label, &_i);			\
+	     _i < _size;								\
+	     _i++, kfree(_label), _label = NULL)					\
+		for_each_if(!IS_ERR(_label = gpiochip_dup_line_label(_chip, _base + _i)))
+
+/**
  * for_each_hwgpio - Iterates over all GPIOs for given chip.
  * @_chip: Chip to iterate over.
  * @_i: Loop counter.
  * @_label: Place to store the address of the label if the GPIO is requested.
  *          Set to NULL for unused GPIOs.
  */
-#define for_each_hwgpio(_chip, _i, _label) \
-	for (CLASS(_gpiochip_for_each_data, _data)(&_label, &_i); \
-	     *_data.i < _chip->ngpio; \
-	     (*_data.i)++, kfree(*(_data.label)), *_data.label = NULL) \
-		if (IS_ERR(*_data.label = \
-			gpiochip_dup_line_label(_chip, *_data.i))) {} \
-		else
+#define for_each_hwgpio(_chip, _i, _label)						\
+	for_each_hwgpio_in_range(_chip, _i, 0, _chip->ngpio, _label)
 
 /**
  * for_each_requested_gpio_in_range - iterates over requested GPIOs in a given range
@@ -573,13 +584,8 @@ DEFINE_CLASS(_gpiochip_for_each_data,
  * @_label:	label of current GPIO
  */
 #define for_each_requested_gpio_in_range(_chip, _i, _base, _size, _label)		\
-	for (CLASS(_gpiochip_for_each_data, _data)(&_label, &_i);			\
-	     *_data.i < _size;								\
-	     (*_data.i)++, kfree(*(_data.label)), *_data.label = NULL)			\
-		if ((*_data.label =							\
-			gpiochip_dup_line_label(_chip, _base + *_data.i)) == NULL) {}	\
-		else if (IS_ERR(*_data.label)) {}					\
-		else
+	for_each_hwgpio_in_range(_chip, _i, _base, _size, _label)			\
+		for_each_if(_label)
 
 /* Iterates over all requested GPIO of the given @chip */
 #define for_each_requested_gpio(chip, i, label)						\
@@ -865,7 +871,7 @@ static inline void gpiochip_unlock_as_irq(struct gpio_chip *gc,
 
 #define for_each_gpiochip_node(dev, child)					\
 	device_for_each_child_node(dev, child)					\
-		if (!fwnode_property_present(child, "gpio-controller")) {} else
+		for_each_if(fwnode_property_present(child, "gpio-controller"))
 
 static inline unsigned int gpiochip_node_count(struct device *dev)
 {
