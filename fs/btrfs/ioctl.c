@@ -393,6 +393,7 @@ int btrfs_fileattr_set(struct mnt_idmap *idmap,
 
 update_flags:
 	binode->flags = binode_flags;
+	btrfs_update_inode_mapping_flags(binode);
 	btrfs_sync_inode_flags_to_i_flags(inode);
 	inode_inc_iversion(inode);
 	inode_set_ctime_current(inode);
@@ -617,8 +618,8 @@ static noinline int create_subvol(struct mnt_idmap *idmap,
 	btrfs_set_root_dirid(root_item, BTRFS_FIRST_FREE_OBJECTID);
 
 	key.objectid = objectid;
-	key.offset = 0;
 	key.type = BTRFS_ROOT_ITEM_KEY;
+	key.offset = 0;
 	ret = btrfs_insert_root(trans, fs_info->tree_root, &key,
 				root_item);
 	if (ret) {
@@ -1530,8 +1531,8 @@ static noinline int copy_to_sk(struct btrfs_path *path,
 		}
 
 		sh.objectid = key->objectid;
-		sh.offset = key->offset;
 		sh.type = key->type;
+		sh.offset = key->offset;
 		sh.len = item_len;
 		sh.transid = found_transid;
 
