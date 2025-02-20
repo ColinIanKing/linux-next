@@ -152,18 +152,15 @@ int bch2_create_trans(struct btree_trans *trans,
 		if (is_subdir_for_nlink(new_inode))
 			dir_u->bi_nlink++;
 		dir_u->bi_mtime = dir_u->bi_ctime = now;
-		dir_u->bi_size += dirent_occupied_size(name);
 
-		ret = bch2_inode_write(trans, &dir_iter, dir_u);
-		if (ret)
-			goto err;
-
-		ret = bch2_dirent_create(trans, dir, &dir_hash,
-					 dir_type,
-					 name,
-					 dir_target,
-					 &dir_offset,
-					 STR_HASH_must_create|BTREE_ITER_with_updates);
+		ret =   bch2_dirent_create(trans, dir, &dir_hash,
+					   dir_type,
+					   name,
+					   dir_target,
+					   &dir_offset,
+					   &dir_u->bi_size,
+					   STR_HASH_must_create|BTREE_ITER_with_updates) ?:
+			bch2_inode_write(trans, &dir_iter, dir_u);
 		if (ret)
 			goto err;
 
@@ -221,13 +218,14 @@ int bch2_link_trans(struct btree_trans *trans,
 	}
 
 	dir_u->bi_mtime = dir_u->bi_ctime = now;
-	dir_u->bi_size += dirent_occupied_size(name);
 
 	dir_hash = bch2_hash_info_init(c, dir_u);
 
 	ret = bch2_dirent_create(trans, dir, &dir_hash,
 				 mode_to_type(inode_u->bi_mode),
-				 name, inum.inum, &dir_offset,
+				 name, inum.inum,
+				 &dir_offset,
+				 &dir_u->bi_size,
 				 STR_HASH_must_create);
 	if (ret)
 		goto err;
