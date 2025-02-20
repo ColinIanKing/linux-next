@@ -1277,7 +1277,7 @@ int cxl_mem_dpa_fetch(struct cxl_memdev_state *mds, struct cxl_dpa_info *info)
 }
 EXPORT_SYMBOL_NS_GPL(cxl_mem_dpa_fetch, "CXL");
 
-int cxl_dirty_shutdown_state(struct cxl_memdev_state *mds)
+int cxl_arm_dirty_shutdown(struct cxl_memdev_state *mds)
 {
 	struct cxl_mailbox *cxl_mbox = &mds->cxlds.cxl_mbox;
 	struct cxl_mbox_cmd mbox_cmd;
@@ -1293,7 +1293,7 @@ int cxl_dirty_shutdown_state(struct cxl_memdev_state *mds)
 
 	return cxl_internal_send_cmd(cxl_mbox, &mbox_cmd);
 }
-EXPORT_SYMBOL_NS_GPL(cxl_dirty_shutdown_state, "CXL");
+EXPORT_SYMBOL_NS_GPL(cxl_arm_dirty_shutdown, "CXL");
 
 int cxl_set_timestamp(struct cxl_memdev_state *mds)
 {
