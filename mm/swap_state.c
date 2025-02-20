@@ -85,7 +85,7 @@ void *get_shadow_from_swap_cache(swp_entry_t entry)
 
 /*
  * add_to_swap_cache resembles filemap_add_folio on swapper_space,
- * but sets SwapCache flag and private instead of mapping and index.
+ * but sets SwapCache flag and 'swap' instead of mapping and index.
  */
 int add_to_swap_cache(struct folio *folio, swp_entry_t entry,
 			gfp_t gfp, void **shadowp)
@@ -203,10 +203,6 @@ bool add_to_swap(struct folio *folio)
 	err = add_to_swap_cache(folio, entry,
 			__GFP_HIGH|__GFP_NOMEMALLOC|__GFP_NOWARN, NULL);
 	if (err)
-		/*
-		 * add_to_swap_cache() doesn't return -EEXIST, so we can safely
-		 * clear SWAP_HAS_CACHE flag.
-		 */
 		goto fail;
 	/*
 	 * Normally the folio will be dirtied in unmap because its
@@ -270,9 +266,7 @@ void clear_shadow_from_swap_cache(int type, unsigned long begin,
 		xa_unlock_irq(&address_space->i_pages);
 
 		/* search the next swapcache until we meet end */
-		curr >>= SWAP_ADDRESS_SPACE_SHIFT;
-		curr++;
-		curr <<= SWAP_ADDRESS_SPACE_SHIFT;
+		curr = ALIGN((curr + 1), SWAP_ADDRESS_SPACE_PAGES);
 		if (curr > end)
 			break;
 	}
@@ -463,7 +457,7 @@ struct folio *__read_swap_cache_async(swp_entry_t entry, gfp_t gfp_mask,
 		 * as SWAP_HAS_CACHE.  That's done in later part of code or
 		 * else swap_off will be aborted if we return NULL.
 		 */
-		if (!swap_swapcount(si, entry) && swap_slot_cache_enabled)
+		if (!swap_entry_swapped(si, entry) && swap_slot_cache_enabled)
 			goto put_and_return;
 
 		/*
@@ -521,7 +515,7 @@ struct folio *__read_swap_cache_async(swp_entry_t entry, gfp_t gfp_mask,
 	if (add_to_swap_cache(new_folio, entry, gfp_mask & GFP_RECLAIM_MASK, &shadow))
 		goto fail_unlock;
 
-	mem_cgroup_swapin_uncharge_swap(entry, 1);
+	memcg1_swapin(entry, 1);
 
 	if (shadow)
 		workingset_refault(new_folio, shadow);
