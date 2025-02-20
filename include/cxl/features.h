@@ -4,6 +4,7 @@
 #define __CXL_FEATURES_H__
 
 #include <linux/uuid.h>
+#include <linux/fwctl.h>
 
 /* Feature UUIDs used by the kernel */
 #define CXL_FEAT_PATROL_SCRUB_UUID						\
@@ -162,6 +163,7 @@ enum cxl_set_feat_flag_data_transfer {
  * @entries: CXl feature entry context
  *	@num_features: total Features supported by the device
  *	@ent: Flex array of Feature detail entries from the device
+ * @fwctl_dev: Firmware Control device
  */
 struct cxl_features_state {
 	struct cxl_dev_state *cxlds;
@@ -170,12 +172,15 @@ struct cxl_features_state {
 		int num_user_features;
 		struct cxl_feat_entry ent[] __counted_by(num_features);
 	} *entries;
+	struct fwctl_device *fwctl_dev;
 };
 
 struct cxl_mailbox;
+struct cxl_memdev;
 #ifdef CONFIG_CXL_FEATURES
 inline struct cxl_features_state *to_cxlfs(struct cxl_dev_state *cxlds);
 int devm_cxl_setup_features(struct cxl_dev_state *cxlds);
+int devm_cxl_setup_fwctl(struct cxl_memdev *cxlmd);
 #else
 static inline struct cxl_features_state *to_cxlfs(struct cxl_dev_state *cxlds)
 {
@@ -183,6 +188,11 @@ static inline struct cxl_features_state *to_cxlfs(struct cxl_dev_state *cxlds)
 }
 
 static inline int devm_cxl_setup_features(struct cxl_dev_state *cxlds)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline int devm_cxl_setup_fwctl(struct cxl_memdev *cxlmd)
 {
 	return -EOPNOTSUPP;
 }

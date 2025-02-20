@@ -105,6 +105,7 @@ config CXL_MEM
 config CXL_FEATURES
 	bool "CXL: Features"
 	depends on CXL_PCI
+	select FWCTL
 	help
 	  Enable support for CXL Features. A CXL device that includes a mailbox
 	  supports commands that allows listing, getting, and setting of
