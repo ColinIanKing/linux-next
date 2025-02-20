@@ -420,8 +420,8 @@ int bch2_rename_trans(struct btree_trans *trans,
 	}
 
 	ret = bch2_dirent_rename(trans,
-				 src_dir, &src_hash,
-				 dst_dir, &dst_hash,
+				 src_dir, &src_hash, &src_dir_u->bi_size,
+				 dst_dir, &dst_hash, &dst_dir_u->bi_size,
 				 src_name, &src_inum, &src_offset,
 				 dst_name, &dst_inum, &dst_offset,
 				 mode);
@@ -462,14 +462,6 @@ int bch2_rename_trans(struct btree_trans *trans,
 		ret = -EXDEV;
 		goto err;
 	}
-
-	if (mode == BCH_RENAME) {
-		src_dir_u->bi_size -= dirent_occupied_size(src_name);
-		dst_dir_u->bi_size += dirent_occupied_size(dst_name);
-	}
-
-	if (mode == BCH_RENAME_OVERWRITE)
-		src_dir_u->bi_size -= dirent_occupied_size(src_name);
 
 	if (src_inode_u->bi_parent_subvol)
 		src_inode_u->bi_parent_subvol = dst_dir.subvol;
