@@ -116,53 +116,52 @@ static void menu_update(struct cpuidle_driver *drv, struct cpuidle_device *dev);
  */
 static unsigned int get_typical_interval(struct menu_device *data)
 {
-	int i, divisor;
-	unsigned int min, max, thresh, avg;
-	uint64_t sum, variance;
-
-	thresh = INT_MAX; /* Discard outliers above this value */
+	s64 value, min_thresh = -1, max_thresh = UINT_MAX;
+	unsigned int max, min, divisor;
+	u64 avg, variance, avg_sq;
+	int i;
 
 again:
-
-	/* First calculate the average of past intervals */
-	min = UINT_MAX;
+	/* Compute the average and variance of past intervals. */
 	max = 0;
-	sum = 0;
+	min = UINT_MAX;
+	avg = 0;
+	variance = 0;
 	divisor = 0;
 	for (i = 0; i < INTERVALS; i++) {
-		unsigned int value = data->intervals[i];
-		if (value <= thresh) {
-			sum += value;
-			divisor++;
-			if (value > max)
-				max = value;
+		value = data->intervals[i];
+		/*
+		 * Discard the samples outside the interval between the min and
+		 * max thresholds.
+		 */
+		if (value <= min_thresh || value >= max_thresh)
+			continue;
 
-			if (value < min)
-				min = value;
-		}
+		divisor++;
+
+		avg += value;
+		variance += value * value;
+
+		if (value > max)
+			max = value;
+
+		if (value < min)
+			min = value;
 	}
 
 	if (!max)
 		return UINT_MAX;
 
-	if (divisor == INTERVALS)
-		avg = sum >> INTERVAL_SHIFT;
-	else
-		avg = div_u64(sum, divisor);
-
-	/* Then try to determine variance */
-	variance = 0;
-	for (i = 0; i < INTERVALS; i++) {
-		unsigned int value = data->intervals[i];
-		if (value <= thresh) {
-			int64_t diff = (int64_t)value - avg;
-			variance += diff * diff;
-		}
-	}
-	if (divisor == INTERVALS)
+	if (divisor == INTERVALS) {
+		avg >>= INTERVAL_SHIFT;
 		variance >>= INTERVAL_SHIFT;
-	else
+	} else {
+		do_div(avg, divisor);
 		do_div(variance, divisor);
+	}
+
+	avg_sq = avg * avg;
+	variance -= avg_sq;
 
 	/*
 	 * The typical interval is obtained when standard deviation is
@@ -177,25 +176,40 @@ again:
 	 * Use this result only if there is no timer to wake us up sooner.
 	 */
 	if (likely(variance <= U64_MAX/36)) {
-		if ((((u64)avg*avg > variance*36) && (divisor * 4 >= INTERVALS * 3))
-							|| variance <= 400) {
+		if ((avg_sq > variance * 36 && divisor * 4 >= INTERVALS * 3) ||
+		    variance <= 400)
 			return avg;
-		}
 	}
 
 	/*
-	 * If we have outliers to the upside in our distribution, discard
-	 * those by setting the threshold to exclude these outliers, then
+	 * If there are outliers, discard them by setting thresholds to exclude
+	 * data points at a large enough distance from the average, then
 	 * calculate the average and standard deviation again. Once we get
-	 * down to the bottom 3/4 of our samples, stop excluding samples.
+	 * down to the last 3/4 of our samples, stop excluding samples.
 	 *
 	 * This can deal with workloads that have long pauses interspersed
 	 * with sporadic activity with a bunch of short pauses.
 	 */
-	if ((divisor * 4) <= INTERVALS * 3)
-		return UINT_MAX;
+	if (divisor * 4 <= INTERVALS * 3) {
+		/*
+		 * If there are sufficiently many data points still under
+		 * consideration after the outliers have been eliminated,
+		 * returning without a prediction would be a mistake because it
+		 * is likely that the next interval will not exceed the current
+		 * maximum, so return the latter in that case.
+		 */
+		if (divisor >= INTERVALS / 2)
+			return max;
 
-	thresh = max - 1;
+		return UINT_MAX;
+	}
+
+	/* Update the thresholds for the next round. */
+	if (avg - min > max - avg)
+		min_thresh = min;
+	else
+		max_thresh = max;
+
 	goto again;
 }
 
