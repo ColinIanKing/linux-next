@@ -376,7 +376,9 @@ struct rxe_dev {
 	struct ib_device_attr	attr;
 	int			max_ucontext;
 	int			max_inline_data;
-	struct mutex	usdev_lock;
+	struct mutex		usdev_lock;
+
+	char			raw_gid[ETH_ALEN];
 
 	struct rxe_pool		uc_pool;
 	struct rxe_pool		pd_pool;
@@ -402,7 +404,6 @@ struct rxe_dev {
 	atomic64_t		stats_counters[RXE_NUM_OF_COUNTERS];
 
 	struct rxe_port		port;
-	struct crypto_shash	*tfm;
 };
 
 static inline struct net_device *rxe_ib_device_get_netdev(struct ib_device *dev)
