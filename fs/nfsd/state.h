@@ -69,13 +69,13 @@ struct nfsd4_callback {
 	struct rpc_message cb_msg;
 #define NFSD4_CALLBACK_RUNNING	BIT(0)	// Callback is running
 #define NFSD4_CALLBACK_WAKE	BIT(1)	// must wake_bit when clearing RUNNING
+#define NFSD4_CALLBACK_REQUEUE	BIT(2)	// requeue callback instead of destroying
 	unsigned long cb_flags;
 	const struct nfsd4_callback_ops *cb_ops;
 	struct work_struct cb_work;
 	int cb_seq_status;
 	int cb_status;
 	int cb_held_slot;
-	bool cb_need_restart;
 };
 
 struct nfsd4_callback_ops {
