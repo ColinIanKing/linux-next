@@ -154,9 +154,9 @@ again:
 			}
 			page = vm_normal_page(migrate->vma, addr, pte);
 			if (page && !is_zone_device_page(page) &&
-			    !(migrate->flags & MIGRATE_VMA_SELECT_SYSTEM))
+			    !(migrate->flags & MIGRATE_VMA_SELECT_SYSTEM)) {
 				goto next;
-			else if (page && is_device_coherent_page(page)) {
+			} else if (page && is_device_coherent_page(page)) {
 				pgmap = page_pgmap(page);
 
 				if (!(migrate->flags &
