@@ -85,6 +85,14 @@ static int cxl_nvdimm_probe(struct device *dev)
 	if (!nvdimm)
 		return -ENOMEM;
 
+	/*
+	 * Set dirty shutdown now, with the expectation that the device
+	 * clear it upon a successful GPF flow. The exception to this
+	 * is upon Viral detection, per CXL 3.2 section 12.4.2.
+	 */
+	if (cxl_dirty_shutdown_state(mds))
+		dev_warn(dev, "GPF: could not dirty shutdown state\n");
+
 	dev_set_drvdata(dev, nvdimm);
 	return devm_add_action_or_reset(dev, unregister_nvdimm, nvdimm);
 }
@@ -375,6 +383,16 @@ static int cxl_pmem_region_probe(struct device *dev)
 			goto out_nvd;
 		}
 
+		if (cxlds->serial == 0) {
+			/* include missing alongside invalid in this error message. */
+			dev_err(dev, "%s: invalid or missing serial number\n",
+				dev_name(&cxlmd->dev));
+			rc = -ENXIO;
+			goto out_nvd;
+		}
+		info[i].serial = cxlds->serial;
+		info[i].offset = m->start;
+
 		m->cxl_nvd = cxl_nvd;
 		mappings[i] = (struct nd_mapping_desc) {
 			.nvdimm = nvdimm,
@@ -382,8 +400,6 @@ static int cxl_pmem_region_probe(struct device *dev)
 			.size = m->size,
 			.position = i,
 		};
-		info[i].offset = m->start;
-		info[i].serial = cxlds->serial;
 	}
 	ndr_desc.num_mappings = cxlr_pmem->nr_mappings;
 	ndr_desc.mapping = mappings;

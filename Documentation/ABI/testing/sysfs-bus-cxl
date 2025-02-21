@@ -1,5 +1,5 @@
 What:		/sys/bus/cxl/flush
-Date:		Januarry, 2022
+Date:		January, 2022
 KernelVersion:	v5.18
 Contact:	linux-cxl@vger.kernel.org
 Description:
@@ -18,6 +18,24 @@ Description:
 		specification.
 
 
+What:		/sys/bus/cxl/devices/memX/payload_max
+Date:		December, 2020
+KernelVersion:	v5.12
+Contact:	linux-cxl@vger.kernel.org
+Description:
+		(RO) Maximum size (in bytes) of the mailbox command payload
+		registers. Linux caps this at 1MB if the device reports a
+		larger size.
+
+
+What:		/sys/bus/cxl/devices/memX/label_storage_size
+Date:		May, 2021
+KernelVersion:	v5.13
+Contact:	linux-cxl@vger.kernel.org
+Description:
+		(RO) Size (in bytes) of the Label Storage Area (LSA).
+
+
 What:		/sys/bus/cxl/devices/memX/ram/size
 Date:		December, 2020
 KernelVersion:	v5.12
@@ -33,7 +51,7 @@ Date:		May, 2023
 KernelVersion:	v6.8
 Contact:	linux-cxl@vger.kernel.org
 Description:
-		(RO) For CXL host platforms that support "QoS Telemmetry"
+		(RO) For CXL host platforms that support "QoS Telemetry"
 		this attribute conveys a comma delimited list of platform
 		specific cookies that identifies a QoS performance class
 		for the volatile partition of the CXL mem device. These
@@ -60,7 +78,7 @@ Date:		May, 2023
 KernelVersion:	v6.8
 Contact:	linux-cxl@vger.kernel.org
 Description:
-		(RO) For CXL host platforms that support "QoS Telemmetry"
+		(RO) For CXL host platforms that support "QoS Telemetry"
 		this attribute conveys a comma delimited list of platform
 		specific cookies that identifies a QoS performance class
 		for the persistent partition of the CXL mem device. These
@@ -423,7 +441,7 @@ Date:		May, 2023
 KernelVersion:	v6.5
 Contact:	linux-cxl@vger.kernel.org
 Description:
-		(RO) For CXL host platforms that support "QoS Telemmetry" this
+		(RO) For CXL host platforms that support "QoS Telemetry" this
 		root-decoder-only attribute conveys a platform specific cookie
 		that identifies a QoS performance class for the CXL Window.
 		This class-id can be compared against a similar "qos_class"
