@@ -89,6 +89,17 @@ RUN_ALL=false
 RUN_DESTRUCTIVE=false
 TAP_PREFIX="# "
 
+# We can do stuff as root either if we are already root, or if sudo exists.
+if [ "$(id -u)" == 0 ]; then
+	HAVE_SUDO_ROOT=true
+	SUDO_ROOT=
+elif command -v sudo >/dev/null 2>&1; then
+	HAVE_SUDO_ROOT=true
+	SUDO_ROOT=sudo
+else
+	HAVE_SUDO_ROOT=false
+fi
+
 while getopts "aht:n" OPT; do
 	case ${OPT} in
 		"a") RUN_ALL=true ;;
@@ -398,10 +409,13 @@ CATEGORY="madv_guard" run_test ./guard-regions
 # MADV_POPULATE_READ and MADV_POPULATE_WRITE tests
 CATEGORY="madv_populate" run_test ./madv_populate
 
-if [ -x ./memfd_secret ]
-then
-(echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope 2>&1) | tap_prefix
-CATEGORY="memfd_secret" run_test ./memfd_secret
+if [ -x ./memfd_secret ]; then
+	if $HAVE_SUDO_ROOT; then
+		(echo 0 | $SUDO_ROOT tee /proc/sys/kernel/yama/ptrace_scope 2>&1) | tap_prefix
+		CATEGORY="memfd_secret" run_test ./memfd_secret
+	else
+		echo "# SKIP ./memfd_secret"
+	fi
 fi
 
 # KSM KSM_MERGE_TIME_HUGE_PAGES test with size of 100
