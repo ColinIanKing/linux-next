@@ -2054,7 +2054,7 @@ TEST_F(guard_regions, pagemap)
 	for (i = 0; i < 10; i++) {
 		char *ptr_p = &ptr[i * page_size];
 		unsigned long entry = pagemap_get_entry(proc_fd, ptr_p);
-		unsigned long masked = entry & PM_GUARD_REGION_MASK;
+		unsigned long masked = entry & PM_GUARD_REGION;
 
 		ASSERT_EQ(masked, 0);
 	}
@@ -2070,9 +2070,9 @@ TEST_F(guard_regions, pagemap)
 	for (i = 0; i < 10; i++) {
 		char *ptr_p = &ptr[i * page_size];
 		unsigned long entry = pagemap_get_entry(proc_fd, ptr_p);
-		unsigned long masked = entry & PM_GUARD_REGION_MASK;
+		unsigned long masked = entry & PM_GUARD_REGION;
 
-		ASSERT_EQ(masked, i % 2 == 0 ? PM_GUARD_REGION_MASK : 0);
+		ASSERT_EQ(masked, i % 2 == 0 ? PM_GUARD_REGION : 0);
 	}
 
 	ASSERT_EQ(close(proc_fd), 0);
