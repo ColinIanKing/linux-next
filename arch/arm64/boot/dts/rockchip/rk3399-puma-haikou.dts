@@ -149,8 +149,11 @@
 	};
 };
 
+&gmac {
+	status = "okay";
+};
+
 &hdmi {
-	ddc-i2c-bus = <&i2c3>;
 	status = "okay";
 };
 
@@ -190,9 +193,18 @@
 	};
 };
 
-&i2c6 {
+&i2c7 {
+	eeprom@50 {
+		reg = <0x50>;
+		compatible = "atmel,24c01";
+		pagesize = <8>;
+		size = <128>;
+		vcc-supply = <&vcc3v3_baseboard>;
+	};
+};
+
+&i2s0 {
 	status = "okay";
-	clock-frequency = <400000>;
 };
 
 &i2s2 {
