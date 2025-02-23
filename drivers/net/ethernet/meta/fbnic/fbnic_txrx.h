@@ -31,6 +31,9 @@ struct fbnic_net;
 #define FBNIC_HPQ_SIZE_DEFAULT		256
 #define FBNIC_PPQ_SIZE_DEFAULT		256
 #define FBNIC_RCQ_SIZE_DEFAULT		1024
+#define FBNIC_TX_USECS_DEFAULT		35
+#define FBNIC_RX_USECS_DEFAULT		30
+#define FBNIC_RX_FRAMES_DEFAULT		0
 
 #define FBNIC_RX_TROOM \
 	SKB_DATA_ALIGN(sizeof(struct skb_shared_info))
@@ -56,9 +59,22 @@ struct fbnic_pkt_buff {
 struct fbnic_queue_stats {
 	u64 packets;
 	u64 bytes;
+	union {
+		struct {
+			u64 csum_partial;
+			u64 lso;
+			u64 ts_packets;
+			u64 ts_lost;
+			u64 stop;
+			u64 wake;
+		} twq;
+		struct {
+			u64 alloc_failed;
+			u64 csum_complete;
+			u64 csum_none;
+		} rx;
+	};
 	u64 dropped;
-	u64 ts_packets;
-	u64 ts_lost;
 	struct u64_stats_sync syncp;
 };
 
