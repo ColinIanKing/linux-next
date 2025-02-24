@@ -203,7 +203,12 @@ static struct afs_cell *afs_alloc_cell(struct afs_net *net,
 	cell->dns_status = vllist->status;
 	smp_store_release(&cell->dns_lookup_count, 1); /* vs source/status */
 	atomic_inc(&net->cells_outstanding);
+	cell->dynroot_ino = idr_alloc_cyclic(&net->cells_dyn_ino, cell,
+					     2, INT_MAX / 2, GFP_KERNEL);
+	if ((int)cell->dynroot_ino < 0)
+		goto error;
 	cell->debug_id = atomic_inc_return(&cell_debug_id);
+
 	trace_afs_cell(cell->debug_id, 1, 0, afs_cell_trace_alloc);
 
 	_leave(" = %p", cell);
@@ -512,6 +517,7 @@ static void afs_cell_destroy(struct rcu_head *rcu)
 	afs_put_vlserverlist(net, rcu_access_pointer(cell->vl_servers));
 	afs_unuse_cell(net, cell->alias_of, afs_cell_trace_unuse_alias);
 	key_put(cell->anonymous_key);
+	idr_remove(&net->cells_dyn_ino, cell->dynroot_ino);
 	kfree(cell->name - 1);
 	kfree(cell);
 
@@ -705,7 +711,6 @@ static int afs_activate_cell(struct afs_net *net, struct afs_cell *cell)
 	if (cell->proc_link.next)
 		cell->proc_link.next->pprev = &cell->proc_link.next;
 
-	afs_dynroot_mkdir(net, cell);
 	mutex_unlock(&net->proc_cells_lock);
 	return 0;
 }
@@ -722,7 +727,6 @@ static void afs_deactivate_cell(struct afs_net *net, struct afs_cell *cell)
 	mutex_lock(&net->proc_cells_lock);
 	if (!hlist_unhashed(&cell->proc_link))
 		hlist_del_rcu(&cell->proc_link);
-	afs_dynroot_rmdir(net, cell);
 	mutex_unlock(&net->proc_cells_lock);
 
 	_leave("");
