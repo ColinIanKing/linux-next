@@ -378,7 +378,7 @@ int __init cma_declare_contiguous_multi(phys_addr_t total_size,
 	 * Create a list of ranges above 4G, largest range first.
 	 */
 	for_each_free_mem_range(i, nid, MEMBLOCK_NONE, &start, &end, NULL) {
-		if (start < SZ_4G)
+		if (upper_32_bits(start) == 0)
 			continue;
 
 		start = ALIGN(start, align);
