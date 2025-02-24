@@ -452,8 +452,8 @@ static struct kmem_cache *perf_event_cache;
  */
 int sysctl_perf_event_paranoid __read_mostly = 2;
 
-/* Minimum for 512 kiB + 1 user control page */
-int sysctl_perf_event_mlock __read_mostly = 512 + (PAGE_SIZE / 1024); /* 'free' kiB per user */
+/* Minimum for 512 kiB + 1 user control page. 'free' kiB per user. */
+static int sysctl_perf_event_mlock __read_mostly = 512 + (PAGE_SIZE / 1024);
 
 /*
  * max perf event sample rate
@@ -463,6 +463,7 @@ int sysctl_perf_event_mlock __read_mostly = 512 + (PAGE_SIZE / 1024); /* 'free' 
 #define DEFAULT_CPU_TIME_MAX_PERCENT	25
 
 int sysctl_perf_event_sample_rate __read_mostly	= DEFAULT_MAX_SAMPLE_RATE;
+static int sysctl_perf_cpu_time_max_percent __read_mostly = DEFAULT_CPU_TIME_MAX_PERCENT;
 
 static int max_samples_per_tick __read_mostly	= DIV_ROUND_UP(DEFAULT_MAX_SAMPLE_RATE, HZ);
 static int perf_sample_period_ns __read_mostly	= DEFAULT_SAMPLE_PERIOD_NS;
@@ -484,7 +485,7 @@ static void update_perf_cpu_limits(void)
 
 static bool perf_rotate_context(struct perf_cpu_pmu_context *cpc);
 
-int perf_event_max_sample_rate_handler(const struct ctl_table *table, int write,
+static int perf_event_max_sample_rate_handler(const struct ctl_table *table, int write,
 				       void *buffer, size_t *lenp, loff_t *ppos)
 {
 	int ret;
@@ -506,9 +507,7 @@ int perf_event_max_sample_rate_handler(const struct ctl_table *table, int write,
 	return 0;
 }
 
-int sysctl_perf_cpu_time_max_percent __read_mostly = DEFAULT_CPU_TIME_MAX_PERCENT;
-
-int perf_cpu_time_max_percent_handler(const struct ctl_table *table, int write,
+static int perf_cpu_time_max_percent_handler(const struct ctl_table *table, int write,
 		void *buffer, size_t *lenp, loff_t *ppos)
 {
 	int ret = proc_dointvec_minmax(table, write, buffer, lenp, ppos);
@@ -527,6 +526,52 @@ int perf_cpu_time_max_percent_handler(const struct ctl_table *table, int write,
 
 	return 0;
 }
+
+static const struct ctl_table events_core_sysctl_table[] = {
+	/*
+	 * User-space relies on this file as a feature check for
+	 * perf_events being enabled. It's an ABI, do not remove!
+	 */
+	{
+		.procname	= "perf_event_paranoid",
+		.data		= &sysctl_perf_event_paranoid,
+		.maxlen		= sizeof(sysctl_perf_event_paranoid),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec,
+	},
+	{
+		.procname	= "perf_event_mlock_kb",
+		.data		= &sysctl_perf_event_mlock,
+		.maxlen		= sizeof(sysctl_perf_event_mlock),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec,
+	},
+	{
+		.procname	= "perf_event_max_sample_rate",
+		.data		= &sysctl_perf_event_sample_rate,
+		.maxlen		= sizeof(sysctl_perf_event_sample_rate),
+		.mode		= 0644,
+		.proc_handler	= perf_event_max_sample_rate_handler,
+		.extra1		= SYSCTL_ONE,
+	},
+	{
+		.procname	= "perf_cpu_time_max_percent",
+		.data		= &sysctl_perf_cpu_time_max_percent,
+		.maxlen		= sizeof(sysctl_perf_cpu_time_max_percent),
+		.mode		= 0644,
+		.proc_handler	= perf_cpu_time_max_percent_handler,
+		.extra1		= SYSCTL_ZERO,
+		.extra2		= SYSCTL_ONE_HUNDRED,
+	},
+};
+
+static int __init init_events_core_sysctls(void)
+{
+	register_sysctl_init("kernel", events_core_sysctl_table);
+	return 0;
+}
+core_initcall(init_events_core_sysctls);
+
 
 /*
  * perf samples are done in some very critical code paths (NMIs).
@@ -1147,8 +1192,8 @@ static void __perf_mux_hrtimer_init(struct perf_cpu_pmu_context *cpc, int cpu)
 	cpc->hrtimer_interval = ns_to_ktime(NSEC_PER_MSEC * interval);
 
 	raw_spin_lock_init(&cpc->hrtimer_lock);
-	hrtimer_init(timer, CLOCK_MONOTONIC, HRTIMER_MODE_ABS_PINNED_HARD);
-	timer->function = perf_mux_hrtimer_handler;
+	hrtimer_setup(timer, perf_mux_hrtimer_handler, CLOCK_MONOTONIC,
+		      HRTIMER_MODE_ABS_PINNED_HARD);
 }
 
 static int perf_mux_hrtimer_restart(struct perf_cpu_pmu_context *cpc)
@@ -1189,6 +1234,12 @@ void perf_pmu_enable(struct pmu *pmu)
 static void perf_assert_pmu_disabled(struct pmu *pmu)
 {
 	WARN_ON_ONCE(*this_cpu_ptr(pmu->pmu_disable_count) == 0);
+}
+
+static inline void perf_pmu_read(struct perf_event *event)
+{
+	if (event->state == PERF_EVENT_STATE_ACTIVE)
+		event->pmu->read(event);
 }
 
 static void get_ctx(struct perf_event_context *ctx)
@@ -3473,8 +3524,7 @@ static void __perf_event_sync_stat(struct perf_event *event,
 	 * we know the event must be on the current CPU, therefore we
 	 * don't need to use it.
 	 */
-	if (event->state == PERF_EVENT_STATE_ACTIVE)
-		event->pmu->read(event);
+	perf_pmu_read(event);
 
 	perf_event_update_time(event);
 
@@ -4618,15 +4668,8 @@ static void __perf_event_read(void *info)
 
 	pmu->read(event);
 
-	for_each_sibling_event(sub, event) {
-		if (sub->state == PERF_EVENT_STATE_ACTIVE) {
-			/*
-			 * Use sibling's PMU rather than @event's since
-			 * sibling could be on different (eg: software) PMU.
-			 */
-			sub->pmu->read(sub);
-		}
-	}
+	for_each_sibling_event(sub, event)
+		perf_pmu_read(sub);
 
 	data->ret = pmu->commit_txn(pmu);
 
@@ -7444,9 +7487,8 @@ static void perf_output_read_group(struct perf_output_handle *handle,
 	if (read_format & PERF_FORMAT_TOTAL_TIME_RUNNING)
 		values[n++] = running;
 
-	if ((leader != event) &&
-	    (leader->state == PERF_EVENT_STATE_ACTIVE))
-		leader->pmu->read(leader);
+	if ((leader != event) && !handle->skip_read)
+		perf_pmu_read(leader);
 
 	values[n++] = perf_event_count(leader, self);
 	if (read_format & PERF_FORMAT_ID)
@@ -7459,9 +7501,8 @@ static void perf_output_read_group(struct perf_output_handle *handle,
 	for_each_sibling_event(sub, leader) {
 		n = 0;
 
-		if ((sub != event) &&
-		    (sub->state == PERF_EVENT_STATE_ACTIVE))
-			sub->pmu->read(sub);
+		if ((sub != event) && !handle->skip_read)
+			perf_pmu_read(sub);
 
 		values[n++] = perf_event_count(sub, self);
 		if (read_format & PERF_FORMAT_ID)
@@ -7519,6 +7560,9 @@ void perf_output_sample(struct perf_output_handle *handle,
 			struct perf_event *event)
 {
 	u64 sample_type = data->type;
+
+	if (data->sample_flags & PERF_SAMPLE_READ)
+		handle->skip_read = 1;
 
 	perf_output_put(handle, *header);
 
@@ -11367,8 +11411,7 @@ static void perf_swevent_init_hrtimer(struct perf_event *event)
 	if (!is_sampling_event(event))
 		return;
 
-	hrtimer_init(&hwc->hrtimer, CLOCK_MONOTONIC, HRTIMER_MODE_REL_HARD);
-	hwc->hrtimer.function = perf_swevent_hrtimer;
+	hrtimer_setup(&hwc->hrtimer, perf_swevent_hrtimer, CLOCK_MONOTONIC, HRTIMER_MODE_REL_HARD);
 
 	/*
 	 * Since hrtimers have a fixed rate, we can do a static freq->period
