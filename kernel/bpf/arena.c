@@ -39,7 +39,7 @@
  */
 
 /* number of bytes addressable by LDX/STX insn with 16-bit 'off' field */
-#define GUARD_SZ (1ull << sizeof_field(struct bpf_insn, off) * 8)
+#define GUARD_SZ round_up(1ull << sizeof_field(struct bpf_insn, off) * 8, PAGE_SIZE << 1)
 #define KERN_VM_SZ (SZ_4G + GUARD_SZ)
 
 struct bpf_arena {
@@ -445,7 +445,7 @@ static long arena_alloc_pages(struct bpf_arena *arena, long uaddr, long page_cnt
 			return 0;
 	}
 
-	/* zeroing is needed, since alloc_pages_bulk_array() only fills in non-zero entries */
+	/* zeroing is needed, since alloc_pages_bulk() only fills in non-zero entries */
 	pages = kvcalloc(page_cnt, sizeof(struct page *), GFP_KERNEL);
 	if (!pages)
 		return 0;

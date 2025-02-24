@@ -222,7 +222,6 @@ typedef int (dio_iodone_t)(struct kiocb *iocb, loff_t offset,
 #define FMODE_FSNOTIFY_HSM(mode)	0
 #endif
 
-
 /*
  * Attribute flags.  These should be or-ed together to figure out what
  * has been changed!
@@ -791,6 +790,19 @@ struct inode {
 
 static inline void inode_set_cached_link(struct inode *inode, char *link, int linklen)
 {
+	int testlen;
+
+	/*
+	 * TODO: patch it into a debug-only check if relevant macros show up.
+	 * In the meantime, since we are suffering strlen even on production kernels
+	 * to find the right length, do a fixup if the wrong value got passed.
+	 */
+	testlen = strlen(link);
+	if (testlen != linklen) {
+		WARN_ONCE(1, "bad length passed for symlink [%s] (got %d, expected %d)",
+			  link, linklen, testlen);
+		linklen = testlen;
+	}
 	inode->i_link = link;
 	inode->i_linklen = linklen;
 	inode->i_opflags |= IOP_CACHED_LINK;
@@ -2926,6 +2938,8 @@ extern int __must_check file_fdatawait_range(struct file *file, loff_t lstart,
 extern int __must_check file_check_and_advance_wb_err(struct file *file);
 extern int __must_check file_write_and_wait_range(struct file *file,
 						loff_t start, loff_t end);
+int filemap_fdatawrite_range_kick(struct address_space *mapping, loff_t start,
+		loff_t end);
 
 static inline int file_write_and_wait(struct file *file)
 {
@@ -2958,6 +2972,11 @@ static inline ssize_t generic_write_sync(struct kiocb *iocb, ssize_t count)
 				(iocb->ki_flags & IOCB_SYNC) ? 0 : 1);
 		if (ret)
 			return ret;
+	} else if (iocb->ki_flags & IOCB_DONTCACHE) {
+		struct address_space *mapping = iocb->ki_filp->f_mapping;
+
+		filemap_fdatawrite_range_kick(mapping, iocb->ki_pos,
+					      iocb->ki_pos + count);
 	}
 
 	return count;
@@ -3131,6 +3150,12 @@ static inline void exe_file_allow_write_access(struct file *exe_file)
 	if (unlikely(!exe_file || FMODE_FSNOTIFY_HSM(exe_file->f_mode)))
 		return;
 	allow_write_access(exe_file);
+}
+
+static inline void file_set_fsnotify_mode(struct file *file, fmode_t mode)
+{
+	file->f_mode &= ~FMODE_FSNOTIFY_MASK;
+	file->f_mode |= mode;
 }
 
 static inline bool inode_is_open_for_write(const struct inode *inode)
