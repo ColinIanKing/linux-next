@@ -540,26 +540,26 @@ static int ad7124_append_status(struct ad_sigma_delta *sd, bool append)
 	return 0;
 }
 
-static int ad7124_disable_all(struct ad_sigma_delta *sd)
+static int ad7124_disable_one(struct ad_sigma_delta *sd, unsigned int chan)
 {
 	struct ad7124_state *st = container_of(sd, struct ad7124_state, sd);
+
+	/* The relevant thing here is that AD7124_CHANNEL_EN_MSK is cleared. */
+	return ad_sd_write_reg(&st->sd, AD7124_CHANNEL(chan), 2, 0);
+}
+
+static int ad7124_disable_all(struct ad_sigma_delta *sd)
+{
 	int ret;
 	int i;
 
-	for (i = 0; i < st->num_channels; i++) {
-		ret = ad7124_spi_write_mask(st, AD7124_CHANNEL(i), AD7124_CHANNEL_EN_MSK, 0, 2);
+	for (i = 0; i < 16; i++) {
+		ret = ad7124_disable_one(sd, i);
 		if (ret < 0)
 			return ret;
 	}
 
 	return 0;
-}
-
-static int ad7124_disable_one(struct ad_sigma_delta *sd, unsigned int chan)
-{
-	struct ad7124_state *st = container_of(sd, struct ad7124_state, sd);
-
-	return ad7124_spi_write_mask(st, AD7124_CHANNEL(chan), AD7124_CHANNEL_EN_MSK, 0, 2);
 }
 
 static const struct ad_sigma_delta_info ad7124_sigma_delta_info = {
@@ -1016,10 +1016,9 @@ static int ad7124_setup(struct ad7124_state *st)
 		 * set all channels to this default value.
 		 */
 		ad7124_set_channel_odr(st, i, 10);
-
-		/* Disable all channels to prevent unintended conversions. */
-		ad_sd_write_reg(&st->sd, AD7124_CHANNEL(i), 2, 0);
 	}
+
+	ad7124_disable_all(&st->sd);
 
 	ret = ad_sd_write_reg(&st->sd, AD7124_ADC_CONTROL, 2, st->adc_control);
 	if (ret < 0)
