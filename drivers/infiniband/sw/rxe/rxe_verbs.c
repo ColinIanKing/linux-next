@@ -80,6 +80,18 @@ err_out:
 	return err;
 }
 
+static int rxe_query_gid(struct ib_device *ibdev, u32 port, int idx,
+			 union ib_gid *gid)
+{
+	struct rxe_dev *rxe = to_rdev(ibdev);
+
+	/* subnet_prefix == interface_id == 0; */
+	memset(gid, 0, sizeof(*gid));
+	memcpy(gid->raw, rxe->raw_gid, ETH_ALEN);
+
+	return 0;
+}
+
 static int rxe_query_pkey(struct ib_device *ibdev,
 			  u32 port_num, u16 index, u16 *pkey)
 {
@@ -1493,6 +1505,7 @@ static const struct ib_device_ops rxe_dev_ops = {
 	.query_ah = rxe_query_ah,
 	.query_device = rxe_query_device,
 	.query_pkey = rxe_query_pkey,
+	.query_gid = rxe_query_gid,
 	.query_port = rxe_query_port,
 	.query_qp = rxe_query_qp,
 	.query_srq = rxe_query_srq,
@@ -1523,17 +1536,13 @@ int rxe_register_device(struct rxe_dev *rxe, const char *ibdev_name,
 	dev->num_comp_vectors = num_possible_cpus();
 	dev->local_dma_lkey = 0;
 	addrconf_addr_eui48((unsigned char *)&dev->node_guid,
-			    ndev->dev_addr);
+			    rxe->raw_gid);
 
 	dev->uverbs_cmd_mask |= BIT_ULL(IB_USER_VERBS_CMD_POST_SEND) |
 				BIT_ULL(IB_USER_VERBS_CMD_REQ_NOTIFY_CQ);
 
 	ib_set_device_ops(dev, &rxe_dev_ops);
 	err = ib_device_set_netdev(&rxe->ib_dev, ndev, 1);
-	if (err)
-		return err;
-
-	err = rxe_icrc_init(rxe);
 	if (err)
 		return err;
 
