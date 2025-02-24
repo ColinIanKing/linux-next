@@ -79,6 +79,7 @@ static inline void page_ext_init(void)
 
 extern struct page_ext *page_ext_get(const struct page *page);
 extern void page_ext_put(struct page_ext *page_ext);
+extern struct page_ext *lookup_page_ext(const struct page *page);
 
 static inline void *page_ext_data(struct page_ext *page_ext,
 				  struct page_ext_operations *ops)
