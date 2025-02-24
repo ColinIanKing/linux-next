@@ -1071,6 +1071,7 @@ static int __init hw_protection_setup(char *str)
 }
 __setup("hw_protection=", hw_protection_setup);
 
+#ifdef CONFIG_SYSFS
 static ssize_t hw_protection_show(struct kobject *kobj,
 				  struct kobj_attribute *attr, char *buf)
 {
@@ -1090,6 +1091,7 @@ static ssize_t hw_protection_store(struct kobject *kobj,
 	return count;
 }
 static struct kobj_attribute hw_protection_attr = __ATTR_RW(hw_protection);
+#endif
 
 static int __init reboot_setup(char *str)
 {
