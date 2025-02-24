@@ -58,6 +58,7 @@ config SND_AMD_ASOC_REMBRANDT
 	select SND_SOC_AMD_ACP_I2S
 	select SND_SOC_AMD_ACP_PDM
 	select SND_SOC_AMD_ACP_LEGACY_COMMON
+	depends on AMD_NODE
 	depends on X86 && PCI
 	help
 	  This option enables Rembrandt I2S support on AMD platform.
@@ -68,6 +69,7 @@ config SND_AMD_ASOC_ACP63
 	tristate "AMD ACP ASOC ACP6.3 Support"
 	depends on X86 && PCI
 	depends on ACPI
+	depends on AMD_NODE
 	select SND_SOC_AMD_ACP_PCM
 	select SND_SOC_AMD_ACP_I2S
 	select SND_SOC_AMD_ACP_PDM
@@ -81,6 +83,7 @@ config SND_AMD_ASOC_ACP70
 	tristate "AMD ACP ASOC Acp7.0 Support"
 	depends on X86 && PCI
 	depends on ACPI
+	depends on AMD_NODE
 	select SND_SOC_AMD_ACP_PCM
 	select SND_SOC_AMD_ACP_I2S
 	select SND_SOC_AMD_ACP_PDM
@@ -156,6 +159,7 @@ config SND_SOC_AMD_LEGACY_SDW_MACH
 	select SND_SOC_RT712_SDCA_SDW
 	select SND_SOC_RT712_SDCA_DMIC_SDW
 	select SND_SOC_RT1316_SDW
+	select SND_SOC_RT1320_SDW
 	select SND_SOC_RT715_SDW
 	select SND_SOC_RT715_SDCA_SDW
 	select SND_SOC_RT722_SDCA_SDW
