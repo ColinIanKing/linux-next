@@ -180,6 +180,11 @@
 	x(EINVAL,			not_in_recovery)			\
 	x(EINVAL,			cannot_rewind_recovery)			\
 	x(0,				data_update_done)			\
+	x(BCH_ERR_data_update_done,	data_update_done_would_block)		\
+	x(BCH_ERR_data_update_done,	data_update_done_unwritten)		\
+	x(BCH_ERR_data_update_done,	data_update_done_no_writes_needed)	\
+	x(BCH_ERR_data_update_done,	data_update_done_no_snapshot)		\
+	x(BCH_ERR_data_update_done,	data_update_done_no_dev_refs)		\
 	x(EINVAL,			device_state_not_allowed)		\
 	x(EINVAL,			member_info_missing)			\
 	x(EINVAL,			mismatched_block_size)			\
@@ -269,6 +274,7 @@
 	x(EIO,				invalidate_stripe_to_dev)		\
 	x(EIO,				no_encryption_key)			\
 	x(EIO,				insufficient_journal_devices)		\
+	x(EIO,				device_offline)				\
 	x(BCH_ERR_btree_node_read_err,	btree_node_read_err_fixable)		\
 	x(BCH_ERR_btree_node_read_err,	btree_node_read_err_want_retry)		\
 	x(BCH_ERR_btree_node_read_err,	btree_node_read_err_must_retry)		\
