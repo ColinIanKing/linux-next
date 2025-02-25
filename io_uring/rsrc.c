@@ -103,19 +103,16 @@ int io_buffer_validate(struct iovec *iov)
 
 static void io_buffer_unmap(struct io_ring_ctx *ctx, struct io_rsrc_node *node)
 {
+	struct io_mapped_ubuf *imu = node->buf;
 	unsigned int i;
 
-	if (node->buf) {
-		struct io_mapped_ubuf *imu = node->buf;
-
-		if (!refcount_dec_and_test(&imu->refs))
-			return;
-		for (i = 0; i < imu->nr_bvecs; i++)
-			unpin_user_page(imu->bvec[i].bv_page);
-		if (imu->acct_pages)
-			io_unaccount_mem(ctx, imu->acct_pages);
-		kvfree(imu);
-	}
+	if (!refcount_dec_and_test(&imu->refs))
+		return;
+	for (i = 0; i < imu->nr_bvecs; i++)
+		unpin_user_page(imu->bvec[i].bv_page);
+	if (imu->acct_pages)
+		io_unaccount_mem(ctx, imu->acct_pages);
+	kvfree(imu);
 }
 
 struct io_rsrc_node *io_rsrc_node_alloc(int type)
@@ -860,7 +857,7 @@ int io_sqe_buffers_register(struct io_ring_ctx *ctx, void __user *arg,
 	return ret;
 }
 
-int io_import_fixed(int ddir, struct iov_iter *iter,
+static int io_import_fixed(int ddir, struct iov_iter *iter,
 			   struct io_mapped_ubuf *imu,
 			   u64 buf_addr, size_t len)
 {
@@ -917,6 +914,35 @@ int io_import_fixed(int ddir, struct iov_iter *iter,
 	}
 
 	return 0;
+}
+
+static inline struct io_rsrc_node *io_find_buf_node(struct io_kiocb *req,
+						    unsigned issue_flags)
+{
+	struct io_ring_ctx *ctx = req->ctx;
+	struct io_rsrc_node *node;
+
+	if (req->flags & REQ_F_BUF_NODE)
+		return req->buf_node;
+
+	io_ring_submit_lock(ctx, issue_flags);
+	node = io_rsrc_node_lookup(&ctx->buf_table, req->buf_index);
+	if (node)
+		io_req_assign_buf_node(req, node);
+	io_ring_submit_unlock(ctx, issue_flags);
+	return node;
+}
+
+int io_import_reg_buf(struct io_kiocb *req, struct iov_iter *iter,
+			u64 buf_addr, size_t len, int ddir,
+			unsigned issue_flags)
+{
+	struct io_rsrc_node *node;
+
+	node = io_find_buf_node(req, issue_flags);
+	if (!node)
+		return -EFAULT;
+	return io_import_fixed(ddir, iter, node->buf, buf_addr, len);
 }
 
 /* Lock two rings at once. The rings must be different! */
