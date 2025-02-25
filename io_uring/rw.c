@@ -79,41 +79,24 @@ static int io_iov_buffer_select_prep(struct io_kiocb *req)
 	return 0;
 }
 
-static int __io_import_iovec(int ddir, struct io_kiocb *req,
-			     struct io_async_rw *io,
-			     unsigned int issue_flags)
+static int io_import_vec(int ddir, struct io_kiocb *req,
+			 struct io_async_rw *io,
+			 const struct iovec __user *uvec,
+			 size_t uvec_segs)
 {
-	const struct io_issue_def *def = &io_issue_defs[req->opcode];
-	struct io_rw *rw = io_kiocb_to_cmd(req, struct io_rw);
+	int ret, nr_segs;
 	struct iovec *iov;
-	void __user *buf;
-	int nr_segs, ret;
-	size_t sqe_len;
-
-	buf = u64_to_user_ptr(rw->addr);
-	sqe_len = rw->len;
-
-	if (!def->vectored || req->flags & REQ_F_BUFFER_SELECT) {
-		if (io_do_buffer_select(req)) {
-			buf = io_buffer_select(req, &sqe_len, issue_flags);
-			if (!buf)
-				return -ENOBUFS;
-			rw->addr = (unsigned long) buf;
-			rw->len = sqe_len;
-		}
-
-		return import_ubuf(ddir, buf, sqe_len, &io->iter);
-	}
 
 	if (io->free_iovec) {
 		nr_segs = io->free_iov_nr;
 		iov = io->free_iovec;
 	} else {
-		iov = &io->fast_iov;
 		nr_segs = 1;
+		iov = &io->fast_iov;
 	}
-	ret = __import_iovec(ddir, buf, sqe_len, nr_segs, &iov, &io->iter,
-				io_is_compat(req->ctx));
+
+	ret = __import_iovec(ddir, uvec, uvec_segs, nr_segs, &iov, &io->iter,
+			     io_is_compat(req->ctx));
 	if (unlikely(ret < 0))
 		return ret;
 	if (iov) {
@@ -125,13 +108,35 @@ static int __io_import_iovec(int ddir, struct io_kiocb *req,
 	return 0;
 }
 
-static inline int io_import_iovec(int rw, struct io_kiocb *req,
-				  struct io_async_rw *io,
-				  unsigned int issue_flags)
+static int __io_import_rw_buffer(int ddir, struct io_kiocb *req,
+			     struct io_async_rw *io,
+			     unsigned int issue_flags)
+{
+	const struct io_issue_def *def = &io_issue_defs[req->opcode];
+	struct io_rw *rw = io_kiocb_to_cmd(req, struct io_rw);
+	void __user *buf = u64_to_user_ptr(rw->addr);
+	size_t sqe_len = rw->len;
+
+	if (def->vectored && !(req->flags & REQ_F_BUFFER_SELECT))
+		return io_import_vec(ddir, req, io, buf, sqe_len);
+
+	if (io_do_buffer_select(req)) {
+		buf = io_buffer_select(req, &sqe_len, issue_flags);
+		if (!buf)
+			return -ENOBUFS;
+		rw->addr = (unsigned long) buf;
+		rw->len = sqe_len;
+	}
+	return import_ubuf(ddir, buf, sqe_len, &io->iter);
+}
+
+static inline int io_import_rw_buffer(int rw, struct io_kiocb *req,
+				      struct io_async_rw *io,
+				      unsigned int issue_flags)
 {
 	int ret;
 
-	ret = __io_import_iovec(rw, req, io, issue_flags);
+	ret = __io_import_rw_buffer(rw, req, io, issue_flags);
 	if (unlikely(ret < 0))
 		return ret;
 
@@ -202,20 +207,6 @@ static int io_rw_alloc_async(struct io_kiocb *req)
 	return 0;
 }
 
-static int io_prep_rw_setup(struct io_kiocb *req, int ddir, bool do_import)
-{
-	struct io_async_rw *rw;
-
-	if (io_rw_alloc_async(req))
-		return -ENOMEM;
-
-	if (!do_import || io_do_buffer_select(req))
-		return 0;
-
-	rw = req->async_data;
-	return io_import_iovec(ddir, req, rw, 0);
-}
-
 static inline void io_meta_save_state(struct io_async_rw *io)
 {
 	io->meta_state.seed = io->meta.seed;
@@ -265,6 +256,9 @@ static int io_prep_rw(struct io_kiocb *req, const struct io_uring_sqe *sqe,
 	u64 attr_type_mask;
 	int ret;
 
+	if (io_rw_alloc_async(req))
+		return -ENOMEM;
+
 	rw->kiocb.ki_pos = READ_ONCE(sqe->off);
 	/* used for fixed read/write too - just read unconditionally */
 	req->buf_index = READ_ONCE(sqe->buf_index);
@@ -290,10 +284,14 @@ static int io_prep_rw(struct io_kiocb *req, const struct io_uring_sqe *sqe,
 	rw->addr = READ_ONCE(sqe->addr);
 	rw->len = READ_ONCE(sqe->len);
 	rw->flags = READ_ONCE(sqe->rw_flags);
-	ret = io_prep_rw_setup(req, ddir, do_import);
 
-	if (unlikely(ret))
-		return ret;
+	if (do_import && !io_do_buffer_select(req)) {
+		struct io_async_rw *io = req->async_data;
+
+		ret = io_import_rw_buffer(ddir, req, io, 0);
+		if (unlikely(ret))
+			return ret;
+	}
 
 	attr_type_mask = READ_ONCE(sqe->attr_type_mask);
 	if (attr_type_mask) {
@@ -854,7 +852,7 @@ static int __io_read(struct io_kiocb *req, unsigned int issue_flags)
 	loff_t *ppos;
 
 	if (io_do_buffer_select(req)) {
-		ret = io_import_iovec(ITER_DEST, req, io, issue_flags);
+		ret = io_import_rw_buffer(ITER_DEST, req, io, issue_flags);
 		if (unlikely(ret < 0))
 			return ret;
 	}
