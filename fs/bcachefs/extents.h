@@ -404,7 +404,7 @@ void bch2_mark_io_failure(struct bch_io_failures *,
 			  struct extent_ptr_decoded *);
 int bch2_bkey_pick_read_device(struct bch_fs *, struct bkey_s_c,
 			       struct bch_io_failures *,
-			       struct extent_ptr_decoded *);
+			       struct extent_ptr_decoded *, int);
 
 /* KEY_TYPE_btree_ptr: */
 
@@ -704,7 +704,7 @@ static inline bool bch2_extent_ptr_eq(struct bch_extent_ptr ptr1,
 		ptr1.unwritten	== ptr2.unwritten &&
 		ptr1.offset	== ptr2.offset &&
 		ptr1.dev	== ptr2.dev &&
-		ptr1.dev	== ptr2.dev);
+		ptr1.gen	== ptr2.gen);
 }
 
 void bch2_ptr_swab(struct bkey_s);
