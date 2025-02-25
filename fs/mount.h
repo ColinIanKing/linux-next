@@ -5,6 +5,8 @@
 #include <linux/ns_common.h>
 #include <linux/fs_pin.h>
 
+extern struct list_head notify_list;
+
 struct mnt_namespace {
 	struct ns_common	ns;
 	struct mount *	root;
@@ -20,7 +22,12 @@ struct mnt_namespace {
 		wait_queue_head_t	poll;
 		struct rcu_head		mnt_ns_rcu;
 	};
+	u64			seq_origin; /* Sequence number of origin mount namespace */
 	u64 event;
+#ifdef CONFIG_FSNOTIFY
+	__u32			n_fsnotify_mask;
+	struct fsnotify_mark_connector __rcu *n_fsnotify_marks;
+#endif
 	unsigned int		nr_mounts; /* # of mounts in the namespace */
 	unsigned int		pending_mounts;
 	struct rb_node		mnt_ns_tree_node; /* node in the mnt_ns_tree */
@@ -76,6 +83,8 @@ struct mount {
 #ifdef CONFIG_FSNOTIFY
 	struct fsnotify_mark_connector __rcu *mnt_fsnotify_marks;
 	__u32 mnt_fsnotify_mask;
+	struct list_head to_notify;	/* need to queue notification */
+	struct mnt_namespace *prev_ns;	/* previous namespace (NULL if none) */
 #endif
 	int mnt_id;			/* mount identifier, reused */
 	u64 mnt_id_unique;		/* mount ID unique until reboot */
@@ -156,6 +165,11 @@ static inline bool mnt_ns_attached(const struct mount *mnt)
 	return !RB_EMPTY_NODE(&mnt->mnt_node);
 }
 
+static inline bool mnt_ns_empty(const struct mnt_namespace *ns)
+{
+	return RB_EMPTY_ROOT(&ns->mounts);
+}
+
 static inline void move_from_ns(struct mount *mnt, struct list_head *dt_list)
 {
 	struct mnt_namespace *ns = mnt->mnt_ns;
@@ -177,3 +191,21 @@ static inline struct mnt_namespace *to_mnt_ns(struct ns_common *ns)
 {
 	return container_of(ns, struct mnt_namespace, ns);
 }
+
+#ifdef CONFIG_FSNOTIFY
+static inline void mnt_notify_add(struct mount *m)
+{
+	/* Optimize the case where there are no watches */
+	if ((m->mnt_ns && m->mnt_ns->n_fsnotify_marks) ||
+	    (m->prev_ns && m->prev_ns->n_fsnotify_marks))
+		list_add_tail(&m->to_notify, &notify_list);
+	else
+		m->prev_ns = m->mnt_ns;
+}
+#else
+static inline void mnt_notify_add(struct mount *m)
+{
+}
+#endif
+
+struct mnt_namespace *mnt_ns_from_dentry(struct dentry *dentry);
