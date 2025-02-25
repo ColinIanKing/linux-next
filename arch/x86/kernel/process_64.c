@@ -942,7 +942,7 @@ long do_arch_prctl_64(struct task_struct *task, int option, unsigned long arg2)
 	case ARCH_MAP_VDSO_X32:
 		return prctl_map_vdso(&vdso_image_x32, arg2);
 # endif
-# if defined CONFIG_X86_32 || defined CONFIG_IA32_EMULATION
+# ifdef CONFIG_IA32_EMULATION
 	case ARCH_MAP_VDSO_32:
 		return prctl_map_vdso(&vdso_image_32, arg2);
 # endif
@@ -979,24 +979,6 @@ long do_arch_prctl_64(struct task_struct *task, int option, unsigned long arg2)
 
 	return ret;
 }
-
-SYSCALL_DEFINE2(arch_prctl, int, option, unsigned long, arg2)
-{
-	long ret;
-
-	ret = do_arch_prctl_64(current, option, arg2);
-	if (ret == -EINVAL)
-		ret = do_arch_prctl_common(option, arg2);
-
-	return ret;
-}
-
-#ifdef CONFIG_IA32_EMULATION
-COMPAT_SYSCALL_DEFINE2(arch_prctl, int, option, unsigned long, arg2)
-{
-	return do_arch_prctl_common(option, arg2);
-}
-#endif
 
 unsigned long KSTK_ESP(struct task_struct *task)
 {
