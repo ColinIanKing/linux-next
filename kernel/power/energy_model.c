@@ -161,14 +161,6 @@ static void em_debug_create_pd(struct device *dev) {}
 static void em_debug_remove_pd(struct device *dev) {}
 #endif
 
-static void em_destroy_table_rcu(struct rcu_head *rp)
-{
-	struct em_perf_table __rcu *table;
-
-	table = container_of(rp, struct em_perf_table, rcu);
-	kfree(table);
-}
-
 static void em_release_table_kref(struct kref *kref)
 {
 	struct em_perf_table __rcu *table;
@@ -176,7 +168,7 @@ static void em_release_table_kref(struct kref *kref)
 	/* It was the last owner of this table so we can free */
 	table = container_of(kref, struct em_perf_table, kref);
 
-	call_rcu(&table->rcu, em_destroy_table_rcu);
+	kfree_rcu(table, rcu);
 }
 
 /**
@@ -728,8 +720,7 @@ free_em_table:
  * are correctly calculated.
  */
 static void em_adjust_new_capacity(struct device *dev,
-				   struct em_perf_domain *pd,
-				   u64 max_cap)
+				   struct em_perf_domain *pd)
 {
 	struct em_perf_table __rcu *em_table;
 
@@ -775,7 +766,8 @@ static void em_check_capacity_update(void)
 		}
 		cpufreq_cpu_put(policy);
 
-		pd = em_cpu_get(cpu);
+		dev = get_cpu_device(cpu);
+		pd = em_pd_get(dev);
 		if (!pd || em_is_artificial(pd))
 			continue;
 
@@ -799,8 +791,7 @@ static void em_check_capacity_update(void)
 		pr_debug("updating cpu%d cpu_cap=%lu old capacity=%lu\n",
 			 cpu, cpu_capacity, em_max_perf);
 
-		dev = get_cpu_device(cpu);
-		em_adjust_new_capacity(dev, pd, cpu_capacity);
+		em_adjust_new_capacity(dev, pd);
 	}
 
 	free_cpumask_var(cpu_done_mask);
