@@ -466,15 +466,21 @@ void btrfs_subpage_clear_writeback(const struct btrfs_fs_info *fs_info,
 	struct btrfs_subpage *subpage = folio_get_private(folio);
 	unsigned int start_bit = subpage_calc_start_bit(fs_info, folio,
 							writeback, start, len);
+	bool was_writeback;
+	bool last = false;
 	unsigned long flags;
 
 	spin_lock_irqsave(&subpage->lock, flags);
+	was_writeback = !subpage_test_bitmap_all_zero(fs_info, folio, writeback);
 	bitmap_clear(subpage->bitmaps, start_bit, len >> fs_info->sectorsize_bits);
-	if (subpage_test_bitmap_all_zero(fs_info, folio, writeback)) {
+	if (subpage_test_bitmap_all_zero(fs_info, folio, writeback) &&
+	    was_writeback) {
 		ASSERT(folio_test_writeback(folio));
-		folio_end_writeback(folio);
+		last = true;
 	}
 	spin_unlock_irqrestore(&subpage->lock, flags);
+	if (last)
+		folio_end_writeback(folio);
 }
 
 void btrfs_subpage_set_ordered(const struct btrfs_fs_info *fs_info,
