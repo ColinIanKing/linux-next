@@ -2162,7 +2162,7 @@ static int shmem_split_large_entry(struct inode *inode, pgoff_t index,
 {
 	struct address_space *mapping = inode->i_mapping;
 	XA_STATE_ORDER(xas, &mapping->i_pages, index, 0);
-	int split_order = 0;
+	int split_order = 0, entry_order = 0;
 	int i;
 
 	/* Convert user data gfp flags to xarray node gfp flags */
@@ -2180,34 +2180,45 @@ static int shmem_split_large_entry(struct inode *inode, pgoff_t index,
 		}
 
 		order = xas_get_order(&xas);
+		entry_order = order;
 
 		/* Try to split large swap entry in pagecache */
 		if (order > 0) {
 			int cur_order = order;
+			pgoff_t swap_index = round_down(index, 1 << order);
 
 			split_order = xas_try_split_min_order(cur_order);
 
 			while (cur_order > 0) {
+				pgoff_t aligned_index =
+					round_down(index, 1 << cur_order);
+				pgoff_t swap_offset = aligned_index - swap_index;
+
 				xas_set_order(&xas, index, split_order);
 				xas_try_split(&xas, old, cur_order, GFP_NOWAIT);
 				if (xas_error(&xas))
 					goto unlock;
+
+				/*
+				 * Re-set the swap entry after splitting, and
+				 * the swap offset of the original large entry
+				 * must be continuous.
+				 */
+				for (i = 0; i < 1 << cur_order;
+				     i += (1 << split_order)) {
+					swp_entry_t tmp;
+
+					tmp = swp_entry(swp_type(swap),
+							swp_offset(swap) +
+							swap_offset +
+								i);
+					__xa_store(&mapping->i_pages,
+						   aligned_index + i,
+						   swp_to_radix_entry(tmp), 0);
+				}
 				cur_order = split_order;
 				split_order =
 					xas_try_split_min_order(split_order);
-			}
-
-			/*
-			 * Re-set the swap entry after splitting, and the swap
-			 * offset of the original large entry must be continuous.
-			 */
-			for (i = 0; i < 1 << order; i++) {
-				pgoff_t aligned_index = round_down(index, 1 << order);
-				swp_entry_t tmp;
-
-				tmp = swp_entry(swp_type(swap), swp_offset(swap) + i);
-				__xa_store(&mapping->i_pages, aligned_index + i,
-					   swp_to_radix_entry(tmp), 0);
 			}
 		}
 
@@ -2221,7 +2232,7 @@ unlock:
 	if (xas_error(&xas))
 		return xas_error(&xas);
 
-	return split_order;
+	return entry_order;
 }
 
 /*
