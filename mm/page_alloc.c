@@ -3675,8 +3675,10 @@ __alloc_pages_direct_compact(gfp_t gfp_mask, unsigned int order,
 	unsigned long pflags;
 	unsigned int noreclaim_flag;
 
-	if (!order)
+	if (!order) {
+		*compact_result = COMPACT_SKIPPED;
 		return NULL;
+	}
 
 	psi_memstall_enter(&pflags);
 	delayacct_compact_start();
