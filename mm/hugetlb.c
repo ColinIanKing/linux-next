@@ -3937,7 +3937,7 @@ static int set_max_huge_pages(struct hstate *h, unsigned long count, int nid,
 	 * and won't grow the pool anywhere else. Not until one of the
 	 * sysctls are changed, or the surplus pages go out of use.
 	 */
-	min_count = h->resv_huge_pages + h->nr_huge_pages - h->free_huge_pages;
+	min_count = h->resv_huge_pages + persistent_huge_pages(h) - h->free_huge_pages;
 	min_count = max(count, min_count);
 	try_to_free_low(h, min_count, nodes_allowed);
 
