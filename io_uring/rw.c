@@ -49,24 +49,16 @@ static bool io_file_supports_nowait(struct io_kiocb *req, __poll_t mask)
 	return false;
 }
 
-#ifdef CONFIG_COMPAT
 static int io_iov_compat_buffer_select_prep(struct io_rw *rw)
 {
-	struct compat_iovec __user *uiov;
-	compat_ssize_t clen;
+	struct compat_iovec __user *uiov = u64_to_user_ptr(rw->addr);
+	struct compat_iovec iov;
 
-	uiov = u64_to_user_ptr(rw->addr);
-	if (!access_ok(uiov, sizeof(*uiov)))
+	if (copy_from_user(&iov, uiov, sizeof(iov)))
 		return -EFAULT;
-	if (__get_user(clen, &uiov->iov_len))
-		return -EFAULT;
-	if (clen < 0)
-		return -EINVAL;
-
-	rw->len = clen;
+	rw->len = iov.iov_len;
 	return 0;
 }
-#endif
 
 static int io_iov_buffer_select_prep(struct io_kiocb *req)
 {
@@ -77,10 +69,8 @@ static int io_iov_buffer_select_prep(struct io_kiocb *req)
 	if (rw->len != 1)
 		return -EINVAL;
 
-#ifdef CONFIG_COMPAT
-	if (req->ctx->compat)
+	if (io_is_compat(req->ctx))
 		return io_iov_compat_buffer_select_prep(rw);
-#endif
 
 	uiov = u64_to_user_ptr(rw->addr);
 	if (copy_from_user(&iov, uiov, sizeof(*uiov)))
@@ -123,7 +113,7 @@ static int __io_import_iovec(int ddir, struct io_kiocb *req,
 		nr_segs = 1;
 	}
 	ret = __import_iovec(ddir, buf, sqe_len, nr_segs, &iov, &io->iter,
-				req->ctx->compat);
+				io_is_compat(req->ctx));
 	if (unlikely(ret < 0))
 		return ret;
 	if (iov) {
@@ -519,7 +509,7 @@ static inline int io_fixup_rw_res(struct io_kiocb *req, long res)
 	return res;
 }
 
-void io_req_rw_complete(struct io_kiocb *req, struct io_tw_state *ts)
+void io_req_rw_complete(struct io_kiocb *req, io_tw_token_t tw)
 {
 	struct io_rw *rw = io_kiocb_to_cmd(req, struct io_rw);
 	struct kiocb *kiocb = &rw->kiocb;
@@ -536,7 +526,7 @@ void io_req_rw_complete(struct io_kiocb *req, struct io_tw_state *ts)
 		req->cqe.flags |= io_put_kbuf(req, req->cqe.res, 0);
 
 	io_req_rw_cleanup(req, 0);
-	io_req_task_complete(req, ts);
+	io_req_task_complete(req, tw);
 }
 
 static void io_complete_rw(struct kiocb *kiocb, long res)
