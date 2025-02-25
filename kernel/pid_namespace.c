@@ -70,8 +70,6 @@ static void dec_pid_namespaces(struct ucounts *ucounts)
 	dec_ucount(ucounts, UCOUNT_PID_NAMESPACES);
 }
 
-static void destroy_pid_namespace_work(struct work_struct *work);
-
 static struct pid_namespace *create_pid_namespace(struct user_namespace *user_ns,
 	struct pid_namespace *parent_pid_ns)
 {
@@ -107,27 +105,20 @@ static struct pid_namespace *create_pid_namespace(struct user_namespace *user_ns
 		goto out_free_idr;
 	ns->ns.ops = &pidns_operations;
 
-	ns->pid_max = parent_pid_ns->pid_max;
-	err = register_pidns_sysctls(ns);
-	if (err)
-		goto out_free_inum;
-
 	refcount_set(&ns->ns.count, 1);
 	ns->level = level;
 	ns->parent = get_pid_ns(parent_pid_ns);
 	ns->user_ns = get_user_ns(user_ns);
 	ns->ucounts = ucounts;
 	ns->pid_allocated = PIDNS_ADDING;
-	INIT_WORK(&ns->work, destroy_pid_namespace_work);
-
 #if defined(CONFIG_SYSCTL) && defined(CONFIG_MEMFD_CREATE)
 	ns->memfd_noexec_scope = pidns_memfd_noexec_scope(parent_pid_ns);
 #endif
-
+#ifdef CONFIG_IA32_EMULATION
+	ns->pid_noncyclic = READ_ONCE(parent_pid_ns->pid_noncyclic);
+#endif
 	return ns;
 
-out_free_inum:
-	ns_free_inum(&ns->ns);
 out_free_idr:
 	idr_destroy(&ns->idr);
 	kmem_cache_free(pid_ns_cachep, ns);
@@ -149,26 +140,10 @@ static void delayed_free_pidns(struct rcu_head *p)
 
 static void destroy_pid_namespace(struct pid_namespace *ns)
 {
-	unregister_pidns_sysctls(ns);
-
 	ns_free_inum(&ns->ns);
 
 	idr_destroy(&ns->idr);
 	call_rcu(&ns->rcu, delayed_free_pidns);
-}
-
-static void destroy_pid_namespace_work(struct work_struct *work)
-{
-	struct pid_namespace *ns =
-		container_of(work, struct pid_namespace, work);
-
-	do {
-		struct pid_namespace *parent;
-
-		parent = ns->parent;
-		destroy_pid_namespace(ns);
-		ns = parent;
-	} while (ns != &init_pid_ns && refcount_dec_and_test(&ns->ns.count));
 }
 
 struct pid_namespace *copy_pid_ns(unsigned long flags,
@@ -183,8 +158,15 @@ struct pid_namespace *copy_pid_ns(unsigned long flags,
 
 void put_pid_ns(struct pid_namespace *ns)
 {
-	if (ns && ns != &init_pid_ns && refcount_dec_and_test(&ns->ns.count))
-		schedule_work(&ns->work);
+	struct pid_namespace *parent;
+
+	while (ns != &init_pid_ns) {
+		parent = ns->parent;
+		if (!refcount_dec_and_test(&ns->ns.count))
+			break;
+		destroy_pid_namespace(ns);
+		ns = parent;
+	}
 }
 EXPORT_SYMBOL_GPL(put_pid_ns);
 
@@ -281,7 +263,7 @@ void zap_pid_ns_processes(struct pid_namespace *pid_ns)
 	return;
 }
 
-#ifdef CONFIG_CHECKPOINT_RESTORE
+#if defined(CONFIG_CHECKPOINT_RESTORE) || defined(CONFIG_IA32_EMULATION)
 static int pid_ns_ctl_handler(const struct ctl_table *table, int write,
 		void *buffer, size_t *lenp, loff_t *ppos)
 {
@@ -292,28 +274,39 @@ static int pid_ns_ctl_handler(const struct ctl_table *table, int write,
 	if (write && !checkpoint_restore_ns_capable(pid_ns->user_ns))
 		return -EPERM;
 
-	next = idr_get_cursor(&pid_ns->idr) - 1;
+	next = -1;
+#ifdef CONFIG_IA32_EMULATION
+	if (!pid_ns->pid_noncyclic)
+#endif
+		next += idr_get_cursor(&pid_ns->idr);
 
 	tmp.data = &next;
-	tmp.extra2 = &pid_ns->pid_max;
 	ret = proc_dointvec_minmax(&tmp, write, buffer, lenp, ppos);
-	if (!ret && write)
-		idr_set_cursor(&pid_ns->idr, next + 1);
+	if (!ret && write) {
+		if (next > -1)
+			idr_set_cursor(&pid_ns->idr, next + 1);
+		else if (!IS_ENABLED(CONFIG_IA32_EMULATION))
+			ret = -EINVAL;
+#ifdef CONFIG_IA32_EMULATION
+		WRITE_ONCE(pid_ns->pid_noncyclic, next == -1);
+#endif
+	}
 
 	return ret;
 }
 
+extern int pid_max;
 static const struct ctl_table pid_ns_ctl_table[] = {
 	{
 		.procname = "ns_last_pid",
 		.maxlen = sizeof(int),
 		.mode = 0666, /* permissions are checked in the handler */
 		.proc_handler = pid_ns_ctl_handler,
-		.extra1 = SYSCTL_ZERO,
-		.extra2 = &init_pid_ns.pid_max,
+		.extra1 = SYSCTL_NEG_ONE,
+		.extra2 = &pid_max,
 	},
 };
-#endif	/* CONFIG_CHECKPOINT_RESTORE */
+#endif	/* CONFIG_CHECKPOINT_RESTORE || CONFIG_IA32_EMULATION */
 
 int reboot_pid_ns(struct pid_namespace *pid_ns, int cmd)
 {
@@ -470,7 +463,7 @@ static __init int pid_namespaces_init(void)
 {
 	pid_ns_cachep = KMEM_CACHE(pid_namespace, SLAB_PANIC | SLAB_ACCOUNT);
 
-#ifdef CONFIG_CHECKPOINT_RESTORE
+#if defined(CONFIG_CHECKPOINT_RESTORE) || defined(CONFIG_IA32_EMULATION)
 	register_sysctl_init("kernel", pid_ns_ctl_table);
 #endif
 
