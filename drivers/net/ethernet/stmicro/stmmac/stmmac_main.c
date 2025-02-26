@@ -88,13 +88,13 @@ MODULE_PARM_DESC(phyaddr, "Physical device address");
 #define STMMAC_XDP_TX		BIT(1)
 #define STMMAC_XDP_REDIRECT	BIT(2)
 
-static int flow_ctrl = FLOW_AUTO;
+static int flow_ctrl = 0xdead;
 module_param(flow_ctrl, int, 0644);
-MODULE_PARM_DESC(flow_ctrl, "Flow control ability [on/off]");
+MODULE_PARM_DESC(flow_ctrl, "Flow control ability [on/off] (obsolete)");
 
 static int pause = PAUSE_TIME;
 module_param(pause, int, 0644);
-MODULE_PARM_DESC(pause, "Flow Control Pause Time");
+MODULE_PARM_DESC(pause, "Flow Control Pause Time (units of 512 bit times)");
 
 #define TC_DEFAULT 64
 static int tc = TC_DEFAULT;
@@ -188,12 +188,11 @@ static void stmmac_verify_args(void)
 		watchdog = TX_TIMEO;
 	if (unlikely((buf_sz < DEFAULT_BUFSIZE) || (buf_sz > BUF_SIZE_16KiB)))
 		buf_sz = DEFAULT_BUFSIZE;
-	if (unlikely(flow_ctrl > 1))
-		flow_ctrl = FLOW_AUTO;
-	else if (likely(flow_ctrl < 0))
-		flow_ctrl = FLOW_OFF;
 	if (unlikely((pause < 0) || (pause > 0xffff)))
 		pause = PAUSE_TIME;
+
+	if (flow_ctrl != 0xdead)
+		pr_warn("stmmac: module parameter 'flow_ctrl' is obsolete - please remove from your module configuration\n");
 }
 
 static void __stmmac_disable_all_queues(struct stmmac_priv *priv)
@@ -390,16 +389,6 @@ static inline u32 stmmac_rx_dirty(struct stmmac_priv *priv, u32 queue)
 	return dirty;
 }
 
-static void stmmac_disable_hw_lpi_timer(struct stmmac_priv *priv)
-{
-	stmmac_set_eee_lpi_timer(priv, priv->hw, 0);
-}
-
-static void stmmac_enable_hw_lpi_timer(struct stmmac_priv *priv)
-{
-	stmmac_set_eee_lpi_timer(priv, priv->hw, priv->tx_lpi_timer);
-}
-
 static bool stmmac_eee_tx_busy(struct stmmac_priv *priv)
 {
 	u32 tx_cnt = priv->plat->tx_queues_to_use;
@@ -436,8 +425,9 @@ static void stmmac_try_to_start_sw_lpi(struct stmmac_priv *priv)
 
 	/* Check and enter in LPI mode */
 	if (!priv->tx_path_in_lpi_mode)
-		stmmac_set_eee_mode(priv, priv->hw,
-			priv->plat->flags & STMMAC_FLAG_EN_TX_LPI_CLOCKGATING);
+		stmmac_set_lpi_mode(priv, priv->hw, STMMAC_LPI_FORCED,
+			priv->plat->flags & STMMAC_FLAG_EN_TX_LPI_CLOCKGATING,
+			0);
 }
 
 /**
@@ -447,8 +437,8 @@ static void stmmac_try_to_start_sw_lpi(struct stmmac_priv *priv)
  */
 static void stmmac_stop_sw_lpi(struct stmmac_priv *priv)
 {
-	stmmac_reset_eee_mode(priv, priv->hw);
 	del_timer_sync(&priv->eee_ctrl_timer);
+	stmmac_set_lpi_mode(priv, priv->hw, STMMAC_LPI_DISABLE, false, 0);
 	priv->tx_path_in_lpi_mode = false;
 }
 
@@ -464,74 +454,6 @@ static void stmmac_eee_ctrl_timer(struct timer_list *t)
 	struct stmmac_priv *priv = from_timer(priv, t, eee_ctrl_timer);
 
 	stmmac_try_to_start_sw_lpi(priv);
-}
-
-/**
- * stmmac_eee_init - init EEE
- * @priv: driver private structure
- * @active: indicates whether EEE should be enabled.
- * Description:
- *  if the GMAC supports the EEE (from the HW cap reg) and the phy device
- *  can also manage EEE, this function enable the LPI state and start related
- *  timer.
- */
-static void stmmac_eee_init(struct stmmac_priv *priv, bool active)
-{
-	priv->eee_active = active;
-
-	/* Check if MAC core supports the EEE feature. */
-	if (!priv->dma_cap.eee) {
-		priv->eee_enabled = false;
-		return;
-	}
-
-	mutex_lock(&priv->lock);
-
-	/* Check if it needs to be deactivated */
-	if (!priv->eee_active) {
-		if (priv->eee_enabled) {
-			netdev_dbg(priv->dev, "disable EEE\n");
-			priv->eee_sw_timer_en = false;
-			stmmac_disable_hw_lpi_timer(priv);
-			del_timer_sync(&priv->eee_ctrl_timer);
-			stmmac_set_eee_timer(priv, priv->hw, 0,
-					     STMMAC_DEFAULT_TWT_LS);
-			if (priv->hw->xpcs)
-				xpcs_config_eee(priv->hw->xpcs,
-						priv->plat->mult_fact_100ns,
-						false);
-		}
-		priv->eee_enabled = false;
-		mutex_unlock(&priv->lock);
-		return;
-	}
-
-	if (priv->eee_active && !priv->eee_enabled) {
-		stmmac_set_eee_timer(priv, priv->hw, STMMAC_DEFAULT_LIT_LS,
-				     STMMAC_DEFAULT_TWT_LS);
-		if (priv->hw->xpcs)
-			xpcs_config_eee(priv->hw->xpcs,
-					priv->plat->mult_fact_100ns,
-					true);
-	}
-
-	if (priv->plat->has_gmac4 && priv->tx_lpi_timer <= STMMAC_ET_MAX) {
-		/* Use hardware LPI mode */
-		del_timer_sync(&priv->eee_ctrl_timer);
-		priv->tx_path_in_lpi_mode = false;
-		priv->eee_sw_timer_en = false;
-		stmmac_enable_hw_lpi_timer(priv);
-	} else {
-		/* Use software LPI mode */
-		priv->eee_sw_timer_en = true;
-		stmmac_disable_hw_lpi_timer(priv);
-		stmmac_restart_sw_lpi_timer(priv);
-	}
-
-	priv->eee_enabled = true;
-
-	mutex_unlock(&priv->lock);
-	netdev_dbg(priv->dev, "Energy-Efficient Ethernet initialized\n");
 }
 
 /* stmmac_get_tx_hwtstamp - get HW TX timestamps
@@ -935,14 +857,16 @@ static void stmmac_release_ptp(struct stmmac_priv *priv)
  *  stmmac_mac_flow_ctrl - Configure flow control in all queues
  *  @priv: driver private structure
  *  @duplex: duplex passed to the next function
+ *  @flow_ctrl: desired flow control modes
  *  Description: It is used for configuring the flow control in all queues
  */
-static void stmmac_mac_flow_ctrl(struct stmmac_priv *priv, u32 duplex)
+static void stmmac_mac_flow_ctrl(struct stmmac_priv *priv, u32 duplex,
+				 unsigned int flow_ctrl)
 {
 	u32 tx_cnt = priv->plat->tx_queues_to_use;
 
-	stmmac_flow_ctrl(priv, priv->hw, duplex, priv->flow_ctrl,
-			priv->pause, tx_cnt);
+	stmmac_flow_ctrl(priv, priv->hw, duplex, flow_ctrl, priv->pause_time,
+			 tx_cnt);
 }
 
 static unsigned long stmmac_mac_get_caps(struct phylink_config *config,
@@ -1002,6 +926,7 @@ static void stmmac_mac_link_up(struct phylink_config *config,
 			       bool tx_pause, bool rx_pause)
 {
 	struct stmmac_priv *priv = netdev_priv(to_net_dev(config->dev));
+	unsigned int flow_ctrl;
 	u32 old_ctrl, ctrl;
 
 	if ((priv->plat->flags & STMMAC_FLAG_SERDES_UP_AFTER_PHY_LINKUP) &&
@@ -1082,15 +1007,15 @@ static void stmmac_mac_link_up(struct phylink_config *config,
 
 	/* Flow Control operation */
 	if (rx_pause && tx_pause)
-		priv->flow_ctrl = FLOW_AUTO;
+		flow_ctrl = FLOW_AUTO;
 	else if (rx_pause && !tx_pause)
-		priv->flow_ctrl = FLOW_RX;
+		flow_ctrl = FLOW_RX;
 	else if (!rx_pause && tx_pause)
-		priv->flow_ctrl = FLOW_TX;
+		flow_ctrl = FLOW_TX;
 	else
-		priv->flow_ctrl = FLOW_OFF;
+		flow_ctrl = FLOW_OFF;
 
-	stmmac_mac_flow_ctrl(priv, duplex);
+	stmmac_mac_flow_ctrl(priv, duplex, flow_ctrl);
 
 	if (ctrl != old_ctrl)
 		writel(ctrl, priv->ioaddr + MAC_CTRL_REG);
@@ -1110,16 +1035,53 @@ static void stmmac_mac_disable_tx_lpi(struct phylink_config *config)
 {
 	struct stmmac_priv *priv = netdev_priv(to_net_dev(config->dev));
 
-	stmmac_eee_init(priv, false);
+	priv->eee_active = false;
+
+	mutex_lock(&priv->lock);
+
+	priv->eee_enabled = false;
+
+	netdev_dbg(priv->dev, "disable EEE\n");
+	priv->eee_sw_timer_en = false;
+	del_timer_sync(&priv->eee_ctrl_timer);
+	stmmac_set_lpi_mode(priv, priv->hw, STMMAC_LPI_DISABLE, false, 0);
+	priv->tx_path_in_lpi_mode = false;
+
+	stmmac_set_eee_timer(priv, priv->hw, 0, STMMAC_DEFAULT_TWT_LS);
+	mutex_unlock(&priv->lock);
 }
 
 static int stmmac_mac_enable_tx_lpi(struct phylink_config *config, u32 timer,
 				    bool tx_clk_stop)
 {
 	struct stmmac_priv *priv = netdev_priv(to_net_dev(config->dev));
+	int ret;
 
 	priv->tx_lpi_timer = timer;
-	stmmac_eee_init(priv, true);
+	priv->eee_active = true;
+
+	mutex_lock(&priv->lock);
+
+	priv->eee_enabled = true;
+
+	stmmac_set_eee_timer(priv, priv->hw, STMMAC_DEFAULT_LIT_LS,
+			     STMMAC_DEFAULT_TWT_LS);
+
+	/* Try to cnfigure the hardware timer. */
+	ret = stmmac_set_lpi_mode(priv, priv->hw, STMMAC_LPI_TIMER,
+				  priv->plat->flags & STMMAC_FLAG_EN_TX_LPI_CLOCKGATING,
+				  priv->tx_lpi_timer);
+
+	if (ret) {
+		/* Hardware timer mode not supported, or value out of range.
+		 * Fall back to using software LPI mode
+		 */
+		priv->eee_sw_timer_en = true;
+		stmmac_restart_sw_lpi_timer(priv);
+	}
+
+	mutex_unlock(&priv->lock);
+	netdev_dbg(priv->dev, "Energy-Efficient Ethernet initialized\n");
 
 	return 0;
 }
@@ -2524,9 +2486,20 @@ static u64 stmmac_xsk_fill_timestamp(void *_priv)
 	return 0;
 }
 
+static void stmmac_xsk_request_launch_time(u64 launch_time, void *_priv)
+{
+	struct timespec64 ts = ns_to_timespec64(launch_time);
+	struct stmmac_metadata_request *meta_req = _priv;
+
+	if (meta_req->tbs & STMMAC_TBS_EN)
+		stmmac_set_desc_tbs(meta_req->priv, meta_req->edesc, ts.tv_sec,
+				    ts.tv_nsec);
+}
+
 static const struct xsk_tx_metadata_ops stmmac_xsk_tx_metadata_ops = {
 	.tmo_request_timestamp		= stmmac_xsk_request_timestamp,
 	.tmo_fill_timestamp		= stmmac_xsk_fill_timestamp,
+	.tmo_request_launch_time	= stmmac_xsk_request_launch_time,
 };
 
 static bool stmmac_xdp_xmit_zc(struct stmmac_priv *priv, u32 queue, u32 budget)
@@ -2610,6 +2583,8 @@ static bool stmmac_xdp_xmit_zc(struct stmmac_priv *priv, u32 queue, u32 budget)
 		meta_req.priv = priv;
 		meta_req.tx_desc = tx_desc;
 		meta_req.set_ic = &set_ic;
+		meta_req.tbs = tx_q->tbs;
+		meta_req.edesc = &tx_q->dma_entx[entry];
 		xsk_tx_metadata_request(meta, &stmmac_xsk_tx_metadata_ops,
 					&meta_req);
 		if (set_ic) {
@@ -3072,7 +3047,7 @@ static int stmmac_init_dma_engine(struct stmmac_priv *priv)
 	int ret = 0;
 
 	if (!priv->plat->dma_cfg || !priv->plat->dma_cfg->pbl) {
-		dev_err(priv->device, "Invalid DMA configuration\n");
+		netdev_err(priv->dev, "Invalid DMA configuration\n");
 		return -EINVAL;
 	}
 
@@ -3081,7 +3056,7 @@ static int stmmac_init_dma_engine(struct stmmac_priv *priv)
 
 	ret = stmmac_reset(priv, priv->ioaddr);
 	if (ret) {
-		dev_err(priv->device, "Failed to reset the dma\n");
+		netdev_err(priv->dev, "Failed to reset the dma\n");
 		return ret;
 	}
 
@@ -7444,7 +7419,7 @@ int stmmac_dvr_probe(struct device *device,
 		return -ENOMEM;
 
 	stmmac_set_ethtool_ops(ndev);
-	priv->pause = pause;
+	priv->pause_time = pause;
 	priv->plat = plat_dat;
 	priv->ioaddr = res->addr;
 	priv->dev->base_addr = (unsigned long)res->addr;
@@ -7639,9 +7614,6 @@ int stmmac_dvr_probe(struct device *device,
 		dev_warn(priv->device,
 			 "%s: warning: maxmtu having invalid value (%d)\n",
 			 __func__, priv->plat->maxmtu);
-
-	if (flow_ctrl)
-		priv->flow_ctrl = FLOW_AUTO;	/* RX/TX pause on */
 
 	ndev->priv_flags |= IFF_LIVE_ADDR_CHANGE;
 

@@ -169,6 +169,7 @@ static const struct pci_device_id rtl8169_pci_tbl[] = {
 	{ PCI_VDEVICE(REALTEK,	0x8125) },
 	{ PCI_VDEVICE(REALTEK,	0x8126) },
 	{ PCI_VDEVICE(REALTEK,	0x3000) },
+	{ PCI_VDEVICE(REALTEK,	0x5000) },
 	{}
 };
 
@@ -5199,6 +5200,33 @@ static int r8169_mdio_write_reg(struct mii_bus *mii_bus, int phyaddr,
 	return 0;
 }
 
+static int r8169_mdio_read_reg_c45(struct mii_bus *mii_bus, int addr,
+				   int devnum, int regnum)
+{
+	struct rtl8169_private *tp = mii_bus->priv;
+
+	if (addr > 0)
+		return -ENODEV;
+
+	if (devnum == MDIO_MMD_VEND2 && regnum > MDIO_STAT2)
+		return r8168_phy_ocp_read(tp, regnum);
+
+	return 0;
+}
+
+static int r8169_mdio_write_reg_c45(struct mii_bus *mii_bus, int addr,
+				    int devnum, int regnum, u16 val)
+{
+	struct rtl8169_private *tp = mii_bus->priv;
+
+	if (addr > 0 || devnum != MDIO_MMD_VEND2 || regnum <= MDIO_STAT2)
+		return -ENODEV;
+
+	r8168_phy_ocp_write(tp, regnum, val);
+
+	return 0;
+}
+
 static int r8169_mdio_register(struct rtl8169_private *tp)
 {
 	struct pci_dev *pdev = tp->pci_dev;
@@ -5222,11 +5250,17 @@ static int r8169_mdio_register(struct rtl8169_private *tp)
 	new_bus->priv = tp;
 	new_bus->parent = &pdev->dev;
 	new_bus->irq[0] = PHY_MAC_INTERRUPT;
+	new_bus->phy_mask = GENMASK(31, 1);
 	snprintf(new_bus->id, MII_BUS_ID_SIZE, "r8169-%x-%x",
 		 pci_domain_nr(pdev->bus), pci_dev_id(pdev));
 
 	new_bus->read = r8169_mdio_read_reg;
 	new_bus->write = r8169_mdio_write_reg;
+
+	if (tp->mac_version >= RTL_GIGA_MAC_VER_40) {
+		new_bus->read_c45 = r8169_mdio_read_reg_c45;
+		new_bus->write_c45 = r8169_mdio_write_reg_c45;
+	}
 
 	ret = devm_mdiobus_register(&pdev->dev, new_bus);
 	if (ret)
@@ -5251,9 +5285,9 @@ static int r8169_mdio_register(struct rtl8169_private *tp)
 
 	/* mimic behavior of r8125/r8126 vendor drivers */
 	if (tp->mac_version == RTL_GIGA_MAC_VER_61)
-		phy_set_eee_broken(tp->phydev,
-				   ETHTOOL_LINK_MODE_2500baseT_Full_BIT);
-	phy_set_eee_broken(tp->phydev, ETHTOOL_LINK_MODE_5000baseT_Full_BIT);
+		phy_disable_eee_mode(tp->phydev,
+				     ETHTOOL_LINK_MODE_2500baseT_Full_BIT);
+	phy_disable_eee_mode(tp->phydev, ETHTOOL_LINK_MODE_5000baseT_Full_BIT);
 
 	/* PHY will be woken up in rtl_open() */
 	phy_suspend(tp->phydev);
