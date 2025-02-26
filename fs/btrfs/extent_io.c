@@ -2652,15 +2652,14 @@ static inline void btrfs_release_extent_buffer(struct extent_buffer *eb)
 	kmem_cache_free(extent_buffer_cache, eb);
 }
 
-static struct extent_buffer *
-__alloc_extent_buffer(struct btrfs_fs_info *fs_info, u64 start,
-		      unsigned long len)
+static struct extent_buffer *__alloc_extent_buffer(struct btrfs_fs_info *fs_info,
+						   u64 start)
 {
 	struct extent_buffer *eb = NULL;
 
 	eb = kmem_cache_zalloc(extent_buffer_cache, GFP_NOFS|__GFP_NOFAIL);
 	eb->start = start;
-	eb->len = len;
+	eb->len = fs_info->nodesize;
 	eb->fs_info = fs_info;
 	init_rwsem(&eb->lock);
 
@@ -2669,7 +2668,7 @@ __alloc_extent_buffer(struct btrfs_fs_info *fs_info, u64 start,
 	spin_lock_init(&eb->refs_lock);
 	atomic_set(&eb->refs, 1);
 
-	ASSERT(len <= BTRFS_MAX_METADATA_BLOCKSIZE);
+	ASSERT(eb->len <= BTRFS_MAX_METADATA_BLOCKSIZE);
 
 	return eb;
 }
@@ -2680,7 +2679,7 @@ struct extent_buffer *btrfs_clone_extent_buffer(const struct extent_buffer *src)
 	int num_folios = num_extent_folios(src);
 	int ret;
 
-	new = __alloc_extent_buffer(src->fs_info, src->start, src->len);
+	new = __alloc_extent_buffer(src->fs_info, src->start);
 	if (new == NULL)
 		return NULL;
 
@@ -2714,13 +2713,13 @@ struct extent_buffer *btrfs_clone_extent_buffer(const struct extent_buffer *src)
 }
 
 struct extent_buffer *__alloc_dummy_extent_buffer(struct btrfs_fs_info *fs_info,
-						  u64 start, unsigned long len)
+						  u64 start)
 {
 	struct extent_buffer *eb;
 	int num_folios = 0;
 	int ret;
 
-	eb = __alloc_extent_buffer(fs_info, start, len);
+	eb = __alloc_extent_buffer(fs_info, start);
 	if (!eb)
 		return NULL;
 
@@ -2754,7 +2753,7 @@ err:
 struct extent_buffer *alloc_dummy_extent_buffer(struct btrfs_fs_info *fs_info,
 						u64 start)
 {
-	return __alloc_dummy_extent_buffer(fs_info, start, fs_info->nodesize);
+	return __alloc_dummy_extent_buffer(fs_info, start);
 }
 
 static void check_buffer_tree_ref(struct extent_buffer *eb)
@@ -3031,7 +3030,6 @@ finish:
 struct extent_buffer *alloc_extent_buffer(struct btrfs_fs_info *fs_info,
 					  u64 start, u64 owner_root, int level)
 {
-	unsigned long len = fs_info->nodesize;
 	int num_folios;
 	int attached = 0;
 	struct extent_buffer *eb;
@@ -3060,7 +3058,7 @@ struct extent_buffer *alloc_extent_buffer(struct btrfs_fs_info *fs_info,
 	if (eb)
 		return eb;
 
-	eb = __alloc_extent_buffer(fs_info, start, len);
+	eb = __alloc_extent_buffer(fs_info, start);
 	if (!eb)
 		return ERR_PTR(-ENOMEM);
 
