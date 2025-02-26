@@ -778,10 +778,14 @@ static struct uprobe *hprobe_expire(struct hprobe *hprobe, bool get)
 	enum hprobe_state hstate;
 
 	/*
-	 * return_instance's hprobe is protected by RCU.
-	 * Underlying uprobe is itself protected from reuse by SRCU.
+	 * Caller should guarantee that return_instance is not going to be
+	 * freed from under us. This can be achieved either through holding
+	 * rcu_read_lock() or by owning return_instance in the first place.
+	 *
+	 * Underlying uprobe is itself protected from reuse by SRCU, so ensure
+	 * SRCU lock is held properly.
 	 */
-	lockdep_assert(rcu_read_lock_held() && srcu_read_lock_held(&uretprobes_srcu));
+	lockdep_assert(srcu_read_lock_held(&uretprobes_srcu));
 
 	hstate = READ_ONCE(hprobe->state);
 	switch (hstate) {
@@ -2318,9 +2322,8 @@ bool uprobe_deny_signal(void)
 	WARN_ON_ONCE(utask->state != UTASK_SSTEP);
 
 	if (task_sigpending(t)) {
-		spin_lock_irq(&t->sighand->siglock);
+		utask->signal_denied = true;
 		clear_tsk_thread_flag(t, TIF_SIGPENDING);
-		spin_unlock_irq(&t->sighand->siglock);
 
 		if (__fatal_signal_pending(t) || arch_uprobe_xol_was_trapped(t)) {
 			utask->state = UTASK_SSTEP_TRAPPED;
@@ -2753,9 +2756,10 @@ static void handle_singlestep(struct uprobe_task *utask, struct pt_regs *regs)
 	utask->state = UTASK_RUNNING;
 	xol_free_insn_slot(utask);
 
-	spin_lock_irq(&current->sighand->siglock);
-	recalc_sigpending(); /* see uprobe_deny_signal() */
-	spin_unlock_irq(&current->sighand->siglock);
+	if (utask->signal_denied) {
+		set_thread_flag(TIF_SIGPENDING);
+		utask->signal_denied = false;
+	}
 
 	if (unlikely(err)) {
 		uprobe_warn(current, "execute the probed insn, sending SIGILL.");
