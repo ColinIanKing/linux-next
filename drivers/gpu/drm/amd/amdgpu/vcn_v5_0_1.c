@@ -575,9 +575,6 @@ static int vcn_v5_0_1_start(struct amdgpu_device *adev)
 	uint32_t tmp;
 	int i, j, k, r, vcn_inst;
 
-	if (adev->pm.dpm_enabled)
-		amdgpu_dpm_enable_uvd(adev, true);
-
 	for (i = 0; i < adev->vcn.num_vcn_inst; ++i) {
 		fw_shared = adev->vcn.inst[i].fw_shared.cpu_addr;
 
@@ -816,9 +813,6 @@ static int vcn_v5_0_1_stop(struct amdgpu_device *adev)
 		WREG32_SOC15(VCN, vcn_inst, regUVD_STATUS, 0);
 	}
 
-	if (adev->pm.dpm_enabled)
-		amdgpu_dpm_enable_uvd(adev, false);
-
 	return 0;
 }
 
@@ -933,13 +927,13 @@ static void vcn_v5_0_1_set_unified_ring_funcs(struct amdgpu_device *adev)
 /**
  * vcn_v5_0_1_is_idle - check VCN block is idle
  *
- * @handle: amdgpu_device pointer
+ * @ip_block: Pointer to the amdgpu_ip_block structure
  *
  * Check whether VCN block is idle
  */
-static bool vcn_v5_0_1_is_idle(void *handle)
+static bool vcn_v5_0_1_is_idle(struct amdgpu_ip_block *ip_block)
 {
-	struct amdgpu_device *adev = (struct amdgpu_device *)handle;
+	struct amdgpu_device *adev = ip_block->adev;
 	int i, ret = 1;
 
 	for (i = 0; i < adev->vcn.num_vcn_inst; ++i)
