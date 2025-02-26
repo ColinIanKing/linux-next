@@ -587,7 +587,7 @@ static inline int swp_swapcount(swp_entry_t entry)
 	return 0;
 }
 
-static int folio_alloc_swap(struct folio *folio, gfp_t gfp_mask)
+static inline int folio_alloc_swap(struct folio *folio, gfp_t gfp_mask)
 {
 	return -EINVAL;
 }
