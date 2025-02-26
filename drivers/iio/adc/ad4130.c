@@ -939,8 +939,15 @@ static const struct iio_enum ad4130_filter_mode_enum = {
 };
 
 static const struct iio_chan_spec_ext_info ad4130_filter_mode_ext_info[] = {
+	/*
+	 * Intentional duplication of attributes to keep backwards compatibility
+	 * while standardizing over the main IIO ABI for digital filtering.
+	 */
 	IIO_ENUM("filter_mode", IIO_SEPARATE, &ad4130_filter_mode_enum),
 	IIO_ENUM_AVAILABLE("filter_mode", IIO_SHARED_BY_TYPE,
+			   &ad4130_filter_mode_enum),
+	IIO_ENUM("filter_type", IIO_SEPARATE, &ad4130_filter_mode_enum),
+	IIO_ENUM_AVAILABLE("filter_type", IIO_SHARED_BY_TYPE,
 			   &ad4130_filter_mode_enum),
 	{ }
 };
@@ -1060,13 +1067,11 @@ static int _ad4130_read_sample(struct iio_dev *indio_dev, unsigned int channel,
 static int ad4130_read_sample(struct iio_dev *indio_dev, unsigned int channel,
 			      int *val)
 {
-	iio_device_claim_direct_scoped(return -EBUSY, indio_dev) {
-		struct ad4130_state *st = iio_priv(indio_dev);
+	struct ad4130_state *st = iio_priv(indio_dev);
 
-		guard(mutex)(&st->lock);
-		return _ad4130_read_sample(indio_dev, channel, val);
-	}
-	unreachable();
+	guard(mutex)(&st->lock);
+
+	return _ad4130_read_sample(indio_dev, channel, val);
 }
 
 static int ad4130_read_raw(struct iio_dev *indio_dev,
@@ -1076,10 +1081,16 @@ static int ad4130_read_raw(struct iio_dev *indio_dev,
 	struct ad4130_state *st = iio_priv(indio_dev);
 	unsigned int channel = chan->scan_index;
 	struct ad4130_setup_info *setup_info = &st->chans_info[channel].setup;
+	int ret;
 
 	switch (info) {
 	case IIO_CHAN_INFO_RAW:
-		return ad4130_read_sample(indio_dev, channel, val);
+		if (!iio_device_claim_direct(indio_dev))
+			return -EBUSY;
+
+		ret = ad4130_read_sample(indio_dev, channel, val);
+		iio_device_release_direct(indio_dev);
+		return ret;
 	case IIO_CHAN_INFO_SCALE: {
 		guard(mutex)(&st->lock);
 		*val = st->scale_tbls[setup_info->ref_sel][setup_info->pga][0];
