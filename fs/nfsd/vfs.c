@@ -1504,11 +1504,8 @@ nfsd_create_locked(struct svc_rqst *rqstp, struct svc_fh *fhp,
 			}
 			dput(resfhp->fh_dentry);
 			resfhp->fh_dentry = dget(d);
-			err = fh_update(resfhp);
 			dput(dchild);
 			dchild = d;
-			if (err)
-				goto out;
 		}
 		break;
 	case S_IFCHR:
