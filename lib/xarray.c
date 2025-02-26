@@ -1081,6 +1081,9 @@ EXPORT_SYMBOL_GPL(xas_split_alloc);
  * The size of the new entries is set in @xas.  The value in @entry is
  * copied to all the replacement entries.
  *
+ * NOTE: use xas_try_split_min_order() to get next split order instead of
+ * @order - 1 if you want to minmize xas_try_split() calls.
+ *
  * Context: Any context.  The caller should hold the xa_lock.
  */
 void xas_split(struct xa_state *xas, void *entry, unsigned int order)
@@ -1231,6 +1234,28 @@ void xas_try_split(struct xa_state *xas, void *entry, unsigned int order)
 }
 EXPORT_SYMBOL_GPL(xas_try_split);
 #endif
+
+/**
+ * xas_try_split_min_order() - Minimal split order xas_try_split() can accept
+ * @order: Current entry order.
+ *
+ * xas_try_split() can split a multi-index entry to smaller than @order - 1 if
+ * no new xa_node is needed. This function provides the minimal order
+ * xas_try_split() supports.
+ *
+ * Return: the minimal order xas_try_split() supports
+ *
+ * Context: Any context.
+ *
+ */
+unsigned int xas_try_split_min_order(unsigned int order)
+{
+	if (order % XA_CHUNK_SHIFT == 0)
+		return order == 0 ? 0 : order - 1;
+
+	return order - (order % XA_CHUNK_SHIFT);
+}
+EXPORT_SYMBOL_GPL(xas_try_split_min_order);
 
 /**
  * xas_pause() - Pause a walk to drop a lock.
