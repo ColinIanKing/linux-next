@@ -33,6 +33,7 @@
 #include "xe_pm.h"
 #include "xe_preempt_fence.h"
 #include "xe_pt.h"
+#include "xe_pxp.h"
 #include "xe_res_cursor.h"
 #include "xe_sync.h"
 #include "xe_trace_bo.h"
@@ -659,27 +660,39 @@ int xe_vm_userptr_pin(struct xe_vm *vm)
 {
 	struct xe_userptr_vma *uvma, *next;
 	int err = 0;
-	LIST_HEAD(tmp_evict);
 
 	xe_assert(vm->xe, !xe_vm_in_fault_mode(vm));
 	lockdep_assert_held_write(&vm->lock);
 
 	/* Collect invalidated userptrs */
 	spin_lock(&vm->userptr.invalidated_lock);
+	xe_assert(vm->xe, list_empty(&vm->userptr.repin_list));
 	list_for_each_entry_safe(uvma, next, &vm->userptr.invalidated,
 				 userptr.invalidate_link) {
 		list_del_init(&uvma->userptr.invalidate_link);
-		list_move_tail(&uvma->userptr.repin_link,
-			       &vm->userptr.repin_list);
+		list_add_tail(&uvma->userptr.repin_link,
+			      &vm->userptr.repin_list);
 	}
 	spin_unlock(&vm->userptr.invalidated_lock);
 
-	/* Pin and move to temporary list */
+	/* Pin and move to bind list */
 	list_for_each_entry_safe(uvma, next, &vm->userptr.repin_list,
 				 userptr.repin_link) {
 		err = xe_vma_userptr_pin_pages(uvma);
 		if (err == -EFAULT) {
 			list_del_init(&uvma->userptr.repin_link);
+			/*
+			 * We might have already done the pin once already, but
+			 * then had to retry before the re-bind happened, due
+			 * some other condition in the caller, but in the
+			 * meantime the userptr got dinged by the notifier such
+			 * that we need to revalidate here, but this time we hit
+			 * the EFAULT. In such a case make sure we remove
+			 * ourselves from the rebind list to avoid going down in
+			 * flames.
+			 */
+			if (!list_empty(&uvma->vma.combined_links.rebind))
+				list_del_init(&uvma->vma.combined_links.rebind);
 
 			/* Wait for pending binds */
 			xe_vm_lock(vm, false);
@@ -690,10 +703,10 @@ int xe_vm_userptr_pin(struct xe_vm *vm)
 			err = xe_vm_invalidate_vma(&uvma->vma);
 			xe_vm_unlock(vm);
 			if (err)
-				return err;
+				break;
 		} else {
-			if (err < 0)
-				return err;
+			if (err)
+				break;
 
 			list_del_init(&uvma->userptr.repin_link);
 			list_move_tail(&uvma->vma.combined_links.rebind,
@@ -701,7 +714,19 @@ int xe_vm_userptr_pin(struct xe_vm *vm)
 		}
 	}
 
-	return 0;
+	if (err) {
+		down_write(&vm->userptr.notifier_lock);
+		spin_lock(&vm->userptr.invalidated_lock);
+		list_for_each_entry_safe(uvma, next, &vm->userptr.repin_list,
+					 userptr.repin_link) {
+			list_del_init(&uvma->userptr.repin_link);
+			list_move_tail(&uvma->userptr.invalidate_link,
+				       &vm->userptr.invalidated);
+		}
+		spin_unlock(&vm->userptr.invalidated_lock);
+		up_write(&vm->userptr.notifier_lock);
+	}
+	return err;
 }
 
 /**
@@ -1066,6 +1091,7 @@ static void xe_vma_destroy(struct xe_vma *vma, struct dma_fence *fence)
 		xe_assert(vm->xe, vma->gpuva.flags & XE_VMA_DESTROYED);
 
 		spin_lock(&vm->userptr.invalidated_lock);
+		xe_assert(vm->xe, list_empty(&to_userptr_vma(vma)->userptr.repin_link));
 		list_del(&to_userptr_vma(vma)->userptr.invalidate_link);
 		spin_unlock(&vm->userptr.invalidated_lock);
 	} else if (!xe_vma_is_null(vma)) {
@@ -1382,6 +1408,12 @@ struct xe_vm *xe_vm_create(struct xe_device *xe, u32 flags)
 	struct xe_tile *tile;
 	u8 id;
 
+	/*
+	 * Since the GSCCS is not user-accessible, we don't expect a GSC VM to
+	 * ever be in faulting mode.
+	 */
+	xe_assert(xe, !((flags & XE_VM_FLAG_GSC) && (flags & XE_VM_FLAG_FAULT_MODE)));
+
 	vm = kzalloc(sizeof(*vm), GFP_KERNEL);
 	if (!vm)
 		return ERR_PTR(-ENOMEM);
@@ -1392,7 +1424,21 @@ struct xe_vm *xe_vm_create(struct xe_device *xe, u32 flags)
 
 	vm->flags = flags;
 
-	init_rwsem(&vm->lock);
+	/**
+	 * GSC VMs are kernel-owned, only used for PXP ops and can sometimes be
+	 * manipulated under the PXP mutex. However, the PXP mutex can be taken
+	 * under a user-VM lock when the PXP session is started at exec_queue
+	 * creation time. Those are different VMs and therefore there is no risk
+	 * of deadlock, but we need to tell lockdep that this is the case or it
+	 * will print a warning.
+	 */
+	if (flags & XE_VM_FLAG_GSC) {
+		static struct lock_class_key gsc_vm_key;
+
+		__init_rwsem(&vm->lock, "gsc_vm", &gsc_vm_key);
+	} else {
+		init_rwsem(&vm->lock);
+	}
 	mutex_init(&vm->snap_mutex);
 
 	INIT_LIST_HEAD(&vm->rebind_list);
@@ -2668,11 +2714,10 @@ static void vm_bind_ioctl_ops_fini(struct xe_vm *vm, struct xe_vma_ops *vops,
 	for (i = 0; i < vops->num_syncs; i++)
 		xe_sync_entry_signal(vops->syncs + i, fence);
 	xe_exec_queue_last_fence_set(wait_exec_queue, vm, fence);
-	dma_fence_put(fence);
 }
 
-static int vm_bind_ioctl_ops_execute(struct xe_vm *vm,
-				     struct xe_vma_ops *vops)
+static struct dma_fence *vm_bind_ioctl_ops_execute(struct xe_vm *vm,
+						   struct xe_vma_ops *vops)
 {
 	struct drm_exec exec;
 	struct dma_fence *fence;
@@ -2685,21 +2730,21 @@ static int vm_bind_ioctl_ops_execute(struct xe_vm *vm,
 	drm_exec_until_all_locked(&exec) {
 		err = vm_bind_ioctl_ops_lock_and_prep(&exec, vm, vops);
 		drm_exec_retry_on_contention(&exec);
-		if (err)
-			goto unlock;
-
-		fence = ops_execute(vm, vops);
-		if (IS_ERR(fence)) {
-			err = PTR_ERR(fence);
+		if (err) {
+			fence = ERR_PTR(err);
 			goto unlock;
 		}
+
+		fence = ops_execute(vm, vops);
+		if (IS_ERR(fence))
+			goto unlock;
 
 		vm_bind_ioctl_ops_fini(vm, vops, fence);
 	}
 
 unlock:
 	drm_exec_fini(&exec);
-	return err;
+	return fence;
 }
 ALLOW_ERROR_INJECTION(vm_bind_ioctl_ops_execute, ERRNO);
 
@@ -2707,7 +2752,8 @@ ALLOW_ERROR_INJECTION(vm_bind_ioctl_ops_execute, ERRNO);
 	(DRM_XE_VM_BIND_FLAG_READONLY | \
 	 DRM_XE_VM_BIND_FLAG_IMMEDIATE | \
 	 DRM_XE_VM_BIND_FLAG_NULL | \
-	 DRM_XE_VM_BIND_FLAG_DUMPABLE)
+	 DRM_XE_VM_BIND_FLAG_DUMPABLE | \
+	 DRM_XE_VM_BIND_FLAG_CHECK_PXP)
 
 #ifdef TEST_VM_OPS_ERROR
 #define SUPPORTED_FLAGS	(SUPPORTED_FLAGS_STUB | FORCE_OP_ERROR)
@@ -2870,7 +2916,7 @@ static void xe_vma_ops_init(struct xe_vma_ops *vops, struct xe_vm *vm,
 
 static int xe_vm_bind_ioctl_validate_bo(struct xe_device *xe, struct xe_bo *bo,
 					u64 addr, u64 range, u64 obj_offset,
-					u16 pat_index)
+					u16 pat_index, u32 op, u32 bind_flags)
 {
 	u16 coh_mode;
 
@@ -2914,6 +2960,12 @@ static int xe_vm_bind_ioctl_validate_bo(struct xe_device *xe, struct xe_bo *bo,
 		return  -EINVAL;
 	}
 
+	/* If a BO is protected it can only be mapped if the key is still valid */
+	if ((bind_flags & DRM_XE_VM_BIND_FLAG_CHECK_PXP) && xe_bo_is_protected(bo) &&
+	    op != DRM_XE_VM_BIND_OP_UNMAP && op != DRM_XE_VM_BIND_OP_UNMAP_ALL)
+		if (XE_IOCTL_DBG(xe, xe_pxp_bo_key_check(xe->pxp, bo) != 0))
+			return -ENOEXEC;
+
 	return 0;
 }
 
@@ -2931,6 +2983,7 @@ int xe_vm_bind_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 	struct xe_sync_entry *syncs = NULL;
 	struct drm_xe_vm_bind_op *bind_ops;
 	struct xe_vma_ops vops;
+	struct dma_fence *fence;
 	int err;
 	int i;
 
@@ -3002,6 +3055,8 @@ int xe_vm_bind_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 		u32 obj = bind_ops[i].obj;
 		u64 obj_offset = bind_ops[i].obj_offset;
 		u16 pat_index = bind_ops[i].pat_index;
+		u32 op = bind_ops[i].op;
+		u32 bind_flags = bind_ops[i].flags;
 
 		if (!obj)
 			continue;
@@ -3014,7 +3069,8 @@ int xe_vm_bind_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 		bos[i] = gem_to_xe_bo(gem_obj);
 
 		err = xe_vm_bind_ioctl_validate_bo(xe, bos[i], addr, range,
-						   obj_offset, pat_index);
+						   obj_offset, pat_index, op,
+						   bind_flags);
 		if (err)
 			goto put_obj;
 	}
@@ -3095,7 +3151,11 @@ int xe_vm_bind_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 	if (err)
 		goto unwind_ops;
 
-	err = vm_bind_ioctl_ops_execute(vm, &vops);
+	fence = vm_bind_ioctl_ops_execute(vm, &vops);
+	if (IS_ERR(fence))
+		err = PTR_ERR(fence);
+	else
+		dma_fence_put(fence);
 
 unwind_ops:
 	if (err && err != -ENODATA)
@@ -3127,6 +3187,81 @@ free_objs:
 	if (args->num_binds > 1)
 		kvfree(bind_ops);
 	return err;
+}
+
+/**
+ * xe_vm_bind_kernel_bo - bind a kernel BO to a VM
+ * @vm: VM to bind the BO to
+ * @bo: BO to bind
+ * @q: exec queue to use for the bind (optional)
+ * @addr: address at which to bind the BO
+ * @cache_lvl: PAT cache level to use
+ *
+ * Execute a VM bind map operation on a kernel-owned BO to bind it into a
+ * kernel-owned VM.
+ *
+ * Returns a dma_fence to track the binding completion if the job to do so was
+ * successfully submitted, an error pointer otherwise.
+ */
+struct dma_fence *xe_vm_bind_kernel_bo(struct xe_vm *vm, struct xe_bo *bo,
+				       struct xe_exec_queue *q, u64 addr,
+				       enum xe_cache_level cache_lvl)
+{
+	struct xe_vma_ops vops;
+	struct drm_gpuva_ops *ops = NULL;
+	struct dma_fence *fence;
+	int err;
+
+	xe_bo_get(bo);
+	xe_vm_get(vm);
+	if (q)
+		xe_exec_queue_get(q);
+
+	down_write(&vm->lock);
+
+	xe_vma_ops_init(&vops, vm, q, NULL, 0);
+
+	ops = vm_bind_ioctl_ops_create(vm, bo, 0, addr, bo->size,
+				       DRM_XE_VM_BIND_OP_MAP, 0, 0,
+				       vm->xe->pat.idx[cache_lvl]);
+	if (IS_ERR(ops)) {
+		err = PTR_ERR(ops);
+		goto release_vm_lock;
+	}
+
+	err = vm_bind_ioctl_ops_parse(vm, ops, &vops);
+	if (err)
+		goto release_vm_lock;
+
+	xe_assert(vm->xe, !list_empty(&vops.list));
+
+	err = xe_vma_ops_alloc(&vops, false);
+	if (err)
+		goto unwind_ops;
+
+	fence = vm_bind_ioctl_ops_execute(vm, &vops);
+	if (IS_ERR(fence))
+		err = PTR_ERR(fence);
+
+unwind_ops:
+	if (err && err != -ENODATA)
+		vm_bind_ioctl_ops_unwind(vm, &ops, 1);
+
+	xe_vma_ops_fini(&vops);
+	drm_gpuva_ops_free(&vm->gpuvm, ops);
+
+release_vm_lock:
+	up_write(&vm->lock);
+
+	if (q)
+		xe_exec_queue_put(q);
+	xe_vm_put(vm);
+	xe_bo_put(bo);
+
+	if (err)
+		fence = ERR_PTR(err);
+
+	return fence;
 }
 
 /**
@@ -3233,6 +3368,35 @@ wait:
 	vma->tile_invalidated = vma->tile_mask;
 
 	return ret;
+}
+
+int xe_vm_validate_protected(struct xe_vm *vm)
+{
+	struct drm_gpuva *gpuva;
+	int err = 0;
+
+	if (!vm)
+		return -ENODEV;
+
+	mutex_lock(&vm->snap_mutex);
+
+	drm_gpuvm_for_each_va(gpuva, &vm->gpuvm) {
+		struct xe_vma *vma = gpuva_to_vma(gpuva);
+		struct xe_bo *bo = vma->gpuva.gem.obj ?
+			gem_to_xe_bo(vma->gpuva.gem.obj) : NULL;
+
+		if (!bo)
+			continue;
+
+		if (xe_bo_is_protected(bo)) {
+			err = xe_pxp_bo_key_check(vm->xe->pxp, bo);
+			if (err)
+				break;
+		}
+	}
+
+	mutex_unlock(&vm->snap_mutex);
+	return err;
 }
 
 struct xe_vm_snapshot {
