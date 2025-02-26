@@ -1232,6 +1232,7 @@ out_auth:
 	ceph_auth_destroy(monc->auth);
 out_monmap:
 	kfree(monc->monmap);
+	monc->monmap = NULL;
 out:
 	return err;
 }
@@ -1267,6 +1268,7 @@ void ceph_monc_stop(struct ceph_mon_client *monc)
 	ceph_msg_put(monc->m_subscribe_ack);
 
 	kfree(monc->monmap);
+	monc->monmap = NULL;
 }
 EXPORT_SYMBOL(ceph_monc_stop);
 
