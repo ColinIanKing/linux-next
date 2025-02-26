@@ -201,13 +201,10 @@ static inline void io_mshot_prep_retry(struct io_kiocb *req,
 	req->buf_index = sr->buf_group;
 }
 
-#ifdef CONFIG_COMPAT
-static int io_compat_msg_copy_hdr(struct io_kiocb *req,
-				  struct io_async_msghdr *iomsg,
-				  struct compat_msghdr *msg, int ddir)
+static int io_net_import_vec(struct io_kiocb *req, struct io_async_msghdr *iomsg,
+			     const struct iovec __user *uiov, unsigned uvec_seg,
+			     int ddir)
 {
-	struct io_sr_msg *sr = io_kiocb_to_cmd(req, struct io_sr_msg);
-	struct compat_iovec __user *uiov;
 	struct iovec *iov;
 	int ret, nr_segs;
 
@@ -215,103 +212,112 @@ static int io_compat_msg_copy_hdr(struct io_kiocb *req,
 		nr_segs = iomsg->free_iov_nr;
 		iov = iomsg->free_iov;
 	} else {
-		iov = &iomsg->fast_iov;
 		nr_segs = 1;
+		iov = &iomsg->fast_iov;
 	}
+
+	ret = __import_iovec(ddir, uiov, uvec_seg, nr_segs, &iov,
+			     &iomsg->msg.msg_iter, io_is_compat(req->ctx));
+	if (unlikely(ret < 0))
+		return ret;
+	io_net_vec_assign(req, iomsg, iov);
+	return 0;
+}
+
+#ifdef CONFIG_COMPAT
+static int io_compat_msg_copy_hdr(struct io_kiocb *req,
+				  struct io_async_msghdr *iomsg,
+				  struct compat_msghdr *msg, int ddir,
+				  struct sockaddr __user **save_addr)
+{
+	struct io_sr_msg *sr = io_kiocb_to_cmd(req, struct io_sr_msg);
+	struct compat_iovec __user *uiov;
+	int ret;
 
 	if (copy_from_user(msg, sr->umsg_compat, sizeof(*msg)))
 		return -EFAULT;
 
+	ret = __get_compat_msghdr(&iomsg->msg, msg, save_addr);
+	if (ret)
+		return ret;
+
 	uiov = compat_ptr(msg->msg_iov);
 	if (req->flags & REQ_F_BUFFER_SELECT) {
-		compat_ssize_t clen;
-
 		if (msg->msg_iovlen == 0) {
-			sr->len = iov->iov_len = 0;
-			iov->iov_base = NULL;
+			sr->len = 0;
 		} else if (msg->msg_iovlen > 1) {
 			return -EINVAL;
 		} else {
-			if (!access_ok(uiov, sizeof(*uiov)))
+			struct compat_iovec tmp_iov;
+
+			if (copy_from_user(&tmp_iov, uiov, sizeof(tmp_iov)))
 				return -EFAULT;
-			if (__get_user(clen, &uiov->iov_len))
-				return -EFAULT;
-			if (clen < 0)
+			if (tmp_iov.iov_len < 0)
 				return -EINVAL;
-			sr->len = clen;
+			sr->len = tmp_iov.iov_len;
 		}
 
 		return 0;
 	}
 
-	ret = __import_iovec(ddir, (struct iovec __user *)uiov, msg->msg_iovlen,
-				nr_segs, &iov, &iomsg->msg.msg_iter, true);
-	if (unlikely(ret < 0))
-		return ret;
-
-	io_net_vec_assign(req, iomsg, iov);
-	return 0;
+	return io_net_import_vec(req, iomsg, (struct iovec __user *)uiov,
+				 msg->msg_iovlen, ddir);
 }
 #endif
 
-static int io_msg_copy_hdr(struct io_kiocb *req, struct io_async_msghdr *iomsg,
-			   struct user_msghdr *msg, int ddir)
+static int io_copy_msghdr_from_user(struct user_msghdr *msg,
+				    struct user_msghdr __user *umsg)
 {
-	struct io_sr_msg *sr = io_kiocb_to_cmd(req, struct io_sr_msg);
-	struct user_msghdr __user *umsg = sr->umsg;
-	struct iovec *iov;
-	int ret, nr_segs;
-
-	if (iomsg->free_iov) {
-		nr_segs = iomsg->free_iov_nr;
-		iov = iomsg->free_iov;
-	} else {
-		iov = &iomsg->fast_iov;
-		nr_segs = 1;
-	}
-
 	if (!user_access_begin(umsg, sizeof(*umsg)))
 		return -EFAULT;
-
-	ret = -EFAULT;
 	unsafe_get_user(msg->msg_name, &umsg->msg_name, ua_end);
 	unsafe_get_user(msg->msg_namelen, &umsg->msg_namelen, ua_end);
 	unsafe_get_user(msg->msg_iov, &umsg->msg_iov, ua_end);
 	unsafe_get_user(msg->msg_iovlen, &umsg->msg_iovlen, ua_end);
 	unsafe_get_user(msg->msg_control, &umsg->msg_control, ua_end);
 	unsafe_get_user(msg->msg_controllen, &umsg->msg_controllen, ua_end);
+	user_access_end();
+	return 0;
+ua_end:
+	user_access_end();
+	return -EFAULT;
+}
+
+static int io_msg_copy_hdr(struct io_kiocb *req, struct io_async_msghdr *iomsg,
+			   struct user_msghdr *msg, int ddir,
+			   struct sockaddr __user **save_addr)
+{
+	struct io_sr_msg *sr = io_kiocb_to_cmd(req, struct io_sr_msg);
+	struct user_msghdr __user *umsg = sr->umsg;
+	int ret;
+
+	ret = io_copy_msghdr_from_user(msg, umsg);
+	if (unlikely(ret))
+		return ret;
+
 	msg->msg_flags = 0;
+
+	ret = __copy_msghdr(&iomsg->msg, msg, save_addr);
+	if (ret)
+		return ret;
 
 	if (req->flags & REQ_F_BUFFER_SELECT) {
 		if (msg->msg_iovlen == 0) {
-			sr->len = iov->iov_len = 0;
-			iov->iov_base = NULL;
+			sr->len = 0;
 		} else if (msg->msg_iovlen > 1) {
-			ret = -EINVAL;
-			goto ua_end;
+			return -EINVAL;
 		} else {
 			struct iovec __user *uiov = msg->msg_iov;
+			struct iovec tmp_iov;
 
-			/* we only need the length for provided buffers */
-			if (!access_ok(&uiov->iov_len, sizeof(uiov->iov_len)))
-				goto ua_end;
-			unsafe_get_user(iov->iov_len, &uiov->iov_len, ua_end);
-			sr->len = iov->iov_len;
+			if (copy_from_user(&tmp_iov, uiov, sizeof(tmp_iov)))
+				return -EFAULT;
+			sr->len = tmp_iov.iov_len;
 		}
-		ret = 0;
-ua_end:
-		user_access_end();
-		return ret;
+		return 0;
 	}
 
-	user_access_end();
-	ret = __import_iovec(ddir, msg->msg_iov, msg->msg_iovlen, nr_segs,
-				&iov, &iomsg->msg.msg_iter, false);
-	if (unlikely(ret < 0))
-		return ret;
-
-	io_net_vec_assign(req, iomsg, iov);
-	return 0;
+	return io_net_import_vec(req, iomsg, msg->msg_iov, msg->msg_iovlen, ddir);
 }
 
 static int io_sendmsg_copy_hdr(struct io_kiocb *req,
@@ -328,20 +334,14 @@ static int io_sendmsg_copy_hdr(struct io_kiocb *req,
 	if (io_is_compat(req->ctx)) {
 		struct compat_msghdr cmsg;
 
-		ret = io_compat_msg_copy_hdr(req, iomsg, &cmsg, ITER_SOURCE);
-		if (unlikely(ret))
-			return ret;
-
-		return __get_compat_msghdr(&iomsg->msg, &cmsg, NULL);
+		ret = io_compat_msg_copy_hdr(req, iomsg, &cmsg, ITER_SOURCE,
+					     NULL);
+		sr->msg_control = iomsg->msg.msg_control_user;
+		return ret;
 	}
 #endif
 
-	ret = io_msg_copy_hdr(req, iomsg, &msg, ITER_SOURCE);
-	if (unlikely(ret))
-		return ret;
-
-	ret = __copy_msghdr(&iomsg->msg, &msg, NULL);
-
+	ret = io_msg_copy_hdr(req, iomsg, &msg, ITER_SOURCE, NULL);
 	/* save msg_control as sys_sendmsg() overwrites it */
 	sr->msg_control = iomsg->msg.msg_control_user;
 	return ret;
@@ -395,14 +395,10 @@ static int io_sendmsg_setup(struct io_kiocb *req, const struct io_uring_sqe *sqe
 {
 	struct io_sr_msg *sr = io_kiocb_to_cmd(req, struct io_sr_msg);
 	struct io_async_msghdr *kmsg = req->async_data;
-	int ret;
 
 	sr->umsg = u64_to_user_ptr(READ_ONCE(sqe->addr));
 
-	ret = io_sendmsg_copy_hdr(req, kmsg);
-	if (!ret)
-		req->flags |= REQ_F_NEED_CLEANUP;
-	return ret;
+	return io_sendmsg_copy_hdr(req, kmsg);
 }
 
 #define SENDMSG_FLAGS (IORING_RECVSEND_POLL_FIRST | IORING_RECVSEND_BUNDLE)
@@ -723,31 +719,22 @@ static int io_recvmsg_copy_hdr(struct io_kiocb *req,
 	iomsg->msg.msg_name = &iomsg->addr;
 	iomsg->msg.msg_iter.nr_segs = 0;
 
-#ifdef CONFIG_COMPAT
 	if (io_is_compat(req->ctx)) {
+#ifdef CONFIG_COMPAT
 		struct compat_msghdr cmsg;
 
-		ret = io_compat_msg_copy_hdr(req, iomsg, &cmsg, ITER_DEST);
-		if (unlikely(ret))
-			return ret;
-
-		ret = __get_compat_msghdr(&iomsg->msg, &cmsg, &iomsg->uaddr);
-		if (unlikely(ret))
-			return ret;
-
-		return io_recvmsg_mshot_prep(req, iomsg, cmsg.msg_namelen,
-						cmsg.msg_controllen);
-	}
+		ret = io_compat_msg_copy_hdr(req, iomsg, &cmsg, ITER_DEST,
+					     &iomsg->uaddr);
+		memset(&msg, 0, sizeof(msg));
+		msg.msg_namelen = cmsg.msg_namelen;
+		msg.msg_controllen = cmsg.msg_controllen;
 #endif
+	} else {
+		ret = io_msg_copy_hdr(req, iomsg, &msg, ITER_DEST, &iomsg->uaddr);
+	}
 
-	ret = io_msg_copy_hdr(req, iomsg, &msg, ITER_DEST);
 	if (unlikely(ret))
 		return ret;
-
-	ret = __copy_msghdr(&iomsg->msg, &msg, &iomsg->uaddr);
-	if (unlikely(ret))
-		return ret;
-
 	return io_recvmsg_mshot_prep(req, iomsg, msg.msg_namelen,
 					msg.msg_controllen);
 }
@@ -781,10 +768,7 @@ static int io_recvmsg_prep_setup(struct io_kiocb *req)
 		return 0;
 	}
 
-	ret = io_recvmsg_copy_hdr(req, kmsg);
-	if (!ret)
-		req->flags |= REQ_F_NEED_CLEANUP;
-	return ret;
+	return io_recvmsg_copy_hdr(req, kmsg);
 }
 
 #define RECVMSG_FLAGS (IORING_RECVSEND_POLL_FIRST | IORING_RECV_MULTISHOT | \
