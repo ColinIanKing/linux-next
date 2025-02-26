@@ -26,6 +26,7 @@
 #include <linux/slab.h>
 #include <linux/srcu.h>
 #include <linux/string.h>
+#include <linux/string_choices.h>
 
 #include <linux/gpio.h>
 #include <linux/gpio/driver.h>
@@ -341,6 +342,22 @@ static int gpiochip_find_base_unlocked(u16 ngpio)
 	}
 }
 
+static int gpiochip_get_direction(struct gpio_chip *gc, unsigned int offset)
+{
+	int ret;
+
+	lockdep_assert_held(&gc->gpiodev->srcu);
+
+	if (WARN_ON(!gc->get_direction))
+		return -EOPNOTSUPP;
+
+	ret = gc->get_direction(gc, offset);
+	if (ret > 1)
+		ret = -EBADE;
+
+	return ret;
+}
+
 /**
  * gpiod_get_direction - return the current direction of a GPIO
  * @desc:	GPIO to get the direction of
@@ -381,7 +398,7 @@ int gpiod_get_direction(struct gpio_desc *desc)
 	if (!guard.gc->get_direction)
 		return -ENOTSUPP;
 
-	ret = guard.gc->get_direction(guard.gc, offset);
+	ret = gpiochip_get_direction(guard.gc, offset);
 	if (ret < 0)
 		return ret;
 
@@ -882,13 +899,29 @@ void *gpiochip_get_data(struct gpio_chip *gc)
 }
 EXPORT_SYMBOL_GPL(gpiochip_get_data);
 
+/*
+ * If the calling driver provides the specific firmware node,
+ * use it. Otherwise use the one from the parent device, if any.
+ */
+static struct fwnode_handle *gpiochip_choose_fwnode(struct gpio_chip *gc)
+{
+	if (gc->fwnode)
+		return gc->fwnode;
+
+	if (gc->parent)
+		return dev_fwnode(gc->parent);
+
+	return NULL;
+}
+
 int gpiochip_get_ngpios(struct gpio_chip *gc, struct device *dev)
 {
+	struct fwnode_handle *fwnode = gpiochip_choose_fwnode(gc);
 	u32 ngpios = gc->ngpio;
 	int ret;
 
 	if (ngpios == 0) {
-		ret = device_property_read_u32(dev, "ngpios", &ngpios);
+		ret = fwnode_property_read_u32(fwnode, "ngpios", &ngpios);
 		if (ret == -ENODATA)
 			/*
 			 * -ENODATA means that there is no property found and
@@ -941,14 +974,7 @@ int gpiochip_add_data_with_key(struct gpio_chip *gc, void *data,
 	gc->gpiodev = gdev;
 	gpiochip_set_data(gc, data);
 
-	/*
-	 * If the calling driver did not initialize firmware node,
-	 * do it here using the parent device, if any.
-	 */
-	if (gc->fwnode)
-		device_set_node(&gdev->dev, gc->fwnode);
-	else if (gc->parent)
-		device_set_node(&gdev->dev, dev_fwnode(gc->parent));
+	device_set_node(&gdev->dev, gpiochip_choose_fwnode(gc));
 
 	gdev->id = ida_alloc(&gpio_ida, GFP_KERNEL);
 	if (gdev->id < 0) {
@@ -1057,7 +1083,7 @@ int gpiochip_add_data_with_key(struct gpio_chip *gc, void *data,
 		desc->gdev = gdev;
 
 		if (gc->get_direction && gpiochip_line_is_valid(gc, desc_index)) {
-			ret = gc->get_direction(gc, desc_index);
+			ret = gpiochip_get_direction(gc, desc_index);
 			if (ret < 0)
 				/*
 				 * FIXME: Bail-out here once all GPIO drivers
@@ -2339,6 +2365,8 @@ static int gpiod_request_commit(struct gpio_desc *desc, const char *label)
 			ret = guard.gc->request(guard.gc, offset);
 		else
 			ret = -EINVAL;
+		if (ret > 0)
+			ret = -EBADE;
 		if (ret)
 			goto out_clear_bit;
 	}
@@ -2581,6 +2609,9 @@ int gpio_do_set_config(struct gpio_desc *desc, unsigned long config)
 		return -ENOTSUPP;
 
 	ret = guard.gc->set_config(guard.gc, gpio_chip_hwgpio(desc), config);
+	if (ret > 0)
+		ret = -EBADE;
+
 #ifdef CONFIG_GPIO_CDEV
 	/*
 	 * Special case - if we're setting debounce period, we need to store
@@ -2686,6 +2717,39 @@ int gpio_set_debounce_timeout(struct gpio_desc *desc, unsigned int debounce)
 	return ret;
 }
 
+static int gpiochip_direction_input(struct gpio_chip *gc, unsigned int offset)
+{
+	int ret;
+
+	lockdep_assert_held(&gc->gpiodev->srcu);
+
+	if (WARN_ON(!gc->direction_input))
+		return -EOPNOTSUPP;
+
+	ret = gc->direction_input(gc, offset);
+	if (ret > 0)
+		ret = -EBADE;
+
+	return ret;
+}
+
+static int gpiochip_direction_output(struct gpio_chip *gc, unsigned int offset,
+				     int value)
+{
+	int ret;
+
+	lockdep_assert_held(&gc->gpiodev->srcu);
+
+	if (WARN_ON(!gc->direction_output))
+		return -EOPNOTSUPP;
+
+	ret = gc->direction_output(gc, offset, value);
+	if (ret > 0)
+		ret = -EBADE;
+
+	return ret;
+}
+
 /**
  * gpiod_direction_input - set the GPIO direction to input
  * @desc:	GPIO to set to input
@@ -2737,11 +2801,10 @@ int gpiod_direction_input_nonotify(struct gpio_desc *desc)
 	 * assume we are in input mode after this.
 	 */
 	if (guard.gc->direction_input) {
-		ret = guard.gc->direction_input(guard.gc,
-						gpio_chip_hwgpio(desc));
+		ret = gpiochip_direction_input(guard.gc,
+					       gpio_chip_hwgpio(desc));
 	} else if (guard.gc->get_direction) {
-		ret = guard.gc->get_direction(guard.gc,
-					      gpio_chip_hwgpio(desc));
+		ret = gpiochip_get_direction(guard.gc, gpio_chip_hwgpio(desc));
 		if (ret < 0)
 			return ret;
 
@@ -2783,13 +2846,13 @@ static int gpiod_direction_output_raw_commit(struct gpio_desc *desc, int value)
 	}
 
 	if (guard.gc->direction_output) {
-		ret = guard.gc->direction_output(guard.gc,
-						 gpio_chip_hwgpio(desc), val);
+		ret = gpiochip_direction_output(guard.gc,
+						gpio_chip_hwgpio(desc), val);
 	} else {
 		/* Check that we are in output mode if we can */
 		if (guard.gc->get_direction) {
-			ret = guard.gc->get_direction(guard.gc,
-						      gpio_chip_hwgpio(desc));
+			ret = gpiochip_get_direction(guard.gc,
+						     gpio_chip_hwgpio(desc));
 			if (ret < 0)
 				return ret;
 
@@ -2894,19 +2957,15 @@ int gpiod_direction_output_nonotify(struct gpio_desc *desc, int value)
 		if (!ret)
 			goto set_output_value;
 		/* Emulate open drain by not actively driving the line high */
-		if (value) {
-			ret = gpiod_direction_input_nonotify(desc);
+		if (value)
 			goto set_output_flag;
-		}
 	} else if (test_bit(FLAG_OPEN_SOURCE, &flags)) {
 		ret = gpio_set_config(desc, PIN_CONFIG_DRIVE_OPEN_SOURCE);
 		if (!ret)
 			goto set_output_value;
 		/* Emulate open source by not actively driving the line low */
-		if (!value) {
-			ret = gpiod_direction_input_nonotify(desc);
+		if (!value)
 			goto set_output_flag;
-		}
 	} else {
 		gpio_set_config(desc, PIN_CONFIG_DRIVE_PUSH_PULL);
 	}
@@ -2918,17 +2977,20 @@ set_output_value:
 	return gpiod_direction_output_raw_commit(desc, value);
 
 set_output_flag:
+	ret = gpiod_direction_input_nonotify(desc);
+	if (ret)
+		return ret;
 	/*
 	 * When emulating open-source or open-drain functionalities by not
 	 * actively driving the line (setting mode to input) we still need to
 	 * set the IS_OUT flag or otherwise we won't be able to set the line
 	 * value anymore.
 	 */
-	if (ret == 0)
-		set_bit(FLAG_IS_OUT, &desc->flags);
-	return ret;
+	set_bit(FLAG_IS_OUT, &desc->flags);
+	return 0;
 }
 
+#if IS_ENABLED(CONFIG_HTE)
 /**
  * gpiod_enable_hw_timestamp_ns - Enable hardware timestamp in nanoseconds.
  *
@@ -2994,6 +3056,7 @@ int gpiod_disable_hw_timestamp_ns(struct gpio_desc *desc, unsigned long flags)
 	return ret;
 }
 EXPORT_SYMBOL_GPL(gpiod_disable_hw_timestamp_ns);
+#endif /* CONFIG_HTE */
 
 /**
  * gpiod_set_config - sets @config for a GPIO
@@ -3100,9 +3163,25 @@ void gpiod_toggle_active_low(struct gpio_desc *desc)
 }
 EXPORT_SYMBOL_GPL(gpiod_toggle_active_low);
 
+static int gpiochip_get(struct gpio_chip *gc, unsigned int offset)
+{
+	int ret;
+
+	lockdep_assert_held(&gc->gpiodev->srcu);
+
+	if (!gc->get)
+		return -EIO;
+
+	ret = gc->get(gc, offset);
+	if (ret > 1)
+		ret = -EBADE;
+
+	return ret;
+}
+
 static int gpio_chip_get_value(struct gpio_chip *gc, const struct gpio_desc *desc)
 {
-	return gc->get ? gc->get(gc, gpio_chip_hwgpio(desc)) : -EIO;
+	return gpiochip_get(gc, gpio_chip_hwgpio(desc));
 }
 
 /* I/O calls are only valid after configuration completed; the relevant
@@ -3151,15 +3230,21 @@ static int gpiod_get_raw_value_commit(const struct gpio_desc *desc)
 static int gpio_chip_get_multiple(struct gpio_chip *gc,
 				  unsigned long *mask, unsigned long *bits)
 {
+	int ret;
+	
 	lockdep_assert_held(&gc->gpiodev->srcu);
 
-	if (gc->get_multiple)
-		return gc->get_multiple(gc, mask, bits);
+	if (gc->get_multiple) {
+		ret = gc->get_multiple(gc, mask, bits);
+		if (ret > 0)
+			return -EBADE;
+	}
+
 	if (gc->get) {
 		int i, value;
 
 		for_each_set_bit(i, mask, gc->ngpio) {
-			value = gc->get(gc, i);
+			value = gpiochip_get(gc, i);
 			if (value < 0)
 				return value;
 			__assign_bit(i, bits, value);
@@ -3421,9 +3506,9 @@ static void gpio_set_open_drain_value_commit(struct gpio_desc *desc, bool value)
 		return;
 
 	if (value) {
-		ret = guard.gc->direction_input(guard.gc, offset);
+		ret = gpiochip_direction_input(guard.gc, offset);
 	} else {
-		ret = guard.gc->direction_output(guard.gc, offset, 0);
+		ret = gpiochip_direction_output(guard.gc, offset, 0);
 		if (!ret)
 			set_bit(FLAG_IS_OUT, &desc->flags);
 	}
@@ -3448,11 +3533,11 @@ static void gpio_set_open_source_value_commit(struct gpio_desc *desc, bool value
 		return;
 
 	if (value) {
-		ret = guard.gc->direction_output(guard.gc, offset, 1);
+		ret = gpiochip_direction_output(guard.gc, offset, 1);
 		if (!ret)
 			set_bit(FLAG_IS_OUT, &desc->flags);
 	} else {
-		ret = guard.gc->direction_input(guard.gc, offset);
+		ret = gpiochip_direction_input(guard.gc, offset);
 	}
 	trace_gpio_direction(desc_to_gpio(desc), !value, ret);
 	if (ret < 0)
@@ -4749,10 +4834,10 @@ int gpiod_hog(struct gpio_desc *desc, const char *name,
 		return ret;
 	}
 
-	gpiod_dbg(desc, "hogged as %s%s\n",
+	gpiod_dbg(desc, "hogged as %s/%s\n",
 		(dflags & GPIOD_FLAGS_BIT_DIR_OUT) ? "output" : "input",
 		(dflags & GPIOD_FLAGS_BIT_DIR_OUT) ?
-		  (dflags & GPIOD_FLAGS_BIT_DIR_VAL) ? "/high" : "/low" : "");
+		  str_high_low(dflags & GPIOD_FLAGS_BIT_DIR_VAL) : "?");
 
 	return 0;
 }
@@ -5026,6 +5111,7 @@ static void gpiolib_dbg_show(struct seq_file *s, struct gpio_device *gdev)
 	unsigned int gpio = gdev->base;
 	struct gpio_desc *desc;
 	struct gpio_chip *gc;
+	unsigned long flags;
 	int value;
 
 	guard(srcu)(&gdev->srcu);
@@ -5038,16 +5124,17 @@ static void gpiolib_dbg_show(struct seq_file *s, struct gpio_device *gdev)
 
 	for_each_gpio_desc(gc, desc) {
 		guard(srcu)(&desc->gdev->desc_srcu);
-		is_irq = test_bit(FLAG_USED_AS_IRQ, &desc->flags);
-		if (is_irq || test_bit(FLAG_REQUESTED, &desc->flags)) {
+		flags = READ_ONCE(desc->flags);
+		is_irq = test_bit(FLAG_USED_AS_IRQ, &flags);
+		if (is_irq || test_bit(FLAG_REQUESTED, &flags)) {
 			gpiod_get_direction(desc);
-			is_out = test_bit(FLAG_IS_OUT, &desc->flags);
+			is_out = test_bit(FLAG_IS_OUT, &flags);
 			value = gpio_chip_get_value(gc, desc);
-			active_low = test_bit(FLAG_ACTIVE_LOW, &desc->flags);
+			active_low = test_bit(FLAG_ACTIVE_LOW, &flags);
 			seq_printf(s, " gpio-%-3u (%-20.20s|%-20.20s) %s %s %s%s\n",
 				   gpio, desc->name ?: "", gpiod_get_label(desc),
 				   is_out ? "out" : "in ",
-				   value >= 0 ? (value ? "hi" : "lo") : "?  ",
+				   value >= 0 ? str_hi_lo(value) : "?  ",
 				   is_irq ? "IRQ " : "",
 				   active_low ? "ACTIVE LOW" : "");
 		} else if (desc->name) {
