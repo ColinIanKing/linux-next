@@ -1105,8 +1105,8 @@ static int move_swap_pte(struct mm_struct *mm, struct vm_area_struct *dst_vma,
 
 	orig_src_pte = ptep_get_and_clear(mm, src_addr, src_pte);
 	set_pte_at(mm, dst_addr, dst_pte, orig_src_pte);
-
 	double_pt_unlock(dst_ptl, src_ptl);
+
 	return 0;
 }
 
@@ -1373,7 +1373,7 @@ retry:
 			folio = filemap_get_folio(swap_address_space(entry),
 					swap_cache_index(entry));
 		if (!IS_ERR_OR_NULL(folio)) {
-			if (folio && folio_test_large(folio)) {
+			if (folio_test_large(folio)) {
 				err = -EBUSY;
 				folio_put(folio);
 				goto out;
@@ -1384,10 +1384,10 @@ retry:
 				pte_unmap(&orig_src_pte);
 				pte_unmap(&orig_dst_pte);
 				src_pte = dst_pte = NULL;
-				/* now we can block and wait */
-				folio_lock(src_folio);
 				put_swap_device(si);
 				si = NULL;
+				/* now we can block and wait */
+				folio_lock(src_folio);
 				goto retry;
 			}
 		}
