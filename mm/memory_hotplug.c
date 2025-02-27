@@ -267,6 +267,11 @@ void mem_hotplug_done(void)
 	cpus_read_unlock();
 }
 
+bool in_mem_hotplug(void)
+{
+	return percpu_is_write_locked(&mem_hotplug_lock);
+}
+
 u64 max_mem_size = U64_MAX;
 
 /* add this memory to iomem resource */
