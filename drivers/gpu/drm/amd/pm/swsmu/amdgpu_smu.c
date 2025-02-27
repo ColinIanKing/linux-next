@@ -2315,7 +2315,12 @@ static int smu_adjust_power_state_dynamic(struct smu_context *smu,
 	if (smu_dpm_ctx->dpm_level != level) {
 		ret = smu_asic_set_performance_level(smu, level);
 		if (ret) {
-			dev_err(smu->adev->dev, "Failed to set performance level!");
+			if (ret == -EOPNOTSUPP)
+				dev_info(smu->adev->dev, "set performance level %d not supported",
+						level);
+			else
+				dev_err(smu->adev->dev, "Failed to set performance level %d",
+						level);
 			return ret;
 		}
 
@@ -3903,6 +3908,23 @@ int smu_send_rma_reason(struct smu_context *smu)
 
 	if (smu->ppt_funcs && smu->ppt_funcs->send_rma_reason)
 		ret = smu->ppt_funcs->send_rma_reason(smu);
+
+	return ret;
+}
+
+/**
+ * smu_reset_sdma_is_supported - Check if SDMA reset is supported by SMU
+ * @smu: smu_context pointer
+ *
+ * This function checks if the SMU supports resetting the SDMA engine.
+ * It returns true if supported, false otherwise.
+ */
+bool smu_reset_sdma_is_supported(struct smu_context *smu)
+{
+	bool ret = false;
+
+	if (smu->ppt_funcs && smu->ppt_funcs->reset_sdma_is_supported)
+		ret = smu->ppt_funcs->reset_sdma_is_supported(smu);
 
 	return ret;
 }

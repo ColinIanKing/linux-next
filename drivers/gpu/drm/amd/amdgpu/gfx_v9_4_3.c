@@ -563,17 +563,6 @@ out:
 	return err;
 }
 
-static bool gfx_v9_4_3_should_disable_gfxoff(struct pci_dev *pdev)
-{
-	return true;
-}
-
-static void gfx_v9_4_3_check_if_need_gfxoff(struct amdgpu_device *adev)
-{
-	if (gfx_v9_4_3_should_disable_gfxoff(adev->pdev))
-		adev->pm.pp_feature &= ~PP_GFXOFF_MASK;
-}
-
 static int gfx_v9_4_3_init_cp_compute_microcode(struct amdgpu_device *adev,
 					  const char *chip_name)
 {
@@ -599,8 +588,6 @@ static int gfx_v9_4_3_init_cp_compute_microcode(struct amdgpu_device *adev,
 
 	adev->gfx.mec2_fw_version = adev->gfx.mec_fw_version;
 	adev->gfx.mec2_feature_version = adev->gfx.mec_feature_version;
-
-	gfx_v9_4_3_check_if_need_gfxoff(adev);
 
 out:
 	if (err)
@@ -1362,10 +1349,8 @@ static void gfx_v9_4_3_xcc_init_pg(struct amdgpu_device *adev, int xcc_id)
 {
 	/*
 	 * Rlc save restore list is workable since v2_1.
-	 * And it's needed by gfxoff feature.
 	 */
-	if (adev->gfx.rlc.is_rlc_v2_1)
-		gfx_v9_4_3_xcc_enable_save_restore_machine(adev, xcc_id);
+	gfx_v9_4_3_xcc_enable_save_restore_machine(adev, xcc_id);
 }
 
 static void gfx_v9_4_3_xcc_disable_gpa_mode(struct amdgpu_device *adev, int xcc_id)
@@ -2408,9 +2393,9 @@ static int gfx_v9_4_3_resume(struct amdgpu_ip_block *ip_block)
 	return gfx_v9_4_3_hw_init(ip_block);
 }
 
-static bool gfx_v9_4_3_is_idle(void *handle)
+static bool gfx_v9_4_3_is_idle(struct amdgpu_ip_block *ip_block)
 {
-	struct amdgpu_device *adev = (struct amdgpu_device *)handle;
+	struct amdgpu_device *adev = ip_block->adev;
 	int i, num_xcc;
 
 	num_xcc = NUM_XCC(adev->gfx.xcc_mask);
@@ -2428,7 +2413,7 @@ static int gfx_v9_4_3_wait_for_idle(struct amdgpu_ip_block *ip_block)
 	struct amdgpu_device *adev = ip_block->adev;
 
 	for (i = 0; i < adev->usec_timeout; i++) {
-		if (gfx_v9_4_3_is_idle(adev))
+		if (gfx_v9_4_3_is_idle(ip_block))
 			return 0;
 		udelay(1);
 	}

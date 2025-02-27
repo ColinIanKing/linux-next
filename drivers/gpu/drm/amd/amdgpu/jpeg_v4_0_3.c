@@ -634,12 +634,6 @@ static void jpeg_v4_0_3_stop_inst(struct amdgpu_device *adev, int inst)
 		 UVD_JPEG_POWER_STATUS__JPEG_POWER_STATUS_MASK,
 		 ~UVD_JPEG_POWER_STATUS__JPEG_POWER_STATUS_MASK);
 
-	WREG32_SOC15(JPEG, jpeg_inst, regUVD_PGFSM_CONFIG,
-		     2 << UVD_PGFSM_CONFIG__UVDJ_PWR_CONFIG__SHIFT);
-	SOC15_WAIT_ON_RREG(JPEG, jpeg_inst, regUVD_PGFSM_STATUS,
-			   UVD_PGFSM_STATUS__UVDJ_PWR_OFF <<
-			   UVD_PGFSM_STATUS__UVDJ_PWR_STATUS__SHIFT,
-			   UVD_PGFSM_STATUS__UVDJ_PWR_STATUS_MASK);
 }
 
 /**
@@ -960,9 +954,9 @@ void jpeg_v4_0_3_dec_ring_nop(struct amdgpu_ring *ring, uint32_t count)
 	}
 }
 
-static bool jpeg_v4_0_3_is_idle(void *handle)
+static bool jpeg_v4_0_3_is_idle(struct amdgpu_ip_block *ip_block)
 {
-	struct amdgpu_device *adev = (struct amdgpu_device *)handle;
+	struct amdgpu_device *adev = ip_block->adev;
 	bool ret = false;
 	int i, j;
 
@@ -1004,7 +998,7 @@ static int jpeg_v4_0_3_set_clockgating_state(struct amdgpu_ip_block *ip_block,
 
 	for (i = 0; i < adev->jpeg.num_jpeg_inst; ++i) {
 		if (enable) {
-			if (!jpeg_v4_0_3_is_idle(adev))
+			if (!jpeg_v4_0_3_is_idle(ip_block))
 				return -EBUSY;
 			jpeg_v4_0_3_enable_clock_gating(adev, i);
 		} else {
