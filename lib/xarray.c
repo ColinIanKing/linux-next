@@ -278,6 +278,7 @@ void xas_destroy(struct xa_state *xas)
 		xas->xa_alloc = node = next;
 	}
 }
+EXPORT_SYMBOL_GPL(xas_destroy);
 
 /**
  * xas_nomem() - Allocate memory if needed.
