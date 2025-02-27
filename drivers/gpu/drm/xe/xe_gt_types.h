@@ -139,7 +139,7 @@ struct xe_gt {
 	/** @stats: GT stats */
 	struct {
 		/** @stats.counters: counters for various GT stats */
-		atomic_t counters[__XE_GT_STATS_NUM_IDS];
+		atomic64_t counters[__XE_GT_STATS_NUM_IDS];
 	} stats;
 #endif
 
@@ -430,6 +430,9 @@ struct xe_gt {
 
 	/** @oa: oa observation subsystem per gt info */
 	struct xe_oa_gt oa;
+
+	/** @eu_stall: EU stall counters subsystem per gt info */
+	struct xe_eu_stall_gt *eu_stall;
 };
 
 #endif
