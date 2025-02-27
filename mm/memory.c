@@ -5229,7 +5229,7 @@ fallback:
 	 * inflating the RSS of the process.
 	 */
 	if (!vma_is_anon_shmem(vma) || unlikely(userfaultfd_armed(vma)) ||
-			unlikely(needs_fallback)) {
+	    unlikely(needs_fallback)) {
 		nr_pages = 1;
 	} else if (nr_pages > 1) {
 		pgoff_t idx = folio_page_idx(folio, page);
