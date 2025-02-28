@@ -49,6 +49,7 @@
 #include "intel_hdcp.h"
 #include "intel_hotplug.h"
 #include "intel_link_bw.h"
+#include "intel_pfit.h"
 #include "intel_psr.h"
 #include "intel_vdsc.h"
 #include "skl_scaler.h"
@@ -1896,7 +1897,8 @@ intel_dp_mst_encoder_init(struct intel_digital_port *dig_port, int conn_base_id)
 	/* create encoders */
 	mst_stream_encoders_create(dig_port);
 	ret = drm_dp_mst_topology_mgr_init(&intel_dp->mst_mgr, display->drm,
-					   &intel_dp->aux, 16, 3, conn_base_id);
+					   &intel_dp->aux, 16,
+					   INTEL_NUM_PIPES(display), conn_base_id);
 	if (ret) {
 		intel_dp->mst_mgr.cbs = NULL;
 		return ret;

@@ -2912,7 +2912,7 @@ static bool can_enable_drrs(struct intel_connector *connector,
 			    const struct intel_crtc_state *pipe_config,
 			    const struct drm_display_mode *downclock_mode)
 {
-	struct drm_i915_private *i915 = to_i915(connector->base.dev);
+	struct intel_display *display = to_intel_display(connector);
 
 	if (pipe_config->vrr.enable)
 		return false;
@@ -2930,7 +2930,7 @@ static bool can_enable_drrs(struct intel_connector *connector,
 	if (pipe_config->has_pch_encoder)
 		return false;
 
-	if (!intel_cpu_transcoder_has_drrs(i915, pipe_config->cpu_transcoder))
+	if (!intel_cpu_transcoder_has_drrs(display, pipe_config->cpu_transcoder))
 		return false;
 
 	return downclock_mode &&
@@ -2943,7 +2943,6 @@ intel_dp_drrs_compute_config(struct intel_connector *connector,
 			     int link_bpp_x16)
 {
 	struct intel_display *display = to_intel_display(connector);
-	struct drm_i915_private *i915 = to_i915(connector->base.dev);
 	const struct drm_display_mode *downclock_mode =
 		intel_panel_downclock_mode(connector, &pipe_config->hw.adjusted_mode);
 	int pixel_clock;
@@ -2956,7 +2955,7 @@ intel_dp_drrs_compute_config(struct intel_connector *connector,
 		pipe_config->update_m_n = true;
 
 	if (!can_enable_drrs(connector, pipe_config, downclock_mode)) {
-		if (intel_cpu_transcoder_has_m2_n2(i915, pipe_config->cpu_transcoder))
+		if (intel_cpu_transcoder_has_m2_n2(display, pipe_config->cpu_transcoder))
 			intel_zero_m_n(&pipe_config->dp_m2_n2);
 		return;
 	}
@@ -3131,7 +3130,7 @@ intel_dp_compute_config(struct intel_encoder *encoder,
 
 	if ((intel_dp_is_edp(intel_dp) && fixed_mode) ||
 	    pipe_config->output_format == INTEL_OUTPUT_FORMAT_YCBCR420) {
-		ret = intel_panel_fitting(pipe_config, conn_state);
+		ret = intel_pfit_compute_config(pipe_config, conn_state);
 		if (ret)
 			return ret;
 	}
