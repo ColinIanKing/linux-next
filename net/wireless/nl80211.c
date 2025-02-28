@@ -4250,6 +4250,10 @@ static int nl80211_parse_mon_options(struct cfg80211_registered_device *rdev,
 		change = true;
 	}
 
+	/* MONITOR_FLAG_COOK_FRAMES is deprecated, refuse cooperation */
+	if (params->flags & MONITOR_FLAG_COOK_FRAMES)
+		return -EOPNOTSUPP;
+
 	if (params->flags & MONITOR_FLAG_ACTIVE &&
 	    !(rdev->wiphy.features & NL80211_FEATURE_ACTIVE_MONITOR))
 		return -EOPNOTSUPP;
@@ -10520,9 +10524,9 @@ static int nl80211_send_bss(struct sk_buff *msg, struct netlink_callback *cb,
 		     intbss->parent_bssid)))
 		goto nla_put_failure;
 
-	if (intbss->ts_boottime &&
+	if (res->ts_boottime &&
 	    nla_put_u64_64bit(msg, NL80211_BSS_LAST_SEEN_BOOTTIME,
-			      intbss->ts_boottime, NL80211_BSS_PAD))
+			      res->ts_boottime, NL80211_BSS_PAD))
 		goto nla_put_failure;
 
 	if (!nl80211_put_signal(msg, intbss->pub.chains,

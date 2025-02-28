@@ -2265,7 +2265,7 @@ static inline int cfg80211_get_station(struct net_device *dev,
  * @MONITOR_FLAG_PLCPFAIL: pass frames with bad PLCP
  * @MONITOR_FLAG_CONTROL: pass control frames
  * @MONITOR_FLAG_OTHER_BSS: disable BSSID filtering
- * @MONITOR_FLAG_COOK_FRAMES: report frames after processing
+ * @MONITOR_FLAG_COOK_FRAMES: deprecated, will unconditionally be refused
  * @MONITOR_FLAG_ACTIVE: active monitor, ACKs frames on its MAC address
  * @MONITOR_FLAG_SKIP_TX: do not pass locally transmitted frames
  */
@@ -2947,6 +2947,7 @@ struct cfg80211_bss_ies {
  * @nontrans_list: list of non-transmitted BSS, if this is a transmitted one
  *	(multi-BSSID support)
  * @signal: signal strength value (type depends on the wiphy's signal_type)
+ * @ts_boottime: timestamp of the last BSS update in nanoseconds since boot
  * @chains: bitmask for filled values in @chain_signal.
  * @chain_signal: per-chain signal strength of last received BSS in dBm.
  * @bssid_index: index in the multiple BSS set
@@ -2970,6 +2971,8 @@ struct cfg80211_bss {
 	struct list_head nontrans_list;
 
 	s32 signal;
+
+	u64 ts_boottime;
 
 	u16 beacon_interval;
 	u16 capability;
