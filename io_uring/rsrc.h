@@ -20,6 +20,11 @@ struct io_rsrc_node {
 	};
 };
 
+enum {
+	IO_IMU_DEST	= 1 << ITER_DEST,
+	IO_IMU_SOURCE	= 1 << ITER_SOURCE,
+};
+
 struct io_mapped_ubuf {
 	u64		ubuf;
 	unsigned int	len;
@@ -27,6 +32,10 @@ struct io_mapped_ubuf {
 	unsigned int    folio_shift;
 	refcount_t	refs;
 	unsigned long	acct_pages;
+	void		(*release)(void *);
+	void		*priv;
+	bool		is_kbuf;
+	u8		dir;
 	struct bio_vec	bvec[] __counted_by(nr_bvecs);
 };
 
@@ -39,7 +48,9 @@ struct io_imu_folio_data {
 	unsigned int	nr_folios;
 };
 
-struct io_rsrc_node *io_rsrc_node_alloc(int type);
+bool io_rsrc_cache_init(struct io_ring_ctx *ctx);
+void io_rsrc_cache_free(struct io_ring_ctx *ctx);
+struct io_rsrc_node *io_rsrc_node_alloc(struct io_ring_ctx *ctx, int type);
 void io_free_rsrc_node(struct io_ring_ctx *ctx, struct io_rsrc_node *node);
 void io_rsrc_data_free(struct io_ring_ctx *ctx, struct io_rsrc_data *data);
 int io_rsrc_data_alloc(struct io_rsrc_data *data, unsigned nr);

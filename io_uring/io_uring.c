@@ -292,6 +292,7 @@ static void io_free_alloc_caches(struct io_ring_ctx *ctx)
 	io_alloc_cache_free(&ctx->uring_cache, kfree);
 	io_alloc_cache_free(&ctx->msg_cache, kfree);
 	io_futex_cache_free(ctx);
+	io_rsrc_cache_free(ctx);
 }
 
 static __cold struct io_ring_ctx *io_ring_ctx_alloc(struct io_uring_params *p)
@@ -339,6 +340,7 @@ static __cold struct io_ring_ctx *io_ring_ctx_alloc(struct io_uring_params *p)
 	ret |= io_alloc_cache_init(&ctx->msg_cache, IO_ALLOC_CACHE_MAX,
 			    sizeof(struct io_kiocb), 0);
 	ret |= io_futex_cache_init(ctx);
+	ret |= io_rsrc_cache_init(ctx);
 	if (ret)
 		goto free_ref;
 	init_completion(&ctx->ref_comp);
@@ -3946,6 +3948,9 @@ static int __init io_uring_init(void)
 	BUILD_BUG_ON((IORING_URING_CMD_MASK & 0xff000000) != 0);
 
 	io_uring_optable_init();
+
+	/* imu->dir is u8 */
+	BUILD_BUG_ON((IO_IMU_DEST | IO_IMU_SOURCE) > U8_MAX);
 
 	/*
 	 * Allow user copy in the per-command field, which starts after the
