@@ -1207,6 +1207,7 @@ enum bpf_perf_event_type {
 #define BPF_F_BEFORE		(1U << 3)
 #define BPF_F_AFTER		(1U << 4)
 #define BPF_F_ID		(1U << 5)
+#define BPF_F_PREORDER		(1U << 6)
 #define BPF_F_LINK		BPF_F_LINK /* 1 << 13 */
 
 /* If BPF_F_STRICT_ALIGNMENT is used in BPF_PROG_LOAD command, the
@@ -6019,7 +6020,10 @@ union bpf_attr {
 	FN(user_ringbuf_drain, 209, ##ctx)		\
 	FN(cgrp_storage_get, 210, ##ctx)		\
 	FN(cgrp_storage_delete, 211, ##ctx)		\
-	/* */
+	/* This helper list is effectively frozen. If you are trying to	\
+	 * add a new helper, you should add a kfunc instead which has	\
+	 * less stability guarantees. See Documentation/bpf/kfuncs.rst	\
+	 */
 
 /* backwards-compatibility macros for users of __BPF_FUNC_MAPPER that don't
  * know or care about integer value that is now passed as second argument
