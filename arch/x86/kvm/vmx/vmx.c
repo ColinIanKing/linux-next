@@ -5211,6 +5211,12 @@ bool vmx_guest_inject_ac(struct kvm_vcpu *vcpu)
 	       (kvm_get_rflags(vcpu) & X86_EFLAGS_AC);
 }
 
+static bool is_xfd_nm_fault(struct kvm_vcpu *vcpu)
+{
+	return vcpu->arch.guest_fpu.fpstate->xfd &&
+	       !kvm_is_cr0_bit_set(vcpu, X86_CR0_TS);
+}
+
 static int handle_exception_nmi(struct kvm_vcpu *vcpu)
 {
 	struct vcpu_vmx *vmx = to_vmx(vcpu);
@@ -5237,7 +5243,8 @@ static int handle_exception_nmi(struct kvm_vcpu *vcpu)
 	 * point.
 	 */
 	if (is_nm_fault(intr_info)) {
-		kvm_queue_exception(vcpu, NM_VECTOR);
+		kvm_queue_exception_p(vcpu, NM_VECTOR,
+				      is_xfd_nm_fault(vcpu) ? vcpu->arch.guest_fpu.xfd_err : 0);
 		return 1;
 	}
 
@@ -5817,7 +5824,7 @@ static int handle_ept_violation(struct kvm_vcpu *vcpu)
 	error_code |= (exit_qualification & EPT_VIOLATION_ACC_INSTR)
 		      ? PFERR_FETCH_MASK : 0;
 	/* ept page table entry is present? */
-	error_code |= (exit_qualification & EPT_VIOLATION_RWX_MASK)
+	error_code |= (exit_qualification & EPT_VIOLATION_PROT_MASK)
 		      ? PFERR_PRESENT_MASK : 0;
 
 	if (error_code & EPT_VIOLATION_GVA_IS_VALID)
@@ -5871,11 +5878,35 @@ static int handle_nmi_window(struct kvm_vcpu *vcpu)
 	return 1;
 }
 
-static bool vmx_emulation_required_with_pending_exception(struct kvm_vcpu *vcpu)
+/*
+ * Returns true if emulation is required (due to the vCPU having invalid state
+ * with unsrestricted guest mode disabled) and KVM can't faithfully emulate the
+ * current vCPU state.
+ */
+static bool vmx_unhandleable_emulation_required(struct kvm_vcpu *vcpu)
 {
 	struct vcpu_vmx *vmx = to_vmx(vcpu);
 
-	return vmx->emulation_required && !vmx->rmode.vm86_active &&
+	if (!vmx->emulation_required)
+		return false;
+
+	/*
+	 * It is architecturally impossible for emulation to be required when a
+	 * nested VM-Enter is pending completion, as VM-Enter will VM-Fail if
+	 * guest state is invalid and unrestricted guest is disabled, i.e. KVM
+	 * should synthesize VM-Fail instead emulation L2 code.  This path is
+	 * only reachable if userspace modifies L2 guest state after KVM has
+	 * performed the nested VM-Enter consistency checks.
+	 */
+	if (vmx->nested.nested_run_pending)
+		return true;
+
+	/*
+	 * KVM only supports emulating exceptions if the vCPU is in Real Mode.
+	 * If emulation is required, KVM can't perform a successful VM-Enter to
+	 * inject the exception.
+	 */
+	return !vmx->rmode.vm86_active &&
 	       (kvm_is_exception_pending(vcpu) || vcpu->arch.exception.injected);
 }
 
@@ -5898,7 +5929,7 @@ static int handle_invalid_guest_state(struct kvm_vcpu *vcpu)
 		if (!kvm_emulate_instruction(vcpu, 0))
 			return 0;
 
-		if (vmx_emulation_required_with_pending_exception(vcpu)) {
+		if (vmx_unhandleable_emulation_required(vcpu)) {
 			kvm_prepare_emulation_failure_exit(vcpu);
 			return 0;
 		}
@@ -5922,7 +5953,7 @@ static int handle_invalid_guest_state(struct kvm_vcpu *vcpu)
 
 int vmx_vcpu_pre_run(struct kvm_vcpu *vcpu)
 {
-	if (vmx_emulation_required_with_pending_exception(vcpu)) {
+	if (vmx_unhandleable_emulation_required(vcpu)) {
 		kvm_prepare_emulation_failure_exit(vcpu);
 		return 0;
 	}
@@ -6997,16 +7028,15 @@ static void handle_nm_fault_irqoff(struct kvm_vcpu *vcpu)
 	 * MSR value is not clobbered by the host activity before the guest
 	 * has chance to consume it.
 	 *
-	 * Do not blindly read xfd_err here, since this exception might
-	 * be caused by L1 interception on a platform which doesn't
-	 * support xfd at all.
+	 * Update the guest's XFD_ERR if and only if XFD is enabled, as the #NM
+	 * interception may have been caused by L1 interception.  Per the SDM,
+	 * XFD_ERR is not modified for non-XFD #NM, i.e. if CR0.TS=1.
 	 *
-	 * Do it conditionally upon guest_fpu::xfd. xfd_err matters
-	 * only when xfd contains a non-zero value.
-	 *
-	 * Queuing exception is done in vmx_handle_exit. See comment there.
+	 * Note, XFD_ERR is updated _before_ the #NM interception check, i.e.
+	 * unlike CR2 and DR6, the value is not a payload that is attached to
+	 * the #NM exception.
 	 */
-	if (vcpu->arch.guest_fpu.fpstate->xfd)
+	if (is_xfd_nm_fault(vcpu))
 		rdmsrl(MSR_IA32_XFD_ERR, vcpu->arch.guest_fpu.xfd_err);
 }
 
