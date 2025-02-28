@@ -104,4 +104,9 @@ struct f2fs_comp_option {
 	__u8 log_cluster_size;
 };
 
+/* used for FS_IOC_GETFLAGS and FS_IOC_SETFLAGS */
+enum {
+	F2FS_NOLINEAR_LOOKUP_FLAG = 0x08000000,
+};
+
 #endif /* _UAPI_LINUX_F2FS_H */

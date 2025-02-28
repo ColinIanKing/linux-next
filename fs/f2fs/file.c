@@ -2062,6 +2062,11 @@ static int f2fs_setflags_common(struct inode *inode, u32 iflags, u32 mask)
 		}
 	}
 
+	if ((iflags ^ masked_flags) & F2FS_NOLINEAR_LOOKUP_FLAG) {
+		if (!S_ISDIR(inode->i_mode) || !IS_CASEFOLDED(inode))
+			return -EINVAL;
+	}
+
 	fi->i_flags = iflags | (fi->i_flags & ~mask);
 	f2fs_bug_on(F2FS_I_SB(inode), (fi->i_flags & F2FS_COMPR_FL) &&
 					(fi->i_flags & F2FS_NOCOMP_FL));
@@ -2093,17 +2098,18 @@ static const struct {
 	u32 iflag;
 	u32 fsflag;
 } f2fs_fsflags_map[] = {
-	{ F2FS_COMPR_FL,	FS_COMPR_FL },
-	{ F2FS_SYNC_FL,		FS_SYNC_FL },
-	{ F2FS_IMMUTABLE_FL,	FS_IMMUTABLE_FL },
-	{ F2FS_APPEND_FL,	FS_APPEND_FL },
-	{ F2FS_NODUMP_FL,	FS_NODUMP_FL },
-	{ F2FS_NOATIME_FL,	FS_NOATIME_FL },
-	{ F2FS_NOCOMP_FL,	FS_NOCOMP_FL },
-	{ F2FS_INDEX_FL,	FS_INDEX_FL },
-	{ F2FS_DIRSYNC_FL,	FS_DIRSYNC_FL },
-	{ F2FS_PROJINHERIT_FL,	FS_PROJINHERIT_FL },
-	{ F2FS_CASEFOLD_FL,	FS_CASEFOLD_FL },
+	{ F2FS_COMPR_FL,		FS_COMPR_FL },
+	{ F2FS_SYNC_FL,			FS_SYNC_FL },
+	{ F2FS_IMMUTABLE_FL,		FS_IMMUTABLE_FL },
+	{ F2FS_APPEND_FL,		FS_APPEND_FL },
+	{ F2FS_NODUMP_FL,		FS_NODUMP_FL },
+	{ F2FS_NOATIME_FL,		FS_NOATIME_FL },
+	{ F2FS_NOCOMP_FL,		FS_NOCOMP_FL },
+	{ F2FS_INDEX_FL,		FS_INDEX_FL },
+	{ F2FS_DIRSYNC_FL,		FS_DIRSYNC_FL },
+	{ F2FS_PROJINHERIT_FL,		FS_PROJINHERIT_FL },
+	{ F2FS_CASEFOLD_FL,		FS_CASEFOLD_FL },
+	{ F2FS_NOLINEAR_LOOKUP_FL,	F2FS_NOLINEAR_LOOKUP_FL },
 };
 
 #define F2FS_GETTABLE_FS_FL (		\
@@ -2121,7 +2127,8 @@ static const struct {
 		FS_INLINE_DATA_FL |	\
 		FS_NOCOW_FL |		\
 		FS_VERITY_FL |		\
-		FS_CASEFOLD_FL)
+		FS_CASEFOLD_FL |	\
+		F2FS_NOLINEAR_LOOKUP_FL)
 
 #define F2FS_SETTABLE_FS_FL (		\
 		FS_COMPR_FL |		\
@@ -2133,7 +2140,8 @@ static const struct {
 		FS_NOCOMP_FL |		\
 		FS_DIRSYNC_FL |		\
 		FS_PROJINHERIT_FL |	\
-		FS_CASEFOLD_FL)
+		FS_CASEFOLD_FL |	\
+		F2FS_NOLINEAR_LOOKUP_FL)
 
 /* Convert f2fs on-disk i_flags to FS_IOC_{GET,SET}FLAGS flags */
 static inline u32 f2fs_iflags_to_fsflags(u32 iflags)
@@ -3344,6 +3352,8 @@ int f2fs_fileattr_get(struct dentry *dentry, struct fileattr *fa)
 		fsflags |= FS_INLINE_DATA_FL;
 	if (is_inode_flag_set(inode, FI_PIN_FILE))
 		fsflags |= FS_NOCOW_FL;
+	if (IS_NOLINEAR_LOOKUP(inode))
+		fsflags |= F2FS_NOLINEAR_LOOKUP_FL;
 
 	fileattr_fill_flags(fa, fsflags & F2FS_GETTABLE_FS_FL);
 
