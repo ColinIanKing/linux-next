@@ -524,7 +524,11 @@ static int __folio_migrate_mapping(struct address_space *mapping,
 			folio_set_swapcache(newfolio);
 			newfolio->private = folio_get_private(folio);
 		}
-		entries = nr;
+		/* shmem uses high-order entry */
+		if (!folio_test_anon(folio))
+			entries = 1;
+		else
+			entries = nr;
 	} else {
 		VM_BUG_ON_FOLIO(folio_test_swapcache(folio), folio);
 		entries = 1;
