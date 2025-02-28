@@ -207,6 +207,26 @@ struct clk;
 #define RK3399_PMU_CLKGATE_CON(x)	((x) * 0x4 + 0x100)
 #define RK3399_PMU_SOFTRST_CON(x)	((x) * 0x4 + 0x110)
 
+#define RK3528_PMU_CRU_BASE		0x10000
+#define RK3528_PCIE_CRU_BASE		0x20000
+#define RK3528_DDRPHY_CRU_BASE		0x28000
+#define RK3528_PLL_CON(x)		RK2928_PLL_CON(x)
+#define RK3528_PCIE_PLL_CON(x)		((x) * 0x4 + RK3528_PCIE_CRU_BASE)
+#define RK3528_DDRPHY_PLL_CON(x)	((x) * 0x4 + RK3528_DDRPHY_CRU_BASE)
+#define RK3528_MODE_CON			0x280
+#define RK3528_CLKSEL_CON(x)		((x) * 0x4 + 0x300)
+#define RK3528_CLKGATE_CON(x)		((x) * 0x4 + 0x800)
+#define RK3528_SOFTRST_CON(x)		((x) * 0x4 + 0xa00)
+#define RK3528_PMU_CLKSEL_CON(x)	((x) * 0x4 + 0x300 + RK3528_PMU_CRU_BASE)
+#define RK3528_PMU_CLKGATE_CON(x)	((x) * 0x4 + 0x800 + RK3528_PMU_CRU_BASE)
+#define RK3528_PCIE_CLKSEL_CON(x)	((x) * 0x4 + 0x300 + RK3528_PCIE_CRU_BASE)
+#define RK3528_PCIE_CLKGATE_CON(x)	((x) * 0x4 + 0x800 + RK3528_PCIE_CRU_BASE)
+#define RK3528_DDRPHY_CLKGATE_CON(x)	((x) * 0x4 + 0x800 + RK3528_DDRPHY_CRU_BASE)
+#define RK3528_DDRPHY_MODE_CON		(0x280 + RK3528_DDRPHY_CRU_BASE)
+#define RK3528_GLB_CNT_TH		0xc00
+#define RK3528_GLB_SRST_FST		0xc08
+#define RK3528_GLB_SRST_SND		0xc0c
+
 #define RK3568_PLL_CON(x)		RK2928_PLL_CON(x)
 #define RK3568_MODE_CON0		0xc0
 #define RK3568_MISC_CON0		0xc4
@@ -444,6 +464,7 @@ struct rockchip_pll_rate_table {
  * Flags:
  * ROCKCHIP_PLL_SYNC_RATE - check rate parameters to match against the
  *	rate_table parameters and ajust them if necessary.
+ * ROCKCHIP_PLL_FIXED_MODE - the pll operates in normal mode only
  */
 struct rockchip_pll_clock {
 	unsigned int		id;
@@ -461,6 +482,7 @@ struct rockchip_pll_clock {
 };
 
 #define ROCKCHIP_PLL_SYNC_RATE		BIT(0)
+#define ROCKCHIP_PLL_FIXED_MODE		BIT(1)
 
 #define PLL(_type, _id, _name, _pnames, _flags, _con, _mode, _mshift,	\
 		_lshift, _pflags, _rtable)				\
@@ -1118,6 +1140,7 @@ static inline void rockchip_register_softrst(struct device_node *np,
 	return rockchip_register_softrst_lut(np, NULL, num_regs, base, flags);
 }
 
+void rk3528_rst_init(struct device_node *np, void __iomem *reg_base);
 void rk3576_rst_init(struct device_node *np, void __iomem *reg_base);
 void rk3588_rst_init(struct device_node *np, void __iomem *reg_base);
 
