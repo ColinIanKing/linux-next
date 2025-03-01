@@ -959,11 +959,7 @@ int io_buffer_register_bvec(struct io_uring_cmd *cmd, struct request *rq,
 	imu->release = release;
 	imu->priv = rq;
 	imu->is_kbuf = true;
-
-	if (op_is_write(req_op(rq)))
-		imu->dir = IO_IMU_SOURCE;
-	else
-		imu->dir = IO_IMU_DEST;
+	imu->dir = 1 << rq_data_dir(rq);
 
 	bvec = imu->bvec;
 	rq_for_each_bvec(bv, rq, rq_iter)
@@ -977,26 +973,36 @@ unlock:
 }
 EXPORT_SYMBOL_GPL(io_buffer_register_bvec);
 
-void io_buffer_unregister_bvec(struct io_uring_cmd *cmd, unsigned int index,
-			       unsigned int issue_flags)
+int io_buffer_unregister_bvec(struct io_uring_cmd *cmd, unsigned int index,
+			      unsigned int issue_flags)
 {
 	struct io_ring_ctx *ctx = cmd_to_io_kiocb(cmd)->ctx;
 	struct io_rsrc_data *data = &ctx->buf_table;
 	struct io_rsrc_node *node;
+	int ret = 0;
 
 	io_ring_submit_lock(ctx, issue_flags);
-	if (index >= data->nr)
+	if (index >= data->nr) {
+		ret = -EINVAL;
 		goto unlock;
+	}
 	index = array_index_nospec(index, data->nr);
 
 	node = data->nodes[index];
-	if (!node || !node->buf->is_kbuf)
+	if (!node) {
+		ret = -EINVAL;
 		goto unlock;
+	}
+	if (!node->buf->is_kbuf) {
+		ret = -EBUSY;
+		goto unlock;
+	}
 
 	io_put_rsrc_node(ctx, node);
 	data->nodes[index] = NULL;
 unlock:
 	io_ring_submit_unlock(ctx, issue_flags);
+	return ret;
 }
 EXPORT_SYMBOL_GPL(io_buffer_unregister_bvec);
 
@@ -1068,8 +1074,8 @@ static int io_import_fixed(int ddir, struct iov_iter *iter,
 	return 0;
 }
 
-static inline struct io_rsrc_node *io_find_buf_node(struct io_kiocb *req,
-						    unsigned issue_flags)
+inline struct io_rsrc_node *io_find_buf_node(struct io_kiocb *req,
+					     unsigned issue_flags)
 {
 	struct io_ring_ctx *ctx = req->ctx;
 	struct io_rsrc_node *node;
