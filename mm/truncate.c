@@ -244,8 +244,14 @@ bool truncate_inode_partial_folio(struct folio *folio, loff_t start, loff_t end)
 		if (!folio_trylock(folio2))
 			goto out;
 
-		/* split result does not matter here */
-		try_folio_split(folio2, split_at2, NULL);
+		/*
+		 * make sure folio2 is large and does not change its mapping.
+		 * Its split result does not matter here.
+		 */
+		if (folio_test_large(folio2) &&
+		    folio2->mapping == folio->mapping)
+			try_folio_split(folio2, split_at2, NULL);
+
 		folio_unlock(folio2);
 out:
 		folio_put(folio2);
