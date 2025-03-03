@@ -56,7 +56,7 @@ static inline pte_t *pte_alloc_one_kernel(struct mm_struct *mm)
 }
 
 #define __pte_free_tlb(tlb, pte, address)	\
-	tlb_remove_ptdesc((tlb), page_ptdesc(pte));
+	tlb_remove_ptdesc((tlb), page_ptdesc(pte))
 
 #ifndef __PAGETABLE_PMD_FOLDED
 
