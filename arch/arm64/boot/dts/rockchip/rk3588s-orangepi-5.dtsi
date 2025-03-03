@@ -197,7 +197,7 @@
 	};
 };
 
-&hdptxphy_hdmi0 {
+&hdptxphy0 {
 	status = "okay";
 };
 
@@ -363,6 +363,10 @@
 		reset-deassert-us = <100000>;
 		reset-gpios = <&gpio3 RK_PB2 GPIO_ACTIVE_LOW>;
 	};
+};
+
+&pd_gpu {
+	domain-supply = <&vdd_gpu_s0>;
 };
 
 &pinctrl {
