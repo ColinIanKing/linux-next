@@ -3651,7 +3651,6 @@ static void *__vmalloc_area_node(struct vm_struct *area, gfp_t gfp_mask,
 		warn_alloc(gfp_mask, NULL,
 			"vmalloc error: size %lu, failed to allocated page array size %lu",
 			nr_small_pages * PAGE_SIZE, array_size);
-		free_vm_area(area);
 		return NULL;
 	}
 
@@ -3844,8 +3843,10 @@ again:
 
 	/* Allocate physical pages and map them into vmalloc space. */
 	ret = __vmalloc_area_node(area, gfp_mask, prot, shift, node);
-	if (!ret)
+	if (!ret) {
+		free_vm_area(area);
 		goto fail;
+	}
 
 	/*
 	 * Mark the pages as accessible, now that they are mapped.
