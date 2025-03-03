@@ -44,6 +44,9 @@
 /** Number of dentries for each connection in the control filesystem */
 #define FUSE_CTL_NUM_DENTRIES 5
 
+/** Frequency (in jiffies) of request timeout checks, if opted into */
+extern const unsigned long fuse_timeout_timer_freq;
+
 /** Maximum of max_pages received in init_out */
 extern unsigned int fuse_max_pages_limit;
 
@@ -442,6 +445,8 @@ struct fuse_req {
 #ifdef CONFIG_FUSE_IO_URING
 	void *ring_entry;
 #endif
+	/** When (in jiffies) the request was created */
+	unsigned long create_time;
 };
 
 struct fuse_iqueue;
@@ -867,6 +872,9 @@ struct fuse_conn {
 	/* Use pages instead of pointer for kernel I/O */
 	unsigned int use_pages_for_kvec_io:1;
 
+	/* Is link not implemented by fs? */
+	unsigned int no_link:1;
+
 	/* Use io_uring for communication */
 	unsigned int io_uring;
 
@@ -935,6 +943,15 @@ struct fuse_conn {
 	/**  uring connection information*/
 	struct fuse_ring *ring;
 #endif
+
+	/** Only used if the connection opts into request timeouts */
+	struct {
+		/* Worker for checking if any requests have timed out */
+		struct delayed_work work;
+
+		/* Request timeout (in jiffies). 0 = no timeout */
+		unsigned int req_timeout;
+	} timeout;
 };
 
 /*
@@ -1215,6 +1232,9 @@ void fuse_request_end(struct fuse_req *req);
 /* Abort all requests */
 void fuse_abort_conn(struct fuse_conn *fc);
 void fuse_wait_aborted(struct fuse_conn *fc);
+
+/* Check if any requests timed out */
+void fuse_check_timeout(struct work_struct *work);
 
 /**
  * Invalidate inode attributes
