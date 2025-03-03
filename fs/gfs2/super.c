@@ -1339,12 +1339,8 @@ static enum evict_behavior evict_should_delete(struct inode *inode,
 
 	/* Must not read inode block until block type has been verified */
 	ret = gfs2_glock_nq_init(ip->i_gl, LM_ST_EXCLUSIVE, GL_SKIP, gh);
-	if (unlikely(ret)) {
-		glock_clear_object(ip->i_iopen_gh.gh_gl, ip);
-		ip->i_iopen_gh.gh_flags |= GL_NOCACHE;
-		gfs2_glock_dq_uninit(&ip->i_iopen_gh);
-		return EVICT_SHOULD_DEFER_DELETE;
-	}
+	if (unlikely(ret))
+		return EVICT_SHOULD_SKIP_DELETE;
 
 	if (gfs2_inode_already_deleted(ip->i_gl, ip->i_no_formal_ino))
 		return EVICT_SHOULD_SKIP_DELETE;
@@ -1364,15 +1360,8 @@ static enum evict_behavior evict_should_delete(struct inode *inode,
 
 should_delete:
 	if (gfs2_holder_initialized(&ip->i_iopen_gh) &&
-	    test_bit(HIF_HOLDER, &ip->i_iopen_gh.gh_iflags)) {
-		enum evict_behavior behavior =
-			gfs2_upgrade_iopen_glock(inode);
-
-		if (behavior != EVICT_SHOULD_DELETE) {
-			gfs2_holder_uninit(&ip->i_iopen_gh);
-			return behavior;
-		}
-	}
+	    test_bit(HIF_HOLDER, &ip->i_iopen_gh.gh_iflags))
+		return gfs2_upgrade_iopen_glock(inode);
 	return EVICT_SHOULD_DELETE;
 }
 
@@ -1535,10 +1524,13 @@ out:
 	if (gfs2_holder_initialized(&ip->i_iopen_gh)) {
 		struct gfs2_glock *gl = ip->i_iopen_gh.gh_gl;
 
+		if (gfs2_holder_queued(&ip->i_iopen_gh)) {
+			ip->i_iopen_gh.gh_flags |= GL_NOCACHE;
+			gfs2_glock_dq(&ip->i_iopen_gh);
+		}
 		glock_clear_object(gl, ip);
 		gfs2_glock_hold(gl);
-		ip->i_iopen_gh.gh_flags |= GL_NOCACHE;
-		gfs2_glock_dq_uninit(&ip->i_iopen_gh);
+		gfs2_holder_uninit(&ip->i_iopen_gh);
 		gfs2_glock_put_eventually(gl);
 	}
 	if (ip->i_gl) {
