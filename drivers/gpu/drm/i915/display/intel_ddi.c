@@ -70,6 +70,7 @@
 #include "intel_lspcon.h"
 #include "intel_mg_phy_regs.h"
 #include "intel_modeset_lock.h"
+#include "intel_pfit.h"
 #include "intel_pps.h"
 #include "intel_psr.h"
 #include "intel_quirks.h"
@@ -187,11 +188,8 @@ static i915_reg_t intel_ddi_buf_status_reg(struct intel_display *display, enum p
 		return DDI_BUF_CTL(port);
 }
 
-void intel_wait_ddi_buf_idle(struct drm_i915_private *dev_priv,
-			     enum port port)
+void intel_wait_ddi_buf_idle(struct intel_display *display, enum port port)
 {
-	struct intel_display *display = &dev_priv->display;
-
 	/*
 	 * Bspec's platform specific timeouts:
 	 * MTL+   : 100 us
@@ -3096,7 +3094,7 @@ static void intel_ddi_buf_disable(struct intel_encoder *encoder,
 	intel_de_rmw(dev_priv, DDI_BUF_CTL(port), DDI_BUF_CTL_ENABLE, 0);
 
 	if (DISPLAY_VER(display) >= 14)
-		intel_wait_ddi_buf_idle(dev_priv, port);
+		intel_wait_ddi_buf_idle(display, port);
 
 	mtl_ddi_disable_d2d(encoder);
 
@@ -3108,7 +3106,7 @@ static void intel_ddi_buf_disable(struct intel_encoder *encoder,
 	intel_ddi_disable_fec(encoder, crtc_state);
 
 	if (DISPLAY_VER(display) < 14)
-		intel_wait_ddi_buf_idle(dev_priv, port);
+		intel_wait_ddi_buf_idle(display, port);
 
 	intel_ddi_wait_for_fec_status(encoder, crtc_state, false);
 }
@@ -5139,7 +5137,7 @@ void intel_ddi_init(struct intel_display *display,
 		return;
 	}
 
-	if (intel_phy_is_snps(dev_priv, phy) &&
+	if (intel_phy_is_snps(display, phy) &&
 	    dev_priv->display.snps.phy_failed_calibration & BIT(phy)) {
 		drm_dbg_kms(&dev_priv->drm,
 			    "SNPS PHY %c failed to calibrate, proceeding anyway\n",
