@@ -548,6 +548,10 @@ int dw_pcie_host_init(struct dw_pcie_rp *pp)
 	if (pp->ops->post_init)
 		pp->ops->post_init(pp);
 
+	ret = dwc_pcie_debugfs_init(pci);
+	if (ret)
+		goto err_stop_link;
+
 	return 0;
 
 err_stop_link:
@@ -571,6 +575,8 @@ EXPORT_SYMBOL_GPL(dw_pcie_host_init);
 void dw_pcie_host_deinit(struct dw_pcie_rp *pp)
 {
 	struct dw_pcie *pci = to_dw_pcie_from_pp(pp);
+
+	dwc_pcie_debugfs_deinit(pci);
 
 	pci_stop_root_bus(pp->bridge->bus);
 	pci_remove_root_bus(pp->bridge->bus);
