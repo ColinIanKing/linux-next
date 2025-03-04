@@ -796,6 +796,7 @@ void dw_pcie_ep_cleanup(struct dw_pcie_ep *ep)
 {
 	struct dw_pcie *pci = to_dw_pcie_from_ep(ep);
 
+	dwc_pcie_debugfs_deinit(pci);
 	dw_pcie_edma_remove(pci);
 }
 EXPORT_SYMBOL_GPL(dw_pcie_ep_cleanup);
@@ -970,6 +971,10 @@ int dw_pcie_ep_init_registers(struct dw_pcie_ep *ep)
 	}
 
 	dw_pcie_ep_init_non_sticky_registers(pci);
+
+	ret = dwc_pcie_debugfs_init(pci);
+	if (ret)
+		goto err_remove_edma;
 
 	return 0;
 
