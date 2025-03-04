@@ -892,7 +892,7 @@ static void vrm_stat_account(struct vma_remap_struct *vrm,
 static unsigned long prep_move_vma(struct vma_remap_struct *vrm,
 				   unsigned long *vm_flags_ptr)
 {
-	unsigned long err;
+	unsigned long err = 0;
 	struct vm_area_struct *vma = vrm->vma;
 	unsigned long old_addr = vrm->addr;
 	unsigned long old_len = vrm->old_len;
