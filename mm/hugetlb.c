@@ -4998,7 +4998,9 @@ void __init hugetlb_bootmem_alloc(void)
 	__hugetlb_bootmem_allocated = true;
 }
 
-/* hugepage_alloc_threads command line parsing
+/*
+ * hugepage_alloc_threads command line parsing.
+ *
  * When set, use this specific number of threads for the boot
  * allocation of hugepages.
  */
