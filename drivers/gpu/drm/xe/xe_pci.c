@@ -765,21 +765,16 @@ static int xe_info_init(struct xe_device *xe,
 
 static void xe_pci_remove(struct pci_dev *pdev)
 {
-	struct xe_device *xe;
-
-	xe = pdev_to_xe_device(pdev);
-	if (!xe) /* driver load aborted, nothing to cleanup */
-		return;
+	struct xe_device *xe = pdev_to_xe_device(pdev);
 
 	if (IS_SRIOV_PF(xe))
 		xe_pci_sriov_configure(pdev, 0);
 
-	if (xe_survivability_mode_enabled(xe))
-		return xe_survivability_mode_remove(xe);
+	if (xe_survivability_mode_is_enabled(xe))
+		return;
 
 	xe_device_remove(xe);
 	xe_pm_runtime_fini(xe);
-	pci_set_drvdata(pdev, NULL);
 }
 
 /*
@@ -851,13 +846,14 @@ static int xe_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	err = xe_device_probe_early(xe);
 
 	/*
-	 * In Boot Survivability mode, no drm card is exposed
-	 * and driver is loaded with bare minimum to allow
-	 * for firmware to be flashed through mei. Return
-	 * success if survivability mode is enabled.
+	 * In Boot Survivability mode, no drm card is exposed and driver is
+	 * loaded with bare minimum to allow for firmware to be flashed through
+	 * mei. If early probe fails, check if survivability mode is flagged by
+	 * HW to be enabled. In that case enable it and return success.
 	 */
 	if (err) {
-		if (xe_survivability_mode_enabled(xe))
+		if (xe_survivability_mode_required(xe) &&
+		    xe_survivability_mode_enable(xe))
 			return 0;
 
 		return err;
@@ -900,10 +896,8 @@ static int xe_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		return err;
 
 	err = xe_device_probe(xe);
-	if (err) {
-		xe_device_call_remove_actions(xe);
+	if (err)
 		return err;
-	}
 
 	err = xe_pm_init(xe);
 	if (err)
@@ -953,7 +947,7 @@ static int xe_pci_suspend(struct device *dev)
 	struct xe_device *xe = pdev_to_xe_device(pdev);
 	int err;
 
-	if (xe_survivability_mode_enabled(xe))
+	if (xe_survivability_mode_is_enabled(xe))
 		return -EBUSY;
 
 	err = xe_pm_suspend(xe);
