@@ -404,7 +404,7 @@ void bch2_mark_io_failure(struct bch_io_failures *,
 			  struct extent_ptr_decoded *);
 int bch2_bkey_pick_read_device(struct bch_fs *, struct bkey_s_c,
 			       struct bch_io_failures *,
-			       struct extent_ptr_decoded *);
+			       struct extent_ptr_decoded *, int);
 
 /* KEY_TYPE_btree_ptr: */
 
@@ -752,5 +752,20 @@ static inline void bch2_key_resize(struct bkey *k, unsigned new_size)
 	k->p.offset += new_size;
 	k->size = new_size;
 }
+
+static inline u64 bch2_bkey_extent_ptrs_flags(struct bkey_ptrs_c ptrs)
+{
+	if (ptrs.start != ptrs.end &&
+	    extent_entry_type(ptrs.start) == BCH_EXTENT_ENTRY_flags)
+		return ptrs.start->flags.flags;
+	return 0;
+}
+
+static inline u64 bch2_bkey_extent_flags(struct bkey_s_c k)
+{
+	return bch2_bkey_extent_ptrs_flags(bch2_bkey_ptrs_c(k));
+}
+
+int bch2_bkey_extent_flags_set(struct bch_fs *, struct bkey_i *, u64);
 
 #endif /* _BCACHEFS_EXTENTS_H */

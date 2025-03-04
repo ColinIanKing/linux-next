@@ -584,7 +584,7 @@ static int sample_block_group_extent_item(struct btrfs_caching_control *caching_
 	struct btrfs_root *extent_root;
 	u64 search_offset;
 	u64 search_end = block_group->start + block_group->length;
-	struct btrfs_path *path;
+	BTRFS_PATH_AUTO_FREE(path);
 	struct btrfs_key search_key;
 	int ret = 0;
 
@@ -626,7 +626,6 @@ static int sample_block_group_extent_item(struct btrfs_caching_control *caching_
 
 	lockdep_assert_held(&caching_ctl->mutex);
 	lockdep_assert_held_read(&fs_info->commit_root_sem);
-	btrfs_free_path(path);
 	return ret;
 }
 
@@ -738,8 +737,8 @@ static int load_extent_tree_free(struct btrfs_caching_control *caching_ctl)
 	path->reada = READA_FORWARD;
 
 	key.objectid = last;
-	key.offset = 0;
 	key.type = BTRFS_EXTENT_ITEM_KEY;
+	key.offset = 0;
 
 next:
 	ret = btrfs_search_slot(NULL, extent_root, &key, path, 0, 0);
@@ -785,8 +784,8 @@ next:
 
 		if (key.objectid < last) {
 			key.objectid = last;
-			key.offset = 0;
 			key.type = BTRFS_EXTENT_ITEM_KEY;
+			key.offset = 0;
 			btrfs_release_path(path);
 			goto next;
 		}
@@ -1823,7 +1822,8 @@ void btrfs_reclaim_bgs_work(struct work_struct *work)
 	list_sort(NULL, &fs_info->reclaim_bgs, reclaim_bgs_cmp);
 	while (!list_empty(&fs_info->reclaim_bgs)) {
 		u64 zone_unusable;
-		u64 reclaimed;
+		u64 used;
+		u64 reserved;
 		int ret = 0;
 
 		bg = list_first_entry(&fs_info->reclaim_bgs,
@@ -1887,6 +1887,17 @@ void btrfs_reclaim_bgs_work(struct work_struct *work)
 			up_write(&space_info->groups_sem);
 			goto next;
 		}
+
+		/*
+		 * Cache the zone_unusable value before turning the block group
+		 * to read only. As soon as the block group is read only it's
+		 * zone_unusable value gets moved to the block group's read-only
+		 * bytes and isn't available for calculations anymore. We also
+		 * cache it before unlocking the block group, to prevent races
+		 * (reports from KCSAN and such tools) with tasks updating it.
+		 */
+		zone_unusable = bg->zone_unusable;
+
 		spin_unlock(&bg->lock);
 		spin_unlock(&space_info->lock);
 
@@ -1903,31 +1914,47 @@ void btrfs_reclaim_bgs_work(struct work_struct *work)
 			goto next;
 		}
 
-		/*
-		 * Cache the zone_unusable value before turning the block group
-		 * to read only. As soon as the blog group is read only it's
-		 * zone_unusable value gets moved to the block group's read-only
-		 * bytes and isn't available for calculations anymore.
-		 */
-		zone_unusable = bg->zone_unusable;
 		ret = inc_block_group_ro(bg, 0);
 		up_write(&space_info->groups_sem);
 		if (ret < 0)
 			goto next;
 
+		/*
+		 * The amount of bytes reclaimed corresponds to the sum of the
+		 * "used" and "reserved" counters. We have set the block group
+		 * to RO above, which prevents reservations from happening but
+		 * we may have existing reservations for which allocation has
+		 * not yet been done - btrfs_update_block_group() was not yet
+		 * called, which is where we will transfer a reserved extent's
+		 * size from the "reserved" counter to the "used" counter - this
+		 * happens when running delayed references. When we relocate the
+		 * chunk below, relocation first flushes dellaloc, waits for
+		 * ordered extent completion (which is where we create delayed
+		 * references for data extents) and commits the current
+		 * transaction (which runs delayed references), and only after
+		 * it does the actual work to move extents out of the block
+		 * group. So the reported amount of reclaimed bytes is
+		 * effectively the sum of the 'used' and 'reserved' counters.
+		 */
+		spin_lock(&bg->lock);
+		used = bg->used;
+		reserved = bg->reserved;
+		spin_unlock(&bg->lock);
+
 		btrfs_info(fs_info,
-			"reclaiming chunk %llu with %llu%% used %llu%% unusable",
+	"reclaiming chunk %llu with %llu%% used %llu%% reserved %llu%% unusable",
 				bg->start,
-				div64_u64(bg->used * 100, bg->length),
+				div64_u64(used * 100, bg->length),
+				div64_u64(reserved * 100, bg->length),
 				div64_u64(zone_unusable * 100, bg->length));
 		trace_btrfs_reclaim_block_group(bg);
-		reclaimed = bg->used;
 		ret = btrfs_relocate_chunk(fs_info, bg->start);
 		if (ret) {
 			btrfs_dec_block_group_ro(bg);
 			btrfs_err(fs_info, "error relocating chunk %llu",
 				  bg->start);
-			reclaimed = 0;
+			used = 0;
+			reserved = 0;
 			spin_lock(&space_info->lock);
 			space_info->reclaim_errors++;
 			if (READ_ONCE(space_info->periodic_reclaim))
@@ -1936,7 +1963,8 @@ void btrfs_reclaim_bgs_work(struct work_struct *work)
 		}
 		spin_lock(&space_info->lock);
 		space_info->reclaim_count++;
-		space_info->reclaim_bytes += reclaimed;
+		space_info->reclaim_bytes += used;
+		space_info->reclaim_bytes += reserved;
 		spin_unlock(&space_info->lock);
 
 next:
@@ -2509,8 +2537,8 @@ int btrfs_read_block_groups(struct btrfs_fs_info *info)
 		return fill_dummy_bgs(info);
 
 	key.objectid = 0;
-	key.offset = 0;
 	key.type = BTRFS_BLOCK_GROUP_ITEM_KEY;
+	key.offset = 0;
 	path = btrfs_alloc_path();
 	if (!path)
 		return -ENOMEM;
@@ -2641,7 +2669,7 @@ static int insert_dev_extent(struct btrfs_trans_handle *trans,
 {
 	struct btrfs_fs_info *fs_info = device->fs_info;
 	struct btrfs_root *root = fs_info->dev_root;
-	struct btrfs_path *path;
+	BTRFS_PATH_AUTO_FREE(path);
 	struct btrfs_dev_extent *extent;
 	struct extent_buffer *leaf;
 	struct btrfs_key key;
@@ -2658,7 +2686,7 @@ static int insert_dev_extent(struct btrfs_trans_handle *trans,
 	key.offset = start;
 	ret = btrfs_insert_empty_item(trans, root, path, &key, sizeof(*extent));
 	if (ret)
-		goto out;
+		return ret;
 
 	leaf = path->nodes[0];
 	extent = btrfs_item_ptr(leaf, path->slots[0], struct btrfs_dev_extent);
@@ -2666,10 +2694,8 @@ static int insert_dev_extent(struct btrfs_trans_handle *trans,
 	btrfs_set_dev_extent_chunk_objectid(leaf, extent,
 					    BTRFS_FIRST_CHUNK_TREE_OBJECTID);
 	btrfs_set_dev_extent_chunk_offset(leaf, extent, chunk_offset);
-
 	btrfs_set_dev_extent_length(leaf, extent, num_bytes);
-out:
-	btrfs_free_path(path);
+
 	return ret;
 }
 
@@ -3306,7 +3332,7 @@ int btrfs_setup_space_cache(struct btrfs_trans_handle *trans)
 	struct btrfs_fs_info *fs_info = trans->fs_info;
 	struct btrfs_block_group *cache, *tmp;
 	struct btrfs_transaction *cur_trans = trans->transaction;
-	struct btrfs_path *path;
+	BTRFS_PATH_AUTO_FREE(path);
 
 	if (list_empty(&cur_trans->dirty_bgs) ||
 	    !btrfs_test_opt(fs_info, SPACE_CACHE))
@@ -3323,7 +3349,6 @@ int btrfs_setup_space_cache(struct btrfs_trans_handle *trans)
 			cache_save_setup(cache, trans, path);
 	}
 
-	btrfs_free_path(path);
 	return 0;
 }
 
@@ -3346,7 +3371,7 @@ int btrfs_start_dirty_block_groups(struct btrfs_trans_handle *trans)
 	struct btrfs_transaction *cur_trans = trans->transaction;
 	int ret = 0;
 	int should_put;
-	struct btrfs_path *path = NULL;
+	BTRFS_PATH_AUTO_FREE(path);
 	LIST_HEAD(dirty);
 	struct list_head *io = &cur_trans->io_bgs;
 	int loops = 0;
@@ -3501,7 +3526,6 @@ out:
 		btrfs_cleanup_dirty_bgs(cur_trans, fs_info);
 	}
 
-	btrfs_free_path(path);
 	return ret;
 }
 
@@ -3512,7 +3536,7 @@ int btrfs_write_dirty_block_groups(struct btrfs_trans_handle *trans)
 	struct btrfs_transaction *cur_trans = trans->transaction;
 	int ret = 0;
 	int should_put;
-	struct btrfs_path *path;
+	BTRFS_PATH_AUTO_FREE(path);
 	struct list_head *io = &cur_trans->io_bgs;
 
 	path = btrfs_alloc_path();
@@ -3624,7 +3648,6 @@ int btrfs_write_dirty_block_groups(struct btrfs_trans_handle *trans)
 		btrfs_put_block_group(cache);
 	}
 
-	btrfs_free_path(path);
 	return ret;
 }
 

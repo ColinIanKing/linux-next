@@ -5792,6 +5792,7 @@ X:	drivers/clk/clkdev.c
 
 COMMON INTERNET FILE SYSTEM CLIENT (CIFS and SMB3)
 M:	Steve French <sfrench@samba.org>
+M:	Steve French <smfrench@gmail.com>
 R:	Paulo Alcantara <pc@manguebit.com> (DFS, global name space)
 R:	Ronnie Sahlberg <ronniesahlberg@gmail.com> (directory leases, sparse files)
 R:	Shyam Prasad N <sprasad@microsoft.com> (multichannel)
@@ -12669,7 +12670,9 @@ F:	tools/testing/selftests/
 
 KERNEL SMB3 SERVER (KSMBD)
 M:	Namjae Jeon <linkinjeon@kernel.org>
+M:	Namjae Jeon <linkinjeon@samba.org>
 M:	Steve French <sfrench@samba.org>
+M:	Steve French <smfrench@gmail.com>
 R:	Sergey Senozhatsky <senozhatsky@chromium.org>
 R:	Tom Talpey <tom@talpey.com>
 L:	linux-cifs@vger.kernel.org
@@ -23112,12 +23115,6 @@ M:	System76 Product Development <productdev@system76.com>
 L:	platform-driver-x86@vger.kernel.org
 S:	Maintained
 F:	drivers/platform/x86/system76_acpi.c
-
-SYSV FILESYSTEM
-S:	Orphan
-F:	Documentation/filesystems/sysv-fs.rst
-F:	fs/sysv/
-F:	include/linux/sysv_fs.h
 
 TASKSTATS STATISTICS INTERFACE
 M:	Balbir Singh <bsingharora@gmail.com>
