@@ -194,13 +194,13 @@ void intel_display_driver_early_probe(struct intel_display *display)
 	mutex_init(&display->hdcp.hdcp_mutex);
 
 	intel_display_irq_init(i915);
-	intel_dkl_phy_init(i915);
+	intel_dkl_phy_init(display);
 	intel_color_init_hooks(display);
 	intel_init_cdclk_hooks(display);
 	intel_audio_hooks_init(display);
 	intel_dpll_init_clock_hook(i915);
 	intel_init_display_hooks(i915);
-	intel_fdi_init_hook(i915);
+	intel_fdi_init_hook(display);
 	intel_dmc_wl_init(display);
 }
 
@@ -449,7 +449,7 @@ int intel_display_driver_probe_nogem(struct intel_display *display)
 
 	intel_plane_possible_crtcs_init(display);
 	intel_shared_dpll_init(display);
-	intel_fdi_pll_freq_update(i915);
+	intel_fdi_pll_freq_update(display);
 
 	intel_update_czclk(i915);
 	intel_display_driver_init_hw(display);
@@ -550,7 +550,7 @@ void intel_display_driver_register(struct intel_display *display)
 
 	intel_audio_register(display);
 
-	intel_display_debugfs_register(i915);
+	intel_display_debugfs_register(display);
 
 	/*
 	 * We need to coordinate the hotplugs with the asynchronous
