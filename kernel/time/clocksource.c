@@ -201,7 +201,8 @@ static void clocksource_change_rating(struct clocksource *cs, int rating)
 
 static void __clocksource_unstable(struct clocksource *cs)
 {
-	cs->flags &= ~(CLOCK_SOURCE_VALID_FOR_HRES | CLOCK_SOURCE_WATCHDOG);
+	cs->flags &= ~(CLOCK_SOURCE_VALID_FOR_HRES | CLOCK_SOURCE_WATCHDOG |
+		       CLOCK_SOURCE_DEFERRED_UNSTABLE);
 	cs->flags |= CLOCK_SOURCE_UNSTABLE;
 
 	/*
@@ -215,6 +216,11 @@ static void __clocksource_unstable(struct clocksource *cs)
 
 	if (cs->mark_unstable)
 		cs->mark_unstable(cs);
+}
+
+static void __clocksource_deferred_unstable(struct clocksource *cs)
+{
+	cs->flags |= CLOCK_SOURCE_DEFERRED_UNSTABLE;
 
 	/* kick clocksource_watchdog_kthread() */
 	if (finished_booting)
@@ -236,7 +242,7 @@ void clocksource_mark_unstable(struct clocksource *cs)
 	if (!(cs->flags & CLOCK_SOURCE_UNSTABLE)) {
 		if (!list_empty(&cs->list) && list_empty(&cs->wd_list))
 			list_add(&cs->wd_list, &watchdog_list);
-		__clocksource_unstable(cs);
+		__clocksource_deferred_unstable(cs);
 	}
 	spin_unlock_irqrestore(&watchdog_lock, flags);
 }
@@ -453,7 +459,7 @@ static void clocksource_watchdog(struct timer_list *unused)
 
 		if (read_ret == WD_READ_UNSTABLE) {
 			/* Clock readout unreliable, so give it up. */
-			__clocksource_unstable(cs);
+			__clocksource_deferred_unstable(cs);
 			continue;
 		}
 
@@ -538,7 +544,7 @@ static void clocksource_watchdog(struct timer_list *unused)
 				pr_warn("                      '%s' (not '%s') is current clocksource.\n", curr_clocksource->name, cs->name);
 			else
 				pr_warn("                      No current clocksource.\n");
-			__clocksource_unstable(cs);
+			__clocksource_deferred_unstable(cs);
 			continue;
 		}
 
@@ -703,6 +709,8 @@ static int __clocksource_watchdog_kthread(void)
 
 	spin_lock_irqsave(&watchdog_lock, flags);
 	list_for_each_entry_safe(cs, tmp, &watchdog_list, wd_list) {
+		if (cs->flags & CLOCK_SOURCE_DEFERRED_UNSTABLE)
+			__clocksource_unstable(cs);
 		if (cs->flags & CLOCK_SOURCE_UNSTABLE) {
 			list_del_init(&cs->wd_list);
 			clocksource_change_rating(cs, 0);
