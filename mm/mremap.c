@@ -475,8 +475,8 @@ static bool move_huge_pud(struct pagetable_move_control *pmc,
 	return true;
 }
 #else
-static bool move_huge_pud(struct vm_area_struct *vma, unsigned long old_addr,
-			  unsigned long new_addr, pud_t *old_pud, pud_t *new_pud)
+static bool move_huge_pud(struct pagetable_move_control *pmc,
+			  pud_t *old_pud, pud_t *new_pud)
 {
 	WARN_ON_ONCE(1);
 	return false;
