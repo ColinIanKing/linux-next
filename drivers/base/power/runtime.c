@@ -1474,8 +1474,8 @@ bool pm_runtime_block_if_disabled(struct device *dev)
 
 	spin_lock_irq(&dev->power.lock);
 
-	ret = dev->power.disable_depth && dev->power.last_status == RPM_INVALID;
-	if (ret)
+	ret = !pm_runtime_enabled(dev);
+	if (ret && dev->power.last_status == RPM_INVALID)
 		dev->power.last_status = RPM_BLOCKED;
 
 	spin_unlock_irq(&dev->power.lock);
@@ -1567,23 +1567,6 @@ out:
 	spin_unlock_irqrestore(&dev->power.lock, flags);
 }
 EXPORT_SYMBOL_GPL(pm_runtime_enable);
-
-bool pm_runtime_blocked(struct device *dev)
-{
-	bool ret;
-
-	/*
-	 * dev->power.last_status is a bit field, so in case it is updated via
-	 * RMW, read it under the spin lock.
-	 */
-	spin_lock_irq(&dev->power.lock);
-
-	ret = dev->power.last_status == RPM_BLOCKED;
-
-	spin_unlock_irq(&dev->power.lock);
-
-	return ret;
-}
 
 static void pm_runtime_disable_action(void *data)
 {
@@ -1914,7 +1897,7 @@ void pm_runtime_drop_link(struct device_link *link)
 	pm_request_idle(link->supplier);
 }
 
-static bool pm_runtime_need_not_resume(struct device *dev)
+bool pm_runtime_need_not_resume(struct device *dev)
 {
 	return atomic_read(&dev->power.usage_count) <= 1 &&
 		(atomic_read(&dev->power.child_count) == 0 ||
