@@ -11,11 +11,11 @@
 
 #include <linux/kernel_stat.h>
 #include <linux/mmu_context.h>
+#include <linux/cpufeature.h>
 #include <linux/perf_event.h>
 #include <linux/signal.h>
 #include <linux/sched.h>
 #include <linux/sched/debug.h>
-#include <linux/jump_label.h>
 #include <linux/kernel.h>
 #include <linux/errno.h>
 #include <linux/string.h>
@@ -46,16 +46,6 @@
 #include <asm/uv.h>
 #include "../kernel/entry.h"
 
-static DEFINE_STATIC_KEY_FALSE(have_store_indication);
-
-static int __init fault_init(void)
-{
-	if (test_facility(75))
-		static_branch_enable(&have_store_indication);
-	return 0;
-}
-early_initcall(fault_init);
-
 /*
  * Find out which address space caused the exception.
  */
@@ -81,7 +71,7 @@ static __always_inline bool fault_is_write(struct pt_regs *regs)
 {
 	union teid teid = { .val = regs->int_parm_long };
 
-	if (static_branch_likely(&have_store_indication))
+	if (test_facility(75))
 		return teid.fsi == TEID_FSI_STORE;
 	return false;
 }
@@ -377,7 +367,7 @@ void do_protection_exception(struct pt_regs *regs)
 		 */
 		return handle_fault_error_nolock(regs, 0);
 	}
-	if (unlikely(MACHINE_HAS_NX && teid.b56)) {
+	if (unlikely(cpu_has_nx() && teid.b56)) {
 		regs->int_parm_long = (teid.addr * PAGE_SIZE) | (regs->psw.addr & PAGE_MASK);
 		return handle_fault_error_nolock(regs, SEGV_ACCERR);
 	}

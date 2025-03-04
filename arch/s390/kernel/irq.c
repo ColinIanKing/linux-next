@@ -9,6 +9,7 @@
  */
 
 #include <linux/kernel_stat.h>
+#include <linux/cpufeature.h>
 #include <linux/interrupt.h>
 #include <linux/seq_file.h>
 #include <linux/proc_fs.h>
@@ -25,6 +26,7 @@
 #include <asm/irq_regs.h>
 #include <asm/cputime.h>
 #include <asm/lowcore.h>
+#include <asm/machine.h>
 #include <asm/irq.h>
 #include <asm/hw_irq.h>
 #include <asm/stacktrace.h>
@@ -149,7 +151,7 @@ void noinstr do_io_irq(struct pt_regs *regs)
 
 	if (user_mode(regs)) {
 		update_timer_sys();
-		if (static_branch_likely(&cpu_has_bear))
+		if (cpu_has_bear())
 			current->thread.last_break = regs->last_break;
 	}
 
@@ -164,7 +166,7 @@ void noinstr do_io_irq(struct pt_regs *regs)
 			do_irq_async(regs, THIN_INTERRUPT);
 		else
 			do_irq_async(regs, IO_INTERRUPT);
-	} while (MACHINE_IS_LPAR && irq_pending(regs));
+	} while (machine_is_lpar() && irq_pending(regs));
 
 	irq_exit_rcu();
 
@@ -185,7 +187,7 @@ void noinstr do_ext_irq(struct pt_regs *regs)
 
 	if (user_mode(regs)) {
 		update_timer_sys();
-		if (static_branch_likely(&cpu_has_bear))
+		if (cpu_has_bear())
 			current->thread.last_break = regs->last_break;
 	}
 

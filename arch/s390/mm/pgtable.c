@@ -4,6 +4,7 @@
  *    Author(s): Martin Schwidefsky <schwidefsky@de.ibm.com>
  */
 
+#include <linux/cpufeature.h>
 #include <linux/sched.h>
 #include <linux/kernel.h>
 #include <linux/errno.h>
@@ -23,6 +24,7 @@
 #include <asm/tlbflush.h>
 #include <asm/mmu_context.h>
 #include <asm/page-states.h>
+#include <asm/machine.h>
 
 pgprot_t pgprot_writecombine(pgprot_t prot)
 {
@@ -49,7 +51,7 @@ static inline void ptep_ipte_local(struct mm_struct *mm, unsigned long addr,
 {
 	unsigned long opt, asce;
 
-	if (MACHINE_HAS_TLB_GUEST) {
+	if (machine_has_tlb_guest()) {
 		opt = 0;
 		asce = READ_ONCE(mm->context.gmap_asce);
 		if (asce == 0UL || nodat)
@@ -69,7 +71,7 @@ static inline void ptep_ipte_global(struct mm_struct *mm, unsigned long addr,
 {
 	unsigned long opt, asce;
 
-	if (MACHINE_HAS_TLB_GUEST) {
+	if (machine_has_tlb_guest()) {
 		opt = 0;
 		asce = READ_ONCE(mm->context.gmap_asce);
 		if (asce == 0UL || nodat)
@@ -94,7 +96,7 @@ static inline pte_t ptep_flush_direct(struct mm_struct *mm,
 	if (unlikely(pte_val(old) & _PAGE_INVALID))
 		return old;
 	atomic_inc(&mm->context.flush_count);
-	if (MACHINE_HAS_TLB_LC &&
+	if (cpu_has_tlb_lc() &&
 	    cpumask_equal(mm_cpumask(mm), cpumask_of(smp_processor_id())))
 		ptep_ipte_local(mm, addr, ptep, nodat);
 	else
@@ -210,7 +212,7 @@ static inline pgste_t pgste_set_pte(pte_t *ptep, pgste_t pgste, pte_t entry)
 	if ((pte_val(entry) & _PAGE_PRESENT) &&
 	    (pte_val(entry) & _PAGE_WRITE) &&
 	    !(pte_val(entry) & _PAGE_INVALID)) {
-		if (!MACHINE_HAS_ESOP) {
+		if (!machine_has_esop()) {
 			/*
 			 * Without enhanced suppression-on-protection force
 			 * the dirty bit on for all writable ptes.
@@ -374,7 +376,7 @@ void ptep_modify_prot_commit(struct vm_area_struct *vma, unsigned long addr,
 static inline void pmdp_idte_local(struct mm_struct *mm,
 				   unsigned long addr, pmd_t *pmdp)
 {
-	if (MACHINE_HAS_TLB_GUEST)
+	if (machine_has_tlb_guest())
 		__pmdp_idte(addr, pmdp, IDTE_NODAT | IDTE_GUEST_ASCE,
 			    mm->context.asce, IDTE_LOCAL);
 	else
@@ -386,12 +388,12 @@ static inline void pmdp_idte_local(struct mm_struct *mm,
 static inline void pmdp_idte_global(struct mm_struct *mm,
 				    unsigned long addr, pmd_t *pmdp)
 {
-	if (MACHINE_HAS_TLB_GUEST) {
+	if (machine_has_tlb_guest()) {
 		__pmdp_idte(addr, pmdp, IDTE_NODAT | IDTE_GUEST_ASCE,
 			    mm->context.asce, IDTE_GLOBAL);
 		if (mm_has_pgste(mm) && mm->context.allow_gmap_hpage_1m)
 			gmap_pmdp_idte_global(mm, addr);
-	} else if (MACHINE_HAS_IDTE) {
+	} else if (cpu_has_idte()) {
 		__pmdp_idte(addr, pmdp, 0, 0, IDTE_GLOBAL);
 		if (mm_has_pgste(mm) && mm->context.allow_gmap_hpage_1m)
 			gmap_pmdp_idte_global(mm, addr);
@@ -411,7 +413,7 @@ static inline pmd_t pmdp_flush_direct(struct mm_struct *mm,
 	if (pmd_val(old) & _SEGMENT_ENTRY_INVALID)
 		return old;
 	atomic_inc(&mm->context.flush_count);
-	if (MACHINE_HAS_TLB_LC &&
+	if (cpu_has_tlb_lc() &&
 	    cpumask_equal(mm_cpumask(mm), cpumask_of(smp_processor_id())))
 		pmdp_idte_local(mm, addr, pmdp);
 	else
@@ -505,7 +507,7 @@ EXPORT_SYMBOL(pmdp_xchg_lazy);
 static inline void pudp_idte_local(struct mm_struct *mm,
 				   unsigned long addr, pud_t *pudp)
 {
-	if (MACHINE_HAS_TLB_GUEST)
+	if (machine_has_tlb_guest())
 		__pudp_idte(addr, pudp, IDTE_NODAT | IDTE_GUEST_ASCE,
 			    mm->context.asce, IDTE_LOCAL);
 	else
@@ -515,10 +517,10 @@ static inline void pudp_idte_local(struct mm_struct *mm,
 static inline void pudp_idte_global(struct mm_struct *mm,
 				    unsigned long addr, pud_t *pudp)
 {
-	if (MACHINE_HAS_TLB_GUEST)
+	if (machine_has_tlb_guest())
 		__pudp_idte(addr, pudp, IDTE_NODAT | IDTE_GUEST_ASCE,
 			    mm->context.asce, IDTE_GLOBAL);
-	else if (MACHINE_HAS_IDTE)
+	else if (cpu_has_idte())
 		__pudp_idte(addr, pudp, 0, 0, IDTE_GLOBAL);
 	else
 		/*
@@ -537,7 +539,7 @@ static inline pud_t pudp_flush_direct(struct mm_struct *mm,
 	if (pud_val(old) & _REGION_ENTRY_INVALID)
 		return old;
 	atomic_inc(&mm->context.flush_count);
-	if (MACHINE_HAS_TLB_LC &&
+	if (cpu_has_tlb_lc() &&
 	    cpumask_equal(mm_cpumask(mm), cpumask_of(smp_processor_id())))
 		pudp_idte_local(mm, addr, pudp);
 	else
@@ -786,7 +788,7 @@ bool ptep_test_and_clear_uc(struct mm_struct *mm, unsigned long addr,
 		pgste = pgste_pte_notify(mm, addr, ptep, pgste);
 		nodat = !!(pgste_val(pgste) & _PGSTE_GPS_NODAT);
 		ptep_ipte_global(mm, addr, ptep, nodat);
-		if (MACHINE_HAS_ESOP || !(pte_val(pte) & _PAGE_WRITE))
+		if (machine_has_esop() || !(pte_val(pte) & _PAGE_WRITE))
 			pte = set_pte_bit(pte, __pgprot(_PAGE_PROTECT));
 		else
 			pte = set_pte_bit(pte, __pgprot(_PAGE_INVALID));
