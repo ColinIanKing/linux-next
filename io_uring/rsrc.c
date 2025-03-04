@@ -487,6 +487,12 @@ int io_files_update(struct io_kiocb *req, unsigned int issue_flags)
 	return IOU_OK;
 }
 
+static void io_free_node(struct io_ring_ctx *ctx, struct io_rsrc_node *node)
+{
+	if (!io_alloc_cache_put(&ctx->node_cache, node))
+		kfree(node);
+}
+
 void io_free_rsrc_node(struct io_ring_ctx *ctx, struct io_rsrc_node *node)
 {
 	if (node->tag)
@@ -494,20 +500,17 @@ void io_free_rsrc_node(struct io_ring_ctx *ctx, struct io_rsrc_node *node)
 
 	switch (node->type) {
 	case IORING_RSRC_FILE:
-		if (io_slot_file(node))
-			fput(io_slot_file(node));
+		fput(io_slot_file(node));
 		break;
 	case IORING_RSRC_BUFFER:
-		if (node->buf)
-			io_buffer_unmap(ctx, node->buf);
+		io_buffer_unmap(ctx, node->buf);
 		break;
 	default:
 		WARN_ON_ONCE(1);
 		break;
 	}
 
-	if (!io_alloc_cache_put(&ctx->node_cache, node))
-		kvfree(node);
+	io_free_node(ctx, node);
 }
 
 int io_sqe_files_unregister(struct io_ring_ctx *ctx)
@@ -777,7 +780,6 @@ static struct io_rsrc_node *io_sqe_buffer_register(struct io_ring_ctx *ctx,
 	node = io_rsrc_node_alloc(ctx, IORING_RSRC_BUFFER);
 	if (!node)
 		return ERR_PTR(-ENOMEM);
-	node->buf = NULL;
 
 	ret = -ENOMEM;
 	pages = io_pin_pages((unsigned long) iov->iov_base, iov->iov_len,
@@ -833,8 +835,7 @@ done:
 	if (ret) {
 		if (imu)
 			io_free_imu(ctx, imu);
-		if (node)
-			io_put_rsrc_node(ctx, node);
+		io_free_node(ctx, node);
 		node = ERR_PTR(ret);
 	}
 	kvfree(pages);
