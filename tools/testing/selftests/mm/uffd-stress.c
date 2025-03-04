@@ -458,7 +458,7 @@ int main(int argc, char **argv)
 	nr_pages_per_cpu = bytes / page_size / nr_threads;
 	if (!nr_pages_per_cpu) {
 		_err("pages_per_cpu = 0, cannot test (%lu / %lu / %lu)",
-			nr_pages_per_cpu, bytes, page_size, nr_threads);
+			bytes, page_size, nr_threads);
 		usage();
 	}
 
