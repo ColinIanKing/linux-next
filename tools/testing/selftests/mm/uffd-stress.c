@@ -461,7 +461,7 @@ int main(int argc, char **argv)
 			       nr_cpus);
 		nr_threads = 32;
 	} else {
-		nr_cpus = nr_threads;
+		nr_threads = nr_cpus;
 	}
 
 	nr_pages_per_cpu = bytes / page_size / nr_threads;
