@@ -340,7 +340,7 @@ DAMON-observed access events to the theoretical maximum amount of the events
 (``aggrs``).
 
 The DAMON-observed access events are calculated in byte granularity based on
-DAMON :ref:`region assumption <damon_design_region_based_sample>`.  For
+DAMON :ref:`region assumption <damon_design_region_based_sampling>`.  For
 example, if a region of size ``X`` bytes of ``Y`` ``nr_accesses`` is found, it
 means ``X * Y`` access events are observed by DAMON.  Theoretical maximum
 access events for the region is calculated in same way, but replacing ``Y``
