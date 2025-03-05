@@ -109,6 +109,7 @@
 #include <linux/mmu_notifier.h>
 #include <linux/printk.h>
 #include <linux/swapops.h>
+#include <linux/gcd.h>
 
 #include <asm/tlbflush.h>
 #include <asm/tlb.h>
@@ -139,29 +140,133 @@ static struct mempolicy default_policy = {
 static struct mempolicy preferred_node_policy[MAX_NUMNODES];
 
 /*
- * iw_table is the sysfs-set interleave weight table, a value of 0 denotes
- * system-default value should be used. A NULL iw_table also denotes that
- * system-default values should be used. Until the system-default table
- * is implemented, the system-default is always 1.
- *
- * iw_table is RCU protected
+ * weightiness balances the tradeoff between small weights (cycles through nodes
+ * faster, more fair/even distribution) and large weights (smaller errors
+ * between actual bandwidth ratios and weight ratios). 32 is a number that has
+ * been found to perform at a reasonable compromise between the two goals.
  */
-static u8 __rcu *iw_table;
-static DEFINE_MUTEX(iw_table_lock);
+static const int weightiness = 32;
+
+/* wi_state is RCU protected */
+static struct weighted_interleave_state __rcu *wi_state;
+static unsigned int *node_bw_table;
+
+/*
+ * wi_state_lock protects both wi_state and node_bw_table.
+ * node_bw_table is only used by writers to update wi_state.
+ */
+static DEFINE_MUTEX(wi_state_lock);
 
 static u8 get_il_weight(int node)
 {
-	u8 *table;
-	u8 weight;
+	u8 weight = 1;
 
 	rcu_read_lock();
-	table = rcu_dereference(iw_table);
-	/* if no iw_table, use system default */
-	weight = table ? table[node] : 1;
-	/* if value in iw_table is 0, use system default */
-	weight = weight ? weight : 1;
+	if (rcu_access_pointer(wi_state))
+		weight = rcu_dereference(wi_state)->iw_table[node];
 	rcu_read_unlock();
+
 	return weight;
+}
+
+/*
+ * Convert bandwidth values into weighted interleave weights.
+ * Call with wi_state_lock.
+ */
+static void reduce_interleave_weights(unsigned int *bw, u8 *new_iw)
+{
+	u64 sum_bw = 0;
+	unsigned int cast_sum_bw, scaling_factor = 1, iw_gcd = 0;
+	int nid;
+
+	for_each_node_state(nid, N_MEMORY)
+		sum_bw += bw[nid];
+
+	/* Scale bandwidths to whole numbers in the range [1, weightiness] */
+	for_each_node_state(nid, N_MEMORY) {
+		/*
+		 * Try not to perform 64-bit division.
+		 * If sum_bw < scaling_factor, then sum_bw < U32_MAX.
+		 * If sum_bw > scaling_factor, then round the weight up to 1.
+		 */
+		scaling_factor = weightiness * bw[nid];
+		if (bw[nid] && sum_bw < scaling_factor) {
+			cast_sum_bw = (unsigned int)sum_bw;
+			new_iw[nid] = scaling_factor / cast_sum_bw;
+		} else {
+			new_iw[nid] = 1;
+		}
+		if (!iw_gcd)
+			iw_gcd = new_iw[nid];
+		iw_gcd = gcd(iw_gcd, new_iw[nid]);
+	}
+
+	/* 1:2 is strictly better than 16:32. Reduce by the weights' GCD. */
+	for_each_node_state(nid, N_MEMORY)
+		new_iw[nid] /= iw_gcd;
+}
+
+int mempolicy_set_node_perf(unsigned int node, struct access_coordinate *coords)
+{
+	struct weighted_interleave_state *new_wi_state, *old_wi_state = NULL;
+	unsigned int *old_bw, *new_bw;
+	unsigned int bw_val;
+	int i;
+
+	bw_val = min(coords->read_bandwidth, coords->write_bandwidth);
+	new_bw = kcalloc(nr_node_ids, sizeof(unsigned int), GFP_KERNEL);
+	if (!new_bw)
+		return -ENOMEM;
+
+	new_wi_state = kzalloc(struct_size(new_wi_state, iw_table, nr_node_ids),
+			       GFP_KERNEL);
+	if (!new_wi_state) {
+		kfree(new_bw);
+		return -ENOMEM;
+	}
+	for (i = 0; i < nr_node_ids; i++)
+		new_wi_state->iw_table[i] = 1;
+
+	/*
+	 * Update bandwidth info, even in manual mode. That way, when switching
+	 * to auto mode in the future, iw_table can be overwritten using
+	 * accurate bw data.
+	 */
+	mutex_lock(&wi_state_lock);
+
+	old_bw = node_bw_table;
+	if (old_bw)
+		memcpy(new_bw, old_bw, nr_node_ids * sizeof(unsigned int));
+	new_bw[node] = bw_val;
+	node_bw_table = new_bw;
+
+	/* wi_state not initialized yet; assume auto == true */
+	if (!rcu_access_pointer(wi_state))
+		goto reduce;
+
+	old_wi_state = rcu_dereference_protected(wi_state,
+					lockdep_is_held(&wi_state_lock));
+	if (old_wi_state->mode_auto)
+		goto reduce;
+
+	mutex_unlock(&wi_state_lock);
+	kfree(new_wi_state);
+	kfree(old_bw);
+	return 0;
+
+reduce:
+	new_wi_state->mode_auto = true;
+	reduce_interleave_weights(new_bw, new_wi_state->iw_table);
+	rcu_assign_pointer(wi_state, new_wi_state);
+
+	mutex_unlock(&wi_state_lock);
+	if (old_wi_state) {
+		synchronize_rcu();
+		kfree(old_wi_state);
+	}
+	kfree(old_bw);
+
+	return 0;
 }
 
 /**
@@ -1988,34 +2093,33 @@ static unsigned int weighted_interleave_nid(struct mempolicy *pol, pgoff_t ilx)
 	u8 *table;
 	unsigned int weight_total = 0;
 	u8 weight;
-	int nid;
+	int nid = 0;
 
 	nr_nodes = read_once_policy_nodemask(pol, &nodemask);
 	if (!nr_nodes)
 		return numa_node_id();
 
 	rcu_read_lock();
-	table = rcu_dereference(iw_table);
+	if (!rcu_access_pointer(wi_state))
+		goto out;
+
+	table = rcu_dereference(wi_state)->iw_table;
 	/* calculate the total weight */
-	for_each_node_mask(nid, nodemask) {
-		/* detect system default usage */
-		weight = table ? table[nid] : 1;
-		weight = weight ? weight : 1;
-		weight_total += weight;
-	}
+	for_each_node_mask(nid, nodemask)
+		weight_total += table ? table[nid] : 1;
 
 	/* Calculate the node offset based on totals */
 	target = ilx % weight_total;
 	nid = first_node(nodemask);
 	while (target) {
 		/* detect system default usage */
-		weight = table ? table[nid] : 1;
-		weight = weight ? weight : 1;
+		weight = table[nid];
 		if (target < weight)
 			break;
 		target -= weight;
 		nid = next_node_in(nid, nodemask);
 	}
+out:
 	rcu_read_unlock();
 	return nid;
 }
@@ -2411,13 +2515,14 @@ static unsigned long alloc_pages_bulk_weighted_interleave(gfp_t gfp,
 		struct mempolicy *pol, unsigned long nr_pages,
 		struct page **page_array)
 {
+	struct weighted_interleave_state *state;
 	struct task_struct *me = current;
 	unsigned int cpuset_mems_cookie;
 	unsigned long total_allocated = 0;
 	unsigned long nr_allocated = 0;
 	unsigned long rounds;
 	unsigned long node_pages, delta;
-	u8 *table, *weights, weight;
+	u8 *weights, weight;
 	unsigned int weight_total = 0;
 	unsigned long rem_pages = nr_pages;
 	nodemask_t nodes;
@@ -2467,17 +2572,19 @@ static unsigned long alloc_pages_bulk_weighted_interleave(gfp_t gfp,
 		return total_allocated;
 
 	rcu_read_lock();
-	table = rcu_dereference(iw_table);
-	if (table)
-		memcpy(weights, table, nr_node_ids);
-	rcu_read_unlock();
+	if (rcu_access_pointer(wi_state)) {
+		state = rcu_dereference(wi_state);
+		memcpy(weights, state->iw_table, nr_node_ids * sizeof(u8));
+		rcu_read_unlock();
+	} else {
+		rcu_read_unlock();
+		for (i = 0; i < nr_node_ids; i++)
+			weights[i] = 1;
+	}
 
 	/* calculate total, detect system default usage */
-	for_each_node_mask(node, nodes) {
-		if (!weights[node])
-			weights[node] = 1;
+	for_each_node_mask(node, nodes)
 		weight_total += weights[node];
-	}
 
 	/*
 	 * Calculate rounds/partial rounds to minimize __alloc_pages_bulk calls.
@@ -3402,35 +3509,111 @@ static ssize_t node_show(struct kobject *kobj, struct kobj_attribute *attr,
 static ssize_t node_store(struct kobject *kobj, struct kobj_attribute *attr,
 			  const char *buf, size_t count)
 {
+	struct weighted_interleave_state *new_wi_state, *old_wi_state = NULL;
 	struct iw_node_attr *node_attr;
-	u8 *new;
-	u8 *old;
 	u8 weight = 0;
+	int i;
 
 	node_attr = container_of(attr, struct iw_node_attr, kobj_attr);
 	if (count == 0 || sysfs_streq(buf, ""))
 		weight = 0;
-	else if (kstrtou8(buf, 0, &weight))
+	else if (kstrtou8(buf, 0, &weight) || weight == 0)
 		return -EINVAL;
 
-	new = kzalloc(nr_node_ids, GFP_KERNEL);
-	if (!new)
+	new_wi_state = kzalloc(struct_size(new_wi_state, iw_table, nr_node_ids),
+			       GFP_KERNEL);
+	if (!new_wi_state)
 		return -ENOMEM;
 
-	mutex_lock(&iw_table_lock);
-	old = rcu_dereference_protected(iw_table,
-					lockdep_is_held(&iw_table_lock));
-	if (old)
-		memcpy(new, old, nr_node_ids);
-	new[node_attr->nid] = weight;
-	rcu_assign_pointer(iw_table, new);
-	mutex_unlock(&iw_table_lock);
-	synchronize_rcu();
-	kfree(old);
+	mutex_lock(&wi_state_lock);
+	if (rcu_access_pointer(wi_state)) {
+		old_wi_state = rcu_dereference_protected(wi_state,
+					lockdep_is_held(&wi_state_lock));
+		memcpy(new_wi_state->iw_table, old_wi_state->iw_table,
+					nr_node_ids * sizeof(u8));
+	} else {
+		for (i = 0; i < nr_node_ids; i++)
+			new_wi_state->iw_table[i] = 1;
+	}
+	new_wi_state->iw_table[node_attr->nid] = weight;
+	new_wi_state->mode_auto = false;
+
+	rcu_assign_pointer(wi_state, new_wi_state);
+	mutex_unlock(&wi_state_lock);
+	if (old_wi_state) {
+		synchronize_rcu();
+		kfree(old_wi_state);
+	}
 	return count;
 }
 
 static struct iw_node_attr **node_attrs;
+
+static ssize_t weighted_interleave_auto_show(struct kobject *kobj,
+		struct kobj_attribute *attr, char *buf)
+{
+	bool wi_auto = true;
+
+	rcu_read_lock();
+	if (rcu_access_pointer(wi_state))
+		wi_auto = rcu_dereference(wi_state)->mode_auto;
+	rcu_read_unlock();
+
+	return sysfs_emit(buf, "%s\n", str_true_false(wi_auto));
+}
+
+static ssize_t weighted_interleave_auto_store(struct kobject *kobj,
+		struct kobj_attribute *attr, const char *buf, size_t count)
+{
+	struct weighted_interleave_state *new_wi_state, *old_wi_state = NULL;
+	unsigned int *bw;
+	bool input;
+	int i;
+
+	if (kstrtobool(buf, &input))
+		return -EINVAL;
+
+	new_wi_state = kzalloc(struct_size(new_wi_state, iw_table, nr_node_ids),
+			       GFP_KERNEL);
+	if (!new_wi_state)
+		return -ENOMEM;
+	for (i = 0; i < nr_node_ids; i++)
+		new_wi_state->iw_table[i] = 1;
+
+	mutex_lock(&wi_state_lock);
+	if (!input) {
+		if (rcu_access_pointer(wi_state)) {
+			old_wi_state = rcu_dereference_protected(wi_state,
+					lockdep_is_held(&wi_state_lock));
+			memcpy(new_wi_state->iw_table, old_wi_state->iw_table,
+					nr_node_ids * sizeof(u8));
+		}
+		goto update_wi_state;
+	}
+
+	bw = node_bw_table;
+	if (!bw) {
+		mutex_unlock(&wi_state_lock);
+		kfree(new_wi_state);
+		return -ENODEV;
+	}
+
+	new_wi_state->mode_auto = true;
+	reduce_interleave_weights(bw, new_wi_state->iw_table);
+
+update_wi_state:
+	rcu_assign_pointer(wi_state, new_wi_state);
+	mutex_unlock(&wi_state_lock);
+	if (old_wi_state) {
+		synchronize_rcu();
+		kfree(old_wi_state);
+	}
+	return count;
+}
+
+static struct kobj_attribute wi_attr =
+	__ATTR(auto, 0664, weighted_interleave_auto_show,
+			   weighted_interleave_auto_store);
 
 static void sysfs_wi_node_release(struct iw_node_attr *node_attr,
 				  struct kobject *parent)
@@ -3489,6 +3672,15 @@ static int add_weight_node(int nid, struct kobject *wi_kobj)
 	return 0;
 }
 
+static struct attribute *wi_default_attrs[] = {
+	&wi_attr.attr,
+	NULL
+};
+
+static const struct attribute_group wi_attr_group = {
+	.attrs = wi_default_attrs,
+};
+
 static int add_weighted_interleave_group(struct kobject *root_kobj)
 {
 	struct kobject *wi_kobj;
@@ -3502,6 +3694,13 @@ static int add_weighted_interleave_group(struct kobject *root_kobj)
 				   "weighted_interleave");
 	if (err) {
 		kfree(wi_kobj);
+		return err;
+	}
+
+	err = sysfs_create_group(wi_kobj, &wi_attr_group);
+	if (err) {
+		pr_err("failed to add sysfs [auto]\n");
+		kobject_put(wi_kobj);
 		return err;
 	}
 
@@ -3519,15 +3718,22 @@ static int add_weighted_interleave_group(struct kobject *root_kobj)
 
 static void mempolicy_kobj_release(struct kobject *kobj)
 {
-	u8 *old;
+	struct weighted_interleave_state *old_wi_state;
 
-	mutex_lock(&iw_table_lock);
-	old = rcu_dereference_protected(iw_table,
-					lockdep_is_held(&iw_table_lock));
-	rcu_assign_pointer(iw_table, NULL);
-	mutex_unlock(&iw_table_lock);
+	mutex_lock(&wi_state_lock);
+	if (!rcu_access_pointer(wi_state)) {
+		mutex_unlock(&wi_state_lock);
+		goto out;
+	}
+
+	old_wi_state = rcu_dereference_protected(wi_state,
+			lockdep_is_held(&wi_state_lock));
+
+	rcu_assign_pointer(wi_state, NULL);
+	mutex_unlock(&wi_state_lock);
 	synchronize_rcu();
-	kfree(old);
+	kfree(old_wi_state);
+out:
 	kfree(node_attrs);
 	kfree(kobj);
 }
