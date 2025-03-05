@@ -1998,10 +1998,11 @@ get_free_mem_region(struct device *dev, struct resource *base,
 	if (flags & GFR_REQUEST_REGION) {
 		free_resource(res);
 		devres_free(dr);
-	} else if (dev)
+	} else if (dev) {
 		devm_release_action(dev, remove_free_mem_region, res);
-	else
+	} else {
 		free_resource(res);
+	}
 
 	return ERR_PTR(-ERANGE);
 }
