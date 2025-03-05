@@ -381,18 +381,20 @@ struct folio {
 		struct {
 			unsigned long _flags_1;
 			unsigned long _head_1;
-	/* public: */
 			union {
 				struct {
+	/* public: */
 					atomic_t _large_mapcount;
 					atomic_t _entire_mapcount;
 					atomic_t _nr_pages_mapped;
 					atomic_t _pincount;
+	/* private: the union with struct page is transitional */
 				};
 				unsigned long _usable_1[4];
 			};
 			atomic_t _mapcount_1;
 			atomic_t _refcount_1;
+	/* public: */
 #ifdef NR_PAGES_IN_LARGE_FOLIO
 			unsigned int _nr_pages;
 #endif /* NR_PAGES_IN_LARGE_FOLIO */
