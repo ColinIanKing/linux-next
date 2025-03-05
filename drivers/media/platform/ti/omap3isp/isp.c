@@ -1961,6 +1961,13 @@ static int isp_attach_iommu(struct isp_device *isp)
 	struct dma_iommu_mapping *mapping;
 	int ret;
 
+	/* We always want to replace any default mapping from the arch code */
+	mapping = to_dma_iommu_mapping(isp->dev);
+	if (mapping) {
+		arm_iommu_detach_device(isp->dev);
+		arm_iommu_release_mapping(mapping);
+	}
+
 	/*
 	 * Create the ARM mapping, used by the ARM DMA mapping core to allocate
 	 * VAs. This will allocate a corresponding IOMMU domain.
@@ -2272,17 +2279,13 @@ static int isp_probe(struct platform_device *pdev)
 	if (ret)
 		goto error_release_isp;
 
-	isp->syscon = syscon_regmap_lookup_by_phandle(pdev->dev.of_node,
-						      "syscon");
+	isp->syscon = syscon_regmap_lookup_by_phandle_args(pdev->dev.of_node,
+							   "syscon", 1,
+							   &isp->syscon_offset);
 	if (IS_ERR(isp->syscon)) {
 		ret = PTR_ERR(isp->syscon);
 		goto error_release_isp;
 	}
-
-	ret = of_property_read_u32_index(pdev->dev.of_node,
-					 "syscon", 1, &isp->syscon_offset);
-	if (ret)
-		goto error_release_isp;
 
 	isp->autoidle = autoidle;
 
