@@ -36,12 +36,14 @@
 
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_blend.h>
+#include <drm/drm_damage_helper.h>
 #include <drm/drm_fourcc.h>
 #include <drm/drm_gem.h>
 #include <drm/drm_gem_atomic_helper.h>
 
-#include "i915_drv.h"
 #include "i915_config.h"
+#include "i915_drv.h"
+#include "i915_vma.h"
 #include "i9xx_plane_regs.h"
 #include "intel_atomic_plane.h"
 #include "intel_cdclk.h"
@@ -131,6 +133,7 @@ intel_plane_duplicate_state(struct drm_plane *plane)
 	intel_state->ggtt_vma = NULL;
 	intel_state->dpt_vma = NULL;
 	intel_state->flags = 0;
+	intel_state->damage = DRM_RECT_INIT(0, 0, 0, 0);
 
 	/* add reference to fb */
 	if (intel_state->hw.fb)
@@ -334,6 +337,25 @@ static void intel_plane_clear_hw_state(struct intel_plane_state *plane_state)
 		drm_framebuffer_put(plane_state->hw.fb);
 
 	memset(&plane_state->hw, 0, sizeof(plane_state->hw));
+}
+
+static void
+intel_plane_copy_uapi_plane_damage(struct intel_plane_state *new_plane_state,
+				   const struct intel_plane_state *old_uapi_plane_state,
+				   const struct intel_plane_state *new_uapi_plane_state)
+{
+	struct intel_display *display = to_intel_display(new_plane_state);
+	struct drm_rect *damage = &new_plane_state->damage;
+
+	/* damage property tracking enabled from display version 12 onwards */
+	if (DISPLAY_VER(display) < 12)
+		return;
+
+	if (!drm_atomic_helper_damage_merged(&old_uapi_plane_state->uapi,
+					     &new_uapi_plane_state->uapi,
+					     damage))
+		/* Incase helper fails, mark whole plane region as damage */
+		*damage = drm_plane_state_src(&new_uapi_plane_state->uapi);
 }
 
 void intel_plane_copy_uapi_to_hw_state(struct intel_plane_state *plane_state,
@@ -705,6 +727,7 @@ int intel_plane_atomic_check(struct intel_atomic_state *state,
 	const struct intel_plane_state *old_plane_state =
 		intel_atomic_get_old_plane_state(state, plane);
 	const struct intel_plane_state *new_primary_crtc_plane_state;
+	const struct intel_plane_state *old_primary_crtc_plane_state;
 	struct intel_crtc *crtc = intel_crtc_for_pipe(display, plane->pipe);
 	const struct intel_crtc_state *old_crtc_state =
 		intel_atomic_get_old_crtc_state(state, crtc);
@@ -719,9 +742,16 @@ int intel_plane_atomic_check(struct intel_atomic_state *state,
 
 		new_primary_crtc_plane_state =
 			intel_atomic_get_new_plane_state(state, primary_crtc_plane);
+		old_primary_crtc_plane_state =
+			intel_atomic_get_old_plane_state(state, primary_crtc_plane);
 	} else {
 		new_primary_crtc_plane_state = new_plane_state;
+		old_primary_crtc_plane_state = old_plane_state;
 	}
+
+	intel_plane_copy_uapi_plane_damage(new_plane_state,
+					   old_primary_crtc_plane_state,
+					   new_primary_crtc_plane_state);
 
 	intel_plane_copy_uapi_to_hw_state(new_plane_state,
 					  new_primary_crtc_plane_state,
@@ -787,6 +817,9 @@ void intel_plane_update_noarm(struct intel_dsb *dsb,
 	struct intel_crtc *crtc = to_intel_crtc(crtc_state->uapi.crtc);
 
 	trace_intel_plane_update_noarm(plane_state, crtc);
+
+	if (plane->fbc)
+		intel_fbc_dirty_rect_update_noarm(dsb, plane);
 
 	if (plane->update_noarm)
 		plane->update_noarm(dsb, plane, crtc_state, plane_state);
@@ -1119,11 +1152,11 @@ intel_prepare_plane_fb(struct drm_plane *_plane,
 {
 	struct i915_sched_attr attr = { .priority = I915_PRIORITY_DISPLAY };
 	struct intel_plane *plane = to_intel_plane(_plane);
+	struct intel_display *display = to_intel_display(plane);
 	struct intel_plane_state *new_plane_state =
 		to_intel_plane_state(_new_plane_state);
 	struct intel_atomic_state *state =
 		to_intel_atomic_state(new_plane_state->uapi.state);
-	struct drm_i915_private *dev_priv = to_i915(plane->base.dev);
 	struct intel_plane_state *old_plane_state =
 		intel_atomic_get_old_plane_state(state, plane);
 	struct drm_gem_object *obj = intel_fb_bo(new_plane_state->hw.fb);
@@ -1181,7 +1214,7 @@ intel_prepare_plane_fb(struct drm_plane *_plane,
 	 * that are not quite steady state without resorting to forcing
 	 * maximum clocks following a vblank miss (see do_rps_boost()).
 	 */
-	intel_display_rps_mark_interactive(dev_priv, state, true);
+	intel_display_rps_mark_interactive(display, state, true);
 
 	return 0;
 
@@ -1202,17 +1235,17 @@ static void
 intel_cleanup_plane_fb(struct drm_plane *plane,
 		       struct drm_plane_state *_old_plane_state)
 {
+	struct intel_display *display = to_intel_display(plane->dev);
 	struct intel_plane_state *old_plane_state =
 		to_intel_plane_state(_old_plane_state);
 	struct intel_atomic_state *state =
 		to_intel_atomic_state(old_plane_state->uapi.state);
-	struct drm_i915_private *dev_priv = to_i915(plane->dev);
 	struct drm_gem_object *obj = intel_fb_bo(old_plane_state->hw.fb);
 
 	if (!obj)
 		return;
 
-	intel_display_rps_mark_interactive(dev_priv, state, false);
+	intel_display_rps_mark_interactive(display, state, false);
 
 	intel_plane_unpin_fb(old_plane_state);
 }
@@ -1531,4 +1564,9 @@ int intel_atomic_check_planes(struct intel_atomic_state *state)
 	}
 
 	return 0;
+}
+
+u32 intel_plane_ggtt_offset(const struct intel_plane_state *plane_state)
+{
+	return i915_ggtt_offset(plane_state->ggtt_vma);
 }
