@@ -172,6 +172,8 @@ static void free_resource(struct resource *res)
 		kfree(res);
 }
 
+DEFINE_FREE(free_resource, struct resource *, if (_T) free_resource(_T))
+
 static struct resource *alloc_resource(gfp_t flags)
 {
 	return kzalloc(sizeof(struct resource), flags);
@@ -1631,17 +1633,29 @@ void devm_release_resource(struct device *dev, struct resource *new)
 }
 EXPORT_SYMBOL(devm_release_resource);
 
+/*
+ * The GFR_REQUEST_REGION case performs a request_region() to be paired
+ * with release_region(). The alloc_free_mem_region() path performs
+ * insert_resource() to be paired with {remove,free}_resource(). The
+ * @res member differentiates the 2 cases.
+ */
 struct region_devres {
 	struct resource *parent;
 	resource_size_t start;
 	resource_size_t n;
+	struct resource *res;
 };
 
 static void devm_region_release(struct device *dev, void *res)
 {
 	struct region_devres *this = res;
 
-	__release_region(this->parent, this->start, this->n);
+	if (!this->res) {
+		__release_region(this->parent, this->start, this->n);
+	} else {
+		remove_resource(this->res);
+		free_resource(this->res);
+	}
 }
 
 static int devm_region_match(struct device *dev, void *res, void *match_data)
@@ -1908,42 +1922,18 @@ static resource_size_t gfr_next(resource_size_t addr, resource_size_t size,
 	return addr + size;
 }
 
-static void remove_free_mem_region(void *_res)
-{
-	struct resource *res = _res;
-
-	if (res->parent)
-		remove_resource(res);
-	free_resource(res);
-}
-
 static struct resource *
-get_free_mem_region(struct device *dev, struct resource *base,
-		    resource_size_t size, const unsigned long align,
-		    const char *name, const unsigned long desc,
-		    const unsigned long flags)
+__get_free_mem_region(struct resource *base, resource_size_t size,
+		      const unsigned long align, const char *name,
+		      const unsigned long desc, const unsigned long flags)
 {
 	resource_size_t addr;
-	struct resource *res;
-	struct region_devres *dr = NULL;
 
 	size = ALIGN(size, align);
 
-	res = alloc_resource(GFP_KERNEL);
+	struct resource *res __free(free_resource) = alloc_resource(GFP_KERNEL);
 	if (!res)
 		return ERR_PTR(-ENOMEM);
-
-	if (dev && (flags & GFR_REQUEST_REGION)) {
-		dr = devres_alloc(devm_region_release,
-				sizeof(struct region_devres), GFP_KERNEL);
-		if (!dr) {
-			free_resource(res);
-			return ERR_PTR(-ENOMEM);
-		}
-	} else if (dev) {
-		if (devm_add_action_or_reset(dev, remove_free_mem_region, res))
-			return ERR_PTR(-ENOMEM);
-	}
 
 	write_lock(&resource_lock);
 	for (addr = gfr_start(base, size, align, flags);
@@ -1958,16 +1948,8 @@ get_free_mem_region(struct device *dev, struct resource *base,
 						    size, name, 0))
 				break;
 
-			if (dev) {
-				dr->parent = &iomem_resource;
-				dr->start = addr;
-				dr->n = size;
-				devres_add(dev, dr);
-			}
-
 			res->desc = desc;
 			write_unlock(&resource_lock);
-
 
 			/*
 			 * A driver is claiming this region so revoke any
@@ -1985,23 +1967,56 @@ get_free_mem_region(struct device *dev, struct resource *base,
 			 * Only succeed if the resource hosts an exclusive
 			 * range after the insert
 			 */
-			if (__insert_resource(base, res) || res->child)
+			if (__insert_resource(base, res))
 				break;
+			if (res->child) {
+				remove_resource(res);
+				break;
+			}
 
 			write_unlock(&resource_lock);
 		}
 
-		return res;
+		return no_free_ptr(res);
 	}
 	write_unlock(&resource_lock);
 
-	if (flags & GFR_REQUEST_REGION) {
-		free_resource(res);
-		devres_free(dr);
-	} else if (dev)
-		devm_release_action(dev, remove_free_mem_region, res);
-
 	return ERR_PTR(-ERANGE);
+}
+
+static struct resource *
+get_free_mem_region(struct device *dev, struct resource *base,
+		    resource_size_t size, const unsigned long align,
+		    const char *name, const unsigned long desc,
+		    const unsigned long flags)
+{
+
+	struct region_devres *dr __free(kfree) = NULL;
+	struct resource *res;
+
+	if (dev) {
+		dr = devres_alloc(devm_region_release,
+				  sizeof(struct region_devres), GFP_KERNEL);
+		if (!dr)
+			return ERR_PTR(-ENOMEM);
+	}
+
+	res = __get_free_mem_region(base, size, align, name, desc, flags);
+
+	if (IS_ERR(res) || !dr)
+		return res;
+
+	dr->parent = base;
+	dr->start = res->start;
+	dr->n = resource_size(res);
+
+	/* See 'struct region_devres' definition for details */
+	if ((flags & GFR_REQUEST_REGION) == 0)
+		dr->res = res;
+
+	devres_add(dev, no_free_ptr(dr));
+
+	return res;
 }
 
 /**
