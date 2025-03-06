@@ -146,7 +146,6 @@ void __init adjust_lowmem_bounds(void)
 	phys_addr_t end;
 	adjust_lowmem_bounds_mpu();
 	end = memblock_end_of_DRAM();
-	high_memory = __va(end - 1) + 1;
 	memblock_set_current_limit(end);
 }
 

@@ -419,7 +419,6 @@ void __init paging_init(void)
 		max_zone_pfns[ZONE_HIGHMEM] = max_low_pfn;
 	}
 #endif
-	high_memory = (void *) __va(max_low_pfn << PAGE_SHIFT);
 
 	free_area_init(max_zone_pfns);
 }
@@ -471,7 +470,6 @@ void __init mem_init(void)
 #else  /* CONFIG_NUMA */
 void __init mem_init(void)
 {
-	high_memory = (void *) __va(get_num_physpages() << PAGE_SHIFT);
 	setup_zero_pages();	/* This comes from node 0 */
 	memblock_free_all();
 }
