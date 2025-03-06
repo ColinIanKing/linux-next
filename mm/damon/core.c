@@ -2431,9 +2431,6 @@ static int kdamond_fn(void *data)
 
 		if (ctx->ops.prepare_access_checks)
 			ctx->ops.prepare_access_checks(ctx);
-		if (ctx->callback.after_sampling &&
-				ctx->callback.after_sampling(ctx))
-			break;
 
 		kdamond_usleep(sample_interval);
 		ctx->passed_sample_intervals++;
