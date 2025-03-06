@@ -1629,10 +1629,11 @@ check_old:
 }
 
 /**
- * zswap_load() - load a page from zswap
+ * zswap_load() - load a folio from zswap
  * @folio: folio to load
  *
- * Return: 0 on success, or one of the following error codes:
+ * Return: 0 on success, with the folio unlocked and marked up-to-date, or one
+ * of the following error codes:
  *
  *  -EIO: if the swapped out content was in zswap, but could not be loaded
  *  into the page due to a decompression failure. The folio is unlocked, but
