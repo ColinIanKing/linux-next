@@ -1652,6 +1652,9 @@ static void unlink_file_vma_batch_process(struct unlink_vma_file_batch *vb)
 void unlink_file_vma_batch_add(struct unlink_vma_file_batch *vb,
 			       struct vm_area_struct *vma)
 {
+	if (vma_is_anonymous(vma))
+		return;
+
 	if (vma->vm_file == NULL)
 		return;
 
@@ -1675,8 +1678,12 @@ void unlink_file_vma_batch_final(struct unlink_vma_file_batch *vb)
  */
 void unlink_file_vma(struct vm_area_struct *vma)
 {
-	struct file *file = vma->vm_file;
+	struct file *file;
 
+	if (vma_is_anonymous(vma))
+		return;
+
+	file = vma->vm_file;
 	if (file) {
 		struct address_space *mapping = file->f_mapping;
 
@@ -1688,9 +1695,13 @@ void unlink_file_vma(struct vm_area_struct *vma)
 
 void vma_link_file(struct vm_area_struct *vma)
 {
-	struct file *file = vma->vm_file;
+	struct file *file;
 	struct address_space *mapping;
 
+	if (vma_is_anonymous(vma))
+		return;
+
+	file = vma->vm_file;
 	if (file) {
 		mapping = file->f_mapping;
 		i_mmap_lock_write(mapping);
