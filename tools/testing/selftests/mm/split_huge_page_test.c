@@ -261,17 +261,31 @@ void split_pte_mapped_thp(void)
 	close(kpageflags_fd);
 }
 
-void split_file_backed_thp(void)
+void split_file_backed_thp(int order)
 {
 	int status;
 	int fd;
-	ssize_t num_written;
 	char tmpfs_template[] = "/tmp/thp_split_XXXXXX";
 	const char *tmpfs_loc = mkdtemp(tmpfs_template);
 	char testfile[INPUT_MAX];
+	ssize_t num_written, num_read;
+	char *file_buf1, *file_buf2;
 	uint64_t pgoff_start = 0, pgoff_end = 1024;
+	int i;
 
 	ksft_print_msg("Please enable pr_debug in split_huge_pages_in_file() for more info.\n");
+
+	file_buf1 = (char *)malloc(pmd_pagesize);
+	file_buf2 = (char *)malloc(pmd_pagesize);
+
+	if (!file_buf1 || !file_buf2) {
+		ksft_print_msg("cannot allocate file buffers\n");
+		goto out;
+	}
+
+	for (i = 0; i < pmd_pagesize; i++)
+		file_buf1[i] = (char)i;
+	memset(file_buf2, 0, pmd_pagesize);
 
 	status = mount("tmpfs", tmpfs_loc, "tmpfs", 0, "huge=always,size=4m");
 
@@ -281,26 +295,45 @@ void split_file_backed_thp(void)
 	status = snprintf(testfile, INPUT_MAX, "%s/thp_file", tmpfs_loc);
 	if (status >= INPUT_MAX) {
 		ksft_exit_fail_msg("Fail to create file-backed THP split testing file\n");
+		goto cleanup;
 	}
 
-	fd = open(testfile, O_CREAT|O_WRONLY, 0664);
+	fd = open(testfile, O_CREAT|O_RDWR, 0664);
 	if (fd == -1) {
 		ksft_perror("Cannot open testing file");
 		goto cleanup;
 	}
 
-	/* write something to the file, so a file-backed THP can be allocated */
-	num_written = write(fd, tmpfs_loc, strlen(tmpfs_loc) + 1);
-	close(fd);
+	/* write pmd size data to the file, so a file-backed THP can be allocated */
+	num_written = write(fd, file_buf1, pmd_pagesize);
 
-	if (num_written < 1) {
-		ksft_perror("Fail to write data to testing file");
-		goto cleanup;
+	if (num_written == -1 || num_written != pmd_pagesize) {
+		ksft_perror("Failed to write data to testing file");
+		goto close_file;
 	}
 
 	/* split the file-backed THP */
-	write_debugfs(PATH_FMT, testfile, pgoff_start, pgoff_end, 0);
+	write_debugfs(PATH_FMT, testfile, pgoff_start, pgoff_end, order);
 
+	/* check file content after split */
+	status = lseek(fd, 0, SEEK_SET);
+	if (status == -1) {
+		ksft_perror("Cannot lseek file");
+		goto close_file;
+	}
+
+	num_read = read(fd, file_buf2, num_written);
+	if (num_read == -1 || num_read != num_written) {
+		ksft_perror("Cannot read file content back");
+		goto close_file;
+	}
+
+	if (strncmp(file_buf1, file_buf2, pmd_pagesize) != 0) {
+		ksft_print_msg("File content changed\n");
+		goto close_file;
+	}
+
+	close(fd);
 	status = unlink(testfile);
 	if (status) {
 		ksft_perror("Cannot remove testing file");
@@ -318,12 +351,15 @@ void split_file_backed_thp(void)
 		ksft_exit_fail_msg("cannot remove tmp dir: %s\n", strerror(errno));
 
 	ksft_print_msg("Please check dmesg for more information\n");
-	ksft_test_result_pass("File-backed THP split test done\n");
+	ksft_test_result_pass("File-backed THP split to order %d test done\n", order);
 	return;
 
+close_file:
+	close(fd);
 cleanup:
 	umount(tmpfs_loc);
 	rmdir(tmpfs_loc);
+out:
 	ksft_exit_fail_msg("Error occurred\n");
 }
 
@@ -481,7 +517,7 @@ int main(int argc, char **argv)
 	if (argc > 1)
 		optional_xfs_path = argv[1];
 
-	ksft_set_plan(1+8+2+9);
+	ksft_set_plan(1+8+1+9+9);
 
 	pagesize = getpagesize();
 	pageshift = ffs(pagesize) - 1;
@@ -498,7 +534,8 @@ int main(int argc, char **argv)
 			split_pmd_thp_to_order(i);
 
 	split_pte_mapped_thp();
-	split_file_backed_thp();
+	for (i = 0; i < 9; i++)
+		split_file_backed_thp(i);
 
 	created_tmp = prepare_thp_fs(optional_xfs_path, fs_loc_template,
 			&fs_loc);
