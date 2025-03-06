@@ -159,6 +159,7 @@
 #include <net/netdev_rx_queue.h>
 #include <net/page_pool/types.h>
 #include <net/page_pool/helpers.h>
+#include <net/page_pool/memory_provider.h>
 #include <net/rps.h>
 #include <linux/phy_link_topology.h>
 
@@ -1007,7 +1008,7 @@ struct net_device *dev_get_by_napi_id(unsigned int napi_id)
 
 	WARN_ON_ONCE(!rcu_read_lock_held());
 
-	if (napi_id < MIN_NAPI_ID)
+	if (!napi_id_valid(napi_id))
 		return NULL;
 
 	napi = napi_by_id(napi_id);
@@ -4565,7 +4566,8 @@ int __dev_queue_xmit(struct sk_buff *skb, struct net_device *sb_dev)
 	skb_reset_mac_header(skb);
 	skb_assert_len(skb);
 
-	if (unlikely(skb_shinfo(skb)->tx_flags & SKBTX_SCHED_TSTAMP))
+	if (unlikely(skb_shinfo(skb)->tx_flags &
+		     (SKBTX_SCHED_TSTAMP | SKBTX_BPF)))
 		__skb_tstamp_tx(skb, NULL, NULL, skb->sk, SCM_TSTAMP_SCHED);
 
 	/* Disable soft irqs for various locks below. Also
@@ -6184,16 +6186,18 @@ EXPORT_SYMBOL(netif_receive_skb_list);
 static void flush_backlog(struct work_struct *work)
 {
 	struct sk_buff *skb, *tmp;
+	struct sk_buff_head list;
 	struct softnet_data *sd;
 
+	__skb_queue_head_init(&list);
 	local_bh_disable();
 	sd = this_cpu_ptr(&softnet_data);
 
 	backlog_lock_irq_disable(sd);
 	skb_queue_walk_safe(&sd->input_pkt_queue, skb, tmp) {
-		if (skb->dev->reg_state == NETREG_UNREGISTERING) {
+		if (READ_ONCE(skb->dev->reg_state) == NETREG_UNREGISTERING) {
 			__skb_unlink(skb, &sd->input_pkt_queue);
-			dev_kfree_skb_irq(skb);
+			__skb_queue_tail(&list, skb);
 			rps_input_queue_head_incr(sd);
 		}
 	}
@@ -6201,14 +6205,16 @@ static void flush_backlog(struct work_struct *work)
 
 	local_lock_nested_bh(&softnet_data.process_queue_bh_lock);
 	skb_queue_walk_safe(&sd->process_queue, skb, tmp) {
-		if (skb->dev->reg_state == NETREG_UNREGISTERING) {
+		if (READ_ONCE(skb->dev->reg_state) == NETREG_UNREGISTERING) {
 			__skb_unlink(skb, &sd->process_queue);
-			kfree_skb(skb);
+			__skb_queue_tail(&list, skb);
 			rps_input_queue_head_incr(sd);
 		}
 	}
 	local_unlock_nested_bh(&softnet_data.process_queue_bh_lock);
 	local_bh_enable();
+
+	__skb_queue_purge_reason(&list, SKB_DROP_REASON_DEV_READY);
 }
 
 static bool flush_required(int cpu)
@@ -6472,7 +6478,7 @@ bool napi_complete_done(struct napi_struct *n, int work_done)
 		return false;
 
 	if (work_done) {
-		if (n->gro_bitmask)
+		if (n->gro.bitmask)
 			timeout = napi_get_gro_flush_timeout(n);
 		n->defer_hard_irqs_count = napi_get_defer_hard_irqs(n);
 	}
@@ -6482,15 +6488,14 @@ bool napi_complete_done(struct napi_struct *n, int work_done)
 		if (timeout)
 			ret = false;
 	}
-	if (n->gro_bitmask) {
-		/* When the NAPI instance uses a timeout and keeps postponing
-		 * it, we need to bound somehow the time packets are kept in
-		 * the GRO layer
-		 */
-		napi_gro_flush(n, !!timeout);
-	}
 
-	gro_normal_list(n);
+	/*
+	 * When the NAPI instance uses a timeout and keeps postponing
+	 * it, we need to bound somehow the time packets are kept in
+	 * the GRO layer.
+	 */
+	gro_flush(&n->gro, !!timeout);
+	gro_normal_list(&n->gro);
 
 	if (unlikely(!list_empty(&n->poll_list))) {
 		/* If n->poll_list is not empty, we need to mask irqs */
@@ -6554,19 +6559,15 @@ static void skb_defer_free_flush(struct softnet_data *sd)
 static void __busy_poll_stop(struct napi_struct *napi, bool skip_schedule)
 {
 	if (!skip_schedule) {
-		gro_normal_list(napi);
+		gro_normal_list(&napi->gro);
 		__napi_schedule(napi);
 		return;
 	}
 
-	if (napi->gro_bitmask) {
-		/* flush too old packets
-		 * If HZ < 1000, flush all packets.
-		 */
-		napi_gro_flush(napi, HZ >= 1000);
-	}
+	/* Flush too old packets. If HZ < 1000, flush all packets */
+	gro_flush(&napi->gro, HZ >= 1000);
+	gro_normal_list(&napi->gro);
 
-	gro_normal_list(napi);
 	clear_bit(NAPI_STATE_SCHED, &napi->state);
 }
 
@@ -6673,7 +6674,7 @@ restart:
 		}
 		work = napi_poll(napi, budget);
 		trace_napi_poll(napi, work, budget);
-		gro_normal_list(napi);
+		gro_normal_list(&napi->gro);
 count:
 		if (work > 0)
 			__NET_ADD_STATS(dev_net(napi->dev),
@@ -6773,6 +6774,8 @@ void napi_resume_irqs(unsigned int napi_id)
 static void __napi_hash_add_with_id(struct napi_struct *napi,
 				    unsigned int napi_id)
 {
+	napi->gro.cached_napi_id = napi_id;
+
 	WRITE_ONCE(napi->napi_id, napi_id);
 	hlist_add_head_rcu(&napi->napi_hash_node,
 			   &napi_hash[napi->napi_id % HASH_SIZE(napi_hash)]);
@@ -6800,7 +6803,7 @@ static void napi_hash_add(struct napi_struct *napi)
 
 	/* 0..NR_CPUS range is reserved for sender_cpu use */
 	do {
-		if (unlikely(++napi_gen_id < MIN_NAPI_ID))
+		if (unlikely(!napi_id_valid(++napi_gen_id)))
 			napi_gen_id = MIN_NAPI_ID;
 	} while (napi_by_id(napi_gen_id));
 
@@ -6839,17 +6842,6 @@ static enum hrtimer_restart napi_watchdog(struct hrtimer *timer)
 	}
 
 	return HRTIMER_NORESTART;
-}
-
-static void init_gro_hash(struct napi_struct *napi)
-{
-	int i;
-
-	for (i = 0; i < GRO_HASH_BUCKETS; i++) {
-		INIT_LIST_HEAD(&napi->gro_hash[i].list);
-		napi->gro_hash[i].count = 0;
-	}
-	napi->gro_bitmask = 0;
 }
 
 int dev_set_threaded(struct net_device *dev, bool threaded)
@@ -6931,11 +6923,175 @@ void netif_queue_set_napi(struct net_device *dev, unsigned int queue_index,
 }
 EXPORT_SYMBOL(netif_queue_set_napi);
 
+static void
+netif_napi_irq_notify(struct irq_affinity_notify *notify,
+		      const cpumask_t *mask)
+{
+	struct napi_struct *napi =
+		container_of(notify, struct napi_struct, notify);
+#ifdef CONFIG_RFS_ACCEL
+	struct cpu_rmap *rmap = napi->dev->rx_cpu_rmap;
+	int err;
+#endif
+
+	if (napi->config && napi->dev->irq_affinity_auto)
+		cpumask_copy(&napi->config->affinity_mask, mask);
+
+#ifdef CONFIG_RFS_ACCEL
+	if (napi->dev->rx_cpu_rmap_auto) {
+		err = cpu_rmap_update(rmap, napi->napi_rmap_idx, mask);
+		if (err)
+			netdev_warn(napi->dev, "RMAP update failed (%d)\n",
+				    err);
+	}
+#endif
+}
+
+#ifdef CONFIG_RFS_ACCEL
+static void netif_napi_affinity_release(struct kref *ref)
+{
+	struct napi_struct *napi =
+		container_of(ref, struct napi_struct, notify.kref);
+	struct cpu_rmap *rmap = napi->dev->rx_cpu_rmap;
+
+	netdev_assert_locked(napi->dev);
+	WARN_ON(test_and_clear_bit(NAPI_STATE_HAS_NOTIFIER,
+				   &napi->state));
+
+	if (!napi->dev->rx_cpu_rmap_auto)
+		return;
+	rmap->obj[napi->napi_rmap_idx] = NULL;
+	napi->napi_rmap_idx = -1;
+	cpu_rmap_put(rmap);
+}
+
+int netif_enable_cpu_rmap(struct net_device *dev, unsigned int num_irqs)
+{
+	if (dev->rx_cpu_rmap_auto)
+		return 0;
+
+	dev->rx_cpu_rmap = alloc_irq_cpu_rmap(num_irqs);
+	if (!dev->rx_cpu_rmap)
+		return -ENOMEM;
+
+	dev->rx_cpu_rmap_auto = true;
+	return 0;
+}
+EXPORT_SYMBOL(netif_enable_cpu_rmap);
+
+static void netif_del_cpu_rmap(struct net_device *dev)
+{
+	struct cpu_rmap *rmap = dev->rx_cpu_rmap;
+
+	if (!dev->rx_cpu_rmap_auto)
+		return;
+
+	/* Free the rmap */
+	cpu_rmap_put(rmap);
+	dev->rx_cpu_rmap = NULL;
+	dev->rx_cpu_rmap_auto = false;
+}
+
+#else
+static void netif_napi_affinity_release(struct kref *ref)
+{
+}
+
+int netif_enable_cpu_rmap(struct net_device *dev, unsigned int num_irqs)
+{
+	return 0;
+}
+EXPORT_SYMBOL(netif_enable_cpu_rmap);
+
+static void netif_del_cpu_rmap(struct net_device *dev)
+{
+}
+#endif
+
+void netif_set_affinity_auto(struct net_device *dev)
+{
+	unsigned int i, maxqs, numa;
+
+	maxqs = max(dev->num_tx_queues, dev->num_rx_queues);
+	numa = dev_to_node(&dev->dev);
+
+	for (i = 0; i < maxqs; i++)
+		cpumask_set_cpu(cpumask_local_spread(i, numa),
+				&dev->napi_config[i].affinity_mask);
+
+	dev->irq_affinity_auto = true;
+}
+EXPORT_SYMBOL(netif_set_affinity_auto);
+
+void netif_napi_set_irq_locked(struct napi_struct *napi, int irq)
+{
+	int rc;
+
+	netdev_assert_locked_or_invisible(napi->dev);
+
+	if (napi->irq == irq)
+		return;
+
+	/* Remove existing resources */
+	if (test_and_clear_bit(NAPI_STATE_HAS_NOTIFIER, &napi->state))
+		irq_set_affinity_notifier(napi->irq, NULL);
+
+	napi->irq = irq;
+	if (irq < 0 ||
+	    (!napi->dev->rx_cpu_rmap_auto && !napi->dev->irq_affinity_auto))
+		return;
+
+	/* Abort for buggy drivers */
+	if (napi->dev->irq_affinity_auto && WARN_ON_ONCE(!napi->config))
+		return;
+
+#ifdef CONFIG_RFS_ACCEL
+	if (napi->dev->rx_cpu_rmap_auto) {
+		rc = cpu_rmap_add(napi->dev->rx_cpu_rmap, napi);
+		if (rc < 0)
+			return;
+
+		cpu_rmap_get(napi->dev->rx_cpu_rmap);
+		napi->napi_rmap_idx = rc;
+	}
+#endif
+
+	/* Use core IRQ notifier */
+	napi->notify.notify = netif_napi_irq_notify;
+	napi->notify.release = netif_napi_affinity_release;
+	rc = irq_set_affinity_notifier(irq, &napi->notify);
+	if (rc) {
+		netdev_warn(napi->dev, "Unable to set IRQ notifier (%d)\n",
+			    rc);
+		goto put_rmap;
+	}
+
+	set_bit(NAPI_STATE_HAS_NOTIFIER, &napi->state);
+	return;
+
+put_rmap:
+#ifdef CONFIG_RFS_ACCEL
+	if (napi->dev->rx_cpu_rmap_auto) {
+		napi->dev->rx_cpu_rmap->obj[napi->napi_rmap_idx] = NULL;
+		cpu_rmap_put(napi->dev->rx_cpu_rmap);
+		napi->napi_rmap_idx = -1;
+	}
+#endif
+	napi->notify.notify = NULL;
+	napi->notify.release = NULL;
+}
+EXPORT_SYMBOL(netif_napi_set_irq_locked);
+
 static void napi_restore_config(struct napi_struct *n)
 {
 	n->defer_hard_irqs = n->config->defer_hard_irqs;
 	n->gro_flush_timeout = n->config->gro_flush_timeout;
 	n->irq_suspend_timeout = n->config->irq_suspend_timeout;
+
+	if (n->dev->irq_affinity_auto &&
+	    test_bit(NAPI_STATE_HAS_NOTIFIER, &n->state))
+		irq_set_affinity(n->irq, &n->config->affinity_mask);
+
 	/* a NAPI ID might be stored in the config, if so use it. if not, use
 	 * napi_hash_add to generate one for us.
 	 */
@@ -6971,7 +7127,7 @@ netif_napi_dev_list_add(struct net_device *dev, struct napi_struct *napi)
 
 	higher = &dev->napi_list;
 	list_for_each_entry(pos, &dev->napi_list, dev_list) {
-		if (pos->napi_id >= MIN_NAPI_ID)
+		if (napi_id_valid(pos->napi_id))
 			pos_id = pos->napi_id;
 		else if (pos->config)
 			pos_id = pos->config->napi_id;
@@ -7015,10 +7171,8 @@ void netif_napi_add_weight_locked(struct net_device *dev,
 	INIT_HLIST_NODE(&napi->napi_hash_node);
 	hrtimer_init(&napi->timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL_PINNED);
 	napi->timer.function = napi_watchdog;
-	init_gro_hash(napi);
+	gro_init(&napi->gro);
 	napi->skb = NULL;
-	INIT_LIST_HEAD(&napi->rx_list);
-	napi->rx_count = 0;
 	napi->poll = poll;
 	if (weight > NAPI_POLL_WEIGHT)
 		netdev_err_once(dev, "%s() called with weight %d\n", __func__,
@@ -7132,19 +7286,6 @@ void napi_enable(struct napi_struct *n)
 }
 EXPORT_SYMBOL(napi_enable);
 
-static void flush_gro_hash(struct napi_struct *napi)
-{
-	int i;
-
-	for (i = 0; i < GRO_HASH_BUCKETS; i++) {
-		struct sk_buff *skb, *n;
-
-		list_for_each_entry_safe(skb, n, &napi->gro_hash[i].list, list)
-			kfree_skb(skb);
-		napi->gro_hash[i].count = 0;
-	}
-}
-
 /* Must be called in process context */
 void __netif_napi_del_locked(struct napi_struct *napi)
 {
@@ -7152,6 +7293,12 @@ void __netif_napi_del_locked(struct napi_struct *napi)
 
 	if (!test_and_clear_bit(NAPI_STATE_LISTED, &napi->state))
 		return;
+
+	/* Make sure NAPI is disabled (or was never enabled). */
+	WARN_ON(!test_bit(NAPI_STATE_SCHED, &napi->state));
+
+	if (test_and_clear_bit(NAPI_STATE_HAS_NOTIFIER, &napi->state))
+		irq_set_affinity_notifier(napi->irq, NULL);
 
 	if (napi->config) {
 		napi->index = -1;
@@ -7161,8 +7308,7 @@ void __netif_napi_del_locked(struct napi_struct *napi)
 	list_del_rcu(&napi->dev_list);
 	napi_free_frags(napi);
 
-	flush_gro_hash(napi);
-	napi->gro_bitmask = 0;
+	gro_cleanup(&napi->gro);
 
 	if (napi->thread) {
 		kthread_stop(napi->thread);
@@ -7221,14 +7367,9 @@ static int __napi_poll(struct napi_struct *n, bool *repoll)
 		return work;
 	}
 
-	if (n->gro_bitmask) {
-		/* flush too old packets
-		 * If HZ < 1000, flush all packets.
-		 */
-		napi_gro_flush(n, HZ >= 1000);
-	}
-
-	gro_normal_list(n);
+	/* Flush too old packets. If HZ < 1000, flush all packets */
+	gro_flush(&n->gro, HZ >= 1000);
+	gro_normal_list(&n->gro);
 
 	/* Some drivers may have called napi_schedule
 	 * prior to exhausting their budget.
@@ -9256,7 +9397,7 @@ int __dev_change_flags(struct net_device *dev, unsigned int flags,
 
 	if ((flags ^ dev->gflags) & IFF_PROMISC) {
 		int inc = (flags & IFF_PROMISC) ? 1 : -1;
-		unsigned int old_flags = dev->flags;
+		old_flags = dev->flags;
 
 		dev->gflags ^= IFF_PROMISC;
 
@@ -11194,9 +11335,8 @@ void netdev_run_todo(void)
 	list_replace_init(&net_unlink_list, &unlink_list);
 
 	while (!list_empty(&unlink_list)) {
-		struct net_device *dev = list_first_entry(&unlink_list,
-							  struct net_device,
-							  unlink_list);
+		dev = list_first_entry(&unlink_list, struct net_device,
+				       unlink_list);
 		list_del_init(&dev->unlink_list);
 		dev->nested_level = dev->lower_level - 1;
 	}
@@ -11706,6 +11846,8 @@ void free_netdev(struct net_device *dev)
 
 	netdev_napi_exit(dev);
 
+	netif_del_cpu_rmap(dev);
+
 	ref_tracker_dir_exit(&dev->refcnt_tracker);
 #ifdef CONFIG_PCPU_DEV_REFCNT
 	free_percpu(dev->pcpu_refcnt);
@@ -11820,6 +11962,19 @@ void unregister_netdevice_queue(struct net_device *dev, struct list_head *head)
 }
 EXPORT_SYMBOL(unregister_netdevice_queue);
 
+static void dev_memory_provider_uninstall(struct net_device *dev)
+{
+	unsigned int i;
+
+	for (i = 0; i < dev->real_num_rx_queues; i++) {
+		struct netdev_rx_queue *rxq = &dev->_rx[i];
+		struct pp_memory_provider_params *p = &rxq->mp_params;
+
+		if (p->mp_ops && p->mp_ops->uninstall)
+			p->mp_ops->uninstall(rxq->mp_params.mp_priv, rxq);
+	}
+}
+
 void unregister_netdevice_many_notify(struct list_head *head,
 				      u32 portid, const struct nlmsghdr *nlh)
 {
@@ -11874,7 +12029,7 @@ void unregister_netdevice_many_notify(struct list_head *head,
 		dev_tcx_uninstall(dev);
 		dev_xdp_uninstall(dev);
 		bpf_dev_bound_netdev_unregister(dev);
-		dev_dmabuf_uninstall(dev);
+		dev_memory_provider_uninstall(dev);
 
 		netdev_offload_xstats_disable_all(dev);
 
@@ -11976,6 +12131,7 @@ EXPORT_SYMBOL(unregister_netdev);
  *	      is already taken in the destination network namespace.
  *	@new_ifindex: If not zero, specifies device index in the target
  *	              namespace.
+ *	@extack: netlink extended ack
  *
  *	This function shuts down a device interface and moves it
  *	to a new network namespace. On success 0 is returned, on
@@ -11985,7 +12141,8 @@ EXPORT_SYMBOL(unregister_netdev);
  */
 
 int __dev_change_net_namespace(struct net_device *dev, struct net *net,
-			       const char *pat, int new_ifindex)
+			       const char *pat, int new_ifindex,
+			       struct netlink_ext_ack *extack)
 {
 	struct netdev_name_node *name_node;
 	struct net *net_old = dev_net(dev);
@@ -11996,12 +12153,16 @@ int __dev_change_net_namespace(struct net_device *dev, struct net *net,
 
 	/* Don't allow namespace local devices to be moved. */
 	err = -EINVAL;
-	if (dev->netns_local)
+	if (dev->netns_immutable) {
+		NL_SET_ERR_MSG(extack, "The interface netns is immutable");
 		goto out;
+	}
 
 	/* Ensure the device has been registered */
-	if (dev->reg_state != NETREG_REGISTERED)
+	if (dev->reg_state != NETREG_REGISTERED) {
+		NL_SET_ERR_MSG(extack, "The interface isn't registered");
 		goto out;
+	}
 
 	/* Get out if there is nothing todo */
 	err = 0;
@@ -12014,30 +12175,49 @@ int __dev_change_net_namespace(struct net_device *dev, struct net *net,
 	err = -EEXIST;
 	if (netdev_name_in_use(net, dev->name)) {
 		/* We get here if we can't use the current device name */
-		if (!pat)
+		if (!pat) {
+			NL_SET_ERR_MSG(extack,
+				       "An interface with the same name exists in the target netns");
 			goto out;
+		}
 		err = dev_prep_valid_name(net, dev, pat, new_name, EEXIST);
-		if (err < 0)
+		if (err < 0) {
+			NL_SET_ERR_MSG_FMT(extack,
+					   "Unable to use '%s' for the new interface name in the target netns",
+					   pat);
 			goto out;
+		}
 	}
 	/* Check that none of the altnames conflicts. */
 	err = -EEXIST;
-	netdev_for_each_altname(dev, name_node)
-		if (netdev_name_in_use(net, name_node->name))
+	netdev_for_each_altname(dev, name_node) {
+		if (netdev_name_in_use(net, name_node->name)) {
+			NL_SET_ERR_MSG_FMT(extack,
+					   "An interface with the altname %s exists in the target netns",
+					   name_node->name);
 			goto out;
+		}
+	}
 
 	/* Check that new_ifindex isn't used yet. */
 	if (new_ifindex) {
 		err = dev_index_reserve(net, new_ifindex);
-		if (err < 0)
+		if (err < 0) {
+			NL_SET_ERR_MSG_FMT(extack,
+					   "The ifindex %d is not available in the target netns",
+					   new_ifindex);
 			goto out;
+		}
 	} else {
 		/* If there is an ifindex conflict assign a new one */
 		err = dev_index_reserve(net, dev->ifindex);
 		if (err == -EBUSY)
 			err = dev_index_reserve(net, 0);
-		if (err < 0)
+		if (err < 0) {
+			NL_SET_ERR_MSG(extack,
+				       "Unable to allocate a new ifindex in the target netns");
 			goto out;
+		}
 		new_ifindex = err;
 	}
 
@@ -12243,7 +12423,7 @@ static struct hlist_head * __net_init netdev_create_hash(void)
 static int __net_init netdev_init(struct net *net)
 {
 	BUILD_BUG_ON(GRO_HASH_BUCKETS >
-		     8 * sizeof_field(struct napi_struct, gro_bitmask));
+		     BITS_PER_BYTE * sizeof_field(struct gro_node, bitmask));
 
 	INIT_LIST_HEAD(&net->dev_base_head);
 
@@ -12378,7 +12558,7 @@ static void __net_exit default_device_exit_net(struct net *net)
 		char fb_name[IFNAMSIZ];
 
 		/* Ignore unmoveable devices (i.e. loopback) */
-		if (dev->netns_local)
+		if (dev->netns_immutable)
 			continue;
 
 		/* Leave virtual devices for the generic cleanup */
@@ -12608,7 +12788,7 @@ static int __init net_dev_init(void)
 		INIT_CSD(&sd->defer_csd, trigger_rx_softirq, sd);
 		spin_lock_init(&sd->defer_lock);
 
-		init_gro_hash(&sd->backlog);
+		gro_init(&sd->backlog.gro);
 		sd->backlog.poll = process_backlog;
 		sd->backlog.weight = weight_p;
 		INIT_LIST_HEAD(&sd->backlog.poll_list);
