@@ -386,7 +386,6 @@ struct intel_display {
 	struct {
 		/* list of fbdev register on this device */
 		struct intel_fbdev *fbdev;
-		struct work_struct suspend_work;
 	} fbdev;
 
 	struct {
@@ -512,6 +511,8 @@ struct intel_display {
 		/* restore state for suspend/resume and display reset */
 		struct drm_atomic_state *modeset_state;
 		struct drm_modeset_acquire_ctx reset_ctx;
+		/* modeset stuck tracking for reset */
+		atomic_t pending_fb_pin;
 		u32 saveDSPARB;
 		u32 saveSWF0[16];
 		u32 saveSWF1[16];
