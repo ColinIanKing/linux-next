@@ -182,13 +182,12 @@ static int btrfs_repair_eb_io_failure(const struct extent_buffer *eb,
 				      int mirror_num)
 {
 	struct btrfs_fs_info *fs_info = eb->fs_info;
-	int num_folios = num_extent_folios(eb);
 	int ret = 0;
 
 	if (sb_rdonly(fs_info->sb))
 		return -EROFS;
 
-	for (int i = 0; i < num_folios; i++) {
+	for (int i = 0; i < num_extent_folios(eb); i++) {
 		struct folio *folio = eb->folios[i];
 		u64 start = max_t(u64, eb->start, folio_pos(folio));
 		u64 end = min_t(u64, eb->start + eb->len,
@@ -284,8 +283,7 @@ blk_status_t btree_csum_one_bio(struct btrfs_bio *bbio)
 
 	if (WARN_ON_ONCE(found_start != eb->start))
 		return BLK_STS_IOERR;
-	if (WARN_ON(!btrfs_folio_test_uptodate(fs_info, eb->folios[0],
-					       eb->start, eb->len)))
+	if (WARN_ON(!btrfs_meta_folio_test_uptodate(eb->folios[0], eb)))
 		return BLK_STS_IOERR;
 
 	ASSERT(memcmp_extent_buffer(eb, fs_info->fs_devices->metadata_uuid,
@@ -1089,21 +1087,22 @@ struct btrfs_root *btrfs_read_tree_root(struct btrfs_root *tree_root,
 					const struct btrfs_key *key)
 {
 	struct btrfs_root *root;
-	struct btrfs_path *path;
+	BTRFS_PATH_AUTO_FREE(path);
 
 	path = btrfs_alloc_path();
 	if (!path)
 		return ERR_PTR(-ENOMEM);
 	root = read_tree_root_path(tree_root, path, key);
-	btrfs_free_path(path);
 
 	return root;
 }
 
 /*
- * Initialize subvolume root in-memory structure
+ * Initialize subvolume root in-memory structure.
  *
  * @anon_dev:	anonymous device to attach to the root, if zero, allocate new
+ *
+ * In case of failure the caller is responsible to call btrfs_free_fs_root()
  */
 static int btrfs_init_fs_root(struct btrfs_root *root, dev_t anon_dev)
 {
@@ -1127,7 +1126,7 @@ static int btrfs_init_fs_root(struct btrfs_root *root, dev_t anon_dev)
 		if (!anon_dev) {
 			ret = get_anon_bdev(&root->anon_dev);
 			if (ret)
-				goto fail;
+				return ret;
 		} else {
 			root->anon_dev = anon_dev;
 		}
@@ -1137,7 +1136,7 @@ static int btrfs_init_fs_root(struct btrfs_root *root, dev_t anon_dev)
 	ret = btrfs_init_root_free_objectid(root);
 	if (ret) {
 		mutex_unlock(&root->objectid_mutex);
-		goto fail;
+		return ret;
 	}
 
 	ASSERT(root->free_objectid <= BTRFS_LAST_FREE_OBJECTID);
@@ -1145,9 +1144,6 @@ static int btrfs_init_fs_root(struct btrfs_root *root, dev_t anon_dev)
 	mutex_unlock(&root->objectid_mutex);
 
 	return 0;
-fail:
-	/* The caller is responsible to call btrfs_free_fs_root */
-	return ret;
 }
 
 static struct btrfs_root *btrfs_lookup_fs_root(struct btrfs_fs_info *fs_info,
@@ -2200,8 +2196,8 @@ static int load_global_roots_objectid(struct btrfs_root *tree_root,
 
 static int load_global_roots(struct btrfs_root *tree_root)
 {
-	struct btrfs_path *path;
-	int ret = 0;
+	BTRFS_PATH_AUTO_FREE(path);
+	int ret;
 
 	path = btrfs_alloc_path();
 	if (!path)
@@ -2210,18 +2206,17 @@ static int load_global_roots(struct btrfs_root *tree_root)
 	ret = load_global_roots_objectid(tree_root, path,
 					 BTRFS_EXTENT_TREE_OBJECTID, "extent");
 	if (ret)
-		goto out;
+		return ret;
 	ret = load_global_roots_objectid(tree_root, path,
 					 BTRFS_CSUM_TREE_OBJECTID, "csum");
 	if (ret)
-		goto out;
+		return ret;
 	if (!btrfs_fs_compat_ro(tree_root->fs_info, FREE_SPACE_TREE))
-		goto out;
+		return ret;
 	ret = load_global_roots_objectid(tree_root, path,
 					 BTRFS_FREE_SPACE_TREE_OBJECTID,
 					 "free space");
-out:
-	btrfs_free_path(path);
+
 	return ret;
 }
 
@@ -3390,7 +3385,6 @@ int __cold open_ctree(struct super_block *sb, struct btrfs_fs_devices *fs_device
 	fs_info->nodesize = nodesize;
 	fs_info->sectorsize = sectorsize;
 	fs_info->sectorsize_bits = ilog2(sectorsize);
-	fs_info->sectors_per_page = (PAGE_SIZE >> fs_info->sectorsize_bits);
 	fs_info->csums_per_leaf = BTRFS_MAX_ITEM_SIZE(fs_info) / fs_info->csum_size;
 	fs_info->stripesize = stripesize;
 	fs_info->fs_devices->fs_info = fs_info;
@@ -4902,7 +4896,7 @@ static int btrfs_cleanup_transaction(struct btrfs_fs_info *fs_info)
 
 int btrfs_init_root_free_objectid(struct btrfs_root *root)
 {
-	struct btrfs_path *path;
+	BTRFS_PATH_AUTO_FREE(path);
 	int ret;
 	struct extent_buffer *l;
 	struct btrfs_key search_key;
@@ -4918,14 +4912,13 @@ int btrfs_init_root_free_objectid(struct btrfs_root *root)
 	search_key.offset = (u64)-1;
 	ret = btrfs_search_slot(NULL, root, &search_key, path, 0, 0);
 	if (ret < 0)
-		goto error;
+		return ret;
 	if (ret == 0) {
 		/*
 		 * Key with offset -1 found, there would have to exist a root
 		 * with such id, but this is out of valid range.
 		 */
-		ret = -EUCLEAN;
-		goto error;
+		return -EUCLEAN;
 	}
 	if (path->slots[0] > 0) {
 		slot = path->slots[0] - 1;
@@ -4936,10 +4929,8 @@ int btrfs_init_root_free_objectid(struct btrfs_root *root)
 	} else {
 		root->free_objectid = BTRFS_FIRST_FREE_OBJECTID;
 	}
-	ret = 0;
-error:
-	btrfs_free_path(path);
-	return ret;
+
+	return 0;
 }
 
 int btrfs_get_free_objectid(struct btrfs_root *root, u64 *objectid)
