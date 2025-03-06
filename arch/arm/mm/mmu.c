@@ -1250,8 +1250,6 @@ void __init adjust_lowmem_bounds(void)
 
 	arm_lowmem_limit = lowmem_limit;
 
-	high_memory = __va(arm_lowmem_limit - 1) + 1;
-
 	if (!memblock_limit)
 		memblock_limit = arm_lowmem_limit;
 
