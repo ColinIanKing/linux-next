@@ -168,7 +168,6 @@ void __init cf_bootmem_alloc(void)
 	memstart = PAGE_ALIGN(_ramstart);
 	min_low_pfn = PFN_DOWN(_rambase);
 	max_pfn = max_low_pfn = PFN_DOWN(_ramend);
-	high_memory = (void *)_ramend;
 
 	/* Reserve kernel text/data/bss */
 	memblock_reserve(_rambase, memstart - _rambase);
