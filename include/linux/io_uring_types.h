@@ -110,6 +110,14 @@ struct io_uring_task {
 	} ____cacheline_aligned_in_smp;
 };
 
+struct iou_vec {
+	union {
+		struct iovec	*iovec;
+		struct bio_vec	*bvec;
+	};
+	unsigned		nr; /* number of struct iovec it can hold */
+};
+
 struct io_uring {
 	u32 head;
 	u32 tail;
@@ -494,6 +502,7 @@ enum {
 	REQ_F_BUFFERS_COMMIT_BIT,
 	REQ_F_BUF_NODE_BIT,
 	REQ_F_HAS_METADATA_BIT,
+	REQ_F_IMPORT_BUFFER_BIT,
 
 	/* not a real bit, just to check we're not overflowing the space */
 	__REQ_F_LAST_BIT,
@@ -576,6 +585,8 @@ enum {
 	REQ_F_BUF_NODE		= IO_REQ_FLAG(REQ_F_BUF_NODE_BIT),
 	/* request has read/write metadata assigned */
 	REQ_F_HAS_METADATA	= IO_REQ_FLAG(REQ_F_HAS_METADATA_BIT),
+	/* resolve padded iovec to registered buffers */
+	REQ_F_IMPORT_BUFFER	= IO_REQ_FLAG(REQ_F_IMPORT_BUFFER_BIT),
 };
 
 typedef void (*io_req_tw_func_t)(struct io_kiocb *req, io_tw_token_t tw);
