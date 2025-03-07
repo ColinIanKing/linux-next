@@ -478,6 +478,7 @@ int btintel_version_info_tlv(struct hci_dev *hdev,
 	case 0x1c:	/* Gale Peak (GaP) */
 	case 0x1d:	/* BlazarU (BzrU) */
 	case 0x1e:	/* BlazarI (Bzr) */
+	case 0x1f:      /* Scorpious Peak */
 		break;
 	default:
 		bt_dev_err(hdev, "Unsupported Intel hardware variant (0x%x)",
@@ -2756,6 +2757,7 @@ static int btintel_set_dsbr(struct hci_dev *hdev, struct intel_version_tlv *ver)
 	/* DSBR command needs to be sent for,
 	 * 1. BlazarI or BlazarIW + B0 step product in IML image.
 	 * 2. Gale Peak2 or BlazarU in OP image.
+	 * 3. Scorpious Peak in IML image.
 	 */
 
 	switch (cnvi) {
@@ -2769,6 +2771,10 @@ static int btintel_set_dsbr(struct hci_dev *hdev, struct intel_version_tlv *ver)
 	case BTINTEL_CNVI_BLAZARU:
 		if (ver->img_type == BTINTEL_IMG_OP &&
 		    hdev->bus == HCI_USB)
+			break;
+		return 0;
+	case BTINTEL_CNVI_SCP:
+		if (ver->img_type == BTINTEL_IMG_IML)
 			break;
 		return 0;
 	default:
@@ -2919,6 +2925,7 @@ void btintel_set_msft_opcode(struct hci_dev *hdev, u8 hw_variant)
 	case 0x1c:
 	case 0x1d:
 	case 0x1e:
+	case 0x1f:
 		hci_set_msft_opcode(hdev, 0xFC1E);
 		break;
 	default:
@@ -3258,6 +3265,7 @@ static int btintel_setup_combined(struct hci_dev *hdev)
 	case 0x1b:
 	case 0x1d:
 	case 0x1e:
+	case 0x1f:
 		/* Display version information of TLV type */
 		btintel_version_info_tlv(hdev, &ver_tlv);
 
