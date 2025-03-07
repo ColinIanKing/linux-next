@@ -398,6 +398,7 @@ extern inline u64 ioread64(const void __iomem *addr)
 	mb();
 	return ret;
 }
+#define ioread64 ioread64
 
 extern inline void iowrite32(u32 b, void __iomem *addr)
 {
@@ -410,6 +411,7 @@ extern inline void iowrite64(u64 b, void __iomem *addr)
 	mb();
 	IO_CONCAT(__IO_PREFIX, iowrite64)(b, addr);
 }
+#define iowrite64 iowrite64
 
 extern inline u32 inl(unsigned long port)
 {
@@ -423,9 +425,7 @@ extern inline void outl(u32 b, unsigned long port)
 #endif
 
 #define ioread32 ioread32
-#define ioread64 ioread64
 #define iowrite32 iowrite32
-#define iowrite64 iowrite64
 
 #if IO_CONCAT(__IO_PREFIX,trivial_rw_bw) == 1
 extern inline u8 __raw_readb(const volatile void __iomem *addr)
@@ -633,8 +633,6 @@ extern void outsl (unsigned long port, const void *src, unsigned long count);
  * These get provided from <asm-generic/iomap.h> since alpha does not
  * select GENERIC_IOMAP.
  */
-#define ioread64 ioread64
-#define iowrite64 iowrite64
 #define ioread8_rep ioread8_rep
 #define ioread16_rep ioread16_rep
 #define ioread32_rep ioread32_rep
