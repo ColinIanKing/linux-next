@@ -19,6 +19,8 @@
 #include <linux/sched.h>
 #include <linux/slab.h>
 
+#include "access.h"
+
 enum landlock_log_status {
 	LANDLOCK_LOG_PENDING = 0,
 	LANDLOCK_LOG_RECORDED,
@@ -124,6 +126,12 @@ static inline void landlock_put_hierarchy(struct landlock_hierarchy *hierarchy)
 #ifdef CONFIG_AUDIT
 
 int landlock_init_hierarchy_log(struct landlock_hierarchy *const hierarchy);
+
+deny_masks_t
+landlock_get_deny_masks(const access_mask_t all_existing_optional_access,
+			const access_mask_t optional_access,
+			const layer_mask_t (*const layer_masks)[],
+			size_t layer_masks_size);
 
 #else /* CONFIG_AUDIT */
 
