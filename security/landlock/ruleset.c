@@ -510,6 +510,9 @@ static void free_ruleset_work(struct work_struct *const work)
 void landlock_put_ruleset_deferred(struct landlock_ruleset *const ruleset)
 {
 	if (ruleset && refcount_dec_and_test(&ruleset->usage)) {
+		/* Logs with the current context. */
+		landlock_log_drop_domain(ruleset);
+
 		INIT_WORK(&ruleset->work_free, free_ruleset_work);
 		schedule_work(&ruleset->work_free);
 	}
@@ -520,6 +523,9 @@ void landlock_put_ruleset_deferred(struct landlock_ruleset *const ruleset)
  *
  * @parent: Parent domain.
  * @ruleset: New ruleset to be merged.
+ *
+ * The current task is requesting to be restricted.  The subjective credentials
+ * must not be in an overridden state. cf. landlock_init_hierarchy_log().
  *
  * Returns the intersection of @parent and @ruleset, or returns @parent if
  * @ruleset is empty, or returns a duplicate of @ruleset if @parent is empty.
