@@ -7134,7 +7134,7 @@ static int __rb_map_vma(struct ring_buffer_per_cpu *cpu_buffer,
 			goto out;
 		}
 
-		if (virt_addr_valid(cpu_buffer->subbuf_ids[s]))
+		if (virt_addr_valid((void *)cpu_buffer->subbuf_ids[s]))
 			page = virt_to_page((void *)cpu_buffer->subbuf_ids[s]);
 		else
 			page = vmalloc_to_page((void *)cpu_buffer->subbuf_ids[s]);
