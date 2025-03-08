@@ -14,6 +14,7 @@
 #include <linux/rcupdate.h>
 
 #include "access.h"
+#include "cred.h"
 #include "ruleset.h"
 #include "setup.h"
 
@@ -54,12 +55,13 @@ struct landlock_file_security {
 	 */
 	access_mask_t allowed_access;
 	/**
-	 * @fown_domain: Domain of the task that set the PID that may receive a
-	 * signal e.g., SIGURG when writing MSG_OOB to the related socket.
-	 * This pointer is protected by the related file->f_owner->lock, as for
-	 * fown_struct's members: pid, uid, and euid.
+	 * @fown_subject: Landlock credential of the task that set the PID that
+	 * may receive a signal e.g., SIGURG when writing MSG_OOB to the
+	 * related socket.  This pointer is protected by the related
+	 * file->f_owner->lock, as for fown_struct's members: pid, uid, and
+	 * euid.
 	 */
-	struct landlock_ruleset *fown_domain;
+	struct landlock_cred_security fown_subject;
 };
 
 /**

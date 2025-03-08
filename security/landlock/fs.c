@@ -1641,17 +1641,31 @@ static int hook_file_ioctl_compat(struct file *file, unsigned int cmd,
 
 static void hook_file_set_fowner(struct file *file)
 {
-	struct landlock_ruleset *new_dom, *prev_dom;
+	static const struct access_masks signal_scope = {
+		.scope = LANDLOCK_SCOPE_SIGNAL,
+	};
+	const struct landlock_cred_security *new_subject;
+	struct landlock_cred_security *fown_subject;
+	struct landlock_ruleset *prev_dom;
 
 	/*
 	 * Lock already held by __f_setown(), see commit 26f204380a3c ("fs: Fix
 	 * file_set_fowner LSM hook inconsistencies").
 	 */
 	lockdep_assert_held(&file_f_owner(file)->lock);
-	new_dom = landlock_get_current_domain();
-	landlock_get_ruleset(new_dom);
-	prev_dom = landlock_file(file)->fown_domain;
-	landlock_file(file)->fown_domain = new_dom;
+
+	fown_subject = &landlock_file(file)->fown_subject;
+	prev_dom = fown_subject->domain;
+	new_subject = landlock_get_applicable_subject(current_cred(),
+						      signal_scope, NULL);
+	if (new_subject) {
+		landlock_get_ruleset(new_subject->domain);
+		*fown_subject = *new_subject;
+	} else {
+		static const struct landlock_cred_security empty = {};
+
+		*fown_subject = empty;
+	}
 
 	/* Called in an RCU read-side critical section. */
 	landlock_put_ruleset_deferred(prev_dom);
@@ -1659,7 +1673,7 @@ static void hook_file_set_fowner(struct file *file)
 
 static void hook_file_free_security(struct file *file)
 {
-	landlock_put_ruleset_deferred(landlock_file(file)->fown_domain);
+	landlock_put_ruleset_deferred(landlock_file(file)->fown_subject.domain);
 }
 
 static struct security_hook_list landlock_hooks[] __ro_after_init = {
