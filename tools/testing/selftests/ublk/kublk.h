@@ -12,6 +12,7 @@
 #include <getopt.h>
 #include <limits.h>
 #include <poll.h>
+#include <fcntl.h>
 #include <sys/syscall.h>
 #include <sys/mman.h>
 #include <sys/ioctl.h>
@@ -66,6 +67,7 @@ struct dev_ctx {
 	char *files[MAX_BACK_FILES];
 	unsigned int	logging:1;
 	unsigned int	all:1;
+	unsigned int	fg:1;
 
 	int _evtfd;
 };
