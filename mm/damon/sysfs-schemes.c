@@ -1616,7 +1616,7 @@ static int damon_sysfs_scheme_set_filters(struct damon_sysfs_scheme *scheme,
 		return -ENOMEM;
 	err = kobject_init_and_add(&filters->kobj,
 			&damon_sysfs_scheme_filters_ktype, &scheme->kobj,
-			name);
+			"%s", name);
 	if (err)
 		kobject_put(&filters->kobj);
 	else
