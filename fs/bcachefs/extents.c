@@ -28,6 +28,13 @@
 #include "trace.h"
 #include "util.h"
 
+static const char * const bch2_extent_flags_strs[] = {
+#define x(n, v)	[BCH_EXTENT_##n] = #n,
+	BCH_EXTENT_FLAGS()
+#undef x
+	NULL,
+};
+
 static unsigned bch2_crc_field_size_max[] = {
 	[BCH_EXTENT_ENTRY_crc32] = CRC32_SIZE_MAX,
 	[BCH_EXTENT_ENTRY_crc64] = CRC64_SIZE_MAX,
@@ -72,10 +79,14 @@ void bch2_mark_io_failure(struct bch_io_failures *failed,
 	}
 }
 
-static inline u64 dev_latency(struct bch_fs *c, unsigned dev)
+static inline u64 dev_latency(struct bch_dev *ca)
 {
-	struct bch_dev *ca = bch2_dev_rcu(c, dev);
 	return ca ? atomic64_read(&ca->cur_latency[READ]) : S64_MAX;
+}
+
+static inline int dev_failed(struct bch_dev *ca)
+{
+	return !ca || ca->mi.state == BCH_MEMBER_STATE_failed;
 }
 
 /*
@@ -86,8 +97,16 @@ static inline bool ptr_better(struct bch_fs *c,
 			      const struct extent_ptr_decoded p2)
 {
 	if (likely(!p1.idx && !p2.idx)) {
-		u64 l1 = dev_latency(c, p1.ptr.dev);
-		u64 l2 = dev_latency(c, p2.ptr.dev);
+		struct bch_dev *ca1 = bch2_dev_rcu(c, p1.ptr.dev);
+		struct bch_dev *ca2 = bch2_dev_rcu(c, p2.ptr.dev);
+
+		int failed_delta = dev_failed(ca1) - dev_failed(ca2);
+
+		if (failed_delta)
+			return failed_delta < 0;
+
+		u64 l1 = dev_latency(ca1);
+		u64 l2 = dev_latency(ca2);
 
 		/*
 		 * Square the latencies, to bias more in favor of the faster
@@ -114,8 +133,9 @@ static inline bool ptr_better(struct bch_fs *c,
  * other devices, it will still pick a pointer from avoid.
  */
 int bch2_bkey_pick_read_device(struct bch_fs *c, struct bkey_s_c k,
-			       struct bch_io_failures *failed,
-			       struct extent_ptr_decoded *pick)
+			      struct bch_io_failures *failed,
+			      struct extent_ptr_decoded *pick,
+			      int dev)
 {
 	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
 	const union bch_extent_entry *entry;
@@ -125,6 +145,9 @@ int bch2_bkey_pick_read_device(struct bch_fs *c, struct bkey_s_c k,
 
 	if (k.k->type == KEY_TYPE_error)
 		return -BCH_ERR_key_type_error;
+
+	if (bch2_bkey_extent_ptrs_flags(ptrs) & BCH_EXTENT_poisoned)
+		return -BCH_ERR_extent_poisened;
 
 	rcu_read_lock();
 	bkey_for_each_ptr_decode(k.k, ptrs, p, entry) {
@@ -136,6 +159,10 @@ int bch2_bkey_pick_read_device(struct bch_fs *c, struct bkey_s_c k,
 			ret = 0;
 			break;
 		}
+
+		/* Are we being asked to read from a specific device? */
+		if (dev >= 0 && p.ptr.dev != dev)
+			continue;
 
 		/*
 		 * If there are any dirty pointers it's an error if we can't
@@ -155,7 +182,7 @@ int bch2_bkey_pick_read_device(struct bch_fs *c, struct bkey_s_c k,
 				? f->idx
 				: f->idx + 1;
 
-		if (!p.idx && (!ca || !bch2_dev_is_readable(ca)))
+		if (!p.idx && (!ca || !bch2_dev_is_online(ca)))
 			p.idx++;
 
 		if (!p.idx && p.has_ec && bch2_force_reconstruct_read)
@@ -997,7 +1024,7 @@ static bool want_cached_ptr(struct bch_fs *c, struct bch_io_opts *opts,
 
 	struct bch_dev *ca = bch2_dev_rcu_noerror(c, ptr->dev);
 
-	return ca && bch2_dev_is_readable(ca) && !dev_ptr_stale_rcu(ca, ptr);
+	return ca && bch2_dev_is_healthy(ca) && !dev_ptr_stale_rcu(ca, ptr);
 }
 
 void bch2_extent_ptr_set_cached(struct bch_fs *c,
@@ -1220,6 +1247,10 @@ void bch2_bkey_ptrs_to_text(struct printbuf *out, struct bch_fs *c,
 			bch2_extent_rebalance_to_text(out, c, &entry->rebalance);
 			break;
 
+		case BCH_EXTENT_ENTRY_flags:
+			prt_bitflags(out, bch2_extent_flags_strs, entry->flags.flags);
+			break;
+
 		default:
 			prt_printf(out, "(invalid extent entry %.16llx)", *((u64 *) entry));
 			return;
@@ -1381,6 +1412,11 @@ int bch2_bkey_ptrs_validate(struct bch_fs *c, struct bkey_s_c k,
 #endif
 			break;
 		}
+		case BCH_EXTENT_ENTRY_flags:
+			bkey_fsck_err_on(entry != ptrs.start,
+					 c, extent_flags_not_at_start,
+					 "extent flags entry not at start");
+			break;
 		}
 	}
 
@@ -1447,6 +1483,28 @@ void bch2_ptr_swab(struct bkey_s k)
 	}
 }
 
+int bch2_bkey_extent_flags_set(struct bch_fs *c, struct bkey_i *k, u64 flags)
+{
+	int ret = bch2_request_incompat_feature(c, bcachefs_metadata_version_extent_flags);
+	if (ret)
+		return ret;
+
+	struct bkey_ptrs ptrs = bch2_bkey_ptrs(bkey_i_to_s(k));
+
+	if (ptrs.start != ptrs.end &&
+	    extent_entry_type(ptrs.start) == BCH_EXTENT_ENTRY_flags) {
+		ptrs.start->flags.flags = flags;
+	} else {
+		struct bch_extent_flags f = {
+			.type	= BIT(BCH_EXTENT_ENTRY_flags),
+			.flags	= flags,
+		};
+		__extent_entry_insert(k, ptrs.start, (union bch_extent_entry *) &f);
+	}
+
+	return 0;
+}
+
 /* Generic extent code: */
 
 int bch2_cut_front_s(struct bpos where, struct bkey_s k)
@@ -1492,8 +1550,8 @@ int bch2_cut_front_s(struct bpos where, struct bkey_s k)
 				entry->crc128.offset += sub;
 				break;
 			case BCH_EXTENT_ENTRY_stripe_ptr:
-				break;
 			case BCH_EXTENT_ENTRY_rebalance:
+			case BCH_EXTENT_ENTRY_flags:
 				break;
 			}
 

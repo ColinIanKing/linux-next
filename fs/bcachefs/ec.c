@@ -20,6 +20,7 @@
 #include "io_read.h"
 #include "io_write.h"
 #include "keylist.h"
+#include "lru.h"
 #include "recovery.h"
 #include "replicas.h"
 #include "super-io.h"
@@ -104,6 +105,7 @@ struct ec_bio {
 	struct bch_dev		*ca;
 	struct ec_stripe_buf	*buf;
 	size_t			idx;
+	u64			submit_time;
 	struct bio		bio;
 };
 
@@ -298,10 +300,22 @@ static int mark_stripe_bucket(struct btree_trans *trans,
 	struct bpos bucket = PTR_BUCKET_POS(ca, ptr);
 
 	if (flags & BTREE_TRIGGER_transactional) {
+		struct extent_ptr_decoded p = {
+			.ptr = *ptr,
+			.crc = bch2_extent_crc_unpack(s.k, NULL),
+		};
+		struct bkey_i_backpointer bp;
+		bch2_extent_ptr_to_bp(c, BTREE_ID_stripes, 0, s.s_c, p,
+				      (const union bch_extent_entry *) ptr, &bp);
+
 		struct bkey_i_alloc_v4 *a =
 			bch2_trans_start_alloc_update(trans, bucket, 0);
-		ret = PTR_ERR_OR_ZERO(a) ?:
-			__mark_stripe_bucket(trans, ca, s, ptr_idx, deleting, bucket, &a->v, flags);
+		ret   = PTR_ERR_OR_ZERO(a) ?:
+			__mark_stripe_bucket(trans, ca, s, ptr_idx, deleting, bucket, &a->v, flags) ?:
+			bch2_bucket_backpointer_mod(trans, s.s_c, &bp,
+						    !(flags & BTREE_TRIGGER_overwrite));
+		if (ret)
+			goto err;
 	}
 
 	if (flags & BTREE_TRIGGER_gc) {
@@ -399,6 +413,15 @@ int bch2_trigger_stripe(struct btree_trans *trans,
 	       (new_s->nr_blocks	!= old_s->nr_blocks ||
 		new_s->nr_redundant	!= old_s->nr_redundant));
 
+	if (flags & BTREE_TRIGGER_transactional) {
+		int ret = bch2_lru_change(trans,
+					  BCH_LRU_STRIPE_FRAGMENTATION,
+					  idx,
+					  stripe_lru_pos(old_s),
+					  stripe_lru_pos(new_s));
+		if (ret)
+			return ret;
+	}
 
 	if (flags & (BTREE_TRIGGER_transactional|BTREE_TRIGGER_gc)) {
 		/*
@@ -726,14 +749,15 @@ static void ec_block_endio(struct bio *bio)
 	struct bch_dev *ca = ec_bio->ca;
 	struct closure *cl = bio->bi_private;
 
-	if (bch2_dev_io_err_on(bio->bi_status, ca,
-			       bio_data_dir(bio)
-			       ? BCH_MEMBER_ERROR_write
-			       : BCH_MEMBER_ERROR_read,
-			       "erasure coding %s error: %s",
+	bch2_account_io_completion(ca, bio_data_dir(bio),
+				   ec_bio->submit_time, !bio->bi_status);
+
+	if (bio->bi_status) {
+		bch_err_dev_ratelimited(ca, "erasure coding %s error: %s",
 			       str_write_read(bio_data_dir(bio)),
-			       bch2_blk_status_to_str(bio->bi_status)))
+			       bch2_blk_status_to_str(bio->bi_status));
 		clear_bit(ec_bio->idx, ec_bio->buf->valid);
+	}
 
 	int stale = dev_ptr_stale(ca, ptr);
 	if (stale) {
@@ -796,6 +820,7 @@ static void ec_block_io(struct bch_fs *c, struct ec_stripe_buf *buf,
 		ec_bio->ca			= ca;
 		ec_bio->buf			= buf;
 		ec_bio->idx			= idx;
+		ec_bio->submit_time		= local_clock();
 
 		ec_bio->bio.bi_iter.bi_sector	= ptr->offset + buf->offset + (offset >> 9);
 		ec_bio->bio.bi_end_io		= ec_block_endio;
@@ -1127,62 +1152,46 @@ void bch2_stripes_heap_update(struct bch_fs *c,
 
 static int ec_stripe_delete(struct btree_trans *trans, u64 idx)
 {
-	struct bch_fs *c = trans->c;
 	struct btree_iter iter;
-	struct bkey_s_c k;
-	struct bkey_s_c_stripe s;
-	int ret;
-
-	k = bch2_bkey_get_iter(trans, &iter, BTREE_ID_stripes, POS(0, idx),
-			       BTREE_ITER_intent);
-	ret = bkey_err(k);
+	struct bkey_s_c k = bch2_bkey_get_iter(trans, &iter,
+					       BTREE_ID_stripes, POS(0, idx),
+					       BTREE_ITER_intent);
+	int ret = bkey_err(k);
 	if (ret)
 		goto err;
 
-	if (k.k->type != KEY_TYPE_stripe) {
-		bch2_fs_inconsistent(c, "attempting to delete nonexistent stripe %llu", idx);
-		ret = -EINVAL;
-		goto err;
-	}
-
-	s = bkey_s_c_to_stripe(k);
-	for (unsigned i = 0; i < s.v->nr_blocks; i++)
-		if (stripe_blockcount_get(s.v, i)) {
-			struct printbuf buf = PRINTBUF;
-
-			bch2_bkey_val_to_text(&buf, c, k);
-			bch2_fs_inconsistent(c, "attempting to delete nonempty stripe %s", buf.buf);
-			printbuf_exit(&buf);
-			ret = -EINVAL;
-			goto err;
-		}
-
-	ret = bch2_btree_delete_at(trans, &iter, 0);
+	/*
+	 * We expect write buffer races here
+	 * Important: check stripe_is_open with stripe key locked:
+	 */
+	if (k.k->type == KEY_TYPE_stripe &&
+	    !bch2_stripe_is_open(trans->c, idx) &&
+	    stripe_lru_pos(bkey_s_c_to_stripe(k).v) == 1)
+		ret = bch2_btree_delete_at(trans, &iter, 0);
 err:
 	bch2_trans_iter_exit(trans, &iter);
 	return ret;
 }
 
+/*
+ * XXX
+ * can we kill this and delete stripes from the trigger?
+ */
 static void ec_stripe_delete_work(struct work_struct *work)
 {
 	struct bch_fs *c =
 		container_of(work, struct bch_fs, ec_stripe_delete_work);
 
-	while (1) {
-		mutex_lock(&c->ec_stripes_heap_lock);
-		u64 idx = stripe_idx_to_delete(c);
-		mutex_unlock(&c->ec_stripes_heap_lock);
-
-		if (!idx)
-			break;
-
-		int ret = bch2_trans_commit_do(c, NULL, NULL, BCH_TRANS_COMMIT_no_enospc,
-					ec_stripe_delete(trans, idx));
-		bch_err_fn(c, ret);
-		if (ret)
-			break;
-	}
-
+	bch2_trans_run(c,
+		bch2_btree_write_buffer_tryflush(trans) ?:
+		for_each_btree_key_max_commit(trans, lru_iter, BTREE_ID_lru,
+				lru_pos(BCH_LRU_STRIPE_FRAGMENTATION, 1, 0),
+				lru_pos(BCH_LRU_STRIPE_FRAGMENTATION, 1, LRU_TIME_MAX),
+				0, lru_k,
+				NULL, NULL,
+				BCH_TRANS_COMMIT_no_enospc, ({
+			ec_stripe_delete(trans, lru_k.k->p.offset);
+		})));
 	bch2_write_ref_put(c, BCH_WRITE_REF_stripe_delete);
 }
 
@@ -1380,8 +1389,12 @@ static int ec_stripe_update_bucket(struct btree_trans *trans, struct ec_stripe_b
 		if (bp_k.k->type != KEY_TYPE_backpointer)
 			continue;
 
+		struct bkey_s_c_backpointer bp = bkey_s_c_to_backpointer(bp_k);
+		if (bp.v->btree_id == BTREE_ID_stripes)
+			continue;
+
 		ec_stripe_update_extent(trans, ca, bucket_pos, ptr.gen, s,
-					bkey_s_c_to_backpointer(bp_k), &last_flushed);
+					bp, &last_flushed);
 	}));
 
 	bch2_bkey_buf_exit(&last_flushed, c);
@@ -1527,6 +1540,8 @@ static void ec_stripe_create(struct ec_stripe_new *s)
 	if (ret)
 		goto err;
 err:
+	trace_stripe_create(c, s->idx, ret);
+
 	bch2_disk_reservation_put(c, &s->res);
 
 	for (i = 0; i < v->nr_blocks; i++)
@@ -1968,39 +1983,40 @@ static int new_stripe_alloc_buckets(struct btree_trans *trans,
 	return 0;
 }
 
-static s64 get_existing_stripe(struct bch_fs *c,
-			       struct ec_stripe_head *head)
+static int __get_existing_stripe(struct btree_trans *trans,
+				 struct ec_stripe_head *head,
+				 struct ec_stripe_buf *stripe,
+				 u64 idx)
 {
-	ec_stripes_heap *h = &c->ec_stripes_heap;
-	struct stripe *m;
-	size_t heap_idx;
-	u64 stripe_idx;
-	s64 ret = -1;
+	struct bch_fs *c = trans->c;
 
-	if (may_create_new_stripe(c))
-		return -1;
+	struct btree_iter iter;
+	struct bkey_s_c k = bch2_bkey_get_iter(trans, &iter,
+					  BTREE_ID_stripes, POS(0, idx), 0);
+	int ret = bkey_err(k);
+	if (ret)
+		goto err;
 
-	mutex_lock(&c->ec_stripes_heap_lock);
-	for (heap_idx = 0; heap_idx < h->nr; heap_idx++) {
-		/* No blocks worth reusing, stripe will just be deleted: */
-		if (!h->data[heap_idx].blocks_nonempty)
-			continue;
+	/* We expect write buffer races here */
+	if (k.k->type != KEY_TYPE_stripe)
+		goto out;
 
-		stripe_idx = h->data[heap_idx].idx;
+	struct bkey_s_c_stripe s = bkey_s_c_to_stripe(k);
+	if (stripe_lru_pos(s.v) <= 1)
+		goto out;
 
-		m = genradix_ptr(&c->stripes, stripe_idx);
-
-		if (m->disk_label	== head->disk_label &&
-		    m->algorithm	== head->algo &&
-		    m->nr_redundant	== head->redundancy &&
-		    m->sectors		== head->blocksize &&
-		    m->blocks_nonempty	< m->nr_blocks - m->nr_redundant &&
-		    bch2_try_open_stripe(c, head->s, stripe_idx)) {
-			ret = stripe_idx;
-			break;
-		}
+	if (s.v->disk_label	== head->disk_label &&
+	    s.v->algorithm	== head->algo &&
+	    s.v->nr_redundant	== head->redundancy &&
+	    s.v->sectors	== head->blocksize &&
+	    bch2_try_open_stripe(c, head->s, idx)) {
+		bkey_reassemble(&stripe->key, k);
+		ret = 1;
 	}
-	mutex_unlock(&c->ec_stripes_heap_lock);
+out:
+	bch2_set_btree_iter_dontneed(&iter);
+err:
+	bch2_trans_iter_exit(trans, &iter);
 	return ret;
 }
 
@@ -2052,24 +2068,33 @@ static int __bch2_ec_stripe_head_reuse(struct btree_trans *trans, struct ec_stri
 				       struct ec_stripe_new *s)
 {
 	struct bch_fs *c = trans->c;
-	s64 idx;
-	int ret;
 
 	/*
 	 * If we can't allocate a new stripe, and there's no stripes with empty
 	 * blocks for us to reuse, that means we have to wait on copygc:
 	 */
-	idx = get_existing_stripe(c, h);
-	if (idx < 0)
-		return -BCH_ERR_stripe_alloc_blocked;
+	if (may_create_new_stripe(c))
+		return -1;
 
-	ret = get_stripe_key_trans(trans, idx, &s->existing_stripe);
-	bch2_fs_fatal_err_on(ret && !bch2_err_matches(ret, BCH_ERR_transaction_restart), c,
-			     "reading stripe key: %s", bch2_err_str(ret));
-	if (ret) {
-		bch2_stripe_close(c, s);
-		return ret;
+	struct btree_iter lru_iter;
+	struct bkey_s_c lru_k;
+	int ret = 0;
+
+	for_each_btree_key_max_norestart(trans, lru_iter, BTREE_ID_lru,
+			lru_pos(BCH_LRU_STRIPE_FRAGMENTATION, 2, 0),
+			lru_pos(BCH_LRU_STRIPE_FRAGMENTATION, 2, LRU_TIME_MAX),
+			0, lru_k, ret) {
+		ret = __get_existing_stripe(trans, h, &s->existing_stripe, lru_k.k->p.offset);
+		if (ret)
+			break;
 	}
+	bch2_trans_iter_exit(trans, &lru_iter);
+	if (!ret)
+		ret = -BCH_ERR_stripe_alloc_blocked;
+	if (ret == 1)
+		ret = 0;
+	if (ret)
+		return ret;
 
 	return init_new_stripe_from_existing(c, s);
 }
@@ -2502,4 +2527,41 @@ int bch2_fs_ec_init(struct bch_fs *c)
 {
 	return bioset_init(&c->ec_bioset, 1, offsetof(struct ec_bio, bio),
 			   BIOSET_NEED_BVECS);
+}
+
+static int bch2_check_stripe_to_lru_ref(struct btree_trans *trans,
+					struct bkey_s_c k,
+					struct bkey_buf *last_flushed)
+{
+	if (k.k->type != KEY_TYPE_stripe)
+		return 0;
+
+	struct bkey_s_c_stripe s = bkey_s_c_to_stripe(k);
+
+	u64 lru_idx = stripe_lru_pos(s.v);
+	if (lru_idx) {
+		int ret = bch2_lru_check_set(trans, BCH_LRU_STRIPE_FRAGMENTATION,
+					     k.k->p.offset, lru_idx, k, last_flushed);
+		if (ret)
+			return ret;
+	}
+	return 0;
+}
+
+int bch2_check_stripe_to_lru_refs(struct bch_fs *c)
+{
+	struct bkey_buf last_flushed;
+
+	bch2_bkey_buf_init(&last_flushed);
+	bkey_init(&last_flushed.k->k);
+
+	int ret = bch2_trans_run(c,
+		for_each_btree_key_commit(trans, iter, BTREE_ID_stripes,
+				POS_MIN, BTREE_ITER_prefetch, k,
+				NULL, NULL, BCH_TRANS_COMMIT_no_enospc,
+			bch2_check_stripe_to_lru_ref(trans, k, &last_flushed)));
+
+	bch2_bkey_buf_exit(&last_flushed, c);
+	bch_err_fn(c, ret);
+	return ret;
 }
