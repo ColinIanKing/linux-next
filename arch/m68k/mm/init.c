@@ -66,8 +66,6 @@ void __init paging_init(void)
 	unsigned long end_mem = memory_end & PAGE_MASK;
 	unsigned long max_zone_pfn[MAX_NR_ZONES] = { 0, };
 
-	high_memory = (void *) end_mem;
-
 	empty_zero_page = memblock_alloc_or_panic(PAGE_SIZE, PAGE_SIZE);
 	max_zone_pfn[ZONE_DMA] = end_mem >> PAGE_SHIFT;
 	free_area_init(max_zone_pfn);
@@ -121,7 +119,5 @@ static inline void init_pointer_tables(void)
 
 void __init mem_init(void)
 {
-	/* this will put all memory onto the freelists */
-	memblock_free_all();
 	init_pointer_tables();
 }

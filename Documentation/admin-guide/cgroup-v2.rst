@@ -1311,6 +1311,14 @@ PAGE_SIZE multiple when read back.
 	Caller could retry them differently, return into userspace
 	as -ENOMEM or silently ignore in cases like disk readahead.
 
+  memory.max.effective
+	A read-only single value file which exists on non-root cgroups.
+
+        The effective limit of the cgroup i.e. the minimum memory.max
+        of all ancestors including itself. This is useful for environments
+        where cgroup namespace is being used and the application does not
+        have full view of the hierarchy.
+
   memory.reclaim
 	A write-only nested-keyed file which exists for all cgroups.
 
@@ -1440,7 +1448,10 @@ The following nested keys are defined.
 
 	  anon
 		Amount of memory used in anonymous mappings such as
-		brk(), sbrk(), and mmap(MAP_ANONYMOUS)
+		brk(), sbrk(), and mmap(MAP_ANONYMOUS). Note that
+		some kernel configurations might account complete larger
+		allocations (e.g., THP) if only some, but not all the
+		memory of such an allocation is mapped anymore.
 
 	  file
 		Amount of memory used to cache filesystem data,
@@ -1483,7 +1494,10 @@ The following nested keys are defined.
 		Amount of application memory swapped out to zswap.
 
 	  file_mapped
-		Amount of cached filesystem data mapped with mmap()
+		Amount of cached filesystem data mapped with mmap(). Note
+		that some kernel configurations might account complete
+		larger allocations (e.g., THP) if only some, but not
+		not all the memory of such an allocation is mapped.
 
 	  file_dirty
 		Amount of cached filesystem data that was modified but
@@ -1726,6 +1740,14 @@ The following nested keys are defined.
 	Swap usage hard limit.  If a cgroup's swap usage reaches this
 	limit, anonymous memory of the cgroup will not be swapped out.
 
+  memory.swap.max.effective
+	A read-only single value file which exists on non-root cgroups.
+
+        The effective limit of the cgroup i.e. the minimum memory.swap.max
+        of all ancestors including itself. This is useful for environments
+        where cgroup namespace is being used and the application does not
+        have full view of the hierarchy.
+
   memory.swap.events
 	A read-only flat-keyed file which exists on non-root cgroups.
 	The following entries are defined.  Unless specified
@@ -1765,6 +1787,14 @@ The following nested keys are defined.
 	Zswap usage hard limit. If a cgroup's zswap pool reaches this
 	limit, it will refuse to take any more stores before existing
 	entries fault back in or are written out to disk.
+
+  memory.zswap.max.effective
+	A read-only single value file which exists on non-root cgroups.
+
+        The effective limit of the cgroup i.e. the minimum memory.zswap.max
+        of all ancestors including itself. This is useful for environments
+        where cgroup namespace is being used and the application does not
+        have full view of the hierarchy.
 
   memory.zswap.writeback
 	A read-write single value file. The default value is "1".
