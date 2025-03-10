@@ -1349,11 +1349,11 @@ static int io_estimate_bvec_size(struct iovec *iov, unsigned nr_iovs,
 
 int io_import_reg_vec(int ddir, struct iov_iter *iter,
 			struct io_kiocb *req, struct iou_vec *vec,
-			unsigned nr_iovs, unsigned iovec_off,
-			unsigned issue_flags)
+			unsigned nr_iovs, unsigned issue_flags)
 {
 	struct io_rsrc_node *node;
 	struct io_mapped_ubuf *imu;
+	unsigned iovec_off;
 	struct iovec *iov;
 	unsigned nr_segs;
 
@@ -1366,6 +1366,7 @@ int io_import_reg_vec(int ddir, struct iov_iter *iter,
 	if (!(imu->dir & (1 << ddir)))
 		return -EFAULT;
 
+	iovec_off = vec->nr - nr_iovs;
 	iov = vec->iovec + iovec_off;
 	nr_segs = io_estimate_bvec_size(iov, nr_iovs, imu);
 
@@ -1377,8 +1378,7 @@ int io_import_reg_vec(int ddir, struct iov_iter *iter,
 		nr_segs += nr_iovs;
 	}
 
-	if (WARN_ON_ONCE(iovec_off + nr_iovs != vec->nr) ||
-	    nr_segs > vec->nr) {
+	if (nr_segs > vec->nr) {
 		struct iou_vec tmp_vec = {};
 		int ret;
 
@@ -1396,4 +1396,30 @@ int io_import_reg_vec(int ddir, struct iov_iter *iter,
 	}
 
 	return io_vec_fill_bvec(ddir, iter, imu, iov, nr_iovs, vec);
+}
+
+int io_prep_reg_iovec(struct io_kiocb *req, struct iou_vec *iv,
+		      const struct iovec __user *uvec, size_t uvec_segs)
+{
+	struct iovec *iov;
+	int iovec_off, ret;
+	void *res;
+
+	if (uvec_segs > iv->nr) {
+		ret = io_vec_realloc(iv, uvec_segs);
+		if (ret)
+			return ret;
+		req->flags |= REQ_F_NEED_CLEANUP;
+	}
+
+	/* pad iovec to the right */
+	iovec_off = iv->nr - uvec_segs;
+	iov = iv->iovec + iovec_off;
+	res = iovec_from_user(uvec, uvec_segs, uvec_segs, iov,
+			      io_is_compat(req->ctx));
+	if (IS_ERR(res))
+		return PTR_ERR(res);
+
+	req->flags |= REQ_F_IMPORT_BUFFER;
+	return 0;
 }

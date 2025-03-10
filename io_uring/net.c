@@ -403,9 +403,7 @@ static int io_sendmsg_zc_setup(struct io_kiocb *req, const struct io_uring_sqe *
 	struct io_sr_msg *sr = io_kiocb_to_cmd(req, struct io_sr_msg);
 	struct io_async_msghdr *kmsg = req->async_data;
 	struct user_msghdr msg;
-	int ret, iovec_off;
-	struct iovec *iov;
-	void *res;
+	int ret;
 
 	if (!(sr->flags & IORING_RECVSEND_FIXED_BUF))
 		return io_sendmsg_setup(req, sqe);
@@ -416,24 +414,9 @@ static int io_sendmsg_zc_setup(struct io_kiocb *req, const struct io_uring_sqe *
 	if (unlikely(ret))
 		return ret;
 	sr->msg_control = kmsg->msg.msg_control_user;
-
-	if (msg.msg_iovlen > kmsg->vec.nr || WARN_ON_ONCE(!kmsg->vec.iovec)) {
-		ret = io_vec_realloc(&kmsg->vec, msg.msg_iovlen);
-		if (ret)
-			return ret;
-		req->flags |= REQ_F_NEED_CLEANUP;
-	}
-	iovec_off = kmsg->vec.nr - msg.msg_iovlen;
-	iov = kmsg->vec.iovec + iovec_off;
-
-	res = iovec_from_user(msg.msg_iov, msg.msg_iovlen, kmsg->vec.nr, iov,
-			      io_is_compat(req->ctx));
-	if (IS_ERR(res))
-		return PTR_ERR(res);
-
 	kmsg->msg.msg_iter.nr_segs = msg.msg_iovlen;
-	req->flags |= REQ_F_IMPORT_BUFFER;
-	return ret;
+
+	return io_prep_reg_iovec(req, &kmsg->vec, msg.msg_iov, msg.msg_iovlen);
 }
 
 #define SENDMSG_FLAGS (IORING_RECVSEND_POLL_FIRST | IORING_RECVSEND_BUNDLE)
@@ -898,8 +881,7 @@ static inline bool io_recv_finish(struct io_kiocb *req, int *ret,
 	 */
 	if ((req->flags & REQ_F_APOLL_MULTISHOT) && !mshot_finished &&
 	    io_req_post_cqe(req, *ret, cflags | IORING_CQE_F_MORE)) {
-		int mshot_retry_ret = IOU_ISSUE_SKIP_COMPLETE;
-
+		*ret = IOU_RETRY;
 		io_mshot_prep_retry(req, kmsg);
 		/* Known not-empty or unknown state, retry */
 		if (cflags & IORING_CQE_F_SOCK_NONEMPTY || kmsg->msg.msg_inq < 0) {
@@ -907,23 +889,16 @@ static inline bool io_recv_finish(struct io_kiocb *req, int *ret,
 				return false;
 			/* mshot retries exceeded, force a requeue */
 			sr->nr_multishot_loops = 0;
-			mshot_retry_ret = IOU_REQUEUE;
+			if (issue_flags & IO_URING_F_MULTISHOT)
+				*ret = IOU_REQUEUE;
 		}
-		if (issue_flags & IO_URING_F_MULTISHOT)
-			*ret = mshot_retry_ret;
-		else
-			*ret = -EAGAIN;
 		return true;
 	}
 
 	/* Finish the request / stop multishot. */
 finish:
 	io_req_set_res(req, *ret, cflags);
-
-	if (issue_flags & IO_URING_F_MULTISHOT)
-		*ret = IOU_STOP_MULTISHOT;
-	else
-		*ret = IOU_OK;
+	*ret = IOU_COMPLETE;
 	io_req_msg_cleanup(req, issue_flags);
 	return true;
 }
@@ -1070,16 +1045,15 @@ retry_multishot:
 
 	if (ret < min_ret) {
 		if (ret == -EAGAIN && force_nonblock) {
-			if (issue_flags & IO_URING_F_MULTISHOT) {
+			if (issue_flags & IO_URING_F_MULTISHOT)
 				io_kbuf_recycle(req, issue_flags);
-				return IOU_ISSUE_SKIP_COMPLETE;
-			}
-			return -EAGAIN;
+
+			return IOU_RETRY;
 		}
 		if (ret > 0 && io_net_retry(sock, flags)) {
 			sr->done_io += ret;
 			req->flags |= REQ_F_BL_NO_RECYCLE;
-			return -EAGAIN;
+			return IOU_RETRY;
 		}
 		if (ret == -ERESTARTSYS)
 			ret = -EINTR;
@@ -1207,12 +1181,10 @@ retry_multishot:
 	ret = sock_recvmsg(sock, &kmsg->msg, flags);
 	if (ret < min_ret) {
 		if (ret == -EAGAIN && force_nonblock) {
-			if (issue_flags & IO_URING_F_MULTISHOT) {
+			if (issue_flags & IO_URING_F_MULTISHOT)
 				io_kbuf_recycle(req, issue_flags);
-				return IOU_ISSUE_SKIP_COMPLETE;
-			}
 
-			return -EAGAIN;
+			return IOU_RETRY;
 		}
 		if (ret > 0 && io_net_retry(sock, flags)) {
 			sr->len -= ret;
@@ -1295,9 +1267,7 @@ int io_recvzc(struct io_kiocb *req, unsigned int issue_flags)
 	if (len && zc->len == 0) {
 		io_req_set_res(req, 0, 0);
 
-		if (issue_flags & IO_URING_F_MULTISHOT)
-			return IOU_STOP_MULTISHOT;
-		return IOU_OK;
+		return IOU_COMPLETE;
 	}
 	if (unlikely(ret <= 0) && ret != -EAGAIN) {
 		if (ret == -ERESTARTSYS)
@@ -1307,15 +1277,9 @@ int io_recvzc(struct io_kiocb *req, unsigned int issue_flags)
 
 		req_set_fail(req);
 		io_req_set_res(req, ret, 0);
-
-		if (issue_flags & IO_URING_F_MULTISHOT)
-			return IOU_STOP_MULTISHOT;
-		return IOU_OK;
+		return IOU_COMPLETE;
 	}
-
-	if (issue_flags & IO_URING_F_MULTISHOT)
-		return IOU_ISSUE_SKIP_COMPLETE;
-	return -EAGAIN;
+	return IOU_RETRY;
 }
 
 void io_send_zc_cleanup(struct io_kiocb *req)
@@ -1549,12 +1513,10 @@ int io_sendmsg_zc(struct io_kiocb *req, unsigned int issue_flags)
 
 	if (req->flags & REQ_F_IMPORT_BUFFER) {
 		unsigned uvec_segs = kmsg->msg.msg_iter.nr_segs;
-		unsigned iovec_off = kmsg->vec.nr - uvec_segs;
 		int ret;
 
 		ret = io_import_reg_vec(ITER_SOURCE, &kmsg->msg.msg_iter, req,
-					&kmsg->vec, uvec_segs, iovec_off,
-					issue_flags);
+					&kmsg->vec, uvec_segs, issue_flags);
 		if (unlikely(ret))
 			return ret;
 		kmsg->msg.sg_from_iter = io_sg_from_iter;
@@ -1692,16 +1654,9 @@ retry:
 			put_unused_fd(fd);
 		ret = PTR_ERR(file);
 		if (ret == -EAGAIN && force_nonblock &&
-		    !(accept->iou_flags & IORING_ACCEPT_DONTWAIT)) {
-			/*
-			 * if it's multishot and polled, we don't need to
-			 * return EAGAIN to arm the poll infra since it
-			 * has already been done
-			 */
-			if (issue_flags & IO_URING_F_MULTISHOT)
-				return IOU_ISSUE_SKIP_COMPLETE;
-			return ret;
-		}
+		    !(accept->iou_flags & IORING_ACCEPT_DONTWAIT))
+			return IOU_RETRY;
+
 		if (ret == -ERESTARTSYS)
 			ret = -EINTR;
 	} else if (!fixed) {
@@ -1720,17 +1675,13 @@ retry:
 	    io_req_post_cqe(req, ret, cflags | IORING_CQE_F_MORE)) {
 		if (cflags & IORING_CQE_F_SOCK_NONEMPTY || arg.is_empty == -1)
 			goto retry;
-		if (issue_flags & IO_URING_F_MULTISHOT)
-			return IOU_ISSUE_SKIP_COMPLETE;
-		return -EAGAIN;
+		return IOU_RETRY;
 	}
 
 	io_req_set_res(req, ret, cflags);
 	if (ret < 0)
 		req_set_fail(req);
-	if (!(issue_flags & IO_URING_F_MULTISHOT))
-		return IOU_OK;
-	return IOU_STOP_MULTISHOT;
+	return IOU_COMPLETE;
 }
 
 int io_socket_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
