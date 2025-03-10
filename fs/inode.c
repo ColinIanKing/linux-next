@@ -327,7 +327,17 @@ static void i_callback(struct rcu_head *head)
 		free_inode_nonrcu(inode);
 }
 
-static struct inode *alloc_inode(struct super_block *sb)
+/**
+ *	alloc_inode 	- obtain an inode
+ *	@sb: superblock
+ *
+ *	Allocates a new inode for given superblock.
+ *	Inode wont be chained in superblock s_inodes list
+ *	This means :
+ *	- fs can't be unmount
+ *	- quotas, fsnotify, writeback can't work
+ */
+struct inode *alloc_inode(struct super_block *sb)
 {
 	const struct super_operations *ops = sb->s_op;
 	struct inode *inode;
@@ -900,46 +910,6 @@ again:
 }
 EXPORT_SYMBOL_GPL(evict_inodes);
 
-/**
- * invalidate_inodes	- attempt to free all inodes on a superblock
- * @sb:		superblock to operate on
- *
- * Attempts to free all inodes (including dirty inodes) for a given superblock.
- */
-void invalidate_inodes(struct super_block *sb)
-{
-	struct inode *inode, *next;
-	LIST_HEAD(dispose);
-
-again:
-	spin_lock(&sb->s_inode_list_lock);
-	list_for_each_entry_safe(inode, next, &sb->s_inodes, i_sb_list) {
-		spin_lock(&inode->i_lock);
-		if (inode->i_state & (I_NEW | I_FREEING | I_WILL_FREE)) {
-			spin_unlock(&inode->i_lock);
-			continue;
-		}
-		if (atomic_read(&inode->i_count)) {
-			spin_unlock(&inode->i_lock);
-			continue;
-		}
-
-		inode->i_state |= I_FREEING;
-		inode_lru_list_del(inode);
-		spin_unlock(&inode->i_lock);
-		list_add(&inode->i_lru, &dispose);
-		if (need_resched()) {
-			spin_unlock(&sb->s_inode_list_lock);
-			cond_resched();
-			dispose_list(&dispose);
-			goto again;
-		}
-	}
-	spin_unlock(&sb->s_inode_list_lock);
-
-	dispose_list(&dispose);
-}
-
 /*
  * Isolate the inode from the LRU in preparation for freeing it.
  *
@@ -1160,21 +1130,6 @@ unsigned int get_next_ino(void)
 EXPORT_SYMBOL(get_next_ino);
 
 /**
- *	new_inode_pseudo 	- obtain an inode
- *	@sb: superblock
- *
- *	Allocates a new inode for given superblock.
- *	Inode wont be chained in superblock s_inodes list
- *	This means :
- *	- fs can't be unmount
- *	- quotas, fsnotify, writeback can't work
- */
-struct inode *new_inode_pseudo(struct super_block *sb)
-{
-	return alloc_inode(sb);
-}
-
-/**
  *	new_inode 	- obtain an inode
  *	@sb: superblock
  *
@@ -1190,7 +1145,7 @@ struct inode *new_inode(struct super_block *sb)
 {
 	struct inode *inode;
 
-	inode = new_inode_pseudo(sb);
+	inode = alloc_inode(sb);
 	if (inode)
 		inode_sb_list_add(inode);
 	return inode;
@@ -2953,3 +2908,18 @@ umode_t mode_strip_sgid(struct mnt_idmap *idmap,
 	return mode & ~S_ISGID;
 }
 EXPORT_SYMBOL(mode_strip_sgid);
+
+#ifdef CONFIG_DEBUG_VFS
+/*
+ * Dump an inode.
+ *
+ * TODO: add a proper inode dumping routine, this is a stub to get debug off the
+ * ground.
+ */
+void dump_inode(struct inode *inode, const char *reason)
+{
+       pr_warn("%s encountered for inode %px", reason, inode);
+}
+
+EXPORT_SYMBOL(dump_inode);
+#endif
