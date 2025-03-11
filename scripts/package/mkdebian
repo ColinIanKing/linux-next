@@ -96,6 +96,14 @@ set_debarch() {
 # Create debian/source/ if it is a source package build
 gen_source ()
 {
+	# The Debian Policy requires -debian_revision part in the version for a
+	# non-native package. Since the source format 3.0 (quilt) is used here,
+	# a hyphen is required in the version.
+	if [ "${KDEB_PKGVERSION:+set}" ] && ! echo "${KDEB_PKGVERSION}" | grep -- '-..*'; then
+		echo "error: KDEB_PKGVERSION must include a hyphen to create a source package" >&2
+		exit 1
+	fi
+
 	mkdir -p debian/source
 
 	echo "3.0 (quilt)" > debian/source/format
