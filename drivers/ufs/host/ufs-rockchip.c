@@ -171,7 +171,7 @@ static int ufs_rockchip_common_init(struct ufs_hba *hba)
 				"failed to get reset gpio\n");
 
 	err = devm_clk_bulk_get_all_enabled(dev, &host->clks);
-	if (err)
+	if (err < 0)
 		return dev_err_probe(dev, err, "failed to enable clocks\n");
 
 	host->hba = hba;
@@ -265,7 +265,7 @@ static int ufs_rockchip_runtime_suspend(struct device *dev)
 	clk_disable_unprepare(host->ref_out_clk);
 
 	/* Do not power down the genpd if rpm_lvl is less than level 5 */
-	dev_pm_genpd_rpm_always_on(dev, hba->rpm_lvl < UFS_PM_LVL_5 ? true : false);
+	dev_pm_genpd_rpm_always_on(dev, hba->rpm_lvl < UFS_PM_LVL_5);
 
 	return ufshcd_runtime_suspend(dev);
 }
@@ -307,7 +307,7 @@ static int ufs_rockchip_system_suspend(struct device *dev)
 
 	err = ufshcd_system_suspend(dev);
 	if (err) {
-		dev_err(hba->dev, "UFSHCD system susped failed %d\n", err);
+		dev_err(hba->dev, "UFSHCD system suspend failed %d\n", err);
 		return err;
 	}
 
