@@ -87,6 +87,7 @@ void __init disable_tracing_selftest(const char *reason)
 static struct trace_iterator *tracepoint_print_iter;
 int tracepoint_printk;
 static bool tracepoint_printk_stop_on_boot __initdata;
+static bool traceoff_after_boot __initdata;
 static DEFINE_STATIC_KEY_FALSE(tracepoint_printk_key);
 
 /* For tracers that don't implement custom flags */
@@ -329,6 +330,13 @@ static int __init set_tracepoint_printk_stop(char *str)
 	return 1;
 }
 __setup("tp_printk_stop_on_boot", set_tracepoint_printk_stop);
+
+static int __init set_traceoff_after_boot(char *str)
+{
+	traceoff_after_boot = true;
+	return 1;
+}
+__setup("traceoff_after_boot", set_traceoff_after_boot);
 
 unsigned long long ns2usecs(u64 nsec)
 {
@@ -2878,19 +2886,29 @@ trace_buffer_unlock_commit_nostack(struct trace_buffer *buffer,
 
 void
 trace_function(struct trace_array *tr, unsigned long ip, unsigned long
-	       parent_ip, unsigned int trace_ctx)
+	       parent_ip, unsigned int trace_ctx, struct ftrace_regs *fregs)
 {
 	struct trace_buffer *buffer = tr->array_buffer.buffer;
 	struct ring_buffer_event *event;
 	struct ftrace_entry *entry;
+	int size = sizeof(*entry);
 
-	event = __trace_buffer_lock_reserve(buffer, TRACE_FN, sizeof(*entry),
+	size += FTRACE_REGS_MAX_ARGS * !!fregs * sizeof(long);
+
+	event = __trace_buffer_lock_reserve(buffer, TRACE_FN, size,
 					    trace_ctx);
 	if (!event)
 		return;
 	entry	= ring_buffer_event_data(event);
 	entry->ip			= ip;
 	entry->parent_ip		= parent_ip;
+
+#ifdef CONFIG_HAVE_FUNCTION_ARG_ACCESS_API
+	if (fregs) {
+		for (int i = 0; i < FTRACE_REGS_MAX_ARGS; i++)
+			entry->args[i] = ftrace_regs_get_argument(fregs, i);
+	}
+#endif
 
 	if (static_branch_unlikely(&trace_function_exports_enabled))
 		ftrace_exports(event, TRACE_EXPORT_FUNCTION);
@@ -9284,6 +9302,9 @@ static void free_trace_buffers(struct trace_array *tr)
 #ifdef CONFIG_TRACER_MAX_TRACE
 	free_trace_buffer(&tr->max_buffer);
 #endif
+
+	if (tr->range_addr_start)
+		vunmap((void *)tr->range_addr_start);
 }
 
 static void init_trace_flags_index(struct trace_array *tr)
@@ -9445,6 +9466,7 @@ trace_array_create_systems(const char *name, const char *systems,
 	free_cpumask_var(tr->pipe_cpumask);
 	free_cpumask_var(tr->tracing_cpumask);
 	kfree_const(tr->system_names);
+	kfree(tr->range_name);
 	kfree(tr->name);
 	kfree(tr);
 
@@ -9570,6 +9592,11 @@ static int __remove_instance(struct trace_array *tr)
 	free_percpu(tr->last_func_repeats);
 	free_trace_buffers(tr);
 	clear_tracing_err_log(tr);
+
+	if (tr->range_name) {
+		reserve_mem_release_by_name(tr->range_name);
+		kfree(tr->range_name);
+	}
 
 	for (i = 0; i < tr->nr_topts; i++) {
 		kfree(tr->topts[i].topts);
@@ -10368,6 +10395,7 @@ __init static void enable_instances(void)
 		bool traceoff = false;
 		char *flag_delim;
 		char *addr_delim;
+		char *rname __free(kfree) = NULL;
 
 		tok = strsep(&curr_str, ",");
 
@@ -10424,6 +10452,7 @@ __init static void enable_instances(void)
 				pr_warn("Failed to map boot instance %s to %s\n", name, tok);
 				continue;
 			}
+			rname = kstrdup(tok, GFP_KERNEL);
 		}
 
 		if (start) {
@@ -10460,7 +10489,7 @@ __init static void enable_instances(void)
 		 */
 		if (start) {
 			tr->flags |= TRACE_ARRAY_FL_BOOT;
-			tr->ref++;
+			tr->range_name = no_free_ptr(rname);
 		}
 
 		while ((tok = strsep(&curr_str, ","))) {
@@ -10703,6 +10732,9 @@ __init static int late_trace_init(void)
 		static_key_disable(&tracepoint_printk_key.key);
 		tracepoint_printk = 0;
 	}
+
+	if (traceoff_after_boot)
+		tracing_off();
 
 	tracing_set_default_clock();
 	clear_boot_tracer();
