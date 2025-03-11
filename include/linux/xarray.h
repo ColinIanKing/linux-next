@@ -1562,7 +1562,6 @@ int xas_get_order(struct xa_state *xas);
 void xas_split(struct xa_state *, void *entry, unsigned int order);
 void xas_split_alloc(struct xa_state *, void *entry, unsigned int order, gfp_t);
 void xas_try_split(struct xa_state *xas, void *entry, unsigned int order);
-unsigned int xas_try_split_min_order(unsigned int order);
 #else
 static inline int xa_get_order(struct xarray *xa, unsigned long index)
 {
@@ -1589,12 +1588,6 @@ static inline void xas_try_split(struct xa_state *xas, void *entry,
 		unsigned int order)
 {
 }
-
-static inline unsigned int xas_try_split_min_order(unsigned int order)
-{
-	return 0;
-}
-
 #endif
 
 /**
