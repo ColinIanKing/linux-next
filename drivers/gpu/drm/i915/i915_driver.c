@@ -46,7 +46,6 @@
 #include <drm/drm_probe_helper.h>
 
 #include "display/i9xx_display_sr.h"
-#include "display/intel_acpi.h"
 #include "display/intel_bw.h"
 #include "display/intel_cdclk.h"
 #include "display/intel_crtc.h"
@@ -657,8 +656,6 @@ static void i915_driver_register(struct drm_i915_private *dev_priv)
 	intel_power_domains_enable(display);
 	intel_runtime_pm_enable(&dev_priv->runtime_pm);
 
-	intel_register_dsm_handler();
-
 	if (i915_switcheroo_register(dev_priv))
 		drm_err(&dev_priv->drm, "Failed to register vga switcheroo!\n");
 }
@@ -674,8 +671,6 @@ static void i915_driver_unregister(struct drm_i915_private *dev_priv)
 	unsigned int i;
 
 	i915_switcheroo_unregister(dev_priv);
-
-	intel_unregister_dsm_handler();
 
 	intel_runtime_pm_disable(&dev_priv->runtime_pm);
 	intel_power_domains_disable(display);
@@ -1130,7 +1125,7 @@ static int i915_drm_suspend_late(struct drm_device *dev, bool hibernation)
 	 * leave the device in D0 on those platforms and hope the BIOS will
 	 * power down the device properly. The issue was seen on multiple old
 	 * GENs with different BIOS vendors, so having an explicit blacklist
-	 * is inpractical; apply the workaround on everything pre GEN6. The
+	 * is impractical; apply the workaround on everything pre GEN6. The
 	 * platforms where the issue was seen:
 	 * Lenovo Thinkpad X301, X61s, X60, T60, X41
 	 * Fujitsu FSC S7110
