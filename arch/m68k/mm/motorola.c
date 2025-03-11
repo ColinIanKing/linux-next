@@ -472,8 +472,6 @@ void __init paging_init(void)
 	module_fixup(NULL, __start_fixup, __stop_fixup);
 	flush_icache();
 
-	high_memory = phys_to_virt(max_addr) + 1;
-
 	min_low_pfn = availmem >> PAGE_SHIFT;
 	max_pfn = max_low_pfn = (max_addr >> PAGE_SHIFT) + 1;
 
