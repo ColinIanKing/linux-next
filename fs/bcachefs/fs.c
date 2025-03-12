@@ -698,6 +698,23 @@ static struct dentry *bch2_lookup(struct inode *vdir, struct dentry *dentry,
 	if (IS_ERR(inode))
 		inode = NULL;
 
+#ifdef CONFIG_UNICODE
+	if (!inode && IS_CASEFOLDED(vdir)) {
+		/*
+		 * Do not cache a negative dentry in casefolded directories
+		 * as it would need to be invalidated in the following situation:
+		 * - Lookup file "blAH" in a casefolded directory
+		 * - Creation of file "BLAH" in a casefolded directory
+		 * - Lookup file "blAH" in a casefolded directory
+		 * which would fail if we had a negative dentry.
+		 *
+		 * We should come back to this when VFS has a method to handle
+		 * this edgecase.
+		 */
+		return NULL;
+	}
+#endif
+
 	return d_splice_alias(&inode->v, dentry);
 }
 
@@ -1802,7 +1819,8 @@ static void bch2_vfs_inode_init(struct btree_trans *trans,
 		break;
 	}
 
-	mapping_set_large_folios(inode->v.i_mapping);
+	mapping_set_folio_min_order(inode->v.i_mapping,
+				    get_order(trans->c->opts.block_size));
 }
 
 static void bch2_free_inode(struct inode *vinode)
@@ -2200,9 +2218,10 @@ static int bch2_fs_get_tree(struct fs_context *fc)
 
 	bch2_opts_apply(&c->opts, opts);
 
-	ret = bch2_fs_start(c);
-	if (ret)
-		goto err_stop_fs;
+	/*
+	 * need to initialise sb and set c->vfs_sb _before_ starting fs,
+	 * for blk_holder_ops
+	 */
 
 	sb = sget(fc->fs_type, NULL, bch2_set_super, fc->sb_flags|SB_NOSEC, c);
 	ret = PTR_ERR_OR_ZERO(sb);
@@ -2263,6 +2282,10 @@ got_sb:
 #endif
 
 	sb->s_shrink->seeks = 0;
+
+	ret = bch2_fs_start(c);
+	if (ret)
+		goto err_put_super;
 
 	vinode = bch2_vfs_inode_get(c, BCACHEFS_ROOT_SUBVOL_INUM);
 	ret = PTR_ERR_OR_ZERO(vinode);
