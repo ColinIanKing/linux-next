@@ -1608,6 +1608,11 @@ static int xhci_urb_enqueue(struct usb_hcd *hcd, struct urb *urb, gfp_t mem_flag
 		goto free_priv;
 	}
 
+	/* Class driver might not be aware ep halted due to async URB giveback */
+	if (*ep_state & EP_STALLED)
+		dev_dbg(&urb->dev->dev, "URB %p queued before clearing halt\n",
+			urb);
+
 	switch (usb_endpoint_type(&urb->ep->desc)) {
 
 	case USB_ENDPOINT_XFER_CONTROL:
@@ -3206,6 +3211,7 @@ static void xhci_endpoint_reset(struct usb_hcd *hcd,
 		return;
 
 	ep = &vdev->eps[ep_index];
+	ep->ep_state &= ~EP_STALLED;
 
 	/* Bail out if toggle is already being cleared by a endpoint reset */
 	spin_lock_irqsave(&xhci->lock, flags);
@@ -4759,8 +4765,8 @@ static u16 xhci_calculate_u1_timeout(struct xhci_hcd *xhci,
 	 */
 	if (timeout_ns <= USB3_LPM_U1_MAX_TIMEOUT)
 		return timeout_ns;
-	dev_dbg(&udev->dev, "Hub-initiated U1 disabled "
-			"due to long timeout %llu ms\n", timeout_ns);
+	dev_dbg(&udev->dev, "Hub-initiated U1 disabled due to long timeout %lluus\n",
+		timeout_ns);
 	return xhci_get_timeout_no_hub_lpm(udev, USB3_LPM_U1);
 }
 
@@ -4817,8 +4823,8 @@ static u16 xhci_calculate_u2_timeout(struct xhci_hcd *xhci,
 	 */
 	if (timeout_ns <= USB3_LPM_U2_MAX_TIMEOUT)
 		return timeout_ns;
-	dev_dbg(&udev->dev, "Hub-initiated U2 disabled "
-			"due to long timeout %llu ms\n", timeout_ns);
+	dev_dbg(&udev->dev, "Hub-initiated U2 disabled due to long timeout %lluus\n",
+		timeout_ns * 256);
 	return xhci_get_timeout_no_hub_lpm(udev, USB3_LPM_U2);
 }
 
