@@ -250,7 +250,7 @@ void tcp_select_initial_window(const struct sock *sk, int __space, __u32 mss,
 	WRITE_ONCE(*__window_clamp,
 		   min_t(__u32, U16_MAX << (*rcv_wscale), window_clamp));
 }
-EXPORT_SYMBOL(tcp_select_initial_window);
+EXPORT_IPV6_MOD(tcp_select_initial_window);
 
 /* Chose a new window to advertise, update state in tcp_sock for the
  * socket, and return result with RFC1323 scaling applied.  The return
@@ -525,6 +525,7 @@ static void bpf_skops_hdr_opt_len(struct sock *sk, struct sk_buff *skb,
 		sock_owned_by_me(sk);
 
 		sock_ops.is_fullsock = 1;
+		sock_ops.is_locked_tcp_sock = 1;
 		sock_ops.sk = sk;
 	}
 
@@ -570,6 +571,7 @@ static void bpf_skops_write_hdr_opt(struct sock *sk, struct sk_buff *skb,
 		sock_owned_by_me(sk);
 
 		sock_ops.is_fullsock = 1;
+		sock_ops.is_locked_tcp_sock = 1;
 		sock_ops.sk = sk;
 	}
 
@@ -941,7 +943,13 @@ static unsigned int tcp_synack_options(const struct sock *sk,
 		opts->options |= OPTION_TS;
 		opts->tsval = tcp_skb_timestamp_ts(tcp_rsk(req)->req_usec_ts, skb) +
 			      tcp_rsk(req)->ts_off;
-		opts->tsecr = READ_ONCE(req->ts_recent);
+		if (!tcp_rsk(req)->snt_tsval_first) {
+			if (!opts->tsval)
+				opts->tsval = ~0U;
+			tcp_rsk(req)->snt_tsval_first = opts->tsval;
+		}
+		WRITE_ONCE(tcp_rsk(req)->snt_tsval_last, opts->tsval);
+		opts->tsecr = req->ts_recent;
 		remaining -= TCPOLEN_TSTAMP_ALIGNED;
 	}
 	if (likely(ireq->sack_ok)) {
@@ -1171,7 +1179,7 @@ void tcp_release_cb(struct sock *sk)
 	if ((flags & TCPF_ACK_DEFERRED) && inet_csk_ack_scheduled(sk))
 		tcp_send_ack(sk);
 }
-EXPORT_SYMBOL(tcp_release_cb);
+EXPORT_IPV6_MOD(tcp_release_cb);
 
 void __init tcp_tasklet_init(void)
 {
@@ -1783,7 +1791,7 @@ int tcp_mtu_to_mss(struct sock *sk, int pmtu)
 	return __tcp_mtu_to_mss(sk, pmtu) -
 	       (tcp_sk(sk)->tcp_header_len - sizeof(struct tcphdr));
 }
-EXPORT_SYMBOL(tcp_mtu_to_mss);
+EXPORT_IPV6_MOD(tcp_mtu_to_mss);
 
 /* Inverse of above */
 int tcp_mss_to_mtu(struct sock *sk, int mss)
@@ -1813,7 +1821,6 @@ void tcp_mtup_init(struct sock *sk)
 	if (icsk->icsk_mtup.enabled)
 		icsk->icsk_mtup.probe_timestamp = tcp_jiffies32;
 }
-EXPORT_SYMBOL(tcp_mtup_init);
 
 /* This function synchronize snd mss to current pmtu/exthdr set.
 
@@ -1857,7 +1864,7 @@ unsigned int tcp_sync_mss(struct sock *sk, u32 pmtu)
 
 	return mss_now;
 }
-EXPORT_SYMBOL(tcp_sync_mss);
+EXPORT_IPV6_MOD(tcp_sync_mss);
 
 /* Compute the current effective MSS, taking SACKs and IP options,
  * and even PMTU discovery events into account.
@@ -2911,7 +2918,7 @@ bool tcp_schedule_loss_probe(struct sock *sk, bool advancing_rto)
 	if (rto_delta_us > 0)
 		timeout = min_t(u32, timeout, usecs_to_jiffies(rto_delta_us));
 
-	tcp_reset_xmit_timer(sk, ICSK_TIME_LOSS_PROBE, timeout, TCP_RTO_MAX);
+	tcp_reset_xmit_timer(sk, ICSK_TIME_LOSS_PROBE, timeout, true);
 	return true;
 }
 
@@ -3545,8 +3552,7 @@ void tcp_xmit_retransmit_queue(struct sock *sk)
 	}
 	if (rearm_timer)
 		tcp_reset_xmit_timer(sk, ICSK_TIME_RETRANS,
-				     inet_csk(sk)->icsk_rto,
-				     TCP_RTO_MAX);
+				     inet_csk(sk)->icsk_rto, true);
 }
 
 /* We allow to exceed memory limits for FIN packets to expedite
@@ -3853,7 +3859,7 @@ struct sk_buff *tcp_make_synack(const struct sock *sk, struct dst_entry *dst,
 
 	return skb;
 }
-EXPORT_SYMBOL(tcp_make_synack);
+EXPORT_IPV6_MOD(tcp_make_synack);
 
 static void tcp_ca_dst_init(struct sock *sk, const struct dst_entry *dst)
 {
@@ -4163,8 +4169,8 @@ int tcp_connect(struct sock *sk)
 	TCP_INC_STATS(sock_net(sk), TCP_MIB_ACTIVEOPENS);
 
 	/* Timer for repeating the SYN until an answer. */
-	inet_csk_reset_xmit_timer(sk, ICSK_TIME_RETRANS,
-				  inet_csk(sk)->icsk_rto, TCP_RTO_MAX);
+	tcp_reset_xmit_timer(sk, ICSK_TIME_RETRANS,
+			     inet_csk(sk)->icsk_rto, false);
 	return 0;
 }
 EXPORT_SYMBOL(tcp_connect);
@@ -4253,11 +4259,11 @@ void __tcp_send_ack(struct sock *sk, u32 rcv_nxt)
 		unsigned long delay;
 
 		delay = TCP_DELACK_MAX << icsk->icsk_ack.retry;
-		if (delay < TCP_RTO_MAX)
+		if (delay < tcp_rto_max(sk))
 			icsk->icsk_ack.retry++;
 		inet_csk_schedule_ack(sk);
 		icsk->icsk_ack.ato = TCP_ATO_MIN;
-		inet_csk_reset_xmit_timer(sk, ICSK_TIME_DACK, delay, TCP_RTO_MAX);
+		tcp_reset_xmit_timer(sk, ICSK_TIME_DACK, delay, false);
 		return;
 	}
 
@@ -4393,7 +4399,7 @@ void tcp_send_probe0(struct sock *sk)
 	if (err <= 0) {
 		if (icsk->icsk_backoff < READ_ONCE(net->ipv4.sysctl_tcp_retries2))
 			icsk->icsk_backoff++;
-		timeout = tcp_probe0_when(sk, TCP_RTO_MAX);
+		timeout = tcp_probe0_when(sk, tcp_rto_max(sk));
 	} else {
 		/* If packet was not sent due to local congestion,
 		 * Let senders fight for local resources conservatively.
@@ -4402,7 +4408,7 @@ void tcp_send_probe0(struct sock *sk)
 	}
 
 	timeout = tcp_clamp_probe0_to_user_timeout(sk, timeout);
-	tcp_reset_xmit_timer(sk, ICSK_TIME_PROBE0, timeout, TCP_RTO_MAX);
+	tcp_reset_xmit_timer(sk, ICSK_TIME_PROBE0, timeout, true);
 }
 
 int tcp_rtx_synack(const struct sock *sk, struct request_sock *req)
@@ -4430,4 +4436,4 @@ int tcp_rtx_synack(const struct sock *sk, struct request_sock *req)
 	}
 	return res;
 }
-EXPORT_SYMBOL(tcp_rtx_synack);
+EXPORT_IPV6_MOD(tcp_rtx_synack);
