@@ -115,7 +115,6 @@ static void __init sun3_bootmem_alloc(unsigned long memory_start,
 
 	max_pfn = num_pages = __pa(memory_end) >> PAGE_SHIFT;
 
-	high_memory = (void *)memory_end;
 	availmem = memory_start;
 
 	m68k_setup_node(0);
