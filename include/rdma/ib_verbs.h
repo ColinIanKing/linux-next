@@ -519,6 +519,23 @@ enum ib_port_state {
 	IB_PORT_ACTIVE_DEFER	= 5
 };
 
+static inline const char *__attribute_const__
+ib_port_state_to_str(enum ib_port_state state)
+{
+	const char * const states[] = {
+		[IB_PORT_NOP] = "NOP",
+		[IB_PORT_DOWN] = "DOWN",
+		[IB_PORT_INIT] = "INIT",
+		[IB_PORT_ARMED] = "ARMED",
+		[IB_PORT_ACTIVE] = "ACTIVE",
+		[IB_PORT_ACTIVE_DEFER] = "ACTIVE_DEFER",
+	};
+
+	if (state < ARRAY_SIZE(states))
+		return states[state];
+	return "UNKNOWN";
+}
+
 enum ib_port_phys_state {
 	IB_PORT_PHYS_STATE_SLEEP = 1,
 	IB_PORT_PHYS_STATE_POLLING = 2,
@@ -1513,6 +1530,7 @@ struct ib_ucontext {
 	struct ib_uverbs_file  *ufile;
 
 	struct ib_rdmacg_object	cg_obj;
+	u64 enabled_caps;
 	/*
 	 * Implementation details of the RDMA core, don't use in drivers:
 	 */
@@ -2750,6 +2768,7 @@ struct ib_device {
 	 * It is a NULL terminated array.
 	 */
 	const struct attribute_group	*groups[4];
+	u8				hw_stats_attr_index;
 
 	u64			     uverbs_cmd_mask;
 
