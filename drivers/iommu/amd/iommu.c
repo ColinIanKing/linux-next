@@ -868,7 +868,7 @@ static void iommu_print_event(struct amd_iommu *iommu, void *__evt)
 	int type, devid, flags, tag;
 	volatile u32 *event = __evt;
 	int count = 0;
-	u64 address;
+	u64 address, ctrl;
 	u32 pasid;
 
 retry:
@@ -878,6 +878,7 @@ retry:
 		  (event[1] & EVENT_DOMID_MASK_LO);
 	flags   = (event[1] >> EVENT_FLAGS_SHIFT) & EVENT_FLAGS_MASK;
 	address = (u64)(((u64)event[3]) << 32) | event[2];
+	ctrl    = readq(iommu->mmio_base + MMIO_CONTROL_OFFSET);
 
 	if (type == 0) {
 		/* Did we hit the erratum? */
@@ -899,6 +900,7 @@ retry:
 		dev_err(dev, "Event logged [ILLEGAL_DEV_TABLE_ENTRY device=%04x:%02x:%02x.%x pasid=0x%05x address=0x%llx flags=0x%04x]\n",
 			iommu->pci_seg->id, PCI_BUS_NUM(devid), PCI_SLOT(devid), PCI_FUNC(devid),
 			pasid, address, flags);
+		dev_err(dev, "Control Reg : 0x%llx\n", ctrl);
 		dump_dte_entry(iommu, devid);
 		break;
 	case EVENT_TYPE_DEV_TAB_ERR:
@@ -2432,15 +2434,6 @@ static struct iommu_group *amd_iommu_device_group(struct device *dev)
  *
  *****************************************************************************/
 
-void protection_domain_free(struct protection_domain *domain)
-{
-	WARN_ON(!list_empty(&domain->dev_list));
-	if (domain->domain.type & __IOMMU_DOMAIN_PAGING)
-		free_io_pgtable_ops(&domain->iop.pgtbl.ops);
-	pdom_id_free(domain->id);
-	kfree(domain);
-}
-
 static void protection_domain_init(struct protection_domain *domain)
 {
 	spin_lock_init(&domain->lock);
@@ -2578,7 +2571,11 @@ void amd_iommu_domain_free(struct iommu_domain *dom)
 {
 	struct protection_domain *domain = to_pdomain(dom);
 
-	protection_domain_free(domain);
+	WARN_ON(!list_empty(&domain->dev_list));
+	if (domain->domain.type & __IOMMU_DOMAIN_PAGING)
+		free_io_pgtable_ops(&domain->iop.pgtbl.ops);
+	pdom_id_free(domain->id);
+	kfree(domain);
 }
 
 static int blocked_domain_attach_device(struct iommu_domain *domain,
