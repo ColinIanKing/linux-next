@@ -125,7 +125,9 @@ static void debug_show_blocker(struct task_struct *task)
 	}
 }
 #else
-#define debug_show_blocker(t)	do {} while (0)
+static inline void debug_show_blocker(struct task_struct *task)
+{
+}
 #endif
 
 static void check_hung_task(struct task_struct *t, unsigned long timeout)
