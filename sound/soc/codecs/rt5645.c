@@ -2841,10 +2841,10 @@ static int rt5645_set_dai_fmt(struct snd_soc_dai *dai, unsigned int fmt)
 	}
 
 	switch (fmt & SND_SOC_DAIFMT_MASTER_MASK) {
-	case SND_SOC_DAIFMT_CBM_CFM:
+	case SND_SOC_DAIFMT_CBP_CFP:
 		rt5645->master[dai->id] = 1;
 		break;
-	case SND_SOC_DAIFMT_CBS_CFS:
+	case SND_SOC_DAIFMT_CBC_CFC:
 		reg_val |= RT5645_I2S_MS_S;
 		rt5645->master[dai->id] = 0;
 		break;
@@ -3660,12 +3660,12 @@ MODULE_DEVICE_TABLE(of, rt5645_of_match);
 
 #ifdef CONFIG_ACPI
 static const struct acpi_device_id rt5645_acpi_match[] = {
-	{ "10EC5645", 0 },
-	{ "10EC5648", 0 },
-	{ "10EC5650", 0 },
-	{ "10EC5640", 0 },
-	{ "10EC3270", 0 },
-	{},
+	{ "10EC3270" },
+	{ "10EC5640" },
+	{ "10EC5645" },
+	{ "10EC5648" },
+	{ "10EC5650" },
+	{ }
 };
 MODULE_DEVICE_TABLE(acpi, rt5645_acpi_match);
 #endif
