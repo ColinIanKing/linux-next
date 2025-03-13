@@ -26,9 +26,8 @@
 
 /* bch_extent_rebalance: */
 
-static const struct bch_extent_rebalance *bch2_bkey_rebalance_opts(struct bkey_s_c k)
+static const struct bch_extent_rebalance *bch2_bkey_ptrs_rebalance_opts(struct bkey_ptrs_c ptrs)
 {
-	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
 	const union bch_extent_entry *entry;
 
 	bkey_extent_entry_for_each(ptrs, entry)
@@ -36,6 +35,11 @@ static const struct bch_extent_rebalance *bch2_bkey_rebalance_opts(struct bkey_s
 			return &entry->rebalance;
 
 	return NULL;
+}
+
+static const struct bch_extent_rebalance *bch2_bkey_rebalance_opts(struct bkey_s_c k)
+{
+	return bch2_bkey_ptrs_rebalance_opts(bch2_bkey_ptrs_c(k));
 }
 
 static inline unsigned bch2_bkey_ptrs_need_compress(struct bch_fs *c,
@@ -91,17 +95,24 @@ static unsigned bch2_bkey_ptrs_need_rebalance(struct bch_fs *c,
 {
 	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
 
+	if (bch2_bkey_extent_ptrs_flags(ptrs) & BIT_ULL(BCH_EXTENT_FLAG_poisoned))
+		return 0;
+
 	return bch2_bkey_ptrs_need_compress(c, opts, k, ptrs) |
 		bch2_bkey_ptrs_need_move(c, opts, ptrs);
 }
 
 u64 bch2_bkey_sectors_need_rebalance(struct bch_fs *c, struct bkey_s_c k)
 {
-	const struct bch_extent_rebalance *opts = bch2_bkey_rebalance_opts(k);
+	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
+
+	const struct bch_extent_rebalance *opts = bch2_bkey_ptrs_rebalance_opts(ptrs);
 	if (!opts)
 		return 0;
 
-	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
+	if (bch2_bkey_extent_ptrs_flags(ptrs) & BIT_ULL(BCH_EXTENT_FLAG_poisoned))
+		return 0;
+
 	const union bch_extent_entry *entry;
 	struct extent_ptr_decoded p;
 	u64 sectors = 0;
@@ -341,7 +352,7 @@ static struct bkey_s_c next_rebalance_extent(struct btree_trans *trans,
 	memset(data_opts, 0, sizeof(*data_opts));
 	data_opts->rewrite_ptrs		= bch2_bkey_ptrs_need_rebalance(c, io_opts, k);
 	data_opts->target		= io_opts->background_target;
-	data_opts->write_flags		|= BCH_WRITE_ONLY_SPECIFIED_DEVS;
+	data_opts->write_flags		|= BCH_WRITE_only_specified_devs;
 
 	if (!data_opts->rewrite_ptrs) {
 		/*
@@ -449,7 +460,7 @@ static bool rebalance_pred(struct bch_fs *c, void *arg,
 {
 	data_opts->rewrite_ptrs		= bch2_bkey_ptrs_need_rebalance(c, io_opts, k);
 	data_opts->target		= io_opts->background_target;
-	data_opts->write_flags		|= BCH_WRITE_ONLY_SPECIFIED_DEVS;
+	data_opts->write_flags		|= BCH_WRITE_only_specified_devs;
 	return data_opts->rewrite_ptrs != 0;
 }
 
