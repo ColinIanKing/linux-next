@@ -77,6 +77,8 @@ my ${CONFIG_} = "CONFIG_";
 
 my %maybe_linker_symbol; # for externs in c exceptions, when seen in *vmlinux.lds.h
 
+my $pending_log = undef;
+
 sub help {
 	my ($exitcode) = @_;
 
@@ -113,7 +115,8 @@ Options:
   --max-line-length=n        set the maximum line length, (default $max_line_length)
                              if exceeded, warn on patches
                              requires --strict for use with --file
-  --min-conf-desc-length=n   set the min description length, if shorter, warn
+  --min-conf-desc-length=n   set the minimum description length for config symbols
+                             in lines, if shorter, warn (default $min_conf_desc_length)
   --tab-size=n               set the number of spaces for tab (default $tabsize)
   --root=PATH                PATH to the kernel tree root
   --no-summary               suppress the per-file summary
@@ -3645,7 +3648,7 @@ sub process {
 			    $help_length < $min_conf_desc_length) {
 				my $stat_real = get_stat_real($linenr, $ln - 1);
 				WARN("CONFIG_DESCRIPTION",
-				     "please write a help paragraph that fully describes the config symbol\n" . "$here\n$stat_real\n");
+				     "please write a help paragraph that fully describes the config symbol with at least $min_conf_desc_length lines\n" . "$here\n$stat_real\n");
 			}
 		}
 
@@ -3877,6 +3880,91 @@ sub process {
 				fix_delete_line($fixlinenr+1, "No newline at end of file");
 			}
 		}
+
+# check for pr_* and dev_* logs without a newline for C and Rust files to avoid missing log messages
+  my $pr_cont_pattern = qr{
+      \b
+      pr_cont!?
+      \s*
+      \(
+      \s*
+      "([^"]*)"
+      [^)]*
+      \)
+  }x;
+  my $log_macro_pattern = qr{
+      \b
+      (
+          pr_(?:emerg|alert|crit|err|warn|notice|info|debug)
+        | dev_(?:emerg|alert|crit|err|warn|notice|info|dbg)
+      )
+      (!?)
+      \s*
+      \(
+      \s*
+      "([^"]*)"
+  }x;
+
+  if ($realfile =~ /\.(?:c|h|rs)$/) {
+      if ($rawline =~ /^\+/) {
+          my $cleanline = $rawline;
+          $cleanline =~ s/^[+\s]+//;
+          $cleanline =~ s/\r?$//;
+          $cleanline =~ s{/\*.*?\*/}{}g;
+          $cleanline =~ s{//.*}{}g;
+
+          if ($pending_log) {
+              if ($cleanline =~ /$pr_cont_pattern/) {
+                  my $cont_string_arg = $1;
+                  if ($cont_string_arg =~ /\\n$/) {
+                      $pending_log = undef;
+                  }
+              } elsif ($cleanline =~ /$log_macro_pattern/) {
+                  WARN($pending_log->{lang} . "_LOG_NO_NEWLINE",
+                       "Possible usage of $pending_log->{macro_call} without a trailing newline.\n" .
+                       $pending_log->{herecurr});
+
+                  $pending_log = undef;
+
+                  my $macro_call  = $1;
+                  my $maybe_excl  = $2;
+                  my $string_arg  = $3;
+                  $string_arg =~ s/\s+$//;
+
+                  if ($realfile =~ /\.rs$/ && $maybe_excl ne '!') {
+                      return;
+                  }
+
+                  if ($string_arg !~ /\\n$/ && $string_arg !~ /\n$/) {
+                      $pending_log = {
+                          macro_call => $macro_call,
+                          herecurr => $herecurr,
+                          lang => ($realfile =~ /\.rs$/) ? "Rust" : "C",
+                      };
+                  }
+              }
+          } else {
+              if ($cleanline =~ /$log_macro_pattern/) {
+                  my $macro_call = $1;
+                  my $maybe_excl = $2;
+                  my $string_arg = $3;
+                  $string_arg =~ s/\s+$//;
+
+                  if ($realfile =~ /\.rs$/ && $maybe_excl ne '!') {
+                      return;
+                  }
+
+                  if ($string_arg !~ /\\n$/ && $string_arg !~ /\n$/) {
+                      $pending_log = {
+                          macro_call => $macro_call,
+                          herecurr   => $herecurr,
+                          lang       => ($realfile =~ /\.rs$/) ? "Rust" : "C",
+                      };
+                  }
+              }
+          }
+      }
+  }
 
 # check for .L prefix local symbols in .S files
 		if ($realfile =~ /\.S$/ &&
@@ -7669,6 +7757,15 @@ sub process {
 				"duplicated sysctl range checking value '$1', consider using the shared one in include/linux/sysctl.h\n" . $herecurr);
 		}
 	}
+
+# pending log means a pr_* without an ending newline has not
+# been followed by a pr_cont call with a newline at the end
+  if ($pending_log) {
+    WARN($pending_log->{lang} . "_LOG_NO_NEWLINE",
+      "Usage of $pending_log->{macro_call} without a trailing newline.\n" .
+      $pending_log->{herecurr});
+    $pending_log = undef;
+  }
 
 	# If we have no input at all, then there is nothing to report on
 	# so just keep quiet.
