@@ -218,11 +218,6 @@ struct filename *getname_uflags(const char __user *filename, int uflags)
 	return getname_flags(filename, flags);
 }
 
-struct filename *getname(const char __user * filename)
-{
-	return getname_flags(filename, 0);
-}
-
 struct filename *__getname_maybe_null(const char __user *pathname)
 {
 	struct filename *name;
@@ -280,14 +275,19 @@ EXPORT_SYMBOL(getname_kernel);
 
 void putname(struct filename *name)
 {
+	int refcnt;
+
 	if (IS_ERR_OR_NULL(name))
 		return;
 
-	if (WARN_ON_ONCE(!atomic_read(&name->refcnt)))
-		return;
+	refcnt = atomic_read(&name->refcnt);
+	if (refcnt != 1) {
+		if (WARN_ON_ONCE(!refcnt))
+			return;
 
-	if (!atomic_dec_and_test(&name->refcnt))
-		return;
+		if (!atomic_dec_and_test(&name->refcnt))
+			return;
+	}
 
 	if (name->name != name->iname) {
 		__putname(name->name);
@@ -3415,6 +3415,8 @@ static int may_open(struct mnt_idmap *idmap, const struct path *path,
 		if ((acc_mode & MAY_EXEC) && path_noexec(path))
 			return -EACCES;
 		break;
+	default:
+		VFS_BUG_ON_INODE(1, inode);
 	}
 
 	error = inode_permission(idmap, inode, MAY_OPEN | acc_mode);
