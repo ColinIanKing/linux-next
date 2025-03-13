@@ -13,7 +13,7 @@ remote_ifname=""
 no_sleep=False
 
 def _test_v4(cfg) -> None:
-    cfg.require_v4()
+    cfg.require_ipver("4")
 
     cmd(f"ping -c 1 -W0.5 {cfg.remote_v4}")
     cmd(f"ping -c 1 -W0.5 {cfg.v4}", host=cfg.remote)
@@ -21,7 +21,7 @@ def _test_v4(cfg) -> None:
     cmd(f"ping -s 65000 -c 1 -W0.5 {cfg.v4}", host=cfg.remote)
 
 def _test_v6(cfg) -> None:
-    cfg.require_v6()
+    cfg.require_ipver("6")
 
     cmd(f"ping -c 1 -W5 {cfg.remote_v6}")
     cmd(f"ping -c 1 -W5 {cfg.v6}", host=cfg.remote)
