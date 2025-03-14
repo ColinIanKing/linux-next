@@ -411,21 +411,25 @@ void scx_idle_update_selcpu_topology(struct sched_ext_ops *ops)
  *
  * 5. Pick any idle CPU usable by the task.
  *
- * Step 3 and 4 are performed only if the system has, respectively, multiple
- * LLC domains / multiple NUMA nodes (see scx_selcpu_topo_llc and
- * scx_selcpu_topo_numa).
+ * Step 3 and 4 are performed only if the system has, respectively,
+ * multiple LLCs / multiple NUMA nodes (see scx_selcpu_topo_llc and
+ * scx_selcpu_topo_numa) and they don't contain the same subset of CPUs.
+ *
+ * If %SCX_OPS_BUILTIN_IDLE_PER_NODE is enabled, the search will always
+ * begin in @prev_cpu's node and proceed to other nodes in order of
+ * increasing distance.
+ *
+ * Return the picked CPU if idle, or a negative value otherwise.
  *
  * NOTE: tasks that can only run on 1 CPU are excluded by this logic, because
  * we never call ops.select_cpu() for them, see select_task_rq().
  */
-s32 scx_select_cpu_dfl(struct task_struct *p, s32 prev_cpu, u64 wake_flags, bool *found)
+s32 scx_select_cpu_dfl(struct task_struct *p, s32 prev_cpu, u64 wake_flags, u64 flags)
 {
 	const struct cpumask *llc_cpus = NULL;
 	const struct cpumask *numa_cpus = NULL;
 	int node = scx_cpu_node_if_enabled(prev_cpu);
 	s32 cpu;
-
-	*found = false;
 
 	/*
 	 * This is necessary to protect llc_cpus.
@@ -455,16 +459,17 @@ s32 scx_select_cpu_dfl(struct task_struct *p, s32 prev_cpu, u64 wake_flags, bool
 	 * If WAKE_SYNC, try to migrate the wakee to the waker's CPU.
 	 */
 	if (wake_flags & SCX_WAKE_SYNC) {
-		cpu = smp_processor_id();
+		int waker_node;
 
 		/*
 		 * If the waker's CPU is cache affine and prev_cpu is idle,
 		 * then avoid a migration.
 		 */
+		cpu = smp_processor_id();
 		if (cpus_share_cache(cpu, prev_cpu) &&
 		    scx_idle_test_and_clear_cpu(prev_cpu)) {
 			cpu = prev_cpu;
-			goto cpu_found;
+			goto out_unlock;
 		}
 
 		/*
@@ -480,11 +485,13 @@ s32 scx_select_cpu_dfl(struct task_struct *p, s32 prev_cpu, u64 wake_flags, bool
 		 * piled up on it even if there is an idle core elsewhere on
 		 * the system.
 		 */
+		waker_node = cpu_to_node(cpu);
 		if (!(current->flags & PF_EXITING) &&
 		    cpu_rq(cpu)->scx.local_dsq.nr == 0 &&
-		    !cpumask_empty(idle_cpumask(cpu_to_node(cpu))->cpu)) {
+		    (!(flags & SCX_PICK_IDLE_IN_NODE) || (waker_node == node)) &&
+		    !cpumask_empty(idle_cpumask(waker_node)->cpu)) {
 			if (cpumask_test_cpu(cpu, p->cpus_ptr))
-				goto cpu_found;
+				goto out_unlock;
 		}
 	}
 
@@ -499,7 +506,7 @@ s32 scx_select_cpu_dfl(struct task_struct *p, s32 prev_cpu, u64 wake_flags, bool
 		if (cpumask_test_cpu(prev_cpu, idle_cpumask(node)->smt) &&
 		    scx_idle_test_and_clear_cpu(prev_cpu)) {
 			cpu = prev_cpu;
-			goto cpu_found;
+			goto out_unlock;
 		}
 
 		/*
@@ -508,7 +515,7 @@ s32 scx_select_cpu_dfl(struct task_struct *p, s32 prev_cpu, u64 wake_flags, bool
 		if (llc_cpus) {
 			cpu = pick_idle_cpu_in_node(llc_cpus, node, SCX_PICK_IDLE_CORE);
 			if (cpu >= 0)
-				goto cpu_found;
+				goto out_unlock;
 		}
 
 		/*
@@ -517,19 +524,29 @@ s32 scx_select_cpu_dfl(struct task_struct *p, s32 prev_cpu, u64 wake_flags, bool
 		if (numa_cpus) {
 			cpu = pick_idle_cpu_in_node(numa_cpus, node, SCX_PICK_IDLE_CORE);
 			if (cpu >= 0)
-				goto cpu_found;
+				goto out_unlock;
 		}
 
 		/*
-		 * Search for any full idle core usable by the task.
+		 * Search for any full-idle core usable by the task.
 		 *
-		 * If NUMA aware idle selection is enabled, the search will
+		 * If the node-aware idle CPU selection policy is enabled
+		 * (%SCX_OPS_BUILTIN_IDLE_PER_NODE), the search will always
 		 * begin in prev_cpu's node and proceed to other nodes in
 		 * order of increasing distance.
 		 */
-		cpu = scx_pick_idle_cpu(p->cpus_ptr, node, SCX_PICK_IDLE_CORE);
+		cpu = scx_pick_idle_cpu(p->cpus_ptr, node, flags | SCX_PICK_IDLE_CORE);
 		if (cpu >= 0)
-			goto cpu_found;
+			goto out_unlock;
+
+		/*
+		 * Give up if we're strictly looking for a full-idle SMT
+		 * core.
+		 */
+		if (flags & SCX_PICK_IDLE_CORE) {
+			cpu = prev_cpu;
+			goto out_unlock;
+		}
 	}
 
 	/*
@@ -537,7 +554,7 @@ s32 scx_select_cpu_dfl(struct task_struct *p, s32 prev_cpu, u64 wake_flags, bool
 	 */
 	if (scx_idle_test_and_clear_cpu(prev_cpu)) {
 		cpu = prev_cpu;
-		goto cpu_found;
+		goto out_unlock;
 	}
 
 	/*
@@ -546,7 +563,7 @@ s32 scx_select_cpu_dfl(struct task_struct *p, s32 prev_cpu, u64 wake_flags, bool
 	if (llc_cpus) {
 		cpu = pick_idle_cpu_in_node(llc_cpus, node, 0);
 		if (cpu >= 0)
-			goto cpu_found;
+			goto out_unlock;
 	}
 
 	/*
@@ -555,23 +572,24 @@ s32 scx_select_cpu_dfl(struct task_struct *p, s32 prev_cpu, u64 wake_flags, bool
 	if (numa_cpus) {
 		cpu = pick_idle_cpu_in_node(numa_cpus, node, 0);
 		if (cpu >= 0)
-			goto cpu_found;
+			goto out_unlock;
 	}
 
 	/*
 	 * Search for any idle CPU usable by the task.
+	 *
+	 * If the node-aware idle CPU selection policy is enabled
+	 * (%SCX_OPS_BUILTIN_IDLE_PER_NODE), the search will always begin
+	 * in prev_cpu's node and proceed to other nodes in order of
+	 * increasing distance.
 	 */
-	cpu = scx_pick_idle_cpu(p->cpus_ptr, node, 0);
+	cpu = scx_pick_idle_cpu(p->cpus_ptr, node, flags);
 	if (cpu >= 0)
-		goto cpu_found;
+		goto out_unlock;
 
-	rcu_read_unlock();
-	return prev_cpu;
-
-cpu_found:
+out_unlock:
 	rcu_read_unlock();
 
-	*found = true;
 	return cpu;
 }
 
@@ -800,6 +818,9 @@ __bpf_kfunc int scx_bpf_cpu_node(s32 cpu)
 __bpf_kfunc s32 scx_bpf_select_cpu_dfl(struct task_struct *p, s32 prev_cpu,
 				       u64 wake_flags, bool *is_idle)
 {
+#ifdef CONFIG_SMP
+	s32 cpu;
+#endif
 	if (!ops_cpu_valid(prev_cpu, NULL))
 		goto prev_cpu;
 
@@ -810,7 +831,11 @@ __bpf_kfunc s32 scx_bpf_select_cpu_dfl(struct task_struct *p, s32 prev_cpu,
 		goto prev_cpu;
 
 #ifdef CONFIG_SMP
-	return scx_select_cpu_dfl(p, prev_cpu, wake_flags, is_idle);
+	cpu = scx_select_cpu_dfl(p, prev_cpu, wake_flags, 0);
+	if (cpu >= 0) {
+		*is_idle = true;
+		return cpu;
+	}
 #endif
 
 prev_cpu:
