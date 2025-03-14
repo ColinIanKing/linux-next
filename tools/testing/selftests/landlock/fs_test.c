@@ -41,6 +41,7 @@
 #define _ASM_GENERIC_FCNTL_H
 #include <linux/fcntl.h>
 
+#include "audit.h"
 #include "common.h"
 
 #ifndef renameat2
@@ -5552,6 +5553,460 @@ TEST_F_FORK(layout3_fs, release_inodes)
 
 	/* Checks that access to the new mount point is denied. */
 	ASSERT_EQ(EACCES, test_open(TMP_DIR, O_RDONLY));
+}
+
+static int matches_log_fs_extra(struct __test_metadata *const _metadata,
+				int audit_fd, const char *const blockers,
+				const char *const path, const char *const extra)
+{
+	static const char log_template[] = REGEX_LANDLOCK_PREFIX
+		" blockers=fs\\.%s path=\"%s\" dev=\"[^\"]\\+\" ino=[0-9]\\+$";
+	char *absolute_path = NULL;
+	size_t log_match_remaining = sizeof(log_template) + strlen(blockers) +
+				     PATH_MAX * 2 +
+				     (extra ? strlen(extra) : 0) + 1;
+	char log_match[log_match_remaining];
+	char *log_match_cursor = log_match;
+	size_t chunk_len;
+
+	chunk_len = snprintf(log_match_cursor, log_match_remaining,
+			     REGEX_LANDLOCK_PREFIX " blockers=%s path=\"",
+			     blockers);
+	if (chunk_len < 0 || chunk_len >= log_match_remaining)
+		return -E2BIG;
+
+	absolute_path = realpath(path, NULL);
+	if (!absolute_path)
+		return -errno;
+
+	log_match_remaining -= chunk_len;
+	log_match_cursor += chunk_len;
+	log_match_cursor = regex_escape(absolute_path, log_match_cursor,
+					log_match_remaining);
+	free(absolute_path);
+	if (log_match_cursor < 0)
+		return (long long)log_match_cursor;
+
+	log_match_remaining -= log_match_cursor - log_match;
+	chunk_len = snprintf(log_match_cursor, log_match_remaining,
+			     "\" dev=\"[^\"]\\+\" ino=[0-9]\\+%s$",
+			     extra ?: "");
+	if (chunk_len < 0 || chunk_len >= log_match_remaining)
+		return -E2BIG;
+
+	return audit_match_record(audit_fd, AUDIT_LANDLOCK_ACCESS, log_match,
+				  NULL);
+}
+
+static int matches_log_fs(struct __test_metadata *const _metadata, int audit_fd,
+			  const char *const blockers, const char *const path)
+{
+	return matches_log_fs_extra(_metadata, audit_fd, blockers, path, NULL);
+}
+
+FIXTURE(audit_layout1)
+{
+	struct audit_filter audit_filter;
+	int audit_fd;
+};
+
+FIXTURE_SETUP(audit_layout1)
+{
+	prepare_layout(_metadata);
+
+	create_layout1(_metadata);
+
+	set_cap(_metadata, CAP_AUDIT_CONTROL);
+	self->audit_fd = audit_init_with_exe_filter(&self->audit_filter);
+	EXPECT_LE(0, self->audit_fd);
+	drop_caps(_metadata);
+}
+
+FIXTURE_TEARDOWN_PARENT(audit_layout1)
+{
+	remove_layout1(_metadata);
+
+	cleanup_layout(_metadata);
+
+	EXPECT_EQ(0, audit_cleanup(-1, NULL));
+}
+
+TEST_F(audit_layout1, execute)
+{
+	struct audit_records records;
+
+	copy_file(_metadata, bin_true, file1_s1d1);
+	test_execute(_metadata, 0, file1_s1d1);
+	test_check_exec(_metadata, 0, file1_s1d1);
+
+	drop_access_rights(_metadata,
+			   &(struct landlock_ruleset_attr){
+				   .handled_access_fs =
+					   LANDLOCK_ACCESS_FS_EXECUTE,
+			   });
+
+	test_execute(_metadata, EACCES, file1_s1d1);
+	EXPECT_EQ(0, matches_log_fs(_metadata, self->audit_fd, "fs\\.execute",
+				    file1_s1d1));
+
+	test_check_exec(_metadata, EACCES, file1_s1d1);
+	EXPECT_EQ(0, matches_log_fs(_metadata, self->audit_fd, "fs\\.execute",
+				    file1_s1d1));
+
+	audit_count_records(self->audit_fd, &records);
+	EXPECT_EQ(0, records.access);
+	EXPECT_EQ(0, records.domain);
+}
+
+TEST_F(audit_layout1, write_file)
+{
+	struct audit_records records;
+
+	drop_access_rights(_metadata,
+			   &(struct landlock_ruleset_attr){
+				   .handled_access_fs =
+					   LANDLOCK_ACCESS_FS_WRITE_FILE,
+			   });
+
+	EXPECT_EQ(EACCES, test_open(file1_s1d1, O_WRONLY));
+	EXPECT_EQ(0, matches_log_fs(_metadata, self->audit_fd,
+				    "fs\\.write_file", file1_s1d1));
+
+	audit_count_records(self->audit_fd, &records);
+	EXPECT_EQ(0, records.access);
+	EXPECT_EQ(1, records.domain);
+}
+
+TEST_F(audit_layout1, read_file)
+{
+	struct audit_records records;
+
+	drop_access_rights(_metadata,
+			   &(struct landlock_ruleset_attr){
+				   .handled_access_fs =
+					   LANDLOCK_ACCESS_FS_READ_FILE,
+			   });
+
+	EXPECT_EQ(EACCES, test_open(file1_s1d1, O_RDONLY));
+	EXPECT_EQ(0, matches_log_fs(_metadata, self->audit_fd, "fs\\.read_file",
+				    file1_s1d1));
+
+	audit_count_records(self->audit_fd, &records);
+	EXPECT_EQ(0, records.access);
+	EXPECT_EQ(1, records.domain);
+}
+
+TEST_F(audit_layout1, read_dir)
+{
+	struct audit_records records;
+
+	drop_access_rights(_metadata,
+			   &(struct landlock_ruleset_attr){
+				   .handled_access_fs =
+					   LANDLOCK_ACCESS_FS_READ_DIR,
+			   });
+
+	EXPECT_EQ(EACCES, test_open(dir_s1d1, O_DIRECTORY));
+	EXPECT_EQ(0, matches_log_fs(_metadata, self->audit_fd, "fs\\.read_dir",
+				    dir_s1d1));
+
+	audit_count_records(self->audit_fd, &records);
+	EXPECT_EQ(0, records.access);
+	EXPECT_EQ(1, records.domain);
+}
+
+TEST_F(audit_layout1, remove_dir)
+{
+	struct audit_records records;
+
+	EXPECT_EQ(0, unlink(file1_s1d3));
+	EXPECT_EQ(0, unlink(file2_s1d3));
+
+	drop_access_rights(_metadata,
+			   &(struct landlock_ruleset_attr){
+				   .handled_access_fs =
+					   LANDLOCK_ACCESS_FS_REMOVE_DIR,
+			   });
+
+	EXPECT_EQ(-1, rmdir(dir_s1d3));
+	EXPECT_EQ(EACCES, errno);
+	EXPECT_EQ(0, matches_log_fs(_metadata, self->audit_fd,
+				    "fs\\.remove_dir", dir_s1d2));
+
+	EXPECT_EQ(-1, unlinkat(AT_FDCWD, dir_s1d3, AT_REMOVEDIR));
+	EXPECT_EQ(EACCES, errno);
+	EXPECT_EQ(0, matches_log_fs(_metadata, self->audit_fd,
+				    "fs\\.remove_dir", dir_s1d2));
+
+	audit_count_records(self->audit_fd, &records);
+	EXPECT_EQ(0, records.access);
+	EXPECT_EQ(0, records.domain);
+}
+
+TEST_F(audit_layout1, remove_file)
+{
+	struct audit_records records;
+
+	drop_access_rights(_metadata,
+			   &(struct landlock_ruleset_attr){
+				   .handled_access_fs =
+					   LANDLOCK_ACCESS_FS_REMOVE_FILE,
+			   });
+
+	EXPECT_EQ(-1, unlink(file1_s1d3));
+	EXPECT_EQ(EACCES, errno);
+	EXPECT_EQ(0, matches_log_fs(_metadata, self->audit_fd,
+				    "fs\\.remove_file", dir_s1d3));
+
+	audit_count_records(self->audit_fd, &records);
+	EXPECT_EQ(0, records.access);
+	EXPECT_EQ(1, records.domain);
+}
+
+TEST_F(audit_layout1, make_char)
+{
+	struct audit_records records;
+
+	EXPECT_EQ(0, unlink(file1_s1d3));
+
+	drop_access_rights(_metadata,
+			   &(struct landlock_ruleset_attr){
+				   .handled_access_fs =
+					   LANDLOCK_ACCESS_FS_MAKE_CHAR,
+			   });
+
+	EXPECT_EQ(-1, mknod(file1_s1d3, S_IFCHR | 0644, 0));
+	EXPECT_EQ(EACCES, errno);
+	EXPECT_EQ(0, matches_log_fs(_metadata, self->audit_fd, "fs\\.make_char",
+				    dir_s1d3));
+
+	audit_count_records(self->audit_fd, &records);
+	EXPECT_EQ(0, records.access);
+	EXPECT_EQ(1, records.domain);
+}
+
+TEST_F(audit_layout1, make_dir)
+{
+	struct audit_records records;
+
+	EXPECT_EQ(0, unlink(file1_s1d3));
+
+	drop_access_rights(_metadata,
+			   &(struct landlock_ruleset_attr){
+				   .handled_access_fs =
+					   LANDLOCK_ACCESS_FS_MAKE_DIR,
+			   });
+
+	EXPECT_EQ(-1, mkdir(file1_s1d3, 0755));
+	EXPECT_EQ(EACCES, errno);
+	EXPECT_EQ(0, matches_log_fs(_metadata, self->audit_fd, "fs\\.make_dir",
+				    dir_s1d3));
+
+	audit_count_records(self->audit_fd, &records);
+	EXPECT_EQ(0, records.access);
+	EXPECT_EQ(1, records.domain);
+}
+
+TEST_F(audit_layout1, make_reg)
+{
+	struct audit_records records;
+
+	EXPECT_EQ(0, unlink(file1_s1d3));
+
+	drop_access_rights(_metadata,
+			   &(struct landlock_ruleset_attr){
+				   .handled_access_fs =
+					   LANDLOCK_ACCESS_FS_MAKE_REG,
+			   });
+
+	EXPECT_EQ(-1, mknod(file1_s1d3, S_IFREG | 0644, 0));
+	EXPECT_EQ(EACCES, errno);
+	EXPECT_EQ(0, matches_log_fs(_metadata, self->audit_fd, "fs\\.make_reg",
+				    dir_s1d3));
+
+	audit_count_records(self->audit_fd, &records);
+	EXPECT_EQ(0, records.access);
+	EXPECT_EQ(1, records.domain);
+}
+
+TEST_F(audit_layout1, make_sock)
+{
+	struct audit_records records;
+
+	EXPECT_EQ(0, unlink(file1_s1d3));
+
+	drop_access_rights(_metadata,
+			   &(struct landlock_ruleset_attr){
+				   .handled_access_fs =
+					   LANDLOCK_ACCESS_FS_MAKE_SOCK,
+			   });
+
+	EXPECT_EQ(-1, mknod(file1_s1d3, S_IFSOCK | 0644, 0));
+	EXPECT_EQ(EACCES, errno);
+	EXPECT_EQ(0, matches_log_fs(_metadata, self->audit_fd, "fs\\.make_sock",
+				    dir_s1d3));
+
+	audit_count_records(self->audit_fd, &records);
+	EXPECT_EQ(0, records.access);
+	EXPECT_EQ(1, records.domain);
+}
+
+TEST_F(audit_layout1, make_fifo)
+{
+	struct audit_records records;
+
+	EXPECT_EQ(0, unlink(file1_s1d3));
+
+	drop_access_rights(_metadata,
+			   &(struct landlock_ruleset_attr){
+				   .handled_access_fs =
+					   LANDLOCK_ACCESS_FS_MAKE_FIFO,
+			   });
+
+	EXPECT_EQ(-1, mknod(file1_s1d3, S_IFIFO | 0644, 0));
+	EXPECT_EQ(EACCES, errno);
+	EXPECT_EQ(0, matches_log_fs(_metadata, self->audit_fd, "fs\\.make_fifo",
+				    dir_s1d3));
+
+	audit_count_records(self->audit_fd, &records);
+	EXPECT_EQ(0, records.access);
+	EXPECT_EQ(1, records.domain);
+}
+
+TEST_F(audit_layout1, make_block)
+{
+	struct audit_records records;
+
+	EXPECT_EQ(0, unlink(file1_s1d3));
+
+	drop_access_rights(_metadata,
+			   &(struct landlock_ruleset_attr){
+				   .handled_access_fs =
+					   LANDLOCK_ACCESS_FS_MAKE_BLOCK,
+			   });
+
+	EXPECT_EQ(-1, mknod(file1_s1d3, S_IFBLK | 0644, 0));
+	EXPECT_EQ(EACCES, errno);
+	EXPECT_EQ(0, matches_log_fs(_metadata, self->audit_fd,
+				    "fs\\.make_block", dir_s1d3));
+
+	audit_count_records(self->audit_fd, &records);
+	EXPECT_EQ(0, records.access);
+	EXPECT_EQ(1, records.domain);
+}
+
+TEST_F(audit_layout1, make_sym)
+{
+	struct audit_records records;
+
+	EXPECT_EQ(0, unlink(file1_s1d3));
+
+	drop_access_rights(_metadata,
+			   &(struct landlock_ruleset_attr){
+				   .handled_access_fs =
+					   LANDLOCK_ACCESS_FS_MAKE_SYM,
+			   });
+
+	EXPECT_EQ(-1, symlink("target", file1_s1d3));
+	EXPECT_EQ(EACCES, errno);
+	EXPECT_EQ(0, matches_log_fs(_metadata, self->audit_fd, "fs\\.make_sym",
+				    dir_s1d3));
+
+	audit_count_records(self->audit_fd, &records);
+	EXPECT_EQ(0, records.access);
+	EXPECT_EQ(1, records.domain);
+}
+
+// TODO: Add refer_exchange
+TEST_F(audit_layout1, refer_handled)
+{
+	struct audit_records records;
+
+	EXPECT_EQ(0, unlink(file1_s1d3));
+
+	drop_access_rights(_metadata, &(struct landlock_ruleset_attr){
+					      .handled_access_fs =
+						      LANDLOCK_ACCESS_FS_REFER,
+				      });
+
+	EXPECT_EQ(-1, link(file1_s1d1, file1_s1d3));
+	EXPECT_EQ(EXDEV, errno);
+	EXPECT_EQ(0, matches_log_fs(_metadata, self->audit_fd, "fs\\.refer",
+				    dir_s1d1));
+	EXPECT_EQ(0, matches_log_fs(_metadata, self->audit_fd, "fs\\.refer",
+				    dir_s1d3));
+
+	audit_count_records(self->audit_fd, &records);
+	EXPECT_EQ(0, records.access);
+	EXPECT_EQ(0, records.domain);
+}
+
+TEST_F(audit_layout1, refer_make)
+{
+	struct audit_records records;
+
+	EXPECT_EQ(0, unlink(file1_s1d3));
+
+	drop_access_rights(_metadata,
+			   &(struct landlock_ruleset_attr){
+				   .handled_access_fs =
+					   LANDLOCK_ACCESS_FS_MAKE_REG |
+					   LANDLOCK_ACCESS_FS_REFER,
+			   });
+
+	EXPECT_EQ(-1, link(file1_s1d1, file1_s1d3));
+	EXPECT_EQ(EACCES, errno);
+	EXPECT_EQ(0, matches_log_fs(_metadata, self->audit_fd, "fs\\.refer",
+				    dir_s1d1));
+	EXPECT_EQ(0, matches_log_fs(_metadata, self->audit_fd,
+				    "fs\\.make_reg,fs\\.refer", dir_s1d3));
+
+	audit_count_records(self->audit_fd, &records);
+	EXPECT_EQ(0, records.access);
+	EXPECT_EQ(0, records.domain);
+}
+
+TEST_F(audit_layout1, truncate)
+{
+	struct audit_records records;
+
+	drop_access_rights(_metadata,
+			   &(struct landlock_ruleset_attr){
+				   .handled_access_fs =
+					   LANDLOCK_ACCESS_FS_TRUNCATE,
+			   });
+
+	EXPECT_EQ(-1, truncate(file1_s1d3, 0));
+	EXPECT_EQ(EACCES, errno);
+	EXPECT_EQ(0, matches_log_fs(_metadata, self->audit_fd, "fs\\.truncate",
+				    file1_s1d3));
+
+	audit_count_records(self->audit_fd, &records);
+	EXPECT_EQ(0, records.access);
+	EXPECT_EQ(1, records.domain);
+}
+
+TEST_F(audit_layout1, ioctl_dev)
+{
+	struct audit_records records;
+	int fd;
+
+	drop_access_rights(_metadata,
+			   &(struct landlock_ruleset_attr){
+				   .handled_access_fs =
+					   LANDLOCK_ACCESS_FS_IOCTL_DEV,
+			   });
+
+	fd = open("/dev/null", O_RDWR | O_CLOEXEC);
+	ASSERT_LE(0, fd);
+	EXPECT_EQ(EACCES, ioctl_error(_metadata, fd, FIONREAD));
+	EXPECT_EQ(0, matches_log_fs_extra(_metadata, self->audit_fd,
+					  "fs\\.ioctl_dev", "/dev/null",
+					  " ioctlcmd=0x541b"));
+
+	audit_count_records(self->audit_fd, &records);
+	EXPECT_EQ(0, records.access);
+	EXPECT_EQ(1, records.domain);
 }
 
 TEST_HARNESS_MAIN
