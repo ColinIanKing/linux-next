@@ -10,7 +10,7 @@
 #ifndef __ASM_VDSO_GETTIMEOFDAY_H
 #define __ASM_VDSO_GETTIMEOFDAY_H
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 
 #include <uapi/linux/time.h>
 #include <asm/vgtod.h>
@@ -331,6 +331,6 @@ static __always_inline u64 vdso_calc_ns(const struct vdso_clock *vc, u64 cycles,
 }
 #define vdso_calc_ns vdso_calc_ns
 
-#endif /* !__ASSEMBLY__ */
+#endif /* !__ASSEMBLER__ */
 
 #endif /* __ASM_VDSO_GETTIMEOFDAY_H */
