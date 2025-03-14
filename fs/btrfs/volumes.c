@@ -1798,8 +1798,8 @@ again:
 	path->skip_locking = 1;
 
 	key.objectid = device->devid;
-	key.offset = search_start;
 	key.type = BTRFS_DEV_EXTENT_KEY;
+	key.offset = search_start;
 
 	ret = btrfs_search_backwards(root, &key, path);
 	if (ret < 0)
@@ -1918,8 +1918,8 @@ static int btrfs_free_dev_extent(struct btrfs_trans_handle *trans,
 		return -ENOMEM;
 
 	key.objectid = device->devid;
-	key.offset = start;
 	key.type = BTRFS_DEV_EXTENT_KEY;
+	key.offset = start;
 again:
 	ret = btrfs_search_slot(trans, root, &key, path, -1, 1);
 	if (ret > 0) {
@@ -2721,8 +2721,8 @@ static int btrfs_finish_sprout(struct btrfs_trans_handle *trans)
 		return -ENOMEM;
 
 	key.objectid = BTRFS_DEV_ITEMS_OBJECTID;
-	key.offset = 0;
 	key.type = BTRFS_DEV_ITEM_KEY;
+	key.offset = 0;
 
 	while (1) {
 		btrfs_reserve_chunk_metadata(trans, false);
@@ -3119,8 +3119,8 @@ static int btrfs_free_chunk(struct btrfs_trans_handle *trans, u64 chunk_offset)
 		return -ENOMEM;
 
 	key.objectid = BTRFS_FIRST_CHUNK_TREE_OBJECTID;
-	key.offset = chunk_offset;
 	key.type = BTRFS_CHUNK_ITEM_KEY;
+	key.offset = chunk_offset;
 
 	ret = btrfs_search_slot(trans, root, &key, path, -1, 1);
 	if (ret < 0)
@@ -3534,7 +3534,8 @@ int btrfs_relocate_chunk(struct btrfs_fs_info *fs_info, u64 chunk_offset)
 	 * filesystem's point of view.
 	 */
 	if (btrfs_is_zoned(fs_info)) {
-		ret = btrfs_discard_extent(fs_info, chunk_offset, length, NULL);
+		ret = btrfs_discard_extent(fs_info, chunk_offset, length, NULL,
+					   BTRFS_CLEAR_OP_DISCARD);
 		if (ret)
 			btrfs_info(fs_info,
 				"failed to reset zone %llu after relocation",
@@ -3577,8 +3578,8 @@ static int btrfs_relocate_sys_chunks(struct btrfs_fs_info *fs_info)
 
 again:
 	key.objectid = BTRFS_FIRST_CHUNK_TREE_OBJECTID;
-	key.offset = (u64)-1;
 	key.type = BTRFS_CHUNK_ITEM_KEY;
+	key.offset = (u64)-1;
 
 	while (1) {
 		mutex_lock(&fs_info->reclaim_bgs_lock);
@@ -4184,8 +4185,8 @@ again:
 		bctl->sys.limit = limit_sys;
 	}
 	key.objectid = BTRFS_FIRST_CHUNK_TREE_OBJECTID;
-	key.offset = (u64)-1;
 	key.type = BTRFS_CHUNK_ITEM_KEY;
+	key.offset = (u64)-1;
 
 	while (1) {
 		if ((!counting && atomic_read(&fs_info->balance_pause_req)) ||
@@ -5001,8 +5002,8 @@ int btrfs_shrink_device(struct btrfs_device *device, u64 new_size)
 
 again:
 	key.objectid = device->devid;
-	key.offset = (u64)-1;
 	key.type = BTRFS_DEV_EXTENT_KEY;
+	key.offset = (u64)-1;
 
 	do {
 		mutex_lock(&fs_info->reclaim_bgs_lock);
@@ -7539,8 +7540,8 @@ int btrfs_read_chunk_tree(struct btrfs_fs_info *fs_info)
 	 * item - BTRFS_FIRST_CHUNK_TREE_OBJECTID).
 	 */
 	key.objectid = BTRFS_DEV_ITEMS_OBJECTID;
-	key.offset = 0;
 	key.type = 0;
+	key.offset = 0;
 	btrfs_for_each_slot(root, &key, &found_key, path, iter_ret) {
 		struct extent_buffer *node = path->nodes[1];
 
@@ -7845,7 +7846,7 @@ void btrfs_dev_stat_inc_and_print(struct btrfs_device *dev, int index)
 
 	if (!dev->dev_stats_valid)
 		return;
-	btrfs_err_rl_in_rcu(dev->fs_info,
+	btrfs_debug_rl_in_rcu(dev->fs_info,
 		"bdev %s errs: wr %u, rd %u, flush %u, corrupt %u, gen %u",
 			   btrfs_dev_name(dev),
 			   btrfs_dev_stat_read(dev, BTRFS_DEV_STAT_WRITE_ERRS),
@@ -8076,6 +8077,11 @@ static int verify_chunk_dev_extent_mapping(struct btrfs_fs_info *fs_info)
 out:
 	read_unlock(&fs_info->mapping_tree_lock);
 	return ret;
+}
+
+void btrfs_chunk_map_clear_bits(struct btrfs_chunk_map *map, unsigned int bits)
+{
+	chunk_map_device_clear_bits(map, bits);
 }
 
 /*
