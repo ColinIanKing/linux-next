@@ -10,7 +10,7 @@
 # define __percpu_rel
 #endif
 
-#ifdef __ASSEMBLY__
+#ifdef __ASSEMBLER__
 
 #ifdef CONFIG_SMP
 # define __percpu		%__percpu_seg:
@@ -26,7 +26,7 @@
 # define INIT_PER_CPU_VAR(var)  var
 #endif
 
-#else /* !__ASSEMBLY__: */
+#else /* !__ASSEMBLER__: */
 
 #include <linux/build_bug.h>
 #include <linux/stringify.h>
@@ -619,7 +619,7 @@ do {									\
 /* We can use this directly for local CPU (faster). */
 DECLARE_PER_CPU_READ_MOSTLY(unsigned long, this_cpu_off);
 
-#endif /* !__ASSEMBLY__ */
+#endif /* !__ASSEMBLER__ */
 
 #ifdef CONFIG_SMP
 
