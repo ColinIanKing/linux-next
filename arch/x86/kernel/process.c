@@ -1060,3 +1060,8 @@ long do_arch_prctl_common(int option, unsigned long arg2)
 
 	return -EINVAL;
 }
+
+SYSCALL_DEFINE0(ni_syscall)
+{
+	return -ENOSYS;
+}
