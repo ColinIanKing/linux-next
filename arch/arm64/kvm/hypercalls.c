@@ -337,6 +337,16 @@ int kvm_smccc_call_handler(struct kvm_vcpu *vcpu)
 				break;
 			}
 			break;
+		case ARM_SMCCC_ARCH_WORKAROUND_4:
+			switch (arm64_get_cve_2024_7881_state()) {
+			case SPECTRE_UNAFFECTED:
+				val[0] = SMCCC_RET_SUCCESS;
+				break;
+			case SPECTRE_VULNERABLE:
+			case SPECTRE_MITIGATED:
+				break;
+			}
+			break;
 		case ARM_SMCCC_HV_PV_TIME_FEATURES:
 			if (test_bit(KVM_REG_ARM_STD_HYP_BIT_PV_TIME,
 				     &smccc_feat->std_hyp_bmap))
@@ -387,6 +397,7 @@ static const u64 kvm_arm_fw_reg_ids[] = {
 	KVM_REG_ARM_STD_BMAP,
 	KVM_REG_ARM_STD_HYP_BMAP,
 	KVM_REG_ARM_VENDOR_HYP_BMAP,
+	KVM_REG_ARM_SMCCC_ARCH_WORKAROUND_4,
 };
 
 void kvm_arm_init_hypercalls(struct kvm *kvm)
@@ -468,6 +479,14 @@ static int get_kernel_wa_level(struct kvm_vcpu *vcpu, u64 regid)
 			return KVM_REG_ARM_SMCCC_ARCH_WORKAROUND_3_NOT_REQUIRED;
 		}
 		return KVM_REG_ARM_SMCCC_ARCH_WORKAROUND_3_NOT_AVAIL;
+	case KVM_REG_ARM_SMCCC_ARCH_WORKAROUND_4:
+		switch (arm64_get_cve_2024_7881_state()) {
+		case SPECTRE_VULNERABLE:
+		case SPECTRE_MITIGATED:
+			return KVM_REG_ARM_SMCCC_ARCH_WORKAROUND_4_NOT_AVAIL;
+		case SPECTRE_UNAFFECTED:
+			return KVM_REG_ARM_SMCCC_ARCH_WORKAROUND_4_AVAIL;
+		}
 	}
 
 	return -EINVAL;
@@ -486,6 +505,7 @@ int kvm_arm_get_fw_reg(struct kvm_vcpu *vcpu, const struct kvm_one_reg *reg)
 	case KVM_REG_ARM_SMCCC_ARCH_WORKAROUND_1:
 	case KVM_REG_ARM_SMCCC_ARCH_WORKAROUND_2:
 	case KVM_REG_ARM_SMCCC_ARCH_WORKAROUND_3:
+	case KVM_REG_ARM_SMCCC_ARCH_WORKAROUND_4:
 		val = get_kernel_wa_level(vcpu, reg->id) & KVM_REG_FEATURE_LEVEL_MASK;
 		break;
 	case KVM_REG_ARM_STD_BMAP:
@@ -587,6 +607,7 @@ int kvm_arm_set_fw_reg(struct kvm_vcpu *vcpu, const struct kvm_one_reg *reg)
 
 	case KVM_REG_ARM_SMCCC_ARCH_WORKAROUND_1:
 	case KVM_REG_ARM_SMCCC_ARCH_WORKAROUND_3:
+	case KVM_REG_ARM_SMCCC_ARCH_WORKAROUND_4:
 		if (val & ~KVM_REG_FEATURE_LEVEL_MASK)
 			return -EINVAL;
 

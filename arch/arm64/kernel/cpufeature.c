@@ -1764,14 +1764,12 @@ has_useable_cnp(const struct arm64_cpu_capabilities *entry, int scope)
 	return has_cpuid_feature(entry, scope);
 }
 
-static bool __meltdown_safe = true;
-static int __kpti_forced; /* 0: not forced, >0: forced on, <0: forced off */
-
-static bool unmap_kernel_at_el0(const struct arm64_cpu_capabilities *entry,
-				int scope)
+static bool cpu_is_meltdown_safe(void)
 {
-	/* List of CPUs that are not vulnerable and don't need KPTI */
-	static const struct midr_range kpti_safe_list[] = {
+	u64 pfr0;
+
+	/* List of CPUs that are not vulnerable to meltdown */
+	static const struct midr_range meltdown_safe_list[] = {
 		MIDR_ALL_VERSIONS(MIDR_CAVIUM_THUNDERX2),
 		MIDR_ALL_VERSIONS(MIDR_BRCM_VULCAN),
 		MIDR_ALL_VERSIONS(MIDR_BRAHMA_B53),
@@ -1789,17 +1787,69 @@ static bool unmap_kernel_at_el0(const struct arm64_cpu_capabilities *entry,
 		MIDR_ALL_VERSIONS(MIDR_QCOM_KRYO_4XX_SILVER),
 		{ /* sentinel */ }
 	};
+
+	if (is_midr_in_range_list(read_cpuid_id(), meltdown_safe_list))
+		return true;
+
+	/*
+	 * ID_AA64PFR0_EL1.CSV3 > 0 indicates that this CPU is not vulnerable
+	 * to meltdown.
+	 */
+	pfr0 = __read_sysreg_by_encoding(SYS_ID_AA64PFR0_EL1);
+	if (cpuid_feature_extract_unsigned_field(pfr0, ID_AA64PFR0_EL1_CSV3_SHIFT))
+		return true;
+
+	return false;
+}
+
+static bool cpu_has_leaky_prefetcher(void)
+{
+	struct arm_smccc_res res;
+
+	/* CPUs which are affected by CVE-2024-7881 */
+	static const struct midr_range leaky_prefetcher_list[] = {
+		MIDR_ALL_VERSIONS(MIDR_CORTEX_X3),
+		MIDR_ALL_VERSIONS(MIDR_CORTEX_X4),
+		MIDR_ALL_VERSIONS(MIDR_CORTEX_X925),
+		MIDR_ALL_VERSIONS(MIDR_NEOVERSE_V2),
+		MIDR_ALL_VERSIONS(MIDR_NEOVERSE_V3),
+		{ /* sentinel */ }
+	};
+
+	if (!is_midr_in_range_list(read_cpuid_id(), leaky_prefetcher_list))
+		return false;
+
+	/*
+	 * If ARCH_WORKAROUND_4 is implemented, then the firmware mitigation is
+	 * present. There is no need to call ARCH_WORKAROUND_4 itself.
+	 */
+	arm_smccc_1_1_invoke(ARM_SMCCC_ARCH_FEATURES_FUNC_ID,
+			     ARM_SMCCC_ARCH_WORKAROUND_4, &res);
+	if (res.a0 == SMCCC_RET_SUCCESS)
+		return false;
+
+	return true;
+}
+
+static bool __meltdown_safe = true;
+static bool __leaky_prefetch_safe = true;
+static int __kpti_forced; /* 0: not forced, >0: forced on, <0: forced off */
+
+static bool needs_kpti(const struct arm64_cpu_capabilities *entry, int scope)
+{
 	char const *str = "kpti command line option";
 	bool meltdown_safe;
+	bool prefetcher_safe;
 
-	meltdown_safe = is_midr_in_range_list(read_cpuid_id(), kpti_safe_list);
+	WARN_ON(scope != SCOPE_LOCAL_CPU);
 
-	/* Defer to CPU feature registers */
-	if (has_cpuid_feature(entry, scope))
-		meltdown_safe = true;
-
+	meltdown_safe = cpu_is_meltdown_safe();
 	if (!meltdown_safe)
 		__meltdown_safe = false;
+
+	prefetcher_safe = !cpu_has_leaky_prefetcher();
+	if (!prefetcher_safe)
+		__leaky_prefetch_safe = false;
 
 	/*
 	 * For reasons that aren't entirely clear, enabling KPTI on Cavium
@@ -1840,7 +1890,7 @@ static bool unmap_kernel_at_el0(const struct arm64_cpu_capabilities *entry,
 		return __kpti_forced > 0;
 	}
 
-	return !meltdown_safe;
+	return !meltdown_safe || !prefetcher_safe;
 }
 
 static bool has_nv1(const struct arm64_cpu_capabilities *entry, int scope)
@@ -2554,13 +2604,7 @@ static const struct arm64_cpu_capabilities arm64_features[] = {
 		.capability = ARM64_UNMAP_KERNEL_AT_EL0,
 		.type = ARM64_CPUCAP_BOOT_RESTRICTED_CPU_LOCAL_FEATURE,
 		.cpu_enable = cpu_enable_kpti,
-		.matches = unmap_kernel_at_el0,
-		/*
-		 * The ID feature fields below are used to indicate that
-		 * the CPU doesn't need KPTI. See unmap_kernel_at_el0 for
-		 * more details.
-		 */
-		ARM64_CPUID_FIELDS(ID_AA64PFR0_EL1, CSV3, IMP)
+		.matches = needs_kpti,
 	},
 	{
 		.capability = ARM64_HAS_FPSIMD,
@@ -3948,4 +3992,15 @@ ssize_t cpu_show_meltdown(struct device *dev, struct device_attribute *attr,
 	default:
 		return sprintf(buf, "Vulnerable\n");
 	}
+}
+
+enum mitigation_state arm64_get_cve_2024_7881_state(void)
+{
+	if (__leaky_prefetch_safe)
+		return SPECTRE_UNAFFECTED;
+
+	if (arm64_kernel_unmapped_at_el0())
+		return SPECTRE_MITIGATED;
+
+	return SPECTRE_VULNERABLE;
 }
