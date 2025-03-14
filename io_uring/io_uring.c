@@ -156,9 +156,10 @@ static struct workqueue_struct *iou_wq __ro_after_init;
 
 static int __read_mostly sysctl_io_uring_disabled;
 static int __read_mostly sysctl_io_uring_group = -1;
+static int __read_mostly sysctl_io_uring_iowait = 1;
 
 #ifdef CONFIG_SYSCTL
-static const struct ctl_table kernel_io_uring_disabled_table[] = {
+static const struct ctl_table kernel_io_uring_sysctl_table[] = {
 	{
 		.procname	= "io_uring_disabled",
 		.data		= &sysctl_io_uring_disabled,
@@ -174,6 +175,15 @@ static const struct ctl_table kernel_io_uring_disabled_table[] = {
 		.maxlen		= sizeof(gid_t),
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec,
+	},
+	{
+		.procname	= "io_uring_iowait",
+		.data		= &sysctl_io_uring_iowait,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= SYSCTL_ZERO,
+		.extra2		= SYSCTL_ONE,
 	},
 };
 #endif
@@ -2496,7 +2506,7 @@ static int __io_cqring_wait_schedule(struct io_ring_ctx *ctx,
 	 * can take into account that the task is waiting for IO - turns out
 	 * to be important for low QD IO.
 	 */
-	if (current_pending_io())
+	if (sysctl_io_uring_iowait && current_pending_io())
 		current->in_iowait = 1;
 	if (iowq->timeout != KTIME_MAX || iowq->min_timeout)
 		ret = io_cqring_schedule_timeout(iowq, ctx->clockid, start_time);
@@ -3959,7 +3969,7 @@ static int __init io_uring_init(void)
 	BUG_ON(!iou_wq);
 
 #ifdef CONFIG_SYSCTL
-	register_sysctl_init("kernel", kernel_io_uring_disabled_table);
+	register_sysctl_init("kernel", kernel_io_uring_sysctl_table);
 #endif
 
 	return 0;
