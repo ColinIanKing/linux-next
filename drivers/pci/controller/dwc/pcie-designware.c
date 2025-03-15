@@ -1114,7 +1114,8 @@ resource_size_t dw_pcie_parent_bus_offset(struct dw_pcie *pci,
 	struct device *dev = pci->dev;
 	struct device_node *np = dev->of_node;
 	int index;
-	u64 reg_addr;
+	u64 reg_addr, fixup_addr;
+	u64 (*fixup)(struct dw_pcie *pcie, u64 cpu_addr);
 
 	/* Look up reg_name address on parent bus */
 	index = of_property_match_string(np, "reg-names", reg_name);
@@ -1126,5 +1127,28 @@ resource_size_t dw_pcie_parent_bus_offset(struct dw_pcie *pci,
 
 	of_property_read_reg(np, index, &reg_addr, NULL);
 
+	fixup = pci->ops ? pci->ops->cpu_addr_fixup : 0;
+	if (fixup) {
+		fixup_addr = fixup(pci, cpu_phy_addr);
+		if (reg_addr == fixup_addr) {
+			dev_info(dev, "%#010llx %s reg[%d] == %#010llx; %ps is redundant\n",
+				 (unsigned long long) cpu_phy_addr,
+				 reg_name, index, fixup_addr, fixup);
+		} else {
+			dev_warn(dev, "%#010llx %s reg[%d] != %#010llx fixed up addr; devicetree is broken\n",
+				 (unsigned long long) cpu_phy_addr, reg_name,
+				 index, fixup_addr);
+			reg_addr = fixup_addr;
+		}
+	} else if (!pci->use_parent_dt_ranges) {
+		if (reg_addr != cpu_phy_addr) {
+			dev_warn(dev, "devicetree has incorrect translation; please check parent \"ranges\" property. CPU physical addr %#010llx, parent bus addr %#010llx\n",
+				 (unsigned long long) cpu_phy_addr, reg_addr);
+			return 0;
+		}
+	}
+
+	dev_info(dev, "%s parent bus offset is %#010llx\n",
+		 reg_name, (unsigned long long) cpu_phy_addr - reg_addr);
 	return cpu_phy_addr - reg_addr;
 }
