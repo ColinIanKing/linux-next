@@ -13,6 +13,7 @@
 #include "common.h"
 #include "cred.h"
 #include "fs.h"
+#include "id.h"
 #include "net.h"
 #include "setup.h"
 #include "task.h"
@@ -33,6 +34,7 @@ const struct lsm_id landlock_lsmid = {
 
 static int __init landlock_init(void)
 {
+	landlock_init_id();
 	landlock_add_cred_hooks();
 	landlock_add_task_hooks();
 	landlock_add_fs_hooks();
