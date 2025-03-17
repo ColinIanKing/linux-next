@@ -26,6 +26,28 @@
 
 #include "internal.h"
 
+bool __file_ref_put_badval(file_ref_t *ref, unsigned long cnt)
+{
+	/*
+	 * If the reference count was already in the dead zone, then this
+	 * put() operation is imbalanced. Warn, put the reference count back to
+	 * DEAD and tell the caller to not deconstruct the object.
+	 */
+	if (WARN_ONCE(cnt >= FILE_REF_RELEASED, "imbalanced put on file reference count")) {
+		atomic_long_set(&ref->refcnt, FILE_REF_DEAD);
+		return false;
+	}
+
+	/*
+	 * This is a put() operation on a saturated refcount. Restore the
+	 * mean saturation value and tell the caller to not deconstruct the
+	 * object.
+	 */
+	if (cnt > FILE_REF_MAXREF)
+		atomic_long_set(&ref->refcnt, FILE_REF_SATURATED);
+	return false;
+}
+
 /**
  * __file_ref_put - Slowpath of file_ref_put()
  * @ref:	Pointer to the reference count
@@ -67,24 +89,7 @@ bool __file_ref_put(file_ref_t *ref, unsigned long cnt)
 		return true;
 	}
 
-	/*
-	 * If the reference count was already in the dead zone, then this
-	 * put() operation is imbalanced. Warn, put the reference count back to
-	 * DEAD and tell the caller to not deconstruct the object.
-	 */
-	if (WARN_ONCE(cnt >= FILE_REF_RELEASED, "imbalanced put on file reference count")) {
-		atomic_long_set(&ref->refcnt, FILE_REF_DEAD);
-		return false;
-	}
-
-	/*
-	 * This is a put() operation on a saturated refcount. Restore the
-	 * mean saturation value and tell the caller to not deconstruct the
-	 * object.
-	 */
-	if (cnt > FILE_REF_MAXREF)
-		atomic_long_set(&ref->refcnt, FILE_REF_SATURATED);
-	return false;
+	return __file_ref_put_badval(ref, cnt);
 }
 EXPORT_SYMBOL_GPL(__file_ref_put);
 
@@ -418,17 +423,25 @@ struct files_struct *dup_fd(struct files_struct *oldf, struct fd_range *punch_ho
 	old_fds = old_fdt->fd;
 	new_fds = new_fdt->fd;
 
+	/*
+	 * We may be racing against fd allocation from other threads using this
+	 * files_struct, despite holding ->file_lock.
+	 *
+	 * alloc_fd() might have already claimed a slot, while fd_install()
+	 * did not populate it yet. Note the latter operates locklessly, so
+	 * the file can show up as we are walking the array below.
+	 *
+	 * At the same time we know no files will disappear as all other
+	 * operations take the lock.
+	 *
+	 * Instead of trying to placate userspace racing with itself, we
+	 * ref the file if we see it and mark the fd slot as unused otherwise.
+	 */
 	for (i = open_files; i != 0; i--) {
-		struct file *f = *old_fds++;
+		struct file *f = rcu_dereference_raw(*old_fds++);
 		if (f) {
 			get_file(f);
 		} else {
-			/*
-			 * The fd may be claimed in the fd bitmap but not yet
-			 * instantiated in the files array if a sibling thread
-			 * is partway through open().  So make sure that this
-			 * fd is available to the new process.
-			 */
 			__clear_open_fd(open_files - i, new_fdt);
 		}
 		rcu_assign_pointer(*new_fds++, f);
@@ -577,6 +590,7 @@ repeat:
 
 	__set_open_fd(fd, fdt, flags & O_CLOEXEC);
 	error = fd;
+	VFS_BUG_ON(rcu_access_pointer(fdt->fd[fd]) != NULL);
 
 out:
 	spin_unlock(&files->file_lock);
@@ -642,7 +656,7 @@ void fd_install(unsigned int fd, struct file *file)
 		rcu_read_unlock_sched();
 		spin_lock(&files->file_lock);
 		fdt = files_fdtable(files);
-		WARN_ON(fdt->fd[fd] != NULL);
+		VFS_BUG_ON(rcu_access_pointer(fdt->fd[fd]) != NULL);
 		rcu_assign_pointer(fdt->fd[fd], file);
 		spin_unlock(&files->file_lock);
 		return;
@@ -650,7 +664,7 @@ void fd_install(unsigned int fd, struct file *file)
 	/* coupled with smp_wmb() in expand_fdtable() */
 	smp_rmb();
 	fdt = rcu_dereference_sched(files->fdt);
-	BUG_ON(fdt->fd[fd] != NULL);
+	VFS_BUG_ON(rcu_access_pointer(fdt->fd[fd]) != NULL);
 	rcu_assign_pointer(fdt->fd[fd], file);
 	rcu_read_unlock_sched();
 }
@@ -679,7 +693,7 @@ struct file *file_close_fd_locked(struct files_struct *files, unsigned fd)
 		return NULL;
 
 	fd = array_index_nospec(fd, fdt->max_fds);
-	file = fdt->fd[fd];
+	file = rcu_dereference_raw(fdt->fd[fd]);
 	if (file) {
 		rcu_assign_pointer(fdt->fd[fd], NULL);
 		__put_unused_fd(files, fd);
@@ -1182,6 +1196,16 @@ static inline bool file_needs_f_pos_lock(struct file *file)
 		(file_count(file) > 1 || file->f_op->iterate_shared);
 }
 
+bool file_seek_cur_needs_f_lock(struct file *file)
+{
+	if (!(file->f_mode & FMODE_ATOMIC_POS) && !file->f_op->iterate_shared)
+		return false;
+
+	VFS_WARN_ON_ONCE((file_count(file) > 1) &&
+			 !mutex_is_locked(&file->f_pos_lock));
+	return true;
+}
+
 struct fd fdget_pos(unsigned int fd)
 {
 	struct fd f = fdget(fd);
@@ -1237,7 +1261,7 @@ __releases(&files->file_lock)
 	 */
 	fdt = files_fdtable(files);
 	fd = array_index_nospec(fd, fdt->max_fds);
-	tofree = fdt->fd[fd];
+	tofree = rcu_dereference_raw(fdt->fd[fd]);
 	if (!tofree && fd_is_open(fd, fdt))
 		goto Ebusy;
 	get_file(file);
