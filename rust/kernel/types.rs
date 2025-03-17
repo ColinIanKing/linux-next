@@ -77,7 +77,7 @@ pub trait ForeignOwnable: Sized {
     ///
     /// The provided pointer must have been returned by a previous call to [`into_foreign`], and if
     /// the pointer is ever passed to [`from_foreign`], then that call must happen after the end of
-    /// the lifetime 'a.
+    /// the lifetime `'a`.
     ///
     /// [`into_foreign`]: Self::into_foreign
     /// [`from_foreign`]: Self::from_foreign
@@ -100,9 +100,9 @@ pub trait ForeignOwnable: Sized {
     ///
     /// The provided pointer must have been returned by a previous call to [`into_foreign`], and if
     /// the pointer is ever passed to [`from_foreign`], then that call must happen after the end of
-    /// the lifetime 'a.
+    /// the lifetime `'a`.
     ///
-    /// The lifetime 'a must not overlap with the lifetime of any other call to [`borrow`] or
+    /// The lifetime `'a` must not overlap with the lifetime of any other call to [`borrow`] or
     /// `borrow_mut` on the same object.
     ///
     /// [`into_foreign`]: Self::into_foreign
@@ -251,7 +251,7 @@ impl<T, F: FnOnce(T)> Drop for ScopeGuard<T, F> {
 
 /// Stores an opaque value.
 ///
-/// `Opaque<T>` is meant to be used with FFI objects that are never interpreted by Rust code.
+/// [`Opaque<T>`] is meant to be used with FFI objects that are never interpreted by Rust code.
 ///
 /// It is used to wrap structs from the C side, like for example `Opaque<bindings::mutex>`.
 /// It gets rid of all the usual assumptions that Rust has for a value:
@@ -266,7 +266,7 @@ impl<T, F: FnOnce(T)> Drop for ScopeGuard<T, F> {
 /// This has to be used for all values that the C side has access to, because it can't be ensured
 /// that the C side is adhering to the usual constraints that Rust needs.
 ///
-/// Using `Opaque<T>` allows to continue to use references on the Rust side even for values shared
+/// Using [`Opaque<T>`] allows to continue to use references on the Rust side even for values shared
 /// with C.
 ///
 /// # Examples
