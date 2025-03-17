@@ -175,6 +175,7 @@ SYM_CODE_END(entry_SYSCALL_64)
  */
 .pushsection .text, "ax"
 SYM_FUNC_START(__switch_to_asm)
+	ANNOTATE_NOENDBR
 	/*
 	 * Save callee-saved registers
 	 * This must match the order in inactive_task_frame
@@ -192,7 +193,7 @@ SYM_FUNC_START(__switch_to_asm)
 
 #ifdef CONFIG_STACKPROTECTOR
 	movq	TASK_stack_canary(%rsi), %rbx
-	movq	%rbx, PER_CPU_VAR(fixed_percpu_data + FIXED_stack_canary)
+	movq	%rbx, PER_CPU_VAR(__stack_chk_guard)
 #endif
 
 	/*
@@ -742,6 +743,7 @@ _ASM_NOKPROBE(common_interrupt_return)
  * Is in entry.text as it shouldn't be instrumented.
  */
 SYM_FUNC_START(asm_load_gs_index)
+	ANNOTATE_NOENDBR
 	FRAME_BEGIN
 	swapgs
 .Lgs_change:
@@ -1526,6 +1528,7 @@ SYM_CODE_END(rewind_stack_and_make_dead)
  * refactored in the future if needed.
  */
 SYM_FUNC_START(clear_bhb_loop)
+	ANNOTATE_NOENDBR
 	push	%rbp
 	mov	%rsp, %rbp
 	movl	$5, %ecx

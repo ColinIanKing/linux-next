@@ -1164,7 +1164,7 @@ static const __initconst struct x86_cpu_id cpu_vuln_whitelist[] = {
 
 	VULNWL_INTEL(INTEL_CORE_YONAH,		NO_SSB),
 
-	VULNWL_INTEL(INTEL_ATOM_AIRMONT_MID,	NO_SSB | NO_L1TF | NO_SWAPGS | NO_ITLB_MULTIHIT | MSBDS_ONLY),
+	VULNWL_INTEL(INTEL_ATOM_SILVERMONT_MID2,NO_SSB | NO_L1TF | NO_SWAPGS | NO_ITLB_MULTIHIT | MSBDS_ONLY),
 	VULNWL_INTEL(INTEL_ATOM_AIRMONT_NP,	NO_SSB | NO_L1TF | NO_SWAPGS | NO_ITLB_MULTIHIT),
 
 	VULNWL_INTEL(INTEL_ATOM_GOLDMONT,	NO_MDS | NO_L1TF | NO_SWAPGS | NO_ITLB_MULTIHIT | NO_MMIO),
@@ -1331,8 +1331,10 @@ static void __init cpu_set_bug_bits(struct cpuinfo_x86 *c)
 
 	setup_force_cpu_bug(X86_BUG_SPECTRE_V1);
 
-	if (!cpu_matches(cpu_vuln_whitelist, NO_SPECTRE_V2))
+	if (!cpu_matches(cpu_vuln_whitelist, NO_SPECTRE_V2)) {
 		setup_force_cpu_bug(X86_BUG_SPECTRE_V2);
+		setup_force_cpu_bug(X86_BUG_SPECTRE_V2_USER);
+	}
 
 	if (!cpu_matches(cpu_vuln_whitelist, NO_SSB) &&
 	    !(x86_arch_cap_msr & ARCH_CAP_SSB_NO) &&
@@ -1479,6 +1481,81 @@ static void detect_nopl(void)
 #endif
 }
 
+static inline void parse_set_clear_cpuid(char *arg, bool set)
+{
+	char *opt;
+	int taint = 0;
+
+	pr_info("%s CPUID bits:", set ? "Force-enabling" : "Clearing");
+
+	while (arg) {
+		bool found __maybe_unused = false;
+		unsigned int bit;
+
+		opt = strsep(&arg, ",");
+
+		/*
+		 * Handle naked numbers first for feature flags which don't
+		 * have names. It doesn't make sense for a bug not to have a
+		 * name so don't handle bug flags here.
+		 */
+		if (!kstrtouint(opt, 10, &bit)) {
+			if (bit < NCAPINTS * 32) {
+
+				/* empty-string, i.e., ""-defined feature flags */
+				if (!x86_cap_flags[bit])
+					pr_cont(" " X86_CAP_FMT_NUM, x86_cap_flag_num(bit));
+				else
+					pr_cont(" " X86_CAP_FMT, x86_cap_flag(bit));
+
+				if (set)
+					setup_force_cpu_cap(bit);
+				else
+					setup_clear_cpu_cap(bit);
+				taint++;
+			}
+			/*
+			 * The assumption is that there are no feature names with only
+			 * numbers in the name thus go to the next argument.
+			 */
+			continue;
+		}
+
+		for (bit = 0; bit < 32 * (NCAPINTS + NBUGINTS); bit++) {
+			const char *flag;
+
+			if (bit < 32 * NCAPINTS)
+				flag = x86_cap_flag(bit);
+			else
+				flag = x86_bug_flag(bit - (32 * NCAPINTS));
+
+			if (!flag)
+				continue;
+
+			if (strcmp(flag, opt))
+				continue;
+
+			pr_cont(" %s", opt);
+			if (set)
+				setup_force_cpu_cap(bit);
+			else
+				setup_clear_cpu_cap(bit);
+			taint++;
+			found = true;
+			break;
+		}
+
+		if (!found)
+			pr_cont(" (unknown: %s)", opt);
+	}
+
+	if (taint)
+		add_taint(TAINT_CPU_OUT_OF_SPEC, LOCKDEP_STILL_OK);
+
+	pr_cont("\n");
+}
+
+
 /*
  * We parse cpu parameters early because fpu__init_system() is executed
  * before parse_early_param().
@@ -1486,8 +1563,7 @@ static void detect_nopl(void)
 static void __init cpu_parse_early_param(void)
 {
 	char arg[128];
-	char *argptr = arg, *opt;
-	int arglen, taint = 0;
+	int arglen;
 
 #ifdef CONFIG_X86_32
 	if (cmdline_find_option_bool(boot_command_line, "no387"))
@@ -1519,61 +1595,12 @@ static void __init cpu_parse_early_param(void)
 		setup_clear_cpu_cap(X86_FEATURE_FRED);
 
 	arglen = cmdline_find_option(boot_command_line, "clearcpuid", arg, sizeof(arg));
-	if (arglen <= 0)
-		return;
+	if (arglen > 0)
+		parse_set_clear_cpuid(arg, false);
 
-	pr_info("Clearing CPUID bits:");
-
-	while (argptr) {
-		bool found __maybe_unused = false;
-		unsigned int bit;
-
-		opt = strsep(&argptr, ",");
-
-		/*
-		 * Handle naked numbers first for feature flags which don't
-		 * have names.
-		 */
-		if (!kstrtouint(opt, 10, &bit)) {
-			if (bit < NCAPINTS * 32) {
-
-				/* empty-string, i.e., ""-defined feature flags */
-				if (!x86_cap_flags[bit])
-					pr_cont(" " X86_CAP_FMT_NUM, x86_cap_flag_num(bit));
-				else
-					pr_cont(" " X86_CAP_FMT, x86_cap_flag(bit));
-
-				setup_clear_cpu_cap(bit);
-				taint++;
-			}
-			/*
-			 * The assumption is that there are no feature names with only
-			 * numbers in the name thus go to the next argument.
-			 */
-			continue;
-		}
-
-		for (bit = 0; bit < 32 * NCAPINTS; bit++) {
-			if (!x86_cap_flag(bit))
-				continue;
-
-			if (strcmp(x86_cap_flag(bit), opt))
-				continue;
-
-			pr_cont(" %s", opt);
-			setup_clear_cpu_cap(bit);
-			taint++;
-			found = true;
-			break;
-		}
-
-		if (!found)
-			pr_cont(" (unknown: %s)", opt);
-	}
-	pr_cont("\n");
-
-	if (taint)
-		add_taint(TAINT_CPU_OUT_OF_SPEC, LOCKDEP_STILL_OK);
+	arglen = cmdline_find_option(boot_command_line, "setcpuid", arg, sizeof(arg));
+	if (arglen > 0)
+		parse_set_clear_cpuid(arg, true);
 }
 
 /*
@@ -2005,14 +2032,22 @@ void print_cpu_info(struct cpuinfo_x86 *c)
 }
 
 /*
- * clearcpuid= was already parsed in cpu_parse_early_param().  This dummy
- * function prevents it from becoming an environment variable for init.
+ * clearcpuid= and setcpuid= were already parsed in cpu_parse_early_param().
+ * These dummy functions prevent them from becoming an environment variable for
+ * init.
  */
+
 static __init int setup_clearcpuid(char *arg)
 {
 	return 1;
 }
 __setup("clearcpuid=", setup_clearcpuid);
+
+static __init int setup_setcpuid(char *arg)
+{
+	return 1;
+}
+__setup("setcpuid=", setup_setcpuid);
 
 DEFINE_PER_CPU_ALIGNED(struct pcpu_hot, pcpu_hot) = {
 	.current_task	= &init_task,
@@ -2023,10 +2058,6 @@ EXPORT_PER_CPU_SYMBOL(pcpu_hot);
 EXPORT_PER_CPU_SYMBOL(const_pcpu_hot);
 
 #ifdef CONFIG_X86_64
-DEFINE_PER_CPU_FIRST(struct fixed_percpu_data,
-		     fixed_percpu_data) __aligned(PAGE_SIZE) __visible;
-EXPORT_PER_CPU_SYMBOL_GPL(fixed_percpu_data);
-
 static void wrmsrl_cstar(unsigned long val)
 {
 	/*
@@ -2089,8 +2120,7 @@ void syscall_init(void)
 	if (!cpu_feature_enabled(X86_FEATURE_FRED))
 		idt_syscall_init();
 }
-
-#else	/* CONFIG_X86_64 */
+#endif /* CONFIG_X86_64 */
 
 #ifdef CONFIG_STACKPROTECTOR
 DEFINE_PER_CPU(unsigned long, __stack_chk_guard);
@@ -2098,8 +2128,6 @@ DEFINE_PER_CPU(unsigned long, __stack_chk_guard);
 EXPORT_PER_CPU_SYMBOL(__stack_chk_guard);
 #endif
 #endif
-
-#endif	/* CONFIG_X86_64 */
 
 /*
  * Clear all 6 debug registers:
