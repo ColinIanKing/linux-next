@@ -271,6 +271,8 @@ static struct io_mapped_region *io_mmap_get_region(struct io_ring_ctx *ctx,
 		return io_pbuf_get_region(ctx, bgid);
 	case IORING_MAP_OFF_PARAM_REGION:
 		return &ctx->param_region;
+	case IORING_MAP_OFF_ZCRX_REGION:
+		return &ctx->zcrx_region;
 	}
 	return NULL;
 }
@@ -309,7 +311,6 @@ static int io_region_mmap(struct io_ring_ctx *ctx,
 {
 	unsigned long nr_pages = min(mr->nr_pages, max_pages);
 
-	vm_flags_set(vma, VM_DONTEXPAND);
 	return vm_insert_pages(vma, vma->vm_start, mr->pages, &nr_pages);
 }
 
@@ -321,6 +322,8 @@ __cold int io_uring_mmap(struct file *file, struct vm_area_struct *vma)
 	unsigned int page_limit = UINT_MAX;
 	struct io_mapped_region *region;
 	void *ptr;
+
+	vm_flags_set(vma, VM_DONTEXPAND);
 
 	guard(mutex)(&ctx->mmap_lock);
 
