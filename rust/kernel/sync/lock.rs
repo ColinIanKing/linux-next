@@ -206,7 +206,8 @@ impl<'a, T: ?Sized, B: Backend> Guard<'a, T, B> {
     /// lock is held.
     ///
     /// ```
-    /// # use kernel::{new_spinlock, stack_pin_init, sync::lock::{Backend, Guard, Lock}};
+    /// # use kernel::{new_spinlock, sync::lock::{Backend, Guard, Lock}};
+    /// # use pin_init::stack_pin_init;
     ///
     /// fn assert_held<T, B: Backend>(guard: &Guard<'_, T, B>, lock: &Lock<T, B>) {
     ///     // Address-equal means the same lock.

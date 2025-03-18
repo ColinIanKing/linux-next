@@ -100,11 +100,9 @@ pub type VBox<T> = Box<T, super::allocator::Vmalloc>;
 /// ```
 pub type KVBox<T> = Box<T, super::allocator::KVmalloc>;
 
-// SAFETY: All zeros is equivalent to `None` (option layout optimization guarantee).
-//
-// In this case we are allowed to use `T: ?Sized`, since all zeros is the `None` variant and there
-// is no problem with a VTABLE pointer being null.
-unsafe impl<T: ?Sized, A: Allocator> ZeroableOption for Box<T, A> {}
+// SAFETY: All zeros is equivalent to `None` (option layout optimization guarantee:
+// https://doc.rust-lang.org/stable/std/option/index.html#representation).
+unsafe impl<T, A: Allocator> ZeroableOption for Box<T, A> {}
 
 // SAFETY: `Box` is `Send` if `T` is `Send` because the `Box` owns a `T`.
 unsafe impl<T, A> Send for Box<T, A>
