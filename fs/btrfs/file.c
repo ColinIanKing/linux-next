@@ -833,7 +833,7 @@ static int prepare_uptodate_folio(struct inode *inode, struct folio *folio, u64 
 	 * The private flag check is essential for subpage as we need to store
 	 * extra bitmap using folio private.
 	 */
-	if (folio->mapping != inode->i_mapping || !folio_test_private(folio)) {
+	if (folio->mapping != inode->i_mapping || !mapping_release_always(folio->mapping)) {
 		folio_unlock(folio);
 		return -EAGAIN;
 	}
@@ -875,9 +875,7 @@ again:
 			ret = PTR_ERR(folio);
 		return ret;
 	}
-	/* Only support page sized folio yet. */
-	ASSERT(folio_order(folio) == 0);
-	ret = set_folio_extent_mapped(folio);
+	ret = btrfs_set_folio_subpage(folio);
 	if (ret < 0) {
 		folio_unlock(folio);
 		folio_put(folio);
@@ -1791,8 +1789,6 @@ static vm_fault_t btrfs_page_mkwrite(struct vm_fault *vmf)
 	u64 page_end;
 	u64 end;
 
-	ASSERT(folio_order(folio) == 0);
-
 	reserved_space = fsize;
 
 	sb_start_pagefault(inode->i_sb);
@@ -1836,7 +1832,7 @@ again:
 	folio_wait_writeback(folio);
 
 	lock_extent(io_tree, page_start, page_end, &cached_state);
-	ret2 = set_folio_extent_mapped(folio);
+	ret2 = btrfs_set_folio_subpage(folio);
 	if (ret2 < 0) {
 		ret = vmf_error(ret2);
 		unlock_extent(io_tree, page_start, page_end, &cached_state);
@@ -1857,7 +1853,7 @@ again:
 		goto again;
 	}
 
-	if (folio->index == ((size - 1) >> PAGE_SHIFT)) {
+	if (folio_contains(folio, (size - 1) >> PAGE_SHIFT)) {
 		reserved_space = round_up(size - page_start, fs_info->sectorsize);
 		if (reserved_space < fsize) {
 			end = page_start + reserved_space - 1;

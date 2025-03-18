@@ -3296,7 +3296,7 @@ out:
 				btrfs_discard_extent(fs_info,
 						ordered_extent->disk_bytenr,
 						ordered_extent->disk_num_bytes,
-						NULL);
+						NULL, BTRFS_CLEAR_OP_DISCARD);
 			btrfs_free_reserved_extent(fs_info,
 					ordered_extent->disk_bytenr,
 					ordered_extent->disk_num_bytes, 1);
@@ -4864,11 +4864,11 @@ again:
 
 	/*
 	 * We unlock the page after the io is completed and then re-lock it
-	 * above.  release_folio() could have come in between that and cleared
-	 * folio private, but left the page in the mapping.  Set the page mapped
+	 * above.  release_folio() could have come in between that,
+	 * but left the page in the mapping.  Set the page mapped
 	 * here to make sure it's properly set for the subpage stuff.
 	 */
-	ret = set_folio_extent_mapped(folio);
+	ret = btrfs_set_folio_subpage(folio);
 	if (ret < 0)
 		goto out_unlock;
 
@@ -5606,6 +5606,8 @@ static int btrfs_init_locked_inode(struct inode *inode, void *p)
 
 	btrfs_set_inode_number(BTRFS_I(inode), args->ino);
 	BTRFS_I(inode)->root = btrfs_grab_root(args->root);
+
+	mapping_set_release_always(inode->i_mapping);
 
 	if (args->root && args->root == args->root->fs_info->tree_root &&
 	    args->ino != BTRFS_BTREE_INODE_OBJECTID)
@@ -6688,6 +6690,7 @@ static int btrfs_create(struct mnt_idmap *idmap, struct inode *dir,
 	inode->i_fop = &btrfs_file_operations;
 	inode->i_op = &btrfs_file_inode_operations;
 	inode->i_mapping->a_ops = &btrfs_aops;
+	mapping_set_release_always(inode->i_mapping);
 	return btrfs_create_common(dir, dentry, inode);
 }
 
@@ -7304,7 +7307,7 @@ static bool __btrfs_release_folio(struct folio *folio, gfp_t gfp_flags)
 {
 	if (try_release_extent_mapping(folio, gfp_flags)) {
 		wait_subpage_spinlock(folio);
-		clear_folio_extent_mapped(folio);
+		btrfs_clear_folio_subpage(folio);
 		return true;
 	}
 	return false;
@@ -7502,7 +7505,7 @@ next:
 	btrfs_folio_clear_checked(fs_info, folio, folio_pos(folio), folio_size(folio));
 	if (!inode_evicting)
 		__btrfs_release_folio(folio, GFP_NOFS);
-	clear_folio_extent_mapped(folio);
+	btrfs_clear_folio_subpage(folio);
 }
 
 static int btrfs_truncate(struct btrfs_inode *inode, bool skip_writeback)
