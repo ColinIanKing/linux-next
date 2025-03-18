@@ -146,6 +146,7 @@ write_attribute(trigger_journal_writes);
 write_attribute(trigger_btree_cache_shrink);
 write_attribute(trigger_btree_key_cache_shrink);
 write_attribute(trigger_freelist_wakeup);
+write_attribute(trigger_btree_updates);
 read_attribute(gc_gens_pos);
 
 read_attribute(uuid);
@@ -173,10 +174,8 @@ read_attribute(journal_debug);
 read_attribute(btree_cache);
 read_attribute(btree_key_cache);
 read_attribute(btree_reserve_cache);
-read_attribute(stripes_heap);
 read_attribute(open_buckets);
 read_attribute(open_buckets_partial);
-read_attribute(write_points);
 read_attribute(nocow_lock_table);
 
 #ifdef BCH_WRITE_REF_DEBUG
@@ -355,17 +354,11 @@ SHOW(bch2_fs)
 	if (attr == &sysfs_btree_reserve_cache)
 		bch2_btree_reserve_cache_to_text(out, c);
 
-	if (attr == &sysfs_stripes_heap)
-		bch2_stripes_heap_to_text(out, c);
-
 	if (attr == &sysfs_open_buckets)
 		bch2_open_buckets_to_text(out, c, NULL);
 
 	if (attr == &sysfs_open_buckets_partial)
 		bch2_open_buckets_partial_to_text(out, c);
-
-	if (attr == &sysfs_write_points)
-		bch2_write_points_to_text(out, c);
 
 	if (attr == &sysfs_compression_stats)
 		bch2_compression_stats_to_text(out, c);
@@ -414,6 +407,9 @@ STORE(bch2_fs)
 		return -EPERM;
 
 	/* Debugging: */
+
+	if (attr == &sysfs_trigger_btree_updates)
+		queue_work(c->btree_interior_update_worker, &c->btree_interior_update_work);
 
 	if (!bch2_write_ref_tryget(c, BCH_WRITE_REF_sysfs))
 		return -EROFS;
@@ -566,10 +562,8 @@ struct attribute *bch2_fs_internal_files[] = {
 	&sysfs_btree_key_cache,
 	&sysfs_btree_reserve_cache,
 	&sysfs_new_stripes,
-	&sysfs_stripes_heap,
 	&sysfs_open_buckets,
 	&sysfs_open_buckets_partial,
-	&sysfs_write_points,
 #ifdef BCH_WRITE_REF_DEBUG
 	&sysfs_write_refs,
 #endif
@@ -585,6 +579,7 @@ struct attribute *bch2_fs_internal_files[] = {
 	&sysfs_trigger_btree_cache_shrink,
 	&sysfs_trigger_btree_key_cache_shrink,
 	&sysfs_trigger_freelist_wakeup,
+	&sysfs_trigger_btree_updates,
 
 	&sysfs_gc_gens_pos,
 
