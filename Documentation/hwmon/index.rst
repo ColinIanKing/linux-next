@@ -53,6 +53,7 @@ Hardware Monitoring Kernel Drivers
    bel-pfe
    bpa-rs600
    bt1-pvt
+   cgbc-hwmon
    chipcap2
    coretemp
    corsair-cpro
@@ -85,6 +86,7 @@ Hardware Monitoring Kernel Drivers
    hih6130
    hp-wmi-sensors
    hs3001
+   htu31
    ibmaem
    ibm-cffps
    ibmpowernv
