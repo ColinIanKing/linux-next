@@ -44,16 +44,6 @@
 #include "protocol.h"
 #include "orangefs-kernel.h"
 
-#define DEBUG_HELP_STRING_SIZE 4096
-#define HELP_STRING_UNINITIALIZED \
-	"Client Debug Keywords are unknown until the first time\n" \
-	"the client is started after boot.\n"
-#define ORANGEFS_KMOD_DEBUG_HELP_FILE "debug-help"
-#define ORANGEFS_KMOD_DEBUG_FILE "kernel-debug"
-#define ORANGEFS_CLIENT_DEBUG_FILE "client-debug"
-#define ORANGEFS_VERBOSE "verbose"
-#define ORANGEFS_ALL "all"
-
 /* a private internal type */
 struct __keyword_mask_s {
 	const char *keyword;
@@ -96,6 +86,16 @@ static struct __keyword_mask_s s_kmod_keyword_mask_map[] = {
 
 static const int num_kmod_keyword_mask_map = (int)
 	(ARRAY_SIZE(s_kmod_keyword_mask_map));
+
+#define DEBUG_HELP_STRING_SIZE 4096
+#define HELP_STRING_UNINITIALIZED \
+	"Client Debug Keywords are unknown until the first time\n" \
+	"the client is started after boot.\n"
+#define ORANGEFS_KMOD_DEBUG_HELP_FILE "debug-help"
+#define ORANGEFS_KMOD_DEBUG_FILE "kernel-debug"
+#define ORANGEFS_CLIENT_DEBUG_FILE "client-debug"
+#define ORANGEFS_VERBOSE "verbose"
+#define ORANGEFS_ALL "all"
 
 /*
  * An array of client_debug_mask will be built to hold debug keyword/mask
