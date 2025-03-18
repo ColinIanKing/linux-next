@@ -8643,7 +8643,6 @@ F:	rust/kernel/net/phy/reg.rs
 
 EXEC & BINFMT API, ELF
 M:	Kees Cook <kees@kernel.org>
-R:	Eric Biederman <ebiederm@xmission.com>
 L:	linux-mm@kvack.org
 S:	Supported
 T:	git git://git.kernel.org/pub/scm/linux/kernel/git/kees/linux.git for-next/execve
@@ -12826,9 +12825,7 @@ F:	fs/kernfs/
 F:	include/linux/kernfs.h
 
 KEXEC
-M:	Eric Biederman <ebiederm@xmission.com>
 L:	kexec@lists.infradead.org
-S:	Maintained
 W:	http://kernel.org/pub/linux/utils/kernel/kexec/
 F:	include/linux/kexec.h
 F:	include/uapi/linux/kexec.h
@@ -18515,6 +18512,7 @@ F:	mm/percpu*.c
 
 PER-TASK DELAY ACCOUNTING
 M:	Balbir Singh <bsingharora@gmail.com>
+M:	Yang Yang <yang.yang29@zte.com.cn>
 S:	Maintained
 F:	include/linux/delayacct.h
 F:	kernel/delayacct.c
@@ -21813,7 +21811,7 @@ M:	Joonsoo Kim <iamjoonsoo.kim@lge.com>
 M:	Andrew Morton <akpm@linux-foundation.org>
 M:	Vlastimil Babka <vbabka@suse.cz>
 R:	Roman Gushchin <roman.gushchin@linux.dev>
-R:	Hyeonggon Yoo <42.hyeyoo@gmail.com>
+R:	Harry Yoo <harry.yoo@oracle.com>
 L:	linux-mm@kvack.org
 S:	Maintained
 T:	git git://git.kernel.org/pub/scm/linux/kernel/git/vbabka/slab.git
