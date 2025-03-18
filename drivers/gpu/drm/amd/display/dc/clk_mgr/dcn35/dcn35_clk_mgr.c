@@ -201,16 +201,26 @@ static void dcn35_disable_otg_wa(struct clk_mgr *clk_mgr_base, struct dc_state *
 		struct pipe_ctx *pipe = safe_to_lower
 			? &context->res_ctx.pipe_ctx[i]
 			: &dc->current_state->res_ctx.pipe_ctx[i];
+		struct link_encoder *new_pipe_link_enc = new_pipe->link_res.dio_link_enc;
+		struct link_encoder *pipe_link_enc = pipe->link_res.dio_link_enc;
 		bool stream_changed_otg_dig_on = false;
 		if (pipe->top_pipe || pipe->prev_odm_pipe)
 			continue;
+
+		if (!dc->config.unify_link_enc_assignment) {
+			if (new_pipe->stream)
+				new_pipe_link_enc = new_pipe->stream->link_enc;
+			if (pipe->stream)
+				pipe_link_enc = pipe->stream->link_enc;
+		}
+
 		stream_changed_otg_dig_on = old_pipe->stream && new_pipe->stream &&
 		old_pipe->stream != new_pipe->stream &&
 		old_pipe->stream_res.tg == new_pipe->stream_res.tg &&
-		new_pipe->stream->link_enc && !new_pipe->stream->dpms_off &&
-		new_pipe->stream->link_enc->funcs->is_dig_enabled &&
-		new_pipe->stream->link_enc->funcs->is_dig_enabled(
-		new_pipe->stream->link_enc) &&
+		new_pipe_link_enc && !new_pipe->stream->dpms_off &&
+		new_pipe_link_enc->funcs->is_dig_enabled &&
+		new_pipe_link_enc->funcs->is_dig_enabled(
+		new_pipe_link_enc) &&
 		new_pipe->stream_res.stream_enc &&
 		new_pipe->stream_res.stream_enc->funcs->is_fifo_enabled &&
 		new_pipe->stream_res.stream_enc->funcs->is_fifo_enabled(new_pipe->stream_res.stream_enc);
@@ -226,7 +236,7 @@ static void dcn35_disable_otg_wa(struct clk_mgr *clk_mgr_base, struct dc_state *
 
 		if (!has_active_hpo && !dccg->ctx->dc->link_srv->dp_is_128b_132b_signal(pipe) &&
 					(pipe->stream && (pipe->stream->dpms_off || dc_is_virtual_signal(pipe->stream->signal) ||
-					!pipe->stream->link_enc) && !stream_changed_otg_dig_on)) {
+					!pipe_link_enc) && !stream_changed_otg_dig_on)) {
 
 
 			/* This w/a should not trigger when we have a dig active */
@@ -467,14 +477,19 @@ void dcn35_update_clocks(struct clk_mgr *clk_mgr_base,
 		update_dppclk = true;
 	}
 
-	if (should_set_clock(safe_to_lower, new_clocks->dispclk_khz, clk_mgr_base->clks.dispclk_khz)) {
+	if (should_set_clock(safe_to_lower, new_clocks->dispclk_khz, clk_mgr_base->clks.dispclk_khz) &&
+	    (new_clocks->dispclk_khz > 0 || (safe_to_lower && display_count == 0))) {
+		int requested_dispclk_khz = new_clocks->dispclk_khz;
+
 		dcn35_disable_otg_wa(clk_mgr_base, context, safe_to_lower, true);
 
-		if (dc->debug.min_disp_clk_khz > 0 && new_clocks->dispclk_khz < dc->debug.min_disp_clk_khz)
-			new_clocks->dispclk_khz = dc->debug.min_disp_clk_khz;
+		/* Clamp the requested clock to PMFW based on their limit. */
+		if (dc->debug.min_disp_clk_khz > 0 && requested_dispclk_khz < dc->debug.min_disp_clk_khz)
+			requested_dispclk_khz = dc->debug.min_disp_clk_khz;
 
+		dcn35_smu_set_dispclk(clk_mgr, requested_dispclk_khz);
 		clk_mgr_base->clks.dispclk_khz = new_clocks->dispclk_khz;
-		dcn35_smu_set_dispclk(clk_mgr, clk_mgr_base->clks.dispclk_khz);
+
 		dcn35_disable_otg_wa(clk_mgr_base, context, safe_to_lower, false);
 
 		update_dispclk = true;
@@ -1249,7 +1264,7 @@ void dcn35_clk_mgr_construct(
 	clk_mgr->base.dprefclk_ss_divider = 1000;
 	clk_mgr->base.ss_on_dprefclk = false;
 	clk_mgr->base.dfs_ref_freq_khz = 48000;
-	if (ctx->dce_version == DCN_VERSION_3_5) {
+	if (ctx->dce_version != DCN_VERSION_3_51) {
 		clk_mgr->base.regs = &clk_mgr_regs_dcn35;
 		clk_mgr->base.clk_mgr_shift = &clk_mgr_shift_dcn35;
 		clk_mgr->base.clk_mgr_mask = &clk_mgr_mask_dcn35;
@@ -1401,7 +1416,7 @@ void dcn35_clk_mgr_construct(
 
 			/* Disable dynamic IPS2 in older PMFW (93.12) for Z8 interop. */
 			if (ctx->dc->config.disable_ips == DMUB_IPS_ENABLE &&
-			    ctx->dce_version == DCN_VERSION_3_5 &&
+			    ctx->dce_version != DCN_VERSION_3_51 &&
 			    ((clk_mgr->base.smu_ver & 0x00FFFFFF) <= 0x005d0c00))
 				ctx->dc->config.disable_ips = DMUB_IPS_RCG_IN_ACTIVE_IPS2_IN_OFF;
 		} else {
