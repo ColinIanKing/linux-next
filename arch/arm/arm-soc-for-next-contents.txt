@@ -1,0 +1,56 @@
+soc/arm
+	renesas/soc
+		https://git.kernel.org/pub/scm/linux/kernel/git/geert/renesas-devel tags/renesas-arm-soc-for-v6.15-tag1
+
+soc/dt
+	asahi/dt
+		https://github.com/AsahiLinux/linux tags/asahi-soc-dt-6.15
+	ixp4xx/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/linusw/linux-integrator tags/ixp4xx-dts-soc-for-v6.15
+	renesas/dt-bindings
+		https://git.kernel.org/pub/scm/linux/kernel/git/geert/renesas-devel tags/renesas-dt-bindings-for-v6.15-tag1
+	renesas/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/geert/renesas-devel tags/renesas-dts-for-v6.15-tag1
+	asahi/dt-2
+		https://github.com/AsahiLinux/linux tags/asahi-soc-dt-6.15-v2
+	juno/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/sudeep.holla/linux tags/juno-updates-6.15
+	patch
+		arm64: dts: nvidia: Remove unused and undocumented "regulator-ramp-delay-scale" property
+	mediatek/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/mediatek/linux tags/mtk-dts64-for-v6.15
+
+soc/drivers
+	resnsas/drivers
+		https://git.kernel.org/pub/scm/linux/kernel/git/geert/renesas-devel tags/renesas-drivers-for-v6.15-tag1
+	asahi/drivers
+		https://github.com/AsahiLinux/linux tags/asahi-soc-rtkit-6.15
+	firmware/smccc
+		https://git.kernel.org/pub/scm/linux/kernel/git/sudeep.holla/linux tags/smccc-update-6.15
+	firmware/scmi
+		https://git.kernel.org/pub/scm/linux/kernel/git/sudeep.holla/linux tags/scmi-updates-6.15
+	firmware/ffa
+		https://git.kernel.org/pub/scm/linux/kernel/git/sudeep.holla/linux tags/ffa-updates-6.15
+	patch
+		firmware: arm_scmi: use ioread64() instead of ioread64_hi_lo()
+	mediatek/drivers
+		https://git.kernel.org/pub/scm/linux/kernel/git/mediatek/linux tags/mtk-soc-for-v6.15
+
+soc/defconfig
+	renesas/defconfig
+		https://git.kernel.org/pub/scm/linux/kernel/git/geert/renesas-devel tags/renesas-arm-defconfig-for-v6.15-tag1
+
+soc/late
+
+arm/fixes
+	<no branch> (0de09025f161f67c07978c4742e221243d070d41)
+		https://github.com/Broadcom/stblinux tags/arm-soc/for-6.14/devicetree-fixes
+	<no branch> (768953614c1c13fdf771be5742f1be573eea8fa4)
+		https://github.com/Broadcom/stblinux tags/arm-soc/for-6.14/devicetree-arm64-fixes
+	<no branch> (2c1092823eb03f8508d6769e2f38eef7e1fe62a0)
+		https://git.kernel.org/pub/scm/linux/kernel/git/shawnguo/linux tags/imx-fixes-6.14
+	<no branch> (1b133129ad6b28186214259af3bd5fc651a85509)
+		https://git.kernel.org/pub/scm/linux/kernel/git/conor/linux tags/riscv-dt-fixes-for-v6.14-rc6
+	patch
+		ARM: OMAP1: select CONFIG_GENERIC_IRQ_CHIP
+
