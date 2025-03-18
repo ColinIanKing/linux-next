@@ -88,13 +88,13 @@ static struct inode *__lookup_free_space_inode(struct btrfs_root *root,
 	struct btrfs_disk_key disk_key;
 	struct btrfs_free_space_header *header;
 	struct extent_buffer *leaf;
-	struct inode *inode = NULL;
+	struct btrfs_inode *inode;
 	unsigned nofs_flag;
 	int ret;
 
 	key.objectid = BTRFS_FREE_SPACE_OBJECTID;
-	key.offset = offset;
 	key.type = 0;
+	key.offset = offset;
 
 	ret = btrfs_search_slot(NULL, root, &key, path, 0, 0);
 	if (ret < 0)
@@ -120,13 +120,13 @@ static struct inode *__lookup_free_space_inode(struct btrfs_root *root,
 	btrfs_release_path(path);
 	memalloc_nofs_restore(nofs_flag);
 	if (IS_ERR(inode))
-		return inode;
+		return ERR_CAST(inode);
 
-	mapping_set_gfp_mask(inode->i_mapping,
-			mapping_gfp_constraint(inode->i_mapping,
+	mapping_set_gfp_mask(inode->vfs_inode.i_mapping,
+			mapping_gfp_constraint(inode->vfs_inode.i_mapping,
 			~(__GFP_FS | __GFP_HIGHMEM)));
 
-	return inode;
+	return &inode->vfs_inode;
 }
 
 struct inode *lookup_free_space_inode(struct btrfs_block_group *block_group,
@@ -201,8 +201,8 @@ static int __create_free_space_inode(struct btrfs_root *root,
 	btrfs_release_path(path);
 
 	key.objectid = BTRFS_FREE_SPACE_OBJECTID;
-	key.offset = offset;
 	key.type = 0;
+	key.offset = offset;
 	ret = btrfs_insert_empty_item(trans, root, path, &key,
 				      sizeof(struct btrfs_free_space_header));
 	if (ret < 0) {
@@ -244,7 +244,7 @@ int btrfs_remove_free_space_inode(struct btrfs_trans_handle *trans,
 				  struct inode *inode,
 				  struct btrfs_block_group *block_group)
 {
-	struct btrfs_path *path;
+	BTRFS_PATH_AUTO_FREE(path);
 	struct btrfs_key key;
 	int ret = 0;
 
@@ -257,12 +257,12 @@ int btrfs_remove_free_space_inode(struct btrfs_trans_handle *trans,
 	if (IS_ERR(inode)) {
 		if (PTR_ERR(inode) != -ENOENT)
 			ret = PTR_ERR(inode);
-		goto out;
+		return ret;
 	}
 	ret = btrfs_orphan_add(trans, BTRFS_I(inode));
 	if (ret) {
 		btrfs_add_delayed_iput(BTRFS_I(inode));
-		goto out;
+		return ret;
 	}
 	clear_nlink(inode);
 	/* One for the block groups ref */
@@ -285,12 +285,9 @@ int btrfs_remove_free_space_inode(struct btrfs_trans_handle *trans,
 	if (ret) {
 		if (ret > 0)
 			ret = 0;
-		goto out;
+		return ret;
 	}
-	ret = btrfs_del_item(trans, trans->fs_info->tree_root, path);
-out:
-	btrfs_free_path(path);
-	return ret;
+	return btrfs_del_item(trans, trans->fs_info->tree_root, path);
 }
 
 int btrfs_truncate_free_space_cache(struct btrfs_trans_handle *trans,
@@ -447,39 +444,32 @@ static void io_ctl_drop_pages(struct btrfs_io_ctl *io_ctl)
 
 static int io_ctl_prepare_pages(struct btrfs_io_ctl *io_ctl, bool uptodate)
 {
-	struct page *page;
+	struct folio *folio;
 	struct inode *inode = io_ctl->inode;
 	gfp_t mask = btrfs_alloc_write_mask(inode->i_mapping);
 	int i;
 
 	for (i = 0; i < io_ctl->num_pages; i++) {
-		int ret;
 
-		page = find_or_create_page(inode->i_mapping, i, mask);
-		if (!page) {
+		folio = __filemap_get_folio(inode->i_mapping, i,
+					    FGP_LOCK | FGP_ACCESSED | FGP_CREAT,
+					    mask);
+		if (IS_ERR(folio)) {
 			io_ctl_drop_pages(io_ctl);
 			return -ENOMEM;
 		}
 
-		ret = set_folio_extent_mapped(page_folio(page));
-		if (ret < 0) {
-			unlock_page(page);
-			put_page(page);
-			io_ctl_drop_pages(io_ctl);
-			return ret;
-		}
-
-		io_ctl->pages[i] = page;
-		if (uptodate && !PageUptodate(page)) {
-			btrfs_read_folio(NULL, page_folio(page));
-			lock_page(page);
-			if (page->mapping != inode->i_mapping) {
+		io_ctl->pages[i] = &folio->page;
+		if (uptodate && !folio_test_uptodate(folio)) {
+			btrfs_read_folio(NULL, folio);
+			folio_lock(folio);
+			if (folio->mapping != inode->i_mapping) {
 				btrfs_err(BTRFS_I(inode)->root->fs_info,
 					  "free space cache page truncated");
 				io_ctl_drop_pages(io_ctl);
 				return -EIO;
 			}
-			if (!PageUptodate(page)) {
+			if (!folio_test_uptodate(folio)) {
 				btrfs_err(BTRFS_I(inode)->root->fs_info,
 					   "error reading free space cache");
 				io_ctl_drop_pages(io_ctl);
@@ -753,8 +743,8 @@ static int __load_free_space_cache(struct btrfs_root *root, struct inode *inode,
 		return 0;
 
 	key.objectid = BTRFS_FREE_SPACE_OBJECTID;
-	key.offset = offset;
 	key.type = 0;
+	key.offset = offset;
 
 	ret = btrfs_search_slot(NULL, root, &key, path, 0, 0);
 	if (ret < 0)
@@ -1156,8 +1146,8 @@ update_cache_item(struct btrfs_trans_handle *trans,
 	int ret;
 
 	key.objectid = BTRFS_FREE_SPACE_OBJECTID;
-	key.offset = offset;
 	key.type = 0;
+	key.offset = offset;
 
 	ret = btrfs_search_slot(trans, root, &key, path, 0, 1);
 	if (ret < 0) {
@@ -3653,7 +3643,8 @@ static int do_trimming(struct btrfs_block_group *block_group,
 		       u64 *total_trimmed, u64 start, u64 bytes,
 		       u64 reserved_start, u64 reserved_bytes,
 		       enum btrfs_trim_state reserved_trim_state,
-		       struct btrfs_trim_range *trim_entry)
+		       struct btrfs_trim_range *trim_entry,
+		       enum btrfs_clear_op_type clear)
 {
 	struct btrfs_space_info *space_info = block_group->space_info;
 	struct btrfs_fs_info *fs_info = block_group->fs_info;
@@ -3675,7 +3666,7 @@ static int do_trimming(struct btrfs_block_group *block_group,
 	spin_unlock(&block_group->lock);
 	spin_unlock(&space_info->lock);
 
-	ret = btrfs_discard_extent(fs_info, start, bytes, &trimmed);
+	ret = btrfs_discard_extent(fs_info, start, bytes, &trimmed, clear);
 	if (!ret) {
 		*total_trimmed += trimmed;
 		trim_state = BTRFS_TRIM_STATE_TRIMMED;
@@ -3712,7 +3703,7 @@ static int do_trimming(struct btrfs_block_group *block_group,
  */
 static int trim_no_bitmap(struct btrfs_block_group *block_group,
 			  u64 *total_trimmed, u64 start, u64 end, u64 minlen,
-			  bool async)
+			  bool async, enum btrfs_clear_op_type clear)
 {
 	struct btrfs_discard_ctl *discard_ctl =
 					&block_group->fs_info->discard_ctl;
@@ -3801,7 +3792,7 @@ static int trim_no_bitmap(struct btrfs_block_group *block_group,
 
 		ret = do_trimming(block_group, total_trimmed, start, bytes,
 				  extent_start, extent_bytes, extent_trim_state,
-				  &trim_entry);
+				  &trim_entry, clear);
 		if (ret) {
 			block_group->discard_cursor = start + bytes;
 			break;
@@ -3878,7 +3869,7 @@ static void end_trimming_bitmap(struct btrfs_free_space_ctl *ctl,
  */
 static int trim_bitmaps(struct btrfs_block_group *block_group,
 			u64 *total_trimmed, u64 start, u64 end, u64 minlen,
-			u64 maxlen, bool async)
+			u64 maxlen, bool async, enum btrfs_clear_op_type clear)
 {
 	struct btrfs_discard_ctl *discard_ctl =
 					&block_group->fs_info->discard_ctl;
@@ -3987,7 +3978,7 @@ static int trim_bitmaps(struct btrfs_block_group *block_group,
 		mutex_unlock(&ctl->cache_writeout_mutex);
 
 		ret = do_trimming(block_group, total_trimmed, start, bytes,
-				  start, bytes, 0, &trim_entry);
+				  start, bytes, 0, &trim_entry, clear);
 		if (ret) {
 			reset_trimming_bitmap(ctl, offset);
 			block_group->discard_cursor =
@@ -4021,7 +4012,8 @@ out:
 }
 
 int btrfs_trim_block_group(struct btrfs_block_group *block_group,
-			   u64 *trimmed, u64 start, u64 end, u64 minlen)
+			   u64 *trimmed, u64 start, u64 end, u64 minlen,
+			   enum btrfs_clear_op_type clear)
 {
 	struct btrfs_free_space_ctl *ctl = block_group->free_space_ctl;
 	int ret;
@@ -4039,11 +4031,11 @@ int btrfs_trim_block_group(struct btrfs_block_group *block_group,
 	btrfs_freeze_block_group(block_group);
 	spin_unlock(&block_group->lock);
 
-	ret = trim_no_bitmap(block_group, trimmed, start, end, minlen, false);
+	ret = trim_no_bitmap(block_group, trimmed, start, end, minlen, false, clear);
 	if (ret)
 		goto out;
 
-	ret = trim_bitmaps(block_group, trimmed, start, end, minlen, 0, false);
+	ret = trim_bitmaps(block_group, trimmed, start, end, minlen, 0, false, clear);
 	div64_u64_rem(end, BITS_PER_BITMAP * ctl->unit, &rem);
 	/* If we ended in the middle of a bitmap, reset the trimming flag */
 	if (rem)
@@ -4055,7 +4047,7 @@ out:
 
 int btrfs_trim_block_group_extents(struct btrfs_block_group *block_group,
 				   u64 *trimmed, u64 start, u64 end, u64 minlen,
-				   bool async)
+				   bool async, enum btrfs_clear_op_type clear)
 {
 	int ret;
 
@@ -4069,7 +4061,7 @@ int btrfs_trim_block_group_extents(struct btrfs_block_group *block_group,
 	btrfs_freeze_block_group(block_group);
 	spin_unlock(&block_group->lock);
 
-	ret = trim_no_bitmap(block_group, trimmed, start, end, minlen, async);
+	ret = trim_no_bitmap(block_group, trimmed, start, end, minlen, async, clear);
 	btrfs_unfreeze_block_group(block_group);
 
 	return ret;
@@ -4077,7 +4069,8 @@ int btrfs_trim_block_group_extents(struct btrfs_block_group *block_group,
 
 int btrfs_trim_block_group_bitmaps(struct btrfs_block_group *block_group,
 				   u64 *trimmed, u64 start, u64 end, u64 minlen,
-				   u64 maxlen, bool async)
+				   u64 maxlen, bool async,
+				   enum btrfs_clear_op_type clear)
 {
 	int ret;
 
@@ -4092,7 +4085,7 @@ int btrfs_trim_block_group_bitmaps(struct btrfs_block_group *block_group,
 	spin_unlock(&block_group->lock);
 
 	ret = trim_bitmaps(block_group, trimmed, start, end, minlen, maxlen,
-			   async);
+			   async, clear);
 
 	btrfs_unfreeze_block_group(block_group);
 
