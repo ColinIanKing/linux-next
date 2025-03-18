@@ -5282,6 +5282,38 @@ static int sol_socket_sockopt(struct sock *sk, int optname,
 			     KERNEL_SOCKPTR(optval), *optlen);
 }
 
+static int bpf_sol_tcp_getsockopt(struct sock *sk, int optname,
+				  char *optval, int optlen)
+{
+	if (optlen != sizeof(int))
+		return -EINVAL;
+
+	switch (optname) {
+	case TCP_BPF_SOCK_OPS_CB_FLAGS: {
+		int cb_flags = tcp_sk(sk)->bpf_sock_ops_cb_flags;
+
+		memcpy(optval, &cb_flags, optlen);
+		break;
+	}
+	case TCP_BPF_RTO_MIN: {
+		int rto_min_us = jiffies_to_usecs(inet_csk(sk)->icsk_rto_min);
+
+		memcpy(optval, &rto_min_us, optlen);
+		break;
+	}
+	case TCP_BPF_DELACK_MAX: {
+		int delack_max_us = jiffies_to_usecs(inet_csk(sk)->icsk_delack_max);
+
+		memcpy(optval, &delack_max_us, optlen);
+		break;
+	}
+	default:
+		return -EINVAL;
+	}
+
+	return 0;
+}
+
 static int bpf_sol_tcp_setsockopt(struct sock *sk, int optname,
 				  char *optval, int optlen)
 {
@@ -5415,20 +5447,9 @@ static int sol_tcp_sockopt(struct sock *sk, int optname,
 		if (*optlen < 1)
 			return -EINVAL;
 		break;
-	case TCP_BPF_SOCK_OPS_CB_FLAGS:
-		if (*optlen != sizeof(int))
-			return -EINVAL;
-		if (getopt) {
-			struct tcp_sock *tp = tcp_sk(sk);
-			int cb_flags = tp->bpf_sock_ops_cb_flags;
-
-			memcpy(optval, &cb_flags, *optlen);
-			return 0;
-		}
-		return bpf_sol_tcp_setsockopt(sk, optname, optval, *optlen);
 	default:
 		if (getopt)
-			return -EINVAL;
+			return bpf_sol_tcp_getsockopt(sk, optname, optval, *optlen);
 		return bpf_sol_tcp_setsockopt(sk, optname, optval, *optlen);
 	}
 
@@ -8116,6 +8137,8 @@ sk_filter_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_skb_load_bytes_relative_proto;
 	case BPF_FUNC_get_socket_cookie:
 		return &bpf_get_socket_cookie_proto;
+	case BPF_FUNC_get_netns_cookie:
+		return &bpf_get_netns_cookie_proto;
 	case BPF_FUNC_get_socket_uid:
 		return &bpf_get_socket_uid_proto;
 	case BPF_FUNC_perf_event_output:
@@ -9676,7 +9699,7 @@ static u32 bpf_convert_ctx_access(enum bpf_access_type type,
 
 	case offsetof(struct __sk_buff, queue_mapping):
 		if (type == BPF_WRITE) {
-			u32 off = bpf_target_off(struct sk_buff, queue_mapping, 2, target_size);
+			u32 offset = bpf_target_off(struct sk_buff, queue_mapping, 2, target_size);
 
 			if (BPF_CLASS(si->code) == BPF_ST && si->imm >= NO_QUEUE_MAPPING) {
 				*insn++ = BPF_JMP_A(0); /* noop */
@@ -9685,7 +9708,7 @@ static u32 bpf_convert_ctx_access(enum bpf_access_type type,
 
 			if (BPF_CLASS(si->code) == BPF_STX)
 				*insn++ = BPF_JMP_IMM(BPF_JGE, si->src_reg, NO_QUEUE_MAPPING, 1);
-			*insn++ = BPF_EMIT_STORE(BPF_H, si, off);
+			*insn++ = BPF_EMIT_STORE(BPF_H, si, offset);
 		} else {
 			*insn++ = BPF_LDX_MEM(BPF_H, si->dst_reg, si->src_reg,
 					      bpf_target_off(struct sk_buff,
