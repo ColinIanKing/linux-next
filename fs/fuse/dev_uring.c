@@ -140,6 +140,33 @@ void fuse_uring_abort_end_requests(struct fuse_ring *ring)
 	}
 }
 
+bool fuse_uring_request_expired(struct fuse_conn *fc)
+{
+	struct fuse_ring *ring = fc->ring;
+	struct fuse_ring_queue *queue;
+	int qid;
+
+	if (!ring)
+		return false;
+
+	for (qid = 0; qid < ring->nr_queues; qid++) {
+		queue = READ_ONCE(ring->queues[qid]);
+		if (!queue)
+			continue;
+
+		spin_lock(&queue->lock);
+		if (fuse_request_expired(fc, &queue->fuse_req_queue) ||
+		    fuse_request_expired(fc, &queue->fuse_req_bg_queue) ||
+		    fuse_fpq_processing_expired(fc, queue->fpq.processing)) {
+			spin_unlock(&queue->lock);
+			return true;
+		}
+		spin_unlock(&queue->lock);
+	}
+
+	return false;
+}
+
 void fuse_uring_destruct(struct fuse_conn *fc)
 {
 	struct fuse_ring *ring = fc->ring;
@@ -208,11 +235,10 @@ static struct fuse_ring *fuse_uring_create(struct fuse_conn *fc)
 
 	init_waitqueue_head(&ring->stop_waitq);
 
-	fc->ring = ring;
 	ring->nr_queues = nr_queues;
 	ring->fc = fc;
 	ring->max_payload_sz = max_payload_size;
-	atomic_set(&ring->queue_refs, 0);
+	smp_store_release(&fc->ring, ring);
 
 	spin_unlock(&fc->lock);
 	return ring;
@@ -1041,7 +1067,7 @@ static int fuse_uring_register(struct io_uring_cmd *cmd,
 			       unsigned int issue_flags, struct fuse_conn *fc)
 {
 	const struct fuse_uring_cmd_req *cmd_req = io_uring_sqe_cmd(cmd->sqe);
-	struct fuse_ring *ring = fc->ring;
+	struct fuse_ring *ring = smp_load_acquire(&fc->ring);
 	struct fuse_ring_queue *queue;
 	struct fuse_ring_ent *ent;
 	int err;
