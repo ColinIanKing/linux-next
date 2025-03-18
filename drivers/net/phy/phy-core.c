@@ -6,6 +6,9 @@
 #include <linux/phy.h>
 #include <linux/of.h>
 
+#include "phylib.h"
+#include "phylib-internal.h"
+
 /**
  * phy_speed_to_str - Return a string representing the PHY link speed
  *
@@ -13,7 +16,7 @@
  */
 const char *phy_speed_to_str(int speed)
 {
-	BUILD_BUG_ON_MSG(__ETHTOOL_LINK_MODE_MASK_NBITS != 103,
+	BUILD_BUG_ON_MSG(__ETHTOOL_LINK_MODE_MASK_NBITS != 121,
 		"Enum ethtool_link_mode_bit_indices and phylib are out of sync. "
 		"If a speed or mode has been added please update phy_speed_to_str "
 		"and the PHY settings array.\n");
@@ -169,6 +172,12 @@ static const struct phy_setting settings[] = {
 	PHY_SETTING( 800000, FULL, 800000baseDR8_2_Full		),
 	PHY_SETTING( 800000, FULL, 800000baseSR8_Full		),
 	PHY_SETTING( 800000, FULL, 800000baseVR8_Full		),
+	PHY_SETTING( 800000, FULL, 800000baseCR4_Full		),
+	PHY_SETTING( 800000, FULL, 800000baseKR4_Full		),
+	PHY_SETTING( 800000, FULL, 800000baseDR4_Full		),
+	PHY_SETTING( 800000, FULL, 800000baseDR4_2_Full		),
+	PHY_SETTING( 800000, FULL, 800000baseSR4_Full		),
+	PHY_SETTING( 800000, FULL, 800000baseVR4_Full		),
 	/* 400G */
 	PHY_SETTING( 400000, FULL, 400000baseCR8_Full		),
 	PHY_SETTING( 400000, FULL, 400000baseKR8_Full		),
@@ -180,6 +189,12 @@ static const struct phy_setting settings[] = {
 	PHY_SETTING( 400000, FULL, 400000baseLR4_ER4_FR4_Full	),
 	PHY_SETTING( 400000, FULL, 400000baseDR4_Full		),
 	PHY_SETTING( 400000, FULL, 400000baseSR4_Full		),
+	PHY_SETTING( 400000, FULL, 400000baseCR2_Full		),
+	PHY_SETTING( 400000, FULL, 400000baseKR2_Full		),
+	PHY_SETTING( 400000, FULL, 400000baseDR2_Full		),
+	PHY_SETTING( 400000, FULL, 400000baseDR2_2_Full		),
+	PHY_SETTING( 400000, FULL, 400000baseSR2_Full		),
+	PHY_SETTING( 400000, FULL, 400000baseVR2_Full		),
 	/* 200G */
 	PHY_SETTING( 200000, FULL, 200000baseCR4_Full		),
 	PHY_SETTING( 200000, FULL, 200000baseKR4_Full		),
@@ -191,6 +206,12 @@ static const struct phy_setting settings[] = {
 	PHY_SETTING( 200000, FULL, 200000baseLR2_ER2_FR2_Full	),
 	PHY_SETTING( 200000, FULL, 200000baseDR2_Full		),
 	PHY_SETTING( 200000, FULL, 200000baseSR2_Full		),
+	PHY_SETTING( 200000, FULL, 200000baseCR_Full		),
+	PHY_SETTING( 200000, FULL, 200000baseKR_Full		),
+	PHY_SETTING( 200000, FULL, 200000baseDR_Full		),
+	PHY_SETTING( 200000, FULL, 200000baseDR_2_Full		),
+	PHY_SETTING( 200000, FULL, 200000baseSR_Full		),
+	PHY_SETTING( 200000, FULL, 200000baseVR_Full		),
 	/* 100G */
 	PHY_SETTING( 100000, FULL, 100000baseCR4_Full		),
 	PHY_SETTING( 100000, FULL, 100000baseKR4_Full		),
@@ -388,7 +409,7 @@ void of_set_phy_supported(struct phy_device *phydev)
 void of_set_phy_eee_broken(struct phy_device *phydev)
 {
 	struct device_node *node = phydev->mdio.dev.of_node;
-	unsigned long *modes = phydev->eee_broken_modes;
+	unsigned long *modes = phydev->eee_disabled_modes;
 
 	if (!IS_ENABLED(CONFIG_OF_MDIO) || !node)
 		return;
@@ -526,7 +547,6 @@ void phy_check_downshift(struct phy_device *phydev)
 
 	phydev->downshifted_rate = 1;
 }
-EXPORT_SYMBOL_GPL(phy_check_downshift);
 
 static int phy_resolve_min_speed(struct phy_device *phydev, bool fdx_only)
 {
@@ -715,43 +735,6 @@ int __phy_package_read_mmd(struct phy_device *phydev,
 EXPORT_SYMBOL(__phy_package_read_mmd);
 
 /**
- * phy_package_read_mmd - read MMD reg relative to PHY package base addr
- * @phydev: The phy_device struct
- * @addr_offset: The offset to be added to PHY package base_addr
- * @devad: The MMD to read from
- * @regnum: The register on the MMD to read
- *
- * Convenience helper for reading a register of an MMD on a given PHY
- * using the PHY package base address. The base address is added to
- * the addr_offset value.
- *
- * Same calling rules as for phy_read();
- *
- * NOTE: It's assumed that the entire PHY package is either C22 or C45.
- */
-int phy_package_read_mmd(struct phy_device *phydev,
-			 unsigned int addr_offset, int devad,
-			 u32 regnum)
-{
-	int addr = phy_package_address(phydev, addr_offset);
-	int val;
-
-	if (addr < 0)
-		return addr;
-
-	if (regnum > (u16)~0 || devad > 32)
-		return -EINVAL;
-
-	phy_lock_mdio_bus(phydev);
-	val = mmd_phy_read(phydev->mdio.bus, addr, phydev->is_c45, devad,
-			   regnum);
-	phy_unlock_mdio_bus(phydev);
-
-	return val;
-}
-EXPORT_SYMBOL(phy_package_read_mmd);
-
-/**
  * __phy_package_write_mmd - write MMD reg relative to PHY package base addr
  * @phydev: The phy_device struct
  * @addr_offset: The offset to be added to PHY package base_addr
@@ -783,44 +766,6 @@ int __phy_package_write_mmd(struct phy_device *phydev,
 			     regnum, val);
 }
 EXPORT_SYMBOL(__phy_package_write_mmd);
-
-/**
- * phy_package_write_mmd - write MMD reg relative to PHY package base addr
- * @phydev: The phy_device struct
- * @addr_offset: The offset to be added to PHY package base_addr
- * @devad: The MMD to write to
- * @regnum: The register on the MMD to write
- * @val: value to write to @regnum
- *
- * Convenience helper for writing a register of an MMD on a given PHY
- * using the PHY package base address. The base address is added to
- * the addr_offset value.
- *
- * Same calling rules as for phy_write();
- *
- * NOTE: It's assumed that the entire PHY package is either C22 or C45.
- */
-int phy_package_write_mmd(struct phy_device *phydev,
-			  unsigned int addr_offset, int devad,
-			  u32 regnum, u16 val)
-{
-	int addr = phy_package_address(phydev, addr_offset);
-	int ret;
-
-	if (addr < 0)
-		return addr;
-
-	if (regnum > (u16)~0 || devad > 32)
-		return -EINVAL;
-
-	phy_lock_mdio_bus(phydev);
-	ret = mmd_phy_write(phydev->mdio.bus, addr, phydev->is_c45, devad,
-			    regnum, val);
-	phy_unlock_mdio_bus(phydev);
-
-	return ret;
-}
-EXPORT_SYMBOL(phy_package_write_mmd);
 
 /**
  * phy_modify_changed - Function for modifying a PHY register
