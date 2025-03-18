@@ -66,12 +66,6 @@ enum {
 };
 
 /*
- * Folio private values.  Every page that is controlled by the extent map has
- * folio private set to this value.
- */
-#define EXTENT_FOLIO_PRIVATE			1
-
-/*
  * The extent buffer bitmap operations are done with byte granularity instead of
  * word granularity for two reasons:
  * 1. The bitmaps must be little-endian on disk.
@@ -247,13 +241,11 @@ int btrfs_writepages(struct address_space *mapping, struct writeback_control *wb
 int btree_write_cache_pages(struct address_space *mapping,
 			    struct writeback_control *wbc);
 void btrfs_readahead(struct readahead_control *rac);
-int set_folio_extent_mapped(struct folio *folio);
-void clear_folio_extent_mapped(struct folio *folio);
+int btrfs_set_folio_subpage(struct folio *folio);
+void btrfs_clear_folio_subpage(struct folio *folio);
 
 struct extent_buffer *alloc_extent_buffer(struct btrfs_fs_info *fs_info,
 					  u64 start, u64 owner_root, int level);
-struct extent_buffer *__alloc_dummy_extent_buffer(struct btrfs_fs_info *fs_info,
-						  u64 start, unsigned long len);
 struct extent_buffer *alloc_dummy_extent_buffer(struct btrfs_fs_info *fs_info,
 						u64 start);
 struct extent_buffer *btrfs_clone_extent_buffer(const struct extent_buffer *src);
@@ -276,7 +268,8 @@ void btrfs_readahead_tree_block(struct btrfs_fs_info *fs_info,
 				u64 bytenr, u64 owner_root, u64 gen, int level);
 void btrfs_readahead_node_child(struct extent_buffer *node, int slot);
 
-static inline int num_extent_pages(const struct extent_buffer *eb)
+/* Note: this can be used in for loops without caching the value in a variable. */
+static inline int __pure num_extent_pages(const struct extent_buffer *eb)
 {
 	/*
 	 * For sectorsize == PAGE_SIZE case, since nodesize is always aligned to
@@ -294,8 +287,10 @@ static inline int num_extent_pages(const struct extent_buffer *eb)
  * As we can have either one large folio covering the whole eb
  * (either nodesize <= PAGE_SIZE, or high order folio), or multiple
  * single-paged folios.
+ *
+ * Note: this can be used in for loops without caching the value in a variable.
  */
-static inline int num_extent_folios(const struct extent_buffer *eb)
+static inline int __pure num_extent_folios(const struct extent_buffer *eb)
 {
 	if (folio_order(eb->folios[0]))
 		return 1;
