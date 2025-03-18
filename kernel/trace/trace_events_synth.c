@@ -620,7 +620,8 @@ static int __set_synth_event_print_fmt(struct synth_event *event,
 		if (event->fields[i]->is_string &&
 		    event->fields[i]->is_dynamic)
 			pos += snprintf(buf + pos, LEN_OR_ZERO,
-				", __get_str(%s)", event->fields[i]->name);
+				", (int)__get_dynamic_array_len(%s), __get_str(%s)",
+				event->fields[i]->name, event->fields[i]->name);
 		else if (event->fields[i]->is_stack)
 			pos += snprintf(buf + pos, LEN_OR_ZERO,
 				", __get_stacktrace(%s)", event->fields[i]->name);
