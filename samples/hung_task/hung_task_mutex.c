@@ -22,7 +22,7 @@
 
 static const char dummy_string[] = "This is a dummy string.";
 static DEFINE_MUTEX(dummy_mutex);
-struct dentry *hung_task_dir;
+static struct dentry *hung_task_dir;
 
 static ssize_t read_dummy(struct file *file, char __user *user_buf,
 			  size_t count, loff_t *ppos)
