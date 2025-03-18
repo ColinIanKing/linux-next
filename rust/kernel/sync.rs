@@ -5,7 +5,7 @@
 //! This module contains the kernel APIs related to synchronisation that have been ported or
 //! wrapped for usage by Rust code in the kernel.
 
-use crate::pin_init;
+use pin_init;
 use crate::prelude::*;
 use crate::types::Opaque;
 
