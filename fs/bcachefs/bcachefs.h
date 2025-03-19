@@ -203,6 +203,7 @@
 #include <linux/types.h>
 #include <linux/workqueue.h>
 #include <linux/zstd.h>
+#include <linux/unicode.h>
 
 #include "bcachefs_format.h"
 #include "btree_journal_iter_types.h"
@@ -444,6 +445,7 @@ BCH_DEBUG_PARAMS_DEBUG()
 	x(btree_node_sort)			\
 	x(btree_node_read)			\
 	x(btree_node_read_done)			\
+	x(btree_node_write)			\
 	x(btree_interior_update_foreground)	\
 	x(btree_interior_update_total)		\
 	x(btree_gc)				\
@@ -456,6 +458,7 @@ BCH_DEBUG_PARAMS_DEBUG()
 	x(blocked_journal_low_on_space)		\
 	x(blocked_journal_low_on_pin)		\
 	x(blocked_journal_max_in_flight)	\
+	x(blocked_journal_max_open)		\
 	x(blocked_key_cache_flush)		\
 	x(blocked_allocate)			\
 	x(blocked_allocate_open_bucket)		\
@@ -533,6 +536,7 @@ struct bch_dev {
 	 */
 	struct bch_member_cpu	mi;
 	atomic64_t		errors[BCH_MEMBER_ERROR_NR];
+	unsigned long		write_errors_start;
 
 	__uuid_t		uuid;
 	char			name[BDEVNAME_SIZE];
@@ -687,7 +691,8 @@ struct btree_trans_buf {
 	x(gc_gens)							\
 	x(snapshot_delete_pagecache)					\
 	x(sysfs)							\
-	x(btree_write_buffer)
+	x(btree_write_buffer)						\
+	x(btree_node_scrub)
 
 enum bch_write_ref {
 #define x(n) BCH_WRITE_REF_##n,
@@ -695,6 +700,8 @@ enum bch_write_ref {
 #undef x
 	BCH_WRITE_REF_NR,
 };
+
+#define BCH_FS_DEFAULT_UTF8_ENCODING UNICODE_AGE(12, 1, 0)
 
 struct bch_fs {
 	struct closure		cl;
@@ -780,6 +787,9 @@ struct bch_fs {
 		u64		btrees_lost_data;
 	}			sb;
 
+#ifdef CONFIG_UNICODE
+	struct unicode_map	*cf_encoding;
+#endif
 
 	struct bch_sb_handle	disk_sb;
 
@@ -969,7 +979,6 @@ struct bch_fs {
 	mempool_t		compress_workspace[BCH_COMPRESSION_OPT_NR];
 	size_t			zstd_workspace_size;
 
-	struct crypto_shash	*sha256;
 	struct crypto_sync_skcipher *chacha20;
 	struct crypto_shash	*poly1305;
 
@@ -993,14 +1002,10 @@ struct bch_fs {
 	wait_queue_head_t	copygc_running_wq;
 
 	/* STRIPES: */
-	GENRADIX(struct stripe) stripes;
 	GENRADIX(struct gc_stripe) gc_stripes;
 
 	struct hlist_head	ec_stripes_new[32];
 	spinlock_t		ec_stripes_new_lock;
-
-	ec_stripes_heap		ec_stripes_heap;
-	struct mutex		ec_stripes_heap_lock;
 
 	/* ERASURE CODING */
 	struct list_head	ec_stripe_head_list;
