@@ -200,7 +200,7 @@ static int __init vt8500_irq_init(struct device_node *node,
 	}
 
 	intc[active_cnt].base = of_iomap(np, 0);
-	intc[active_cnt].domain = irq_domain_add_linear(node, 64,
+	intc[active_cnt].domain = irq_domain_create_linear(of_fwnode_handle(node), 64,
 			&vt8500_irq_domain_ops,	&intc[active_cnt]);
 
 	if (!intc[active_cnt].base) {
