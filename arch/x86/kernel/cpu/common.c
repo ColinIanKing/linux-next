@@ -519,6 +519,17 @@ static __always_inline void setup_pku(struct cpuinfo_x86 *c)
 	if (c == &boot_cpu_data) {
 		if (pku_disabled || !cpu_feature_enabled(X86_FEATURE_PKU))
 			return;
+		if (!cpu_has_xfeatures(XFEATURE_PKRU, NULL)) {
+			/*
+			 * Missing XFEATURE_PKRU is not really a valid
+			 * configuration at this point, but apparently
+			 * Apple Virtualization is affected by this,
+			 * so return with a FW warning instead of crashing
+			 * the bootup:
+			 */
+			WARN_ONCE(1, FW_BUG "Invalid XFEATURE_PKRU configuration.\n");
+			return;
+		}
 		/*
 		 * Setting CR4.PKE will cause the X86_FEATURE_OSPKE cpuid
 		 * bit to be set.  Enforce it.
