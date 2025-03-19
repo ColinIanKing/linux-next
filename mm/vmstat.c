@@ -1274,9 +1274,11 @@ const char * const vmstat_text[] = {
 	"pgdemote_kswapd",
 	"pgdemote_direct",
 	"pgdemote_khugepaged",
+	"pgdemote_proactive",
 #ifdef CONFIG_HUGETLB_PAGE
 	"nr_hugetlb",
 #endif
+	"nr_balloon_pages",
 	/* system-wide enum vm_stat_item counters */
 	"nr_dirty_threshold",
 	"nr_dirty_background_threshold",
@@ -1308,9 +1310,11 @@ const char * const vmstat_text[] = {
 	"pgsteal_kswapd",
 	"pgsteal_direct",
 	"pgsteal_khugepaged",
+	"pgsteal_proactive",
 	"pgscan_kswapd",
 	"pgscan_direct",
 	"pgscan_khugepaged",
+	"pgscan_proactive",
 	"pgscan_direct_throttle",
 	"pgscan_anon",
 	"pgscan_file",
