@@ -232,6 +232,7 @@ struct pci_epc_features {
 	unsigned int	linkup_notifier : 1;
 	unsigned int	msi_capable : 1;
 	unsigned int	msix_capable : 1;
+	unsigned int	intx_capable : 1;
 	struct	pci_epc_bar_desc bar[PCI_STD_NUM_BARS];
 	size_t	align;
 };
