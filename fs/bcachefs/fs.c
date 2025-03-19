@@ -698,6 +698,23 @@ static struct dentry *bch2_lookup(struct inode *vdir, struct dentry *dentry,
 	if (IS_ERR(inode))
 		inode = NULL;
 
+#ifdef CONFIG_UNICODE
+	if (!inode && IS_CASEFOLDED(vdir)) {
+		/*
+		 * Do not cache a negative dentry in casefolded directories
+		 * as it would need to be invalidated in the following situation:
+		 * - Lookup file "blAH" in a casefolded directory
+		 * - Creation of file "BLAH" in a casefolded directory
+		 * - Lookup file "blAH" in a casefolded directory
+		 * which would fail if we had a negative dentry.
+		 *
+		 * We should come back to this when VFS has a method to handle
+		 * this edgecase.
+		 */
+		return NULL;
+	}
+#endif
+
 	return d_splice_alias(&inode->v, dentry);
 }
 
@@ -1802,7 +1819,8 @@ static void bch2_vfs_inode_init(struct btree_trans *trans,
 		break;
 	}
 
-	mapping_set_large_folios(inode->v.i_mapping);
+	mapping_set_folio_min_order(inode->v.i_mapping,
+				    get_order(trans->c->opts.block_size));
 }
 
 static void bch2_free_inode(struct inode *vinode)
@@ -2008,44 +2026,6 @@ static struct bch_fs *bch2_path_to_fs(const char *path)
 	return c ?: ERR_PTR(-ENOENT);
 }
 
-static int bch2_remount(struct super_block *sb, int *flags,
-			struct bch_opts opts)
-{
-	struct bch_fs *c = sb->s_fs_info;
-	int ret = 0;
-
-	opt_set(opts, read_only, (*flags & SB_RDONLY) != 0);
-
-	if (opts.read_only != c->opts.read_only) {
-		down_write(&c->state_lock);
-
-		if (opts.read_only) {
-			bch2_fs_read_only(c);
-
-			sb->s_flags |= SB_RDONLY;
-		} else {
-			ret = bch2_fs_read_write(c);
-			if (ret) {
-				bch_err(c, "error going rw: %i", ret);
-				up_write(&c->state_lock);
-				ret = -EINVAL;
-				goto err;
-			}
-
-			sb->s_flags &= ~SB_RDONLY;
-		}
-
-		c->opts.read_only = opts.read_only;
-
-		up_write(&c->state_lock);
-	}
-
-	if (opt_defined(opts, errors))
-		c->opts.errors = opts.errors;
-err:
-	return bch2_err_class(ret);
-}
-
 static int bch2_show_devname(struct seq_file *seq, struct dentry *root)
 {
 	struct bch_fs *c = root->d_sb->s_fs_info;
@@ -2200,9 +2180,10 @@ static int bch2_fs_get_tree(struct fs_context *fc)
 
 	bch2_opts_apply(&c->opts, opts);
 
-	ret = bch2_fs_start(c);
-	if (ret)
-		goto err_stop_fs;
+	/*
+	 * need to initialise sb and set c->vfs_sb _before_ starting fs,
+	 * for blk_holder_ops
+	 */
 
 	sb = sget(fc->fs_type, NULL, bch2_set_super, fc->sb_flags|SB_NOSEC, c);
 	ret = PTR_ERR_OR_ZERO(sb);
@@ -2263,6 +2244,10 @@ got_sb:
 #endif
 
 	sb->s_shrink->seeks = 0;
+
+	ret = bch2_fs_start(c);
+	if (ret)
+		goto err_put_super;
 
 	vinode = bch2_vfs_inode_get(c, BCACHEFS_ROOT_SUBVOL_INUM);
 	ret = PTR_ERR_OR_ZERO(vinode);
@@ -2351,8 +2336,39 @@ static int bch2_fs_reconfigure(struct fs_context *fc)
 {
 	struct super_block *sb = fc->root->d_sb;
 	struct bch2_opts_parse *opts = fc->fs_private;
+	struct bch_fs *c = sb->s_fs_info;
+	int ret = 0;
 
-	return bch2_remount(sb, &fc->sb_flags, opts->opts);
+	opt_set(opts->opts, read_only, (fc->sb_flags & SB_RDONLY) != 0);
+
+	if (opts->opts.read_only != c->opts.read_only) {
+		down_write(&c->state_lock);
+
+		if (opts->opts.read_only) {
+			bch2_fs_read_only(c);
+
+			sb->s_flags |= SB_RDONLY;
+		} else {
+			ret = bch2_fs_read_write(c);
+			if (ret) {
+				bch_err(c, "error going rw: %i", ret);
+				up_write(&c->state_lock);
+				ret = -EINVAL;
+				goto err;
+			}
+
+			sb->s_flags &= ~SB_RDONLY;
+		}
+
+		c->opts.read_only = opts->opts.read_only;
+
+		up_write(&c->state_lock);
+	}
+
+	if (opt_defined(opts->opts, errors))
+		c->opts.errors = opts->opts.errors;
+err:
+	return bch2_err_class(ret);
 }
 
 static const struct fs_context_operations bch2_context_ops = {
