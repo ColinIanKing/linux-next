@@ -513,6 +513,15 @@ to create an io_uring instance.  If io_uring_group is set to -1 (the
 default), only processes with the CAP_SYS_ADMIN capability may create
 io_uring instances.
 
+io_uring_iowait
+===============
+
+When applications are waiting for completions via io_uring_enter(2),
+the default behavior is to attribute that to iowait if there are
+pending requests in-flight. If io_uring_iowait is set to 0, then
+iowait accounting will not be done when an application is waiting on
+IO. If io_uring_iowait is set to 1 (the default), then applications
+waiting on request completions will contribute to iowait accounting.
 
 kexec_load_disabled
 ===================
