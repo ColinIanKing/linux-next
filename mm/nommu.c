@@ -42,18 +42,12 @@
 #include <asm/mmu_context.h>
 #include "internal.h"
 
-void *high_memory;
-EXPORT_SYMBOL(high_memory);
-struct page *mem_map;
-unsigned long max_mapnr;
-EXPORT_SYMBOL(max_mapnr);
 unsigned long highest_memmap_pfn;
 int sysctl_nr_trim_pages = CONFIG_NOMMU_INITIAL_TRIM_EXCESS;
 int heap_stack_gap = 0;
 
 atomic_long_t mmap_pages_allocated;
 
-EXPORT_SYMBOL(mem_map);
 
 /* list of mapped, potentially shareable regions */
 static struct kmem_cache *vm_region_jar;
@@ -1191,7 +1185,7 @@ share:
 	setup_vma_to_mm(vma, current->mm);
 	current->mm->map_count++;
 	/* add the VMA to the tree */
-	vma_iter_store(&vmi, vma);
+	vma_iter_store_new(&vmi, vma);
 
 	/* we flush the region from the icache only when the first executable
 	 * mapping of it is made  */
@@ -1356,7 +1350,7 @@ static int split_vma(struct vma_iterator *vmi, struct vm_area_struct *vma,
 
 	setup_vma_to_mm(vma, mm);
 	setup_vma_to_mm(new, mm);
-	vma_iter_store(vmi, new);
+	vma_iter_store_new(vmi, new);
 	mm->map_count++;
 	return 0;
 
