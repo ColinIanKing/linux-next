@@ -7,6 +7,7 @@
  */
 
 #include <asm/current.h>
+#include <linux/cleanup.h>
 #include <linux/cred.h>
 #include <linux/errno.h>
 #include <linux/kernel.h>
@@ -214,15 +215,15 @@ static int hook_unix_stream_connect(struct sock *const sock,
 				    struct sock *const other,
 				    struct sock *const newsk)
 {
-	const struct landlock_ruleset *const dom =
-		landlock_get_applicable_domain(landlock_get_current_domain(),
-					       unix_scope);
+	const struct landlock_cred_security *const subject =
+		landlock_get_applicable_subject(current_cred(), unix_scope,
+						NULL);
 
 	/* Quick return for non-landlocked tasks. */
-	if (!dom)
+	if (!subject)
 		return 0;
 
-	if (is_abstract_socket(other) && sock_is_scoped(other, dom))
+	if (is_abstract_socket(other) && sock_is_scoped(other, subject->domain))
 		return -EPERM;
 
 	return 0;
@@ -231,11 +232,11 @@ static int hook_unix_stream_connect(struct sock *const sock,
 static int hook_unix_may_send(struct socket *const sock,
 			      struct socket *const other)
 {
-	const struct landlock_ruleset *const dom =
-		landlock_get_applicable_domain(landlock_get_current_domain(),
-					       unix_scope);
+	const struct landlock_cred_security *const subject =
+		landlock_get_applicable_subject(current_cred(), unix_scope,
+						NULL);
 
-	if (!dom)
+	if (!subject)
 		return 0;
 
 	/*
@@ -245,7 +246,8 @@ static int hook_unix_may_send(struct socket *const sock,
 	if (unix_peer(sock->sk) == other->sk)
 		return 0;
 
-	if (is_abstract_socket(other->sk) && sock_is_scoped(other->sk, dom))
+	if (is_abstract_socket(other->sk) &&
+	    sock_is_scoped(other->sk, subject->domain))
 		return -EPERM;
 
 	return 0;
@@ -257,15 +259,12 @@ static const struct access_masks signal_scope = {
 
 static int hook_task_kill(struct task_struct *const p,
 			  struct kernel_siginfo *const info, const int sig,
-			  const struct cred *const cred)
+			  const struct cred *cred)
 {
 	bool is_scoped;
-	const struct landlock_ruleset *dom;
+	const struct landlock_cred_security *subject;
 
-	if (cred) {
-		/* Dealing with USB IO. */
-		dom = landlock_cred(cred)->domain;
-	} else {
+	if (!cred) {
 		/*
 		 * Always allow sending signals between threads of the same process.
 		 * This is required for process credential changes by the Native POSIX
@@ -277,18 +276,22 @@ static int hook_task_kill(struct task_struct *const p,
 		if (same_thread_group(p, current))
 			return 0;
 
-		dom = landlock_get_current_domain();
+		/* Not dealing with USB IO. */
+		cred = current_cred();
 	}
-	dom = landlock_get_applicable_domain(dom, signal_scope);
+
+	subject = landlock_get_applicable_subject(cred, signal_scope, NULL);
 
 	/* Quick return for non-landlocked tasks. */
-	if (!dom)
+	if (!subject)
 		return 0;
 
-	rcu_read_lock();
-	is_scoped = domain_is_scoped(dom, landlock_get_task_domain(p),
-				     LANDLOCK_SCOPE_SIGNAL);
-	rcu_read_unlock();
+	scoped_guard(rcu)
+	{
+		is_scoped = domain_is_scoped(subject->domain,
+					     landlock_get_task_domain(p),
+					     signal_scope.scope);
+	}
 	if (is_scoped)
 		return -EPERM;
 
