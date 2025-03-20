@@ -1774,6 +1774,7 @@ static void hook_file_set_fowner(struct file *file)
 	struct landlock_ruleset *prev_dom;
 	struct task_struct *p;
 	struct landlock_cred_security fown_subject = {};
+	size_t fown_layer = 0;
 
 	/*
 	 * Lock already held by __f_setown(), see commit 26f204380a3c ("fs: Fix
@@ -1791,8 +1792,8 @@ static void hook_file_set_fowner(struct file *file)
 			.scope = LANDLOCK_SCOPE_SIGNAL,
 		};
 		const struct landlock_cred_security *new_subject =
-			landlock_get_applicable_subject(current_cred(),
-							signal_scope, NULL);
+			landlock_get_applicable_subject(
+				current_cred(), signal_scope, &fown_layer);
 		if (new_subject) {
 			landlock_get_ruleset(new_subject->domain);
 			fown_subject = *new_subject;
@@ -1801,6 +1802,9 @@ static void hook_file_set_fowner(struct file *file)
 
 	prev_dom = landlock_file(file)->fown_subject.domain;
 	landlock_file(file)->fown_subject = fown_subject;
+#ifdef CONFIG_AUDIT
+	landlock_file(file)->fown_layer = fown_layer;
+#endif /* CONFIG_AUDIT*/
 
 	/* Called in an RCU read-side critical section. */
 	landlock_put_ruleset_deferred(prev_dom);
