@@ -590,11 +590,9 @@ static int bch2_trigger_pointer(struct btree_trans *trans,
 		if (ret)
 			goto err;
 
-		if (!p.ptr.cached) {
-			ret = bch2_bucket_backpointer_mod(trans, k, &bp, insert);
-			if (ret)
-				goto err;
-		}
+		ret = bch2_bucket_backpointer_mod(trans, k, &bp, insert);
+		if (ret)
+			goto err;
 	}
 
 	if (flags & BTREE_TRIGGER_gc) {
@@ -674,10 +672,10 @@ err:
 			return -BCH_ERR_ENOMEM_mark_stripe_ptr;
 		}
 
-		mutex_lock(&c->ec_stripes_heap_lock);
+		gc_stripe_lock(m);
 
 		if (!m || !m->alive) {
-			mutex_unlock(&c->ec_stripes_heap_lock);
+			gc_stripe_unlock(m);
 			struct printbuf buf = PRINTBUF;
 			bch2_bkey_val_to_text(&buf, c, k);
 			bch_err_ratelimited(c, "pointer to nonexistent stripe %llu\n  while marking %s",
@@ -693,7 +691,7 @@ err:
 			.type = BCH_DISK_ACCOUNTING_replicas,
 		};
 		memcpy(&acc.replicas, &m->r.e, replicas_entry_bytes(&m->r.e));
-		mutex_unlock(&c->ec_stripes_heap_lock);
+		gc_stripe_unlock(m);
 
 		acc.replicas.data_type = data_type;
 		int ret = bch2_disk_accounting_mod(trans, &acc, &sectors, 1, true);
