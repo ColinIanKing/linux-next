@@ -57,8 +57,8 @@ enum amdgpu_gfx_pipe_priority {
 #define AMDGPU_GFX_QUEUE_PRIORITY_MINIMUM  0
 #define AMDGPU_GFX_QUEUE_PRIORITY_MAXIMUM  15
 
-/* 1 second timeout */
-#define GFX_PROFILE_IDLE_TIMEOUT	msecs_to_jiffies(1000)
+/* 10 millisecond timeout */
+#define GFX_PROFILE_IDLE_TIMEOUT	msecs_to_jiffies(10)
 
 enum amdgpu_gfx_partition {
 	AMDGPU_SPX_PARTITION_MODE = 0,
@@ -482,6 +482,8 @@ struct amdgpu_gfx {
 
 	atomic_t			total_submission_cnt;
 	struct delayed_work		idle_work;
+	bool				workload_profile_active;
+	struct mutex                    workload_profile_mutex;
 };
 
 struct amdgpu_gfx_ras_reg_entry {
