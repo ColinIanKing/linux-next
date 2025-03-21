@@ -269,7 +269,7 @@ void amdgpu_gmc_sysvm_location(struct amdgpu_device *adev, struct amdgpu_gmc *mc
  * @mc: memory controller structure holding memory information
  * @gart_placement: GART placement policy with respect to VRAM
  *
- * Function will place try to place GART before or after VRAM.
+ * Function will try to place GART before or after VRAM.
  * If GART size is bigger than space left then we ajust GART size.
  * Thus function will never fails.
  */
@@ -591,7 +591,8 @@ int amdgpu_gmc_allocate_vm_inv_eng(struct amdgpu_device *adev)
 
 		if (ring == &adev->mes.ring[0] ||
 		    ring == &adev->mes.ring[1] ||
-		    ring == &adev->umsch_mm.ring)
+		    ring == &adev->umsch_mm.ring ||
+		    ring == &adev->cper.ring_buf)
 			continue;
 
 		inv_eng = ffs(vm_inv_engs[vmhub]);
@@ -851,6 +852,7 @@ void amdgpu_gmc_tmz_set(struct amdgpu_device *adev)
 	case IP_VERSION(11, 5, 0):
 	case IP_VERSION(11, 5, 1):
 	case IP_VERSION(11, 5, 2):
+	case IP_VERSION(11, 5, 3):
 		/* Don't enable it by default yet.
 		 */
 		if (amdgpu_tmz < 1) {
@@ -888,6 +890,7 @@ void amdgpu_gmc_noretry_set(struct amdgpu_device *adev)
 				gc_ver == IP_VERSION(9, 4, 2) ||
 				gc_ver == IP_VERSION(9, 4, 3) ||
 				gc_ver == IP_VERSION(9, 4, 4) ||
+				gc_ver == IP_VERSION(9, 5, 0) ||
 				gc_ver >= IP_VERSION(10, 3, 0));
 
 	if (!amdgpu_sriov_xnack_support(adev))
