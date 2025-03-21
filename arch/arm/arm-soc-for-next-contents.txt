@@ -74,6 +74,14 @@ soc/dt
 		https://git.kernel.org/pub/scm/linux/kernel/git/conor/linux tags/riscv-dt-for-v6.15
 	hisilicon/dts
 		https://github.com/hisilicon/linux-hisi tags/hisi-arm64-dt-for-6.15
+	tegra/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/tegra/linux tags/tegra-for-6.15-arm-dt
+	dt/cleanup
+		https://git.kernel.org/pub/scm/linux/kernel/git/krzk/linux-dt tags/dt-cleanup-6.15
+	amlogic/dt64
+		https://git.kernel.org/pub/scm/linux/kernel/git/amlogic/linux tags/amlogic-arm64-dt-for-v6.15-v2
+	amlogic/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/amlogic/linux tags/amlogic-arm-dt-for-v6.15
 
 soc/drivers
 	resnsas/drivers
@@ -112,6 +120,17 @@ soc/drivers
 		https://git.kernel.org/pub/scm/linux/kernel/git/qcom/linux tags/qcom-drivers-for-6.15
 	qcom/drivers-2
 		https://git.kernel.org/pub/scm/linux/kernel/git/qcom/linux tags/qcom-drivers-for-6.15-2
+	zynq/drivers
+		https://github.com/Xilinx/linux-xlnx tags/zynqmp-soc-for-6.15
+	patch
+		platform: cznic: turris-omnia-mcu: Refactor requesting MCU interrupt
+		platform: cznic: Add keyctl helpers for Turris platform
+		platform: cznic: turris-omnia-mcu: Add support for digital message signing with HW private key
+		firmware: turris-mox-rwtm: Drop ECDSA signatures via debugfs
+		firmware: turris-mox-rwtm: Add support for ECDSA signatures with HW private key
+		platform: cznic: fix function parameter names
+	<no branch> (c25951eb7518844fcb7fc9ec58e888731e8c46d0)
+		https://github.com/chleroy/linux tags/soc_fsl-6.15-1
 
 soc/defconfig
 	renesas/defconfig
