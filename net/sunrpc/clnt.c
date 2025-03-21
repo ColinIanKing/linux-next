@@ -1673,20 +1673,19 @@ void rpc_force_rebind(struct rpc_clnt *clnt)
 }
 EXPORT_SYMBOL_GPL(rpc_force_rebind);
 
-static int
+static void
 __rpc_restart_call(struct rpc_task *task, void (*action)(struct rpc_task *))
 {
 	task->tk_status = 0;
 	task->tk_rpc_status = 0;
 	task->tk_action = action;
-	return 1;
 }
 
 /*
  * Restart an (async) RPC call. Usually called from within the
  * exit handler.
  */
-int
+void
 rpc_restart_call(struct rpc_task *task)
 {
 	return __rpc_restart_call(task, call_start);
@@ -1697,7 +1696,7 @@ EXPORT_SYMBOL_GPL(rpc_restart_call);
  * Restart an (async) RPC call from the call_prepare state.
  * Usually called from within the exit handler.
  */
-int
+void
 rpc_restart_call_prepare(struct rpc_task *task)
 {
 	if (task->tk_ops->rpc_call_prepare != NULL)
