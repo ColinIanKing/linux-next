@@ -44,6 +44,7 @@ pub mod cred;
 pub mod device;
 pub mod device_id;
 pub mod devres;
+pub mod dma;
 pub mod driver;
 pub mod error;
 pub mod faux;
@@ -112,11 +113,11 @@ pub trait InPlaceModule: Sync + Send {
     /// Creates an initialiser for the module.
     ///
     /// It is called when the module is loaded.
-    fn init(module: &'static ThisModule) -> impl init::PinInit<Self, error::Error>;
+    fn init(module: &'static ThisModule) -> impl pin_init::PinInit<Self, error::Error>;
 }
 
 impl<T: Module> InPlaceModule for T {
-    fn init(module: &'static ThisModule) -> impl init::PinInit<Self, error::Error> {
+    fn init(module: &'static ThisModule) -> impl pin_init::PinInit<Self, error::Error> {
         let initer = move |slot: *mut Self| {
             let m = <Self as Module>::init(module)?;
 
@@ -126,7 +127,7 @@ impl<T: Module> InPlaceModule for T {
         };
 
         // SAFETY: On success, `initer` always fully initialises an instance of `Self`.
-        unsafe { init::pin_init_from_closure(initer) }
+        unsafe { pin_init::pin_init_from_closure(initer) }
     }
 }
 
