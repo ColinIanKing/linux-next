@@ -3522,21 +3522,6 @@ static int test_acomp(struct crypto_acomp *tfm,
 			goto out;
 		}
 
-#ifdef CONFIG_CRYPTO_MANAGER_EXTRA_TESTS
-		crypto_init_wait(&wait);
-		sg_init_one(&src, input_vec, ilen);
-		acomp_request_set_params(req, &src, NULL, ilen, 0);
-
-		ret = crypto_wait_req(crypto_acomp_compress(req), &wait);
-		if (ret) {
-			pr_err("alg: acomp: compression failed on NULL dst buffer test %d for %s: ret=%d\n",
-			       i + 1, algo, -ret);
-			kfree(input_vec);
-			acomp_request_free(req);
-			goto out;
-		}
-#endif
-
 		kfree(input_vec);
 		acomp_request_free(req);
 	}
@@ -3597,20 +3582,6 @@ static int test_acomp(struct crypto_acomp *tfm,
 			acomp_request_free(req);
 			goto out;
 		}
-
-#ifdef CONFIG_CRYPTO_MANAGER_EXTRA_TESTS
-		crypto_init_wait(&wait);
-		acomp_request_set_params(req, &src, NULL, ilen, 0);
-
-		ret = crypto_wait_req(crypto_acomp_decompress(req), &wait);
-		if (ret) {
-			pr_err("alg: acomp: decompression failed on NULL dst buffer test %d for %s: ret=%d\n",
-			       i + 1, algo, -ret);
-			kfree(input_vec);
-			acomp_request_free(req);
-			goto out;
-		}
-#endif
 
 		kfree(input_vec);
 		acomp_request_free(req);
@@ -4328,7 +4299,7 @@ static int test_sig_one(struct crypto_sig *tfm, const struct sig_testvec *vecs)
 	if (vecs->public_key_vec)
 		return 0;
 
-	sig_size = crypto_sig_keysize(tfm);
+	sig_size = crypto_sig_maxsize(tfm);
 	if (sig_size < vecs->c_size) {
 		pr_err("alg: sig: invalid maxsize %u\n", sig_size);
 		return -EINVAL;
@@ -4340,13 +4311,14 @@ static int test_sig_one(struct crypto_sig *tfm, const struct sig_testvec *vecs)
 
 	/* Run asymmetric signature generation */
 	err = crypto_sig_sign(tfm, vecs->m, vecs->m_size, sig, sig_size);
-	if (err) {
+	if (err < 0) {
 		pr_err("alg: sig: sign test failed: err %d\n", err);
 		return err;
 	}
 
 	/* Verify that generated signature equals cooked signature */
-	if (memcmp(sig, vecs->c, vecs->c_size) ||
+	if (err != vecs->c_size ||
+	    memcmp(sig, vecs->c, vecs->c_size) ||
 	    memchr_inv(sig + vecs->c_size, 0, sig_size - vecs->c_size)) {
 		pr_err("alg: sig: sign test failed: invalid output\n");
 		hexdump(sig, sig_size);
@@ -4505,6 +4477,12 @@ static const struct alg_test_desc alg_test_descs[] = {
 		.test = alg_test_null,
 		.fips_allowed = 1,
 	}, {
+		.alg = "authenc(hmac(sha256),cts(cbc(aes)))",
+		.test = alg_test_aead,
+		.suite = {
+			.aead = __VECS(krb5_test_aes128_cts_hmac_sha256_128)
+		}
+	}, {
 		.alg = "authenc(hmac(sha256),rfc3686(ctr(aes)))",
 		.test = alg_test_null,
 		.fips_allowed = 1,
@@ -4524,6 +4502,12 @@ static const struct alg_test_desc alg_test_descs[] = {
 		.alg = "authenc(hmac(sha384),ctr(aes))",
 		.test = alg_test_null,
 		.fips_allowed = 1,
+	}, {
+		.alg = "authenc(hmac(sha384),cts(cbc(aes)))",
+		.test = alg_test_aead,
+		.suite = {
+			.aead = __VECS(krb5_test_aes256_cts_hmac_sha384_192)
+		}
 	}, {
 		.alg = "authenc(hmac(sha384),rfc3686(ctr(aes)))",
 		.test = alg_test_null,
@@ -5397,6 +5381,10 @@ static const struct alg_test_desc alg_test_descs[] = {
 		.alg = "jitterentropy_rng",
 		.fips_allowed = 1,
 		.test = alg_test_null,
+	}, {
+		.alg = "krb5enc(cmac(camellia),cts(cbc(camellia)))",
+		.test = alg_test_aead,
+		.suite.aead = __VECS(krb5_test_camellia_cts_cmac)
 	}, {
 		.alg = "lrw(aes)",
 		.generic_driver = "lrw(ecb(aes-generic))",

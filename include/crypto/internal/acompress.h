@@ -32,6 +32,7 @@
  *
  * @reqsize:	Context size for (de)compression requests
  * @base:	Common crypto API algorithm data structure
+ * @stream:	Per-cpu memory for algorithm
  * @calg:	Cmonn algorithm data structure shared with scomp
  */
 struct acomp_alg {
@@ -68,22 +69,6 @@ static inline void acomp_request_complete(struct acomp_req *req,
 	crypto_request_complete(&req->base, err);
 }
 
-static inline struct acomp_req *__acomp_request_alloc_noprof(struct crypto_acomp *tfm)
-{
-	struct acomp_req *req;
-
-	req = kzalloc_noprof(sizeof(*req) + crypto_acomp_reqsize(tfm), GFP_KERNEL);
-	if (likely(req))
-		acomp_request_set_tfm(req, tfm);
-	return req;
-}
-#define __acomp_request_alloc(...)	alloc_hooks(__acomp_request_alloc_noprof(__VA_ARGS__))
-
-static inline void __acomp_request_free(struct acomp_req *req)
-{
-	kfree_sensitive(req);
-}
-
 /**
  * crypto_register_acomp() -- Register asynchronous compression algorithm
  *
@@ -108,5 +93,47 @@ void crypto_unregister_acomp(struct acomp_alg *alg);
 
 int crypto_register_acomps(struct acomp_alg *algs, int count);
 void crypto_unregister_acomps(struct acomp_alg *algs, int count);
+
+static inline bool acomp_request_chained(struct acomp_req *req)
+{
+	return crypto_request_chained(&req->base);
+}
+
+static inline bool acomp_request_src_isvirt(struct acomp_req *req)
+{
+	return req->base.flags & CRYPTO_ACOMP_REQ_SRC_VIRT;
+}
+
+static inline bool acomp_request_dst_isvirt(struct acomp_req *req)
+{
+	return req->base.flags & CRYPTO_ACOMP_REQ_DST_VIRT;
+}
+
+static inline bool acomp_request_isvirt(struct acomp_req *req)
+{
+	return req->base.flags & (CRYPTO_ACOMP_REQ_SRC_VIRT |
+				  CRYPTO_ACOMP_REQ_DST_VIRT);
+}
+
+static inline bool acomp_request_src_isnondma(struct acomp_req *req)
+{
+	return req->base.flags & CRYPTO_ACOMP_REQ_SRC_NONDMA;
+}
+
+static inline bool acomp_request_dst_isnondma(struct acomp_req *req)
+{
+	return req->base.flags & CRYPTO_ACOMP_REQ_DST_NONDMA;
+}
+
+static inline bool acomp_request_isnondma(struct acomp_req *req)
+{
+	return req->base.flags & (CRYPTO_ACOMP_REQ_SRC_NONDMA |
+				  CRYPTO_ACOMP_REQ_DST_NONDMA);
+}
+
+static inline bool crypto_acomp_req_chain(struct crypto_acomp *tfm)
+{
+	return crypto_tfm_req_chain(&tfm->base);
+}
 
 #endif
