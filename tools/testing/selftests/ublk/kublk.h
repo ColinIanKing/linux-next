@@ -19,6 +19,7 @@
 #include <sys/inotify.h>
 #include <sys/wait.h>
 #include <sys/eventfd.h>
+#include <sys/uio.h>
 #include <liburing.h>
 #include <linux/ublk_cmd.h>
 #include "ublk_dep.h"
@@ -40,13 +41,9 @@
 /* queue idle timeout */
 #define UBLKSRV_IO_IDLE_SECS		20
 
-#define UBLK_IO_MAX_BYTES               65536
+#define UBLK_IO_MAX_BYTES               (1 << 20)
 #define UBLK_MAX_QUEUES                 4
 #define UBLK_QUEUE_DEPTH                128
-
-#define UBLK_IO_TGT_NORMAL 		0
-#define UBLK_IO_TGT_ZC_BUF 		1
-#define UBLK_IO_TGT_ZC_OP 		2
 
 #define UBLK_DBG_DEV            (1U << 0)
 #define UBLK_DBG_QUEUE          (1U << 1)
@@ -69,6 +66,9 @@ struct dev_ctx {
 	unsigned int	logging:1;
 	unsigned int	all:1;
 	unsigned int	fg:1;
+
+	/* stripe */
+	unsigned int    chunk_size;
 
 	int _evtfd;
 };
@@ -94,11 +94,14 @@ struct ublk_io {
 	unsigned short refs;		/* used by target code only */
 
 	int result;
+
+	unsigned short tgt_ios;
+	void *private_data;
 };
 
 struct ublk_tgt_ops {
 	const char *name;
-	int (*init_tgt)(struct ublk_dev *);
+	int (*init_tgt)(const struct dev_ctx *ctx, struct ublk_dev *);
 	void (*deinit_tgt)(struct ublk_dev *);
 
 	int (*queue_io)(struct ublk_queue *, int tag);
@@ -146,6 +149,8 @@ struct ublk_dev {
 	int nr_fds;
 	int ctrl_fd;
 	struct io_uring ring;
+
+	void *private_data;
 };
 
 #ifndef offsetof
@@ -193,6 +198,11 @@ static inline unsigned int user_data_to_tgt_data(__u64 user_data)
 	return (user_data >> 24) & 0xffff;
 }
 
+static inline unsigned short ublk_cmd_op_nr(unsigned int op)
+{
+	return _IOC_NR(op);
+}
+
 static inline void ublk_err(const char *fmt, ...)
 {
 	va_list ap;
@@ -221,28 +231,22 @@ static inline void ublk_dbg(int level, const char *fmt, ...)
 	}
 }
 
-static inline struct io_uring_sqe *ublk_queue_alloc_sqe(struct ublk_queue *q)
+static inline int ublk_queue_alloc_sqes(struct ublk_queue *q,
+		struct io_uring_sqe *sqes[], int nr_sqes)
 {
 	unsigned left = io_uring_sq_space_left(&q->ring);
+	int i;
 
-	if (left < 1)
+	if (left < nr_sqes)
 		io_uring_submit(&q->ring);
-	return io_uring_get_sqe(&q->ring);
-}
 
-static inline void ublk_queue_alloc_sqe3(struct ublk_queue *q,
-		struct io_uring_sqe **sqe1, struct io_uring_sqe **sqe2,
-		struct io_uring_sqe **sqe3)
-{
-	struct io_uring *r = &q->ring;
-	unsigned left = io_uring_sq_space_left(r);
+	for (i = 0; i < nr_sqes; i++) {
+		sqes[i] = io_uring_get_sqe(&q->ring);
+		if (!sqes[i])
+			return i;
+	}
 
-	if (left < 3)
-		io_uring_submit(r);
-
-	*sqe1 = io_uring_get_sqe(r);
-	*sqe2 = io_uring_get_sqe(r);
-	*sqe3 = io_uring_get_sqe(r);
+	return nr_sqes;
 }
 
 static inline void io_uring_prep_buf_register(struct io_uring_sqe *sqe,
@@ -309,6 +313,11 @@ static inline void ublk_set_sqe_cmd_op(struct io_uring_sqe *sqe, __u32 cmd_op)
 	addr[1] = 0;
 }
 
+static inline struct ublk_io *ublk_get_io(struct ublk_queue *q, unsigned tag)
+{
+	return &q->ios[tag];
+}
+
 static inline int ublk_complete_io(struct ublk_queue *q, unsigned tag, int res)
 {
 	struct ublk_io *io = &q->ios[tag];
@@ -318,6 +327,28 @@ static inline int ublk_complete_io(struct ublk_queue *q, unsigned tag, int res)
 	return ublk_queue_io_cmd(q, io, tag);
 }
 
+static inline void ublk_queued_tgt_io(struct ublk_queue *q, unsigned tag, int queued)
+{
+	if (queued < 0)
+		ublk_complete_io(q, tag, queued);
+	else {
+		struct ublk_io *io = ublk_get_io(q, tag);
+
+		q->io_inflight += queued;
+		io->tgt_ios = queued;
+		io->result = 0;
+	}
+}
+
+static inline int ublk_completed_tgt_io(struct ublk_queue *q, unsigned tag)
+{
+	struct ublk_io *io = ublk_get_io(q, tag);
+
+	q->io_inflight--;
+
+	return --io->tgt_ios == 0;
+}
+
 static inline int ublk_queue_use_zc(const struct ublk_queue *q)
 {
 	return q->state & UBLKSRV_ZC;
@@ -325,5 +356,15 @@ static inline int ublk_queue_use_zc(const struct ublk_queue *q)
 
 extern const struct ublk_tgt_ops null_tgt_ops;
 extern const struct ublk_tgt_ops loop_tgt_ops;
+extern const struct ublk_tgt_ops stripe_tgt_ops;
 
+void backing_file_tgt_deinit(struct ublk_dev *dev);
+int backing_file_tgt_init(struct ublk_dev *dev);
+
+static inline unsigned int ilog2(unsigned int x)
+{
+	if (x == 0)
+		return 0;
+	return (sizeof(x) * 8 - 1) - __builtin_clz(x);
+}
 #endif

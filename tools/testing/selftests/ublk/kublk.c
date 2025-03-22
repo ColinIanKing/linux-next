@@ -9,6 +9,7 @@ unsigned int ublk_dbg_mask = UBLK_LOG;
 static const struct ublk_tgt_ops *tgt_ops_list[] = {
 	&null_tgt_ops,
 	&loop_tgt_ops,
+	&stripe_tgt_ops,
 };
 
 static const struct ublk_tgt_ops *ublk_find_tgt(const char *name)
@@ -379,26 +380,34 @@ static int ublk_queue_init(struct ublk_queue *q)
 	return -ENOMEM;
 }
 
-static int ublk_dev_prep(struct ublk_dev *dev)
+#define WAIT_USEC 	100000
+#define MAX_WAIT_USEC 	(3 * 1000000)
+static int ublk_dev_prep(const struct dev_ctx *ctx, struct ublk_dev *dev)
 {
 	int dev_id = dev->dev_info.dev_id;
+	unsigned int wait_usec = 0;
+	int ret = 0, fd = -1;
 	char buf[64];
-	int ret = 0;
 
 	snprintf(buf, 64, "%s%d", UBLKC_DEV, dev_id);
-	dev->fds[0] = open(buf, O_RDWR);
-	if (dev->fds[0] < 0) {
-		ret = -EBADF;
-		ublk_err("can't open %s, ret %d\n", buf, dev->fds[0]);
-		goto fail;
+
+	while (wait_usec < MAX_WAIT_USEC) {
+		fd = open(buf, O_RDWR);
+		if (fd >= 0)
+			break;
+		usleep(WAIT_USEC);
+		wait_usec += WAIT_USEC;
+	}
+	if (fd < 0) {
+		ublk_err("can't open %s %s\n", buf, strerror(errno));
+		return -1;
 	}
 
+	dev->fds[0] = fd;
 	if (dev->tgt.ops->init_tgt)
-		ret = dev->tgt.ops->init_tgt(dev);
-
-	return ret;
-fail:
-	close(dev->fds[0]);
+		ret = dev->tgt.ops->init_tgt(ctx, dev);
+	if (ret)
+		close(dev->fds[0]);
 	return ret;
 }
 
@@ -412,7 +421,7 @@ static void ublk_dev_unprep(struct ublk_dev *dev)
 int ublk_queue_io_cmd(struct ublk_queue *q, struct ublk_io *io, unsigned tag)
 {
 	struct ublksrv_io_cmd *cmd;
-	struct io_uring_sqe *sqe;
+	struct io_uring_sqe *sqe[1];
 	unsigned int cmd_op = 0;
 	__u64 user_data;
 
@@ -433,24 +442,24 @@ int ublk_queue_io_cmd(struct ublk_queue *q, struct ublk_io *io, unsigned tag)
 	if (io_uring_sq_space_left(&q->ring) < 1)
 		io_uring_submit(&q->ring);
 
-	sqe = ublk_queue_alloc_sqe(q);
-	if (!sqe) {
+	ublk_queue_alloc_sqes(q, sqe, 1);
+	if (!sqe[0]) {
 		ublk_err("%s: run out of sqe %d, tag %d\n",
 				__func__, q->q_id, tag);
 		return -1;
 	}
 
-	cmd = (struct ublksrv_io_cmd *)ublk_get_sqe_cmd(sqe);
+	cmd = (struct ublksrv_io_cmd *)ublk_get_sqe_cmd(sqe[0]);
 
 	if (cmd_op == UBLK_U_IO_COMMIT_AND_FETCH_REQ)
 		cmd->result = io->result;
 
 	/* These fields should be written once, never change */
-	ublk_set_sqe_cmd_op(sqe, cmd_op);
-	sqe->fd		= 0;	/* dev->fds[0] */
-	sqe->opcode	= IORING_OP_URING_CMD;
-	sqe->flags	= IOSQE_FIXED_FILE;
-	sqe->rw_flags	= 0;
+	ublk_set_sqe_cmd_op(sqe[0], cmd_op);
+	sqe[0]->fd		= 0;	/* dev->fds[0] */
+	sqe[0]->opcode	= IORING_OP_URING_CMD;
+	sqe[0]->flags	= IOSQE_FIXED_FILE;
+	sqe[0]->rw_flags	= 0;
 	cmd->tag	= tag;
 	cmd->q_id	= q->q_id;
 	if (!(q->state & UBLKSRV_NO_BUF))
@@ -459,7 +468,7 @@ int ublk_queue_io_cmd(struct ublk_queue *q, struct ublk_io *io, unsigned tag)
 		cmd->addr	= 0;
 
 	user_data = build_user_data(tag, _IOC_NR(cmd_op), 0, 0);
-	io_uring_sqe_set_data64(sqe, user_data);
+	io_uring_sqe_set_data64(sqe[0], user_data);
 
 	io->flags = 0;
 
@@ -658,7 +667,7 @@ static int ublk_start_daemon(const struct dev_ctx *ctx, struct ublk_dev *dev)
 
 	ublk_dbg(UBLK_DBG_DEV, "%s enter\n", __func__);
 
-	ret = ublk_dev_prep(dev);
+	ret = ublk_dev_prep(ctx, dev);
 	if (ret)
 		return ret;
 
@@ -856,6 +865,8 @@ static int __cmd_dev_add(const struct dev_ctx *ctx)
 
 	ret = ublk_start_daemon(ctx, dev);
 	ublk_dbg(UBLK_DBG_DEV, "%s: daemon exit %d\b", ret);
+	if (ret < 0)
+		ublk_ctrl_del_dev(dev);
 
 fail:
 	if (ret < 0)
@@ -1050,8 +1061,9 @@ int main(int argc, char *argv[])
 		{ "depth",		1,	NULL, 'd' },
 		{ "debug_mask",		1,	NULL,  0  },
 		{ "quiet",		0,	NULL,  0  },
-		{ "zero_copy",          1,      NULL, 'z' },
+		{ "zero_copy",          0,      NULL, 'z' },
 		{ "foreground",		0,	NULL,  0  },
+		{ "chunk_size", 	1,	NULL,  0  },
 		{ 0, 0, 0, 0 }
 	};
 	int option_idx, opt;
@@ -1061,6 +1073,7 @@ int main(int argc, char *argv[])
 		.nr_hw_queues	=	2,
 		.dev_id		=	-1,
 		.tgt_type	=	"unknown",
+		.chunk_size 	= 	65536, 	/* def chunk size is 64K */
 	};
 	int ret = -EINVAL, i;
 
@@ -1097,6 +1110,8 @@ int main(int argc, char *argv[])
 				ublk_dbg_mask = 0;
 			if (!strcmp(longopts[option_idx].name, "foreground"))
 				ctx.fg = 1;
+			if (!strcmp(longopts[option_idx].name, "chunk_size"))
+				ctx.chunk_size = strtol(optarg, NULL, 10);
 		}
 	}
 
