@@ -15224,11 +15224,11 @@ MEMORY USERFAULTFD
 M:	Andrew Morton <akpm@linux-foundation.org>
 R:	Peter Xu <peterx@redhat.com>
 S:	Maintained
-F:	mm/userfaultfd.c
-F:	fs/userfaultfd.c
-F:	include/uapi/linux/userfaultfd.h
-F:	include/asm-generic/pgtable_uffd.h
 F:	Documentation/admin-guide/mm/userfaultfd.rst
+F:	fs/userfaultfd.c
+F:	include/asm-generic/pgtable_uffd.h
+F:	include/uapi/linux/userfaultfd.h
+F:	mm/userfaultfd.c
 F:	tools/testing/selftests/mm/uffd-*.[ch]
 
 MEMORY TECHNOLOGY DEVICES (MTD)
