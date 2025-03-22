@@ -68,6 +68,7 @@ struct loop_device {
 	struct rb_root          worker_tree;
 	struct timer_list       timer;
 	bool			sysfs_inited;
+	unsigned 		lo_nr_blocking_writes;
 
 	struct request_queue	*lo_queue;
 	struct blk_mq_tag_set	tag_set;
@@ -514,6 +515,33 @@ static int lo_rw_aio(struct loop_device *lo, struct loop_cmd *cmd)
 	return 0;
 }
 
+static inline bool lo_aio_try_nowait(struct loop_device *lo,
+		struct loop_cmd *cmd)
+{
+	struct file *file = lo->lo_backing_file;
+	struct inode *inode = file->f_mapping->host;
+	struct request *rq = blk_mq_rq_from_pdu(cmd);
+
+	/* NOWAIT works fine for backing block device */
+	if (S_ISBLK(inode->i_mode))
+		return true;
+
+	/*
+	 * NOWAIT is supposed to be fine for READ without contending with
+	 * blocking WRITE
+	 */
+	if (req_op(rq) == REQ_OP_READ)
+		return true;
+
+	/*
+	 * If there is any queued non-NOWAIT async WRITE , don't try new
+	 * NOWAIT WRITE for avoiding contention
+	 *
+	 * Here we focus on handling stable FS block mapping via NOWAIT
+	 */
+	return READ_ONCE(lo->lo_nr_blocking_writes) == 0;
+}
+
 static blk_status_t lo_rw_aio_nowait(struct loop_device *lo,
 		struct loop_cmd *cmd)
 {
@@ -522,6 +550,9 @@ static blk_status_t lo_rw_aio_nowait(struct loop_device *lo,
 
 	if (unlikely(ret < 0))
 		return BLK_STS_IOERR;
+
+	if (!lo_aio_try_nowait(lo, cmd))
+		return BLK_STS_AGAIN;
 
 	cmd->iocb.ki_flags |= IOCB_NOWAIT;
 	ret = lo_submit_rw_aio(lo, cmd, nr_bvec);
@@ -820,12 +851,19 @@ static ssize_t loop_attr_dio_show(struct loop_device *lo, char *buf)
 	return sysfs_emit(buf, "%s\n", dio ? "1" : "0");
 }
 
+static ssize_t loop_attr_nr_blocking_writes_show(struct loop_device *lo,
+						 char *buf)
+{
+	return sysfs_emit(buf, "%u\n", lo->lo_nr_blocking_writes);
+}
+
 LOOP_ATTR_RO(backing_file);
 LOOP_ATTR_RO(offset);
 LOOP_ATTR_RO(sizelimit);
 LOOP_ATTR_RO(autoclear);
 LOOP_ATTR_RO(partscan);
 LOOP_ATTR_RO(dio);
+LOOP_ATTR_RO(nr_blocking_writes);
 
 static struct attribute *loop_attrs[] = {
 	&loop_attr_backing_file.attr,
@@ -834,6 +872,7 @@ static struct attribute *loop_attrs[] = {
 	&loop_attr_autoclear.attr,
 	&loop_attr_partscan.attr,
 	&loop_attr_dio.attr,
+	&loop_attr_nr_blocking_writes.attr,
 	NULL,
 };
 
@@ -908,6 +947,19 @@ static inline int queue_on_root_worker(struct cgroup_subsys_state *css)
 	return !css;
 }
 #endif
+
+static inline void loop_update_blocking_writes(struct loop_device *lo,
+		struct loop_cmd *cmd, bool inc)
+{
+	lockdep_assert_held(&lo->lo_mutex);
+
+	if (req_op(blk_mq_rq_from_pdu(cmd)) == REQ_OP_WRITE) {
+		if (inc)
+			lo->lo_nr_blocking_writes += 1;
+		else
+			lo->lo_nr_blocking_writes -= 1;
+	}
+}
 
 static void loop_queue_work(struct loop_device *lo, struct loop_cmd *cmd)
 {
@@ -991,6 +1043,8 @@ queue_work:
 		work = &lo->rootcg_work;
 		cmd_list = &lo->rootcg_cmd_list;
 	}
+	if (cmd->use_aio)
+		loop_update_blocking_writes(lo, cmd, true);
 	list_add_tail(&cmd->list_entry, cmd_list);
 	queue_work(lo->workqueue, work);
 	spin_unlock_irq(&lo->lo_work_lock);
@@ -2057,6 +2111,8 @@ static void loop_process_work(struct loop_worker *worker,
 		cond_resched();
 
 		spin_lock_irq(&lo->lo_work_lock);
+		if (cmd->use_aio)
+			loop_update_blocking_writes(lo, cmd, false);
 	}
 
 	/*
