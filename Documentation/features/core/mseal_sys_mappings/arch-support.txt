@@ -7,16 +7,16 @@
     |         arch |status|
     -----------------------
     |       alpha: | TODO |
-    |         arc: | TODO |
+    |         arc: |  N/A |
     |         arm: |  N/A |
     |       arm64: |  ok  |
-    |        csky: | TODO |
+    |        csky: |  N/A |
     |     hexagon: |  N/A |
     |   loongarch: | TODO |
-    |        m68k: | TODO |
+    |        m68k: |  N/A |
     |  microblaze: |  N/A |
     |        mips: | TODO |
-    |       nios2: | TODO |
+    |       nios2: |  N/A |
     |    openrisc: |  N/A |
     |      parisc: | TODO |
     |     powerpc: | TODO |
@@ -26,5 +26,5 @@
     |       sparc: | TODO |
     |          um: | TODO |
     |         x86: |  ok  |
-    |      xtensa: | TODO |
+    |      xtensa: |  N/A |
     -----------------------
