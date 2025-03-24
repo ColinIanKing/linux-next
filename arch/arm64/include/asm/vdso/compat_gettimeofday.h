@@ -149,15 +149,15 @@ static __always_inline const struct vdso_time_data *__arch_get_vdso_u_time_data(
 	 * where __aarch64_get_vdso_u_time_data() is called, and then keep the
 	 * result in a register.
 	 */
-	asm volatile("mov %0, %1" : "=r"(ret) : "r"(vdso_u_time_data));
+	asm volatile("mov %0, %1" : "=r"(ret) : "r"(&vdso_u_time_data));
 
 	return ret;
 }
 #define __arch_get_vdso_u_time_data __arch_get_vdso_u_time_data
 
-static inline bool vdso_clocksource_ok(const struct vdso_time_data *vd)
+static inline bool vdso_clocksource_ok(const struct vdso_clock *vc)
 {
-	return vd->clock_mode == VDSO_CLOCKMODE_ARCHTIMER;
+	return vc->clock_mode == VDSO_CLOCKMODE_ARCHTIMER;
 }
 #define vdso_clocksource_ok	vdso_clocksource_ok
 
