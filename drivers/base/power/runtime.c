@@ -1460,20 +1460,31 @@ int pm_runtime_barrier(struct device *dev)
 }
 EXPORT_SYMBOL_GPL(pm_runtime_barrier);
 
-/**
- * __pm_runtime_disable - Disable runtime PM of a device.
- * @dev: Device to handle.
- * @check_resume: If set, check if there's a resume request for the device.
- *
- * Increment power.disable_depth for the device and if it was zero previously,
- * cancel all pending runtime PM requests for the device and wait for all
- * operations in progress to complete.  The device can be either active or
- * suspended after its runtime PM has been disabled.
- *
- * If @check_resume is set and there's a resume request pending when
- * __pm_runtime_disable() is called and power.disable_depth is zero, the
- * function will wake up the device before disabling its runtime PM.
- */
+bool pm_runtime_block_if_disabled(struct device *dev)
+{
+	bool ret;
+
+	spin_lock_irq(&dev->power.lock);
+
+	ret = !pm_runtime_enabled(dev);
+	if (ret && dev->power.last_status == RPM_INVALID)
+		dev->power.last_status = RPM_BLOCKED;
+
+	spin_unlock_irq(&dev->power.lock);
+
+	return ret;
+}
+
+void pm_runtime_unblock(struct device *dev)
+{
+	spin_lock_irq(&dev->power.lock);
+
+	if (dev->power.last_status == RPM_BLOCKED)
+		dev->power.last_status = RPM_INVALID;
+
+	spin_unlock_irq(&dev->power.lock);
+}
+
 void __pm_runtime_disable(struct device *dev, bool check_resume)
 {
 	spin_lock_irq(&dev->power.lock);
@@ -1532,6 +1543,10 @@ void pm_runtime_enable(struct device *dev)
 	if (--dev->power.disable_depth > 0)
 		goto out;
 
+	if (dev->power.last_status == RPM_BLOCKED) {
+		dev_warn(dev, "Attempt to enable runtime PM when it is blocked\n");
+		dump_stack();
+	}
 	dev->power.last_status = RPM_INVALID;
 	dev->power.accounting_timestamp = ktime_get_mono_fast_ns();
 
@@ -1874,7 +1889,7 @@ void pm_runtime_drop_link(struct device_link *link)
 	pm_request_idle(link->supplier);
 }
 
-static bool pm_runtime_need_not_resume(struct device *dev)
+bool pm_runtime_need_not_resume(struct device *dev)
 {
 	return atomic_read(&dev->power.usage_count) <= 1 &&
 		(atomic_read(&dev->power.child_count) == 0 ||
