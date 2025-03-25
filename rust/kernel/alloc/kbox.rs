@@ -15,8 +15,9 @@ use core::pin::Pin;
 use core::ptr::NonNull;
 use core::result::Result;
 
-use crate::init::{InPlaceInit, InPlaceWrite, Init, PinInit};
+use crate::init::InPlaceInit;
 use crate::types::ForeignOwnable;
+use pin_init::{InPlaceWrite, Init, PinInit, ZeroableOption};
 
 /// The kernel's [`Box`] type -- a heap allocation for a single value of type `T`.
 ///
@@ -98,6 +99,10 @@ pub type VBox<T> = Box<T, super::allocator::Vmalloc>;
 /// # Ok::<(), Error>(())
 /// ```
 pub type KVBox<T> = Box<T, super::allocator::KVmalloc>;
+
+// SAFETY: All zeros is equivalent to `None` (option layout optimization guarantee:
+// https://doc.rust-lang.org/stable/std/option/index.html#representation).
+unsafe impl<T, A: Allocator> ZeroableOption for Box<T, A> {}
 
 // SAFETY: `Box` is `Send` if `T` is `Send` because the `Box` owns a `T`.
 unsafe impl<T, A> Send for Box<T, A>
