@@ -44,12 +44,10 @@ struct inet_connection_sock_af_ops {
 				      struct request_sock *req_unhash,
 				      bool *own_req);
 	u16	    net_header_len;
-	u16	    sockaddr_len;
 	int	    (*setsockopt)(struct sock *sk, int level, int optname,
 				  sockptr_t optval, unsigned int optlen);
 	int	    (*getsockopt)(struct sock *sk, int level, int optname,
 				  char __user *optval, int __user *optlen);
-	void	    (*addr2sockaddr)(struct sock *sk, struct sockaddr *);
 	void	    (*mtu_reduced)(struct sock *sk);
 };
 
@@ -66,7 +64,6 @@ struct inet_connection_sock_af_ops {
  * @icsk_af_ops		   Operations which are AF_INET{4,6} specific
  * @icsk_ulp_ops	   Pluggable ULP control hook
  * @icsk_ulp_data	   ULP private data
- * @icsk_clean_acked	   Clean acked data hook
  * @icsk_ca_state:	   Congestion control state
  * @icsk_retransmits:	   Number of unrecovered [RTO] timeouts
  * @icsk_pending:	   Scheduled timer event
@@ -90,13 +87,13 @@ struct inet_connection_sock {
  	struct timer_list	  icsk_delack_timer;
 	__u32			  icsk_rto;
 	__u32                     icsk_rto_min;
+	u32			  icsk_rto_max;
 	__u32                     icsk_delack_max;
 	__u32			  icsk_pmtu_cookie;
 	const struct tcp_congestion_ops *icsk_ca_ops;
 	const struct inet_connection_sock_af_ops *icsk_af_ops;
 	const struct tcp_ulp_ops  *icsk_ulp_ops;
 	void __rcu		  *icsk_ulp_data;
-	void (*icsk_clean_acked)(struct sock *sk, u32 acked_seq);
 	unsigned int		  (*icsk_sync_mss)(struct sock *sk, u32 pmtu);
 	__u8			  icsk_ca_state:5,
 				  icsk_ca_initialized:1,
@@ -116,7 +113,8 @@ struct inet_connection_sock {
 		#define ATO_BITS 8
 		__u32		  ato:ATO_BITS,	 /* Predicted tick of soft clock	   */
 				  lrcv_flowlabel:20, /* last received ipv6 flowlabel	   */
-				  unused:4;
+				  dst_quick_ack:1, /* cache dst RTAX_QUICKACK		   */
+				  unused:3;
 		unsigned long	  timeout;	 /* Currently scheduled timeout		   */
 		__u32		  lrcvtime;	 /* timestamp of last received data packet */
 		__u16		  last_seg_size; /* Size of last incoming segment	   */
@@ -188,9 +186,6 @@ static inline void inet_csk_delack_init(struct sock *sk)
 {
 	memset(&inet_csk(sk)->icsk_ack, 0, sizeof(inet_csk(sk)->icsk_ack));
 }
-
-void inet_csk_delete_keepalive_timer(struct sock *sk);
-void inet_csk_reset_keepalive_timer(struct sock *sk, unsigned long timeout);
 
 static inline void inet_csk_clear_xmit_timer(struct sock *sk, const int what)
 {
@@ -317,8 +312,6 @@ static inline __poll_t inet_csk_listen_poll(const struct sock *sk)
 
 int inet_csk_listen_start(struct sock *sk);
 void inet_csk_listen_stop(struct sock *sk);
-
-void inet_csk_addr2sockaddr(struct sock *sk, struct sockaddr *uaddr);
 
 /* update the fast reuse flag when adding a socket */
 void inet_csk_update_fastreuse(struct inet_bind_bucket *tb,
