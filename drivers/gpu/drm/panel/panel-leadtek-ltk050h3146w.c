@@ -474,11 +474,30 @@ static int ltk050h3146w_unprepare(struct drm_panel *panel)
 	return 0;
 }
 
+static int ltk050h314x_read_id(struct mipi_dsi_multi_context *dsi_ctx) {
+//	struct mipi_dsi_device *dsi = to_mipi_dsi_device(ctx->dev);
+	u8 id[3] = {0};
+	int ret;
+
+	/* ILI988D requires a page 1 select to return stable results for register 4
+	 * HX8394-F ignores this command */
+	ltk050h3146w_a2_select_page(dsi_ctx, 1);
+
+	ret = mipi_dsi_dcs_read(dsi_ctx->dsi, 0x04, id, ARRAY_SIZE(id));
+	if (ret < 0)
+		return ret;
+
+printk("%s: %u %u %u\n", __func__, id[0], id[1], id[2]);
+	return (id[0] << 16) | (id[1] << 8) | (id[2] << 0);
+}
+
 static int ltk050h3146w_prepare(struct drm_panel *panel)
 {
 	struct ltk050h3146w *ctx = panel_to_ltk050h3146w(panel);
 	struct mipi_dsi_device *dsi = to_mipi_dsi_device(ctx->dev);
 	struct mipi_dsi_multi_context dsi_ctx = { .dsi = dsi };
+	static bool detected = false;
+	int ret;
 
 	dev_dbg(ctx->dev, "Resetting the panel\n");
 	dsi_ctx.accum_err = regulator_enable(ctx->vci);
@@ -496,6 +515,43 @@ static int ltk050h3146w_prepare(struct drm_panel *panel)
 	usleep_range(5000, 6000);
 	gpiod_set_value_cansleep(ctx->reset_gpio, 0);
 	msleep(20);
+
+	if (!detected) {
+		/*
+		 * HX8394-F fails to read id register if we don't send a
+		 * SLEEPOUT first.
+		 */
+		mipi_dsi_dcs_write_seq(dsi, 0x11);
+
+		ret = ltk050h314x_read_id(&dsi_ctx);
+		switch (ret) {
+		case 0x0:
+			dev_info(ctx->dev, "ltk050h3146w-a2 identified\n");
+			ctx->panel_desc = &ltk050h3146w_a2_data;
+			break;
+		case 0x830000:
+			dev_info(ctx->dev, "ltk050h3148w identified\n");
+			ctx->panel_desc = &ltk050h3148w_data;
+			break;
+		default:
+			dev_err(ctx->dev, "Failed to identify panel: %d\n",
+				ret);
+			goto disable_iovcc;
+		}
+
+		dsi->mode_flags = ctx->panel_desc->mode_flags;
+
+		detected = true;
+
+		/* reset the device otherwise:
+		 *  - ISL9881 will not work,
+		 *  - HX8394-F will first show a white screen,
+		 */
+		gpiod_set_value_cansleep(ctx->reset_gpio, 1);
+		usleep_range(5000, 6000);
+		gpiod_set_value_cansleep(ctx->reset_gpio, 0);
+		msleep(20);
+	}
 
 	ctx->panel_desc->init(&dsi_ctx);
 	mipi_dsi_dcs_exit_sleep_mode_multi(&dsi_ctx);
