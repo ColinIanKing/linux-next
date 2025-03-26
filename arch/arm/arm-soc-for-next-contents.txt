@@ -1,0 +1,148 @@
+soc/arm
+	renesas/soc
+		https://git.kernel.org/pub/scm/linux/kernel/git/geert/renesas-devel tags/renesas-arm-soc-for-v6.15-tag1
+	imx/arm
+		https://git.kernel.org/pub/scm/linux/kernel/git/shawnguo/linux tags/imx-soc-6.15
+	at91/soc
+		https://git.kernel.org/pub/scm/linux/kernel/git/at91/linux tags/at91-soc-6.15
+
+soc/dt
+	asahi/dt
+		https://github.com/AsahiLinux/linux tags/asahi-soc-dt-6.15
+	ixp4xx/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/linusw/linux-integrator tags/ixp4xx-dts-soc-for-v6.15
+	renesas/dt-bindings
+		https://git.kernel.org/pub/scm/linux/kernel/git/geert/renesas-devel tags/renesas-dt-bindings-for-v6.15-tag1
+	renesas/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/geert/renesas-devel tags/renesas-dts-for-v6.15-tag1
+	asahi/dt-2
+		https://github.com/AsahiLinux/linux tags/asahi-soc-dt-6.15-v2
+	juno/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/sudeep.holla/linux tags/juno-updates-6.15
+	patch
+		arm64: dts: nvidia: Remove unused and undocumented "regulator-ramp-delay-scale" property
+	mediatek/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/mediatek/linux tags/mtk-dts64-for-v6.15
+	renesas/dt-2
+		https://git.kernel.org/pub/scm/linux/kernel/git/geert/renesas-devel tags/renesas-dts-for-v6.15-tag2
+	patch
+		arm64: dts: amd/seattle: Base Overdrive B1 on top of B0 version
+		arm64: dts: amd/seattle: Move and simplify fixed clocks
+		arm64: dts: amd/seattle: Fix bus, mmc, and ethernet node names
+		arm64: dts: amd/seattle: Drop undocumented "spi-controller" properties
+	tegra/dt-bindings
+		https://git.kernel.org/pub/scm/linux/kernel/git/tegra/linux tags/tegra-for-6.15-dt-bindings
+	tegra/dt-2
+		https://git.kernel.org/pub/scm/linux/kernel/git/tegra/linux tags/tegra-for-6.15-arm64-dt-v2
+	rockchip/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/mmind/linux-rockchip tags/v6.15-rockchip-dts64-1
+	asahi/dt-3
+		https://github.com/AsahiLinux/linux tags/asahi-soc-dt-6.15-v3
+	samsung/dt64
+		https://git.kernel.org/pub/scm/linux/kernel/git/krzk/linux tags/samsung-dt64-6.15
+	davinci/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/brgl/linux tags/davinci-updates-for-v6.15-rc1
+	spacemit/dt
+		https://github.com/spacemit-com/linux tags/spacemit-dt-for-6.15-1
+	imx/dt-bindings
+		https://git.kernel.org/pub/scm/linux/kernel/git/shawnguo/linux tags/imx-bindings-6.15
+	imx/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/shawnguo/linux tags/imx-dt-6.15
+	imx/dt64
+		https://git.kernel.org/pub/scm/linux/kernel/git/shawnguo/linux tags/imx-dt64-6.15
+	k3/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/ti/linux tags/ti-k3-dt-for-v6.15
+	stm32/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/atorgue/stm32 tags/stm32-dt-for-v6.15-1
+	at91/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/at91/linux tags/at91-dt-6.15
+	sunxi/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/sunxi/linux tags/sunxi-dt-for-6.15
+	zynq/dt
+		https://github.com/Xilinx/linux-xlnx tags/zynqmp-dt-for-6.14
+	zynq/dt32
+		https://github.com/Xilinx/linux-xlnx tags/zynq-dt-for-6.15
+	rockchip/dt64-2
+		https://git.kernel.org/pub/scm/linux/kernel/git/mmind/linux-rockchip tags/v6.15-rockchip-dts64-2
+	mvebu/dt64
+		https://git.kernel.org/pub/scm/linux/kernel/git/gclement/mvebu tags/mvebu-dt64-6.15-1
+	sophgo/dt
+		https://github.com/sophgo/linux tags/riscv-sophgo-dt-for-v6.15
+	omap/dts
+		https://git.kernel.org/pub/scm/linux/kernel/git/khilman/linux-omap tags/omap-for-v6.15/dt-signed
+	riscv/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/conor/linux tags/riscv-dt-for-v6.15
+	hisilicon/dts
+		https://github.com/hisilicon/linux-hisi tags/hisi-arm64-dt-for-6.15
+	tegra/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/tegra/linux tags/tegra-for-6.15-arm-dt
+	dt/cleanup
+		https://git.kernel.org/pub/scm/linux/kernel/git/krzk/linux-dt tags/dt-cleanup-6.15
+	amlogic/dt64
+		https://git.kernel.org/pub/scm/linux/kernel/git/amlogic/linux tags/amlogic-arm64-dt-for-v6.15-v2
+	amlogic/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/amlogic/linux tags/amlogic-arm-dt-for-v6.15
+
+soc/drivers
+	resnsas/drivers
+		https://git.kernel.org/pub/scm/linux/kernel/git/geert/renesas-devel tags/renesas-drivers-for-v6.15-tag1
+	asahi/drivers
+		https://github.com/AsahiLinux/linux tags/asahi-soc-rtkit-6.15
+	firmware/smccc
+		https://git.kernel.org/pub/scm/linux/kernel/git/sudeep.holla/linux tags/smccc-update-6.15
+	firmware/scmi
+		https://git.kernel.org/pub/scm/linux/kernel/git/sudeep.holla/linux tags/scmi-updates-6.15
+	firmware/ffa
+		https://git.kernel.org/pub/scm/linux/kernel/git/sudeep.holla/linux tags/ffa-updates-6.15
+	patch
+		firmware: arm_scmi: use ioread64() instead of ioread64_hi_lo()
+	mediatek/drivers
+		https://git.kernel.org/pub/scm/linux/kernel/git/mediatek/linux tags/mtk-soc-for-v6.15
+	tegra/drivers
+		https://git.kernel.org/pub/scm/linux/kernel/git/tegra/linux tags/tegra-for-6.15-soc
+	tegra/firmware
+		https://git.kernel.org/pub/scm/linux/kernel/git/tegra/linux tags/tegra-for-6.15-firmware
+	samsung/drivers
+		https://git.kernel.org/pub/scm/linux/kernel/git/krzk/linux tags/samsung-drivers-6.15
+	samsung/arm
+		https://git.kernel.org/pub/scm/linux/kernel/git/krzk/linux tags/samsung-soc-6.15
+	imx/drivers
+		https://git.kernel.org/pub/scm/linux/kernel/git/shawnguo/linux tags/imx-drivers-6.15
+	ti/drivers
+		https://git.kernel.org/pub/scm/linux/kernel/git/ti/linux tags/ti-driver-soc-for-v6.15
+	drivers/reset
+		git://git.pengutronix.de/pza/linux tags/reset-for-v6.15
+	drivers/memory
+		https://git.kernel.org/pub/scm/linux/kernel/git/krzk/linux-mem-ctrl tags/memory-controller-drv-6.15
+	amlogic/drivers
+		https://git.kernel.org/pub/scm/linux/kernel/git/amlogic/linux tags/amlogic-drivers-for-v6.15
+	qcom/drivers
+		https://git.kernel.org/pub/scm/linux/kernel/git/qcom/linux tags/qcom-drivers-for-6.15
+	qcom/drivers-2
+		https://git.kernel.org/pub/scm/linux/kernel/git/qcom/linux tags/qcom-drivers-for-6.15-2
+	zynq/drivers
+		https://github.com/Xilinx/linux-xlnx tags/zynqmp-soc-for-6.15
+	patch
+		platform: cznic: turris-omnia-mcu: Refactor requesting MCU interrupt
+		platform: cznic: Add keyctl helpers for Turris platform
+		platform: cznic: turris-omnia-mcu: Add support for digital message signing with HW private key
+		firmware: turris-mox-rwtm: Drop ECDSA signatures via debugfs
+		firmware: turris-mox-rwtm: Add support for ECDSA signatures with HW private key
+		platform: cznic: fix function parameter names
+	<no branch> (c25951eb7518844fcb7fc9ec58e888731e8c46d0)
+		https://github.com/chleroy/linux tags/soc_fsl-6.15-1
+
+soc/defconfig
+	renesas/defconfig
+		https://git.kernel.org/pub/scm/linux/kernel/git/geert/renesas-devel tags/renesas-arm-defconfig-for-v6.15-tag1
+	rockchip/defconfig
+		https://git.kernel.org/pub/scm/linux/kernel/git/mmind/linux-rockchip tags/v6.15-rockchip-defconfig64-1
+	ti/defconfig
+		https://git.kernel.org/pub/scm/linux/kernel/git/ti/linux tags/ti-k3-config-for-v6.15
+	qcom/defconfig
+		https://git.kernel.org/pub/scm/linux/kernel/git/qcom/linux tags/qcom-arm64-defconfig-for-6.15
+
+soc/late
+
+arm/fixes
+
