@@ -152,7 +152,13 @@ root_hash_sig_key_desc <key_description>
 
 try_verify_in_tasklet
     If verity hashes are in cache, verify data blocks in kernel tasklet instead
-    of workqueue. This option can reduce IO latency.
+    of workqueue. This option can reduce IO latency. The size limits could be
+    configured via /sys/module/dm_verity/parameters/use_bh_bytes. The four
+    parameters correspond to limits for IOPRIO_CLASS_NONE,IOPRIO_CLASS_RT,
+    IOPRIO_CLASS_BE and IOPRIO_CLASS_IDLE in turn.
+    For example:
+    <none>,<rt>,<be>,<idle>
+    4096,4096,4096,4096
 
 Theory of operation
 ===================
