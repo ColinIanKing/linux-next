@@ -186,6 +186,8 @@ static size_t parent(size_t i, unsigned int lsbit, size_t size)
 	return i / 2;
 }
 
+#include <linux/sched.h>
+
 /**
  * sort_r - sort an array of elements
  * @base: pointer to data to sort
@@ -212,10 +214,11 @@ static size_t parent(size_t i, unsigned int lsbit, size_t size)
  * O(n*n) worst-case behavior and extra memory requirements that make
  * it less suitable for kernel use.
  */
-void sort_r(void *base, size_t num, size_t size,
-	    cmp_r_func_t cmp_func,
-	    swap_r_func_t swap_func,
-	    const void *priv)
+static void __sort_r(void *base, size_t num, size_t size,
+		     cmp_r_func_t cmp_func,
+		     swap_r_func_t swap_func,
+		     const void *priv,
+		     bool may_schedule)
 {
 	/* pre-scale counters for performance */
 	size_t n = num * size, a = (num/2) * size;
@@ -286,6 +289,9 @@ void sort_r(void *base, size_t num, size_t size,
 			b = parent(b, lsbit, size);
 			do_swap(base + b, base + c, size, swap_func, priv);
 		}
+
+		if (may_schedule)
+			cond_resched();
 	}
 
 	n -= size;
@@ -293,7 +299,24 @@ void sort_r(void *base, size_t num, size_t size,
 	if (n == size * 2 && do_cmp(base, base + size, cmp_func, priv) > 0)
 		do_swap(base, base + size, size, swap_func, priv);
 }
+
+void sort_r(void *base, size_t num, size_t size,
+	    cmp_r_func_t cmp_func,
+	    swap_r_func_t swap_func,
+	    const void *priv)
+{
+	__sort_r(base, num, size, cmp_func, swap_func, priv, false);
+}
 EXPORT_SYMBOL(sort_r);
+
+void sort_r_nonatomic(void *base, size_t num, size_t size,
+		      cmp_r_func_t cmp_func,
+		      swap_r_func_t swap_func,
+		      const void *priv)
+{
+	__sort_r(base, num, size, cmp_func, swap_func, priv, true);
+}
+EXPORT_SYMBOL(sort_r_nonatomic);
 
 void sort(void *base, size_t num, size_t size,
 	  cmp_func_t cmp_func,
@@ -304,6 +327,19 @@ void sort(void *base, size_t num, size_t size,
 		.swap = swap_func,
 	};
 
-	return sort_r(base, num, size, _CMP_WRAPPER, SWAP_WRAPPER, &w);
+	return __sort_r(base, num, size, _CMP_WRAPPER, SWAP_WRAPPER, &w, false);
 }
 EXPORT_SYMBOL(sort);
+
+void sort_nonatomic(void *base, size_t num, size_t size,
+		    cmp_func_t cmp_func,
+		    swap_func_t swap_func)
+{
+	struct wrapper w = {
+		.cmp  = cmp_func,
+		.swap = swap_func,
+	};
+
+	return __sort_r(base, num, size, _CMP_WRAPPER, SWAP_WRAPPER, &w, true);
+}
+EXPORT_SYMBOL(sort_nonatomic);
