@@ -136,12 +136,8 @@ int bch2_bkey_pick_read_device(struct bch_fs *c, struct bkey_s_c k,
 	if (k.k->type == KEY_TYPE_error)
 		return -BCH_ERR_key_type_error;
 
-	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
-
-	if (bch2_bkey_extent_ptrs_flags(ptrs) & BIT_ULL(BCH_EXTENT_FLAG_poisoned))
-		return -BCH_ERR_extent_poisened;
-
 	rcu_read_lock();
+	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
 	const union bch_extent_entry *entry;
 	struct extent_ptr_decoded p;
 	u64 pick_latency;
@@ -227,8 +223,11 @@ int bch2_bkey_pick_read_device(struct bch_fs *c, struct bkey_s_c k,
 	if (have_io_errors)
 		return -BCH_ERR_data_read_io_err;
 
-	WARN_ONCE(1, "unhandled error case in %s\n", __func__);
-	return -EINVAL;
+	/*
+	 * If we get here, we have pointers (bkey_ptrs_validate() ensures that),
+	 * but they don't point to valid devices:
+	 */
+	return -BCH_ERR_no_devices_valid;
 }
 
 /* KEY_TYPE_btree_ptr: */
