@@ -137,12 +137,15 @@ static inline void bch2_read_extent(struct btree_trans *trans,
 			enum btree_id data_btree, struct bkey_s_c k,
 			unsigned offset_into_extent, unsigned flags)
 {
-	__bch2_read_extent(trans, rbio, rbio->bio.bi_iter, read_pos,
-			   data_btree, k, offset_into_extent, NULL, flags, -1);
+	int ret = __bch2_read_extent(trans, rbio, rbio->bio.bi_iter, read_pos,
+				     data_btree, k, offset_into_extent, NULL, flags, -1);
+	/* __bch2_read_extent only returns errors if BCH_READ_in_retry is set */
+	WARN(ret, "unhandled error from __bch2_read_extent()");
 }
 
 int __bch2_read(struct btree_trans *, struct bch_read_bio *, struct bvec_iter,
-		subvol_inum, struct bch_io_failures *, unsigned flags);
+		subvol_inum,
+		struct bch_io_failures *, struct bkey_buf *, unsigned flags);
 
 static inline void bch2_read(struct bch_fs *c, struct bch_read_bio *rbio,
 			     subvol_inum inum)
@@ -152,7 +155,7 @@ static inline void bch2_read(struct bch_fs *c, struct bch_read_bio *rbio,
 	rbio->subvol = inum.subvol;
 
 	bch2_trans_run(c,
-		__bch2_read(trans, rbio, rbio->bio.bi_iter, inum, NULL,
+		__bch2_read(trans, rbio, rbio->bio.bi_iter, inum, NULL, NULL,
 			    BCH_READ_retry_if_stale|
 			    BCH_READ_may_promote|
 			    BCH_READ_user_mapped));

@@ -95,6 +95,9 @@ static unsigned bch2_bkey_ptrs_need_rebalance(struct bch_fs *c,
 {
 	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
 
+	if (bch2_bkey_extent_ptrs_flags(ptrs) & BIT_ULL(BCH_EXTENT_FLAG_poisoned))
+		return 0;
+
 	return bch2_bkey_ptrs_need_compress(c, opts, k, ptrs) |
 		bch2_bkey_ptrs_need_move(c, opts, ptrs);
 }
@@ -105,6 +108,9 @@ u64 bch2_bkey_sectors_need_rebalance(struct bch_fs *c, struct bkey_s_c k)
 
 	const struct bch_extent_rebalance *opts = bch2_bkey_ptrs_rebalance_opts(ptrs);
 	if (!opts)
+		return 0;
+
+	if (bch2_bkey_extent_ptrs_flags(ptrs) & BIT_ULL(BCH_EXTENT_FLAG_poisoned))
 		return 0;
 
 	const union bch_extent_entry *entry;
@@ -600,12 +606,13 @@ void bch2_rebalance_status_to_text(struct printbuf *out, struct bch_fs *c)
 	struct bch_fs_rebalance *r = &c->rebalance;
 
 	/* print pending work */
-	struct disk_accounting_pos acc = { .type = BCH_DISK_ACCOUNTING_rebalance_work, };
+	struct disk_accounting_pos acc;
+	disk_accounting_key_init(acc, rebalance_work);
 	u64 v;
 	bch2_accounting_mem_read(c, disk_accounting_pos_to_bpos(&acc), &v, 1);
 
 	prt_printf(out, "pending work:\t");
-	prt_human_readable_u64(out, v);
+	prt_human_readable_u64(out, v << 9);
 	prt_printf(out, "\n\n");
 
 	prt_str(out, bch2_rebalance_state_strs[r->state]);
