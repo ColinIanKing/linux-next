@@ -2702,19 +2702,9 @@ long get_user_pages(unsigned long start, unsigned long nr_pages,
 EXPORT_SYMBOL(get_user_pages);
 
 /*
- * get_user_pages_unlocked() is suitable to replace the form:
- *
- *      mmap_read_lock(mm);
- *      get_user_pages(mm, ..., pages, NULL);
- *      mmap_read_unlock(mm);
- *
- *  with:
- *
- *      get_user_pages_unlocked(mm, ..., pages);
- *
- * It is functionally equivalent to get_user_pages_fast so
- * get_user_pages_fast should be used instead if specific gup_flags
- * (e.g. FOLL_FORCE) are not required.
+ * get_user_pages_unlocked() is functionally equivalent to
+ * get_user_pages_fast so get_user_pages_fast should be used instead
+ * if specific gup_flags (e.g. FOLL_FORCE) are not required.
  */
 long get_user_pages_unlocked(unsigned long start, unsigned long nr_pages,
 			     struct page **pages, unsigned int gup_flags)
