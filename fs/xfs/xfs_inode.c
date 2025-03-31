@@ -1404,8 +1404,11 @@ xfs_inactive(
 		goto out;
 
 	/* Try to clean out the cow blocks if there are any. */
-	if (xfs_inode_has_cow_data(ip))
-		xfs_reflink_cancel_cow_range(ip, 0, NULLFILEOFF, true);
+	if (xfs_inode_has_cow_data(ip)) {
+		error = xfs_reflink_cancel_cow_range(ip, 0, NULLFILEOFF, true);
+		if (error)
+			goto out;
+	}
 
 	if (VFS_I(ip)->i_nlink != 0) {
 		/*
@@ -1718,8 +1721,7 @@ xfs_ifree_cluster(
 		 * to mark all the active inodes on the buffer stale.
 		 */
 		error = xfs_trans_get_buf(tp, mp->m_ddev_targp, blkno,
-				mp->m_bsize * igeo->blocks_per_cluster,
-				XBF_UNMAPPED, &bp);
+				mp->m_bsize * igeo->blocks_per_cluster, 0, &bp);
 		if (error)
 			return error;
 
@@ -3071,5 +3073,6 @@ bool
 xfs_is_always_cow_inode(
 	const struct xfs_inode	*ip)
 {
-	return ip->i_mount->m_always_cow && xfs_has_reflink(ip->i_mount);
+	return xfs_is_zoned_inode(ip) ||
+		(ip->i_mount->m_always_cow && xfs_has_reflink(ip->i_mount));
 }

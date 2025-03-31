@@ -114,6 +114,13 @@ unsigned long simple_strtoul(const char *cp, char **endp, unsigned int base)
 }
 EXPORT_SYMBOL(simple_strtoul);
 
+unsigned long simple_strntoul(const char *cp, char **endp, unsigned int base,
+			      size_t max_chars)
+{
+	return simple_strntoull(cp, endp, base, max_chars);
+}
+EXPORT_SYMBOL(simple_strntoul);
+
 /**
  * simple_strtol - convert a string to a signed long
  * @cp: The start of the string
@@ -2283,9 +2290,6 @@ int __init no_hash_pointers_enable(char *str)
 	return 0;
 }
 early_param("no_hash_pointers", no_hash_pointers_enable);
-
-/* Used for Rust formatting ('%pA'). */
-char *rust_fmt_argument(char *buf, char *end, void *ptr);
 
 /*
  * Show a '%p' thing.  A kernel extension is that the '%p' is followed

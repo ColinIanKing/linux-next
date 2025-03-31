@@ -166,8 +166,8 @@ _c_flags += $(if $(patsubst n%,, \
 		$(UBSAN_SANITIZE_$(target-stem).o)$(UBSAN_SANITIZE)$(is-kernel-object)), \
 		$(CFLAGS_UBSAN))
 _c_flags += $(if $(patsubst n%,, \
-		$(UBSAN_SIGNED_WRAP_$(target-stem).o)$(UBSAN_SANITIZE_$(target-stem).o)$(UBSAN_SIGNED_WRAP)$(UBSAN_SANITIZE)$(is-kernel-object)), \
-		$(CFLAGS_UBSAN_SIGNED_WRAP))
+		$(UBSAN_INTEGER_WRAP_$(target-stem).o)$(UBSAN_SANITIZE_$(target-stem).o)$(UBSAN_INTEGER_WRAP)$(UBSAN_SANITIZE)$(is-kernel-object)), \
+		$(CFLAGS_UBSAN_INTEGER_WRAP))
 endif
 
 ifeq ($(CONFIG_KCOV),y)
@@ -277,6 +277,7 @@ objtool-args-$(CONFIG_HAVE_STATIC_CALL_INLINE)		+= --static-call
 objtool-args-$(CONFIG_HAVE_UACCESS_VALIDATION)		+= --uaccess
 objtool-args-$(CONFIG_GCOV_KERNEL)			+= --no-unreachable
 objtool-args-$(CONFIG_PREFIX_SYMBOLS)			+= --prefix=$(CONFIG_FUNCTION_PADDING_BYTES)
+objtool-args-$(CONFIG_OBJTOOL_WERROR)			+= --Werror --backtrace
 
 objtool-args = $(objtool-args-y)					\
 	$(if $(delay-objtool), --link)					\
@@ -305,7 +306,7 @@ endef
 # These are shared by some Makefile.* files.
 
 ifdef CONFIG_LTO_CLANG
-# Run $(LD) here to covert LLVM IR to ELF in the following cases:
+# Run $(LD) here to convert LLVM IR to ELF in the following cases:
 #  - when this object needs objtool processing, as objtool cannot process LLVM IR
 #  - when this is a single-object module, as modpost cannot process LLVM IR
 cmd_ld_single = $(if $(objtool-enabled)$(is-single-obj-m), ; $(LD) $(ld_flags) -r -o $(tmp-target) $@; mv $(tmp-target) $@)
