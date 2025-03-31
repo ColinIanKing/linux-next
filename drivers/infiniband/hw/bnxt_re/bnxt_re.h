@@ -53,12 +53,6 @@
 #define BNXT_RE_MAX_MR_SIZE_HIGH	BIT_ULL(39)
 #define BNXT_RE_MAX_MR_SIZE		BNXT_RE_MAX_MR_SIZE_HIGH
 
-#define BNXT_RE_MAX_QPC_COUNT		(64 * 1024)
-#define BNXT_RE_MAX_MRW_COUNT		(64 * 1024)
-#define BNXT_RE_MAX_SRQC_COUNT		(64 * 1024)
-#define BNXT_RE_MAX_CQ_COUNT		(64 * 1024)
-#define BNXT_RE_MAX_MRW_COUNT_64K	(64 * 1024)
-#define BNXT_RE_MAX_MRW_COUNT_256K	(256 * 1024)
 
 /* Number of MRs to reserve for PF, leaving remainder for VFs */
 #define BNXT_RE_RESVD_MR_FOR_PF         (32 * 1024)
@@ -187,7 +181,6 @@ struct bnxt_re_dev {
 #define BNXT_RE_FLAG_ISSUE_ROCE_STATS          29
 	struct net_device		*netdev;
 	struct auxiliary_device         *adev;
-	struct notifier_block		nb;
 	unsigned int			version, major, minor;
 	struct bnxt_qplib_chip_ctx	*chip_ctx;
 	struct bnxt_en_dev		*en_dev;
