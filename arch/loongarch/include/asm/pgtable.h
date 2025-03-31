@@ -615,7 +615,6 @@ static inline long pmd_protnone(pmd_t pmd)
 
 #ifdef CONFIG_TRANSPARENT_HUGEPAGE
 #define pud_devmap(pud)		(0)
-#define pgd_devmap(pgd)		(0)
 #endif /* CONFIG_TRANSPARENT_HUGEPAGE */
 
 /*
