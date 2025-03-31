@@ -2211,7 +2211,7 @@ int get_msr(int cpu, off_t offset, unsigned long long *msr)
 	return 0;
 }
 
-int probe_msr(int cpu, off_t offset)
+int probe_rapl_msr(int cpu, off_t offset, int index)
 {
 	ssize_t retval;
 	unsigned long long value;
@@ -2220,13 +2220,22 @@ int probe_msr(int cpu, off_t offset)
 
 	retval = pread(get_msr_fd(cpu), &value, sizeof(value), offset);
 
-	/*
-	 * Expect MSRs to accumulate some non-zero value since the system was powered on.
-	 * Treat zero as a read failure.
-	 */
-	if (retval != sizeof(value) || value == 0)
+	/* if the read failed, the probe fails */
+	if (retval != sizeof(value))
 		return 1;
 
+	/* If an Energy Status Counter MSR returns 0, the probe fails */
+	switch (index) {
+	case RAPL_RCI_INDEX_ENERGY_PKG:
+	case RAPL_RCI_INDEX_ENERGY_CORES:
+	case RAPL_RCI_INDEX_DRAM:
+	case RAPL_RCI_INDEX_GFX:
+	case RAPL_RCI_INDEX_ENERGY_PLATFORM:
+		if (value == 0)
+			return 1;
+	}
+
+	/* PKG,DRAM_PERF_STATUS MSRs, can return any value */
 	return 0;
 }
 
@@ -6703,7 +6712,18 @@ static void probe_intel_uncore_frequency_cluster(void)
 		sprintf(path, "%s/current_freq_khz", path_base);
 		sprintf(name_buf, "UMHz%d.%d", domain_id, cluster_id);
 
-		add_counter(0, path, name_buf, 0, SCOPE_PACKAGE, COUNTER_K2M, FORMAT_AVERAGE, 0, package_id);
+		/*
+		 * Once add_couter() is called, that counter is always read
+		 * and reported -- So it is effectively (enabled & present).
+		 * Only call add_counter() here if legacy BIC_UNCORE_MHZ (UncMHz)
+		 * is (enabled).  Since we are in this routine, we
+		 * know we will not probe and set (present) the legacy counter.
+		 *
+		 * This allows "--show/--hide UncMHz" to be effective for
+		 * the clustered MHz counters, as a group.
+		 */
+		if BIC_IS_ENABLED(BIC_UNCORE_MHZ)
+			add_counter(0, path, name_buf, 0, SCOPE_PACKAGE, COUNTER_K2M, FORMAT_AVERAGE, 0, package_id);
 
 		if (quiet)
 			continue;
@@ -7896,7 +7916,7 @@ void rapl_perf_init(void)
 					rci->flags[cai->rci_index] = cai->flags;
 
 					/* Use MSR for this counter */
-				} else if (!no_msr && cai->msr && probe_msr(cpu, cai->msr) == 0) {
+				} else if (!no_msr && cai->msr && probe_rapl_msr(cpu, cai->msr, cai->rci_index) == 0) {
 					rci->source[cai->rci_index] = COUNTER_SOURCE_MSR;
 					rci->msr[cai->rci_index] = cai->msr;
 					rci->msr_mask[cai->rci_index] = cai->msr_mask;
@@ -8034,7 +8054,7 @@ void msr_perf_init_(void)
 					cai->present = true;
 
 					/* User MSR for this counter */
-				} else if (!no_msr && cai->msr && probe_msr(cpu, cai->msr) == 0) {
+				} else if (!no_msr && cai->msr && probe_rapl_msr(cpu, cai->msr, cai->rci_index) == 0) {
 					cci->source[cai->rci_index] = COUNTER_SOURCE_MSR;
 					cci->msr[cai->rci_index] = cai->msr;
 					cci->msr_mask[cai->rci_index] = cai->msr_mask;
@@ -8148,7 +8168,7 @@ void cstate_perf_init_(bool soft_c1)
 
 					/* User MSR for this counter */
 				} else if (!no_msr && cai->msr && pkg_cstate_limit >= cai->pkg_cstate_limit
-					   && probe_msr(cpu, cai->msr) == 0) {
+					   && probe_rapl_msr(cpu, cai->msr, cai->rci_index) == 0) {
 					cci->source[cai->rci_index] = COUNTER_SOURCE_MSR;
 					cci->msr[cai->rci_index] = cai->msr;
 				}
@@ -9592,7 +9612,7 @@ struct msr_counter *find_msrp_by_name(struct msr_counter *head, char *name)
 	for (mp = head; mp; mp = mp->next) {
 		if (debug)
 			fprintf(stderr, "%s: %s %s\n", __func__, name, mp->name);
-		if (!strncmp(name, mp->name, strlen(mp->name)))
+		if (!strcmp(name, mp->name))
 			return mp;
 	}
 	return NULL;
@@ -10245,6 +10265,7 @@ void probe_sysfs(void)
 	char name_buf[16];
 	FILE *input;
 	int state;
+	int min_state = 1024, max_state = 0;
 	char *sp;
 
 	for (state = 10; state >= 0; --state) {
@@ -10276,6 +10297,11 @@ void probe_sysfs(void)
 			continue;
 
 		add_counter(0, path, name_buf, 64, SCOPE_CPU, COUNTER_USEC, FORMAT_PERCENT, SYSFS_PERCPU, 0);
+
+		if (state > max_state)
+			max_state = state;
+		if (state < min_state)
+			min_state = state;
 	}
 
 	for (state = 10; state >= 0; --state) {
@@ -10286,16 +10312,9 @@ void probe_sysfs(void)
 			continue;
 		if (!fgets(name_buf, sizeof(name_buf), input))
 			err(1, "%s: failed to read file", path);
-		/* truncate "C1-HSW\n" to "C1", or truncate "C1\n" to "C1" */
-		sp = strchr(name_buf, '-');
-		if (!sp)
-			sp = strchrnul(name_buf, '\n');
-		*sp = '\0';
 		fclose(input);
 
 		remove_underbar(name_buf);
-
-		sprintf(path, "cpuidle/state%d/usage", state);
 
 		if (!DO_BIC(BIC_sysfs) && !is_deferred_add(name_buf))
 			continue;
@@ -10303,9 +10322,42 @@ void probe_sysfs(void)
 		if (is_deferred_skip(name_buf))
 			continue;
 
-		add_counter(0, path, name_buf, 64, SCOPE_CPU, COUNTER_ITEMS, FORMAT_DELTA, SYSFS_PERCPU, 0);
-	}
+		/* truncate "C1-HSW\n" to "C1", or truncate "C1\n" to "C1" */
+		sp = strchr(name_buf, '-');
+		if (!sp)
+			sp = strchrnul(name_buf, '\n');
 
+		/*
+		 * The 'below' sysfs file always contains 0 for the deepest state (largest index),
+		 * do not add it.
+		 */
+		if (state != max_state) {
+			/*
+			 * Add 'C1+' for C1, and so on. The 'below' sysfs file always contains 0 for
+			 * the last state, so do not add it.
+			 */
+
+			*sp = '+';
+			*(sp + 1) = '\0';
+			sprintf(path, "cpuidle/state%d/below", state);
+			add_counter(0, path, name_buf, 64, SCOPE_CPU, COUNTER_ITEMS, FORMAT_DELTA, SYSFS_PERCPU, 0);
+		}
+
+		*sp = '\0';
+		sprintf(path, "cpuidle/state%d/usage", state);
+		add_counter(0, path, name_buf, 64, SCOPE_CPU, COUNTER_ITEMS, FORMAT_DELTA, SYSFS_PERCPU, 0);
+
+		/*
+		 * The 'above' sysfs file always contains 0 for the shallowest state (smallest
+		 * index), do not add it.
+		 */
+		if (state != min_state) {
+			*sp = '-';
+			*(sp + 1) = '\0';
+			sprintf(path, "cpuidle/state%d/above", state);
+			add_counter(0, path, name_buf, 64, SCOPE_CPU, COUNTER_ITEMS, FORMAT_DELTA, SYSFS_PERCPU, 0);
+		}
+	}
 }
 
 /*
