@@ -258,7 +258,7 @@ cifs_query_mf_symlink(unsigned int xid, struct cifs_tcon *tcon,
 	struct cifs_open_parms oparms;
 	struct cifs_io_parms io_parms = {0};
 	int buf_type = CIFS_NO_BUFFER;
-	FILE_ALL_INFO file_info;
+	struct cifs_open_info_data query_data;
 
 	oparms = (struct cifs_open_parms) {
 		.tcon = tcon,
@@ -270,11 +270,11 @@ cifs_query_mf_symlink(unsigned int xid, struct cifs_tcon *tcon,
 		.fid = &fid,
 	};
 
-	rc = CIFS_open(xid, &oparms, &oplock, &file_info);
+	rc = tcon->ses->server->ops->open(xid, &oparms, &oplock, &query_data);
 	if (rc)
 		return rc;
 
-	if (file_info.EndOfFile != cpu_to_le64(CIFS_MF_SYMLINK_FILE_SIZE)) {
+	if (query_data.fi.EndOfFile != cpu_to_le64(CIFS_MF_SYMLINK_FILE_SIZE)) {
 		rc = -ENOENT;
 		/* it's not a symlink */
 		goto out;
@@ -313,7 +313,7 @@ cifs_create_mf_symlink(unsigned int xid, struct cifs_tcon *tcon,
 		.fid = &fid,
 	};
 
-	rc = CIFS_open(xid, &oparms, &oplock, NULL);
+	rc = tcon->ses->server->ops->open(xid, &oparms, &oplock, NULL);
 	if (rc)
 		return rc;
 
@@ -499,9 +499,8 @@ cifs_hardlink(struct dentry *old_file, struct inode *inode,
 
 #ifdef CONFIG_CIFS_ALLOW_INSECURE_LEGACY
 	if (tcon->unix_ext)
-		rc = CIFSUnixCreateHardLink(xid, tcon, from_name, to_name,
-					    cifs_sb->local_nls,
-					    cifs_remap(cifs_sb));
+		rc = CIFSUnixCreateHardLink(xid, tcon, from_name,
+					    to_name, cifs_sb);
 	else {
 #else
 	{
@@ -618,9 +617,7 @@ cifs_symlink(struct mnt_idmap *idmap, struct inode *inode,
 #ifdef CONFIG_CIFS_ALLOW_INSECURE_LEGACY
 		if (pTcon->unix_ext) {
 			rc = CIFSUnixCreateSymLink(xid, pTcon, full_path,
-						   symname,
-						   cifs_sb->local_nls,
-						   cifs_remap(cifs_sb));
+						   symname, cifs_sb);
 		}
 #endif /* CONFIG_CIFS_ALLOW_INSECURE_LEGACY */
 		break;
