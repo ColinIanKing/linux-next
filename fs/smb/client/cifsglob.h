@@ -2367,4 +2367,29 @@ static inline bool cifs_netbios_name(const char *name, size_t namelen)
 	return ret;
 }
 
+/*
+ * Don't allow path components longer than the server max.
+ * The VFS will not allow "/", but "\" is allowed by posix & sfm mapping.
+ */
+static inline int cifs_check_name(struct dentry *dentry, struct cifs_tcon *tcon)
+{
+	unsigned int maxlen;
+	unsigned int flags;
+	int i;
+
+	maxlen = le32_to_cpu(tcon->fsAttrInfo.MaxPathNameComponentLength);
+	flags = CIFS_SB(dentry->d_sb)->mnt_cifs_flags;
+
+	if (maxlen && unlikely(dentry->d_name.len > maxlen))
+		return -ENAMETOOLONG;
+
+	if (unlikely(!(flags & (CIFS_MOUNT_POSIX_PATHS | CIFS_MOUNT_MAP_SFM_CHR)))) {
+		for (i = 0; i < dentry->d_name.len; i++) {
+			if (dentry->d_name.name[i] == '\\')
+				return -EINVAL;
+		}
+	}
+	return 0;
+}
+
 #endif	/* _CIFS_GLOB_H */

@@ -21,6 +21,7 @@
 #include <asm/byteorder.h>
 #include <linux/types.h>
 #include <linux/nls.h>
+#include <linux/unaligned.h>
 #include "../../nls/nls_ucs2_utils.h"
 
 /*
@@ -72,5 +73,18 @@ extern __le16 *cifs_strndup_to_utf16(const char *src, const int maxlen,
 #endif
 
 wchar_t cifs_toupper(wchar_t in);
+
+static inline void cifs_set_utf16_path_delim(struct cifs_sb_info *cifs_sb,
+					     __le16 *path)
+{
+	__u16 c;
+
+	if (!(cifs_sb->mnt_cifs_flags & CIFS_MOUNT_POSIX_PATHS)) {
+		for (; (c = get_unaligned_le16(path)); path++) {
+			if (c == '/')
+				put_unaligned_le16('\\', path);
+		}
+	}
+}
 
 #endif /* _CIFS_UNICODE_H */
