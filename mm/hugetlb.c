@@ -3778,7 +3778,7 @@ static void try_to_free_low(struct hstate *h, unsigned long count,
 		struct folio *folio, *next;
 		struct list_head *freel = &h->hugepage_freelists[i];
 		list_for_each_entry_safe(folio, next, freel, lru) {
-			if (count >= h->nr_huge_pages)
+			if (count >= available_huge_pages(h))
 				goto out;
 			if (folio_test_highmem(folio))
 				continue;
@@ -3832,11 +3832,30 @@ found:
 	return 1;
 }
 
+static struct folio *remove_surplus_pool_hugetlb_folio(struct hstate *h,
+		nodemask_t *nodes_allowed)
+{
+	int nr_nodes, node;
+	struct folio *folio = NULL;
+
+	lockdep_assert_held(&hugetlb_lock);
+	for_each_node_mask_to_free(h, nr_nodes, node, nodes_allowed) {
+		if (h->surplus_huge_pages_node[node] &&
+		    !list_empty(&h->hugepage_freelists[node])) {
+			folio = list_entry(h->hugepage_freelists[node].next,
+					  struct folio, lru);
+			remove_hugetlb_folio(h, folio, true);
+			break;
+		}
+	}
+
+	return folio;
+}
+
 #define persistent_huge_pages(h) (h->nr_huge_pages - h->surplus_huge_pages)
 static int set_max_huge_pages(struct hstate *h, unsigned long count, int nid,
 			      nodemask_t *nodes_allowed)
 {
-	unsigned long min_count;
 	unsigned long allocated;
 	struct folio *folio;
 	LIST_HEAD(page_list);
@@ -3971,15 +3990,29 @@ static int set_max_huge_pages(struct hstate *h, unsigned long count, int nid,
 	 * and won't grow the pool anywhere else. Not until one of the
 	 * sysctls are changed, or the surplus pages go out of use.
 	 */
-	min_count = h->resv_huge_pages + h->nr_huge_pages - h->free_huge_pages;
-	min_count = max(count, min_count);
-	try_to_free_low(h, min_count, nodes_allowed);
+	try_to_free_low(h, count, nodes_allowed);
 
 	/*
 	 * Collect pages to be removed on list without dropping lock
+	 *
+	 * There may be free surplus huge pages due to HVO, see comments
+	 * in __update_and_free_hugetlb_folio() when calling
+	 * hugetlb_vmemmap_restore_folio(). Collect surplus pages first.
 	 */
-	while (min_count < persistent_huge_pages(h)) {
-		folio = remove_pool_hugetlb_folio(h, nodes_allowed, 0);
+	while (count < available_huge_pages(h)) {
+		if (h->surplus_huge_pages && h->free_huge_pages) {
+			folio = remove_surplus_pool_hugetlb_folio(h, nodes_allowed);
+			if (!folio)
+				break;
+
+			list_add(&folio->lru, &page_list);
+		} else {
+			break;
+		}
+	}
+
+	while (count < available_huge_pages(h)) {
+		folio = remove_pool_hugetlb_folio(h, nodes_allowed, false);
 		if (!folio)
 			break;
 
