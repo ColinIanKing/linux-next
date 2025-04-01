@@ -1211,7 +1211,7 @@ int cifs_update_super_prepath(struct cifs_sb_info *cifs_sb, char *prefix)
 			return rc;
 		}
 		if (cifs_sb->prepath)
-			convert_delimiter(cifs_sb->prepath, CIFS_DIR_SEP(cifs_sb));
+			convert_delimiter(cifs_sb->prepath, '/');
 	}
 
 	cifs_sb->mnt_cifs_flags |= CIFS_MOUNT_USE_PREFIX_PATH;
