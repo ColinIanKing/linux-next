@@ -17,6 +17,7 @@
 #include "smb2glob.h"
 #include "nterr.h"
 #include "cached_dir.h"
+#include "cifs_fs_sb.h"
 
 static int
 check_smb2_hdr(struct smb2_hdr *shdr, __u64 mid)
@@ -453,32 +454,31 @@ calc_size_exit:
 __le16 *
 cifs_convert_path_to_utf16(const char *from, struct cifs_sb_info *cifs_sb)
 {
-	int len;
+	unsigned int sb_flags = cifs_sb->mnt_cifs_flags;
 	const char *start_of_path;
-	__le16 *to;
 	int map_type;
+	__le16 *to;
+	int len;
 
-	if (cifs_sb->mnt_cifs_flags & CIFS_MOUNT_MAP_SFM_CHR)
+	if (sb_flags & CIFS_MOUNT_MAP_SFM_CHR)
 		map_type = SFM_MAP_UNI_RSVD;
-	else if (cifs_sb->mnt_cifs_flags & CIFS_MOUNT_MAP_SPECIAL_CHR)
+	else if (sb_flags & CIFS_MOUNT_MAP_SPECIAL_CHR)
 		map_type = SFU_MAP_UNI_RSVD;
 	else
 		map_type = NO_MAP_UNI_RSVD;
 
-	/* Windows doesn't allow paths beginning with \ */
-	if (from[0] == '\\')
-		start_of_path = from + 1;
-
-	/* SMB311 POSIX extensions paths do not include leading slash */
-	else if (cifs_sb_master_tlink(cifs_sb) &&
-		 cifs_sb_master_tcon(cifs_sb)->posix_extensions &&
-		 (from[0] == '/')) {
-		start_of_path = from + 1;
-	} else
-		start_of_path = from;
+	start_of_path = from;
+	/* Only SMB1 UNIX extensions paths include leading separator */
+	if (*from == '/' &&
+	    (!(sb_flags & CIFS_MOUNT_POSIX_PATHS) ||
+	     (cifs_sb_master_tlink(cifs_sb) &&
+	      cifs_sb_master_tcon(cifs_sb)->posix_extensions)))
+		++start_of_path;
 
 	to = cifs_strndup_to_utf16(start_of_path, PATH_MAX, &len,
 				   cifs_sb->local_nls, map_type);
+	if (to)
+		cifs_set_utf16_path_delim(cifs_sb, to);
 	return to;
 }
 

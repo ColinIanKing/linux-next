@@ -3842,23 +3842,22 @@ cifs_are_all_path_components_accessible(struct TCP_Server_Info *server,
 					char *full_path,
 					int added_treename)
 {
-	int rc;
-	char *s;
-	char sep, tmp;
 	int skip = added_treename ? 1 : 0;
+	char tmp;
+	char *s;
+	int rc;
 
-	sep = CIFS_DIR_SEP(cifs_sb);
 	s = full_path;
 
 	rc = server->ops->is_path_accessible(xid, tcon, cifs_sb, "");
 	while (rc == 0) {
 		/* skip separators */
-		while (*s == sep)
+		while (*s == '/')
 			s++;
 		if (!*s)
 			break;
 		/* next separator */
-		while (*s && *s != sep)
+		while (*s && *s != '/')
 			s++;
 		/*
 		 * if the treename is added, we then have to skip the first
@@ -3888,13 +3887,14 @@ cifs_are_all_path_components_accessible(struct TCP_Server_Info *server,
  */
 int cifs_is_path_remote(struct cifs_mount_ctx *mnt_ctx)
 {
-	int rc;
-	struct cifs_sb_info *cifs_sb = mnt_ctx->cifs_sb;
 	struct TCP_Server_Info *server = mnt_ctx->server;
-	unsigned int xid = mnt_ctx->xid;
-	struct cifs_tcon *tcon = mnt_ctx->tcon;
+	struct cifs_sb_info *cifs_sb = mnt_ctx->cifs_sb;
 	struct smb3_fs_context *ctx = mnt_ctx->fs_ctx;
+	struct cifs_tcon *tcon = mnt_ctx->tcon;
+	unsigned int xid = mnt_ctx->xid;
+	bool add_treename;
 	char *full_path;
+	int rc;
 
 	if (!server->ops->is_path_accessible)
 		return -EOPNOTSUPP;
@@ -3902,8 +3902,8 @@ int cifs_is_path_remote(struct cifs_mount_ctx *mnt_ctx)
 	/*
 	 * cifs_build_path_to_root works only when we have a valid tcon
 	 */
-	full_path = cifs_build_path_to_root(ctx, cifs_sb, tcon,
-					    tcon->Flags & SMB_SHARE_IS_IN_DFS);
+	add_treename = !!(tcon->Flags & SMB_SHARE_IS_IN_DFS);
+	full_path = cifs_build_path_to_root(ctx, tcon, add_treename);
 	if (full_path == NULL)
 		return -ENOMEM;
 

@@ -630,12 +630,13 @@ char *smb3_fs_context_fullpath(const struct smb3_fs_context *ctx, char dirsep)
 	if (!s)
 		return ERR_PTR(-ENOMEM);
 	memcpy(s, ctx->UNC, ulen);
+	s[ulen] = '\0';
+	convert_delimiter(s, dirsep);
 	if (plen) {
 		s[ulen] = dirsep;
 		memcpy(s + ulen + 1, ctx->prepath, plen);
 	}
 	s[ulen + plen] = '\0';
-	convert_delimiter(s, dirsep);
 	return s;
 }
 

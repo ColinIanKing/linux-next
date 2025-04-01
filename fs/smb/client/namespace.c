@@ -164,7 +164,6 @@ static char *automount_fullpath(struct dentry *dentry, void *page)
 	memcpy(s, tcon->origin_fullpath, len);
 	spin_unlock(&tcon->tc_lock);
 	convert_delimiter(s, '/');
-
 	return s;
 }
 
