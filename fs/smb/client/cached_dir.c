@@ -83,9 +83,8 @@ path_to_dentry(struct cifs_sb_info *cifs_sb, const char *path)
 {
 	struct dentry *dentry;
 	const char *s, *p;
-	char sep;
+	char sep = '/';
 
-	sep = CIFS_DIR_SEP(cifs_sb);
 	dentry = dget(cifs_sb->root);
 	s = path;
 

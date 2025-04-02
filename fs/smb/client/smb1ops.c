@@ -14,6 +14,8 @@
 #include "cifspdu.h"
 #include "cifs_unicode.h"
 #include "fs_context.h"
+#include "nterr.h"
+#include "smberr.h"
 
 /*
  * An NT cancel request header looks just like the original request except:
@@ -426,13 +428,6 @@ cifs_negotiate(const unsigned int xid,
 {
 	int rc;
 	rc = CIFSSMBNegotiate(xid, ses, server);
-	if (rc == -EAGAIN) {
-		/* retry only once on 1st time connection */
-		set_credits(server, 1);
-		rc = CIFSSMBNegotiate(xid, ses, server);
-		if (rc == -EAGAIN)
-			rc = -EHOSTDOWN;
-	}
 	return rc;
 }
 
@@ -444,8 +439,8 @@ cifs_negotiate_wsize(struct cifs_tcon *tcon, struct smb3_fs_context *ctx)
 	unsigned int wsize;
 
 	/* start with specified wsize, or default */
-	if (ctx->wsize)
-		wsize = ctx->wsize;
+	if (ctx->got_wsize)
+		wsize = ctx->vol_wsize;
 	else if (tcon->unix_ext && (unix_cap & CIFS_UNIX_LARGE_WRITE_CAP))
 		wsize = CIFS_DEFAULT_IOSIZE;
 	else
@@ -497,7 +492,7 @@ cifs_negotiate_rsize(struct cifs_tcon *tcon, struct smb3_fs_context *ctx)
 	else
 		defsize = server->maxBuf - sizeof(READ_RSP);
 
-	rsize = ctx->rsize ? ctx->rsize : defsize;
+	rsize = ctx->got_rsize ? ctx->vol_rsize : defsize;
 
 	/*
 	 * no CAP_LARGE_READ_X? Then MS-CIFS states that we must limit this to
@@ -532,12 +527,11 @@ cifs_is_path_accessible(const unsigned int xid, struct cifs_tcon *tcon,
 		return -ENOMEM;
 
 	rc = CIFSSMBQPathInfo(xid, tcon, full_path, file_info,
-			      0 /* not legacy */, cifs_sb->local_nls,
-			      cifs_remap(cifs_sb));
-
-	if (rc == -EOPNOTSUPP || rc == -EINVAL)
-		rc = SMBQueryInformation(xid, tcon, full_path, file_info,
-				cifs_sb->local_nls, cifs_remap(cifs_sb));
+			      0 /* not legacy */, cifs_sb);
+	if (rc == -EOPNOTSUPP || rc == -EINVAL) {
+		rc = SMBQueryInformation(xid, tcon, full_path,
+					 file_info, cifs_sb);
+	}
 	kfree(file_info);
 	return rc;
 }
@@ -555,16 +549,16 @@ static int cifs_query_path_info(const unsigned int xid,
 	data->adjust_tz = false;
 
 	/* could do find first instead but this returns more info */
-	rc = CIFSSMBQPathInfo(xid, tcon, full_path, &fi, 0 /* not legacy */, cifs_sb->local_nls,
-			      cifs_remap(cifs_sb));
+	rc = CIFSSMBQPathInfo(xid, tcon, full_path, &fi,
+			      0 /* not legacy */, cifs_sb);
 	/*
 	 * BB optimize code so we do not make the above call when server claims
 	 * no NT SMB support and the above call failed at least once - set flag
 	 * in tcon or mount.
 	 */
 	if ((rc == -EOPNOTSUPP) || (rc == -EINVAL)) {
-		rc = SMBQueryInformation(xid, tcon, full_path, &fi, cifs_sb->local_nls,
-					 cifs_remap(cifs_sb));
+		rc = SMBQueryInformation(xid, tcon, full_path,
+					 &fi, cifs_sb);
 		data->adjust_tz = true;
 	}
 
@@ -597,9 +591,7 @@ static int cifs_get_srv_inum(const unsigned int xid, struct cifs_tcon *tcon,
 	 */
 	if (tcon && !(tcon->ses->capabilities & CAP_INFOLEVEL_PASSTHRU))
 		return -EOPNOTSUPP;
-	return CIFSGetSrvInodeNumber(xid, tcon, full_path, uniqueid,
-				     cifs_sb->local_nls,
-				     cifs_remap(cifs_sb));
+	return CIFSGetSrvInodeNumber(xid, tcon, full_path, uniqueid, cifs_sb);
 }
 
 static int cifs_query_file_info(const unsigned int xid, struct cifs_tcon *tcon,
@@ -714,9 +706,8 @@ static int cifs_open_file(const unsigned int xid, struct cifs_open_parms *oparms
 				   oparms->disposition,
 				   oparms->desired_access,
 				   oparms->create_options,
-				   &oparms->fid->netfid, oplock, &fi,
-				   oparms->cifs_sb->local_nls,
-				   cifs_remap(oparms->cifs_sb));
+				   &oparms->fid->netfid, oplock,
+				   &fi, oparms->cifs_sb);
 	else
 		rc = CIFS_open(xid, oparms, oplock, &fi);
 
@@ -967,8 +958,8 @@ static int cifs_query_symlink(const unsigned int xid,
 	if (!cap_unix(tcon->ses))
 		return -EOPNOTSUPP;
 
-	rc = CIFSSMBUnixQuerySymLink(xid, tcon, full_path, target_path,
-				     cifs_sb->local_nls, cifs_remap(cifs_sb));
+	rc = CIFSSMBUnixQuerySymLink(xid, tcon, full_path,
+				     target_path, cifs_sb);
 	if (rc == -EREMOTE)
 		rc = cifs_unix_dfs_readlink(xid, tcon, full_path,
 					    target_path, cifs_sb->local_nls);
@@ -1044,9 +1035,8 @@ cifs_make_node(unsigned int xid, struct inode *inode,
 			args.uid = INVALID_UID; /* no change */
 			args.gid = INVALID_GID; /* no change */
 		}
-		rc = CIFSSMBUnixSetPathInfo(xid, tcon, full_path, &args,
-					    cifs_sb->local_nls,
-					    cifs_remap(cifs_sb));
+		rc = CIFSSMBUnixSetPathInfo(xid, tcon, full_path,
+					    &args, cifs_sb);
 		if (rc)
 			return rc;
 
@@ -1067,6 +1057,47 @@ cifs_make_node(unsigned int xid, struct inode *inode,
 		return -EPERM;
 	return cifs_sfu_make_node(xid, inode, dentry, tcon,
 				  full_path, mode, dev);
+}
+
+static bool
+cifs_is_network_name_deleted(char *buf, struct TCP_Server_Info *server)
+{
+	struct smb_hdr *shdr = (struct smb_hdr *)buf;
+	struct TCP_Server_Info *pserver;
+	struct cifs_ses *ses;
+	struct cifs_tcon *tcon;
+
+	if (shdr->Flags2 & SMBFLG2_ERR_STATUS) {
+		if (shdr->Status.CifsError != cpu_to_le32(NT_STATUS_NETWORK_NAME_DELETED))
+			return false;
+	} else {
+		if (shdr->Status.DosError.ErrorClass != ERRSRV ||
+		    shdr->Status.DosError.Error != cpu_to_le16(ERRinvtid))
+			return false;
+	}
+
+	/* If server is a channel, select the primary channel */
+	pserver = SERVER_IS_CHAN(server) ? server->primary_server : server;
+
+	spin_lock(&cifs_tcp_ses_lock);
+	list_for_each_entry(ses, &pserver->smb_ses_list, smb_ses_list) {
+		if (cifs_ses_exiting(ses))
+			continue;
+		list_for_each_entry(tcon, &ses->tcon_list, tcon_list) {
+			if (tcon->tid == shdr->Tid) {
+				spin_lock(&tcon->tc_lock);
+				tcon->need_reconnect = true;
+				spin_unlock(&tcon->tc_lock);
+				spin_unlock(&cifs_tcp_ses_lock);
+				pr_warn_once("Server share %s deleted.\n",
+					     tcon->tree_name);
+				return true;
+			}
+		}
+	}
+	spin_unlock(&cifs_tcp_ses_lock);
+
+	return false;
 }
 
 struct smb_version_operations smb1_operations = {
@@ -1153,6 +1184,7 @@ struct smb_version_operations smb1_operations = {
 	.get_acl_by_fid = get_cifs_acl_by_fid,
 	.set_acl = set_cifs_acl,
 	.make_node = cifs_make_node,
+	.is_network_name_deleted = cifs_is_network_name_deleted,
 };
 
 struct smb_version_values smb1_values = {
