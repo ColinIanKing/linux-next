@@ -328,9 +328,31 @@ DEFINE_EVENT(sched_process_template, sched_process_free,
 /*
  * Tracepoint for a task exiting:
  */
-DEFINE_EVENT(sched_process_template, sched_process_exit,
-	     TP_PROTO(struct task_struct *p),
-	     TP_ARGS(p));
+TRACE_EVENT(sched_process_exit,
+
+	TP_PROTO(struct task_struct *p, bool group_dead),
+
+	TP_ARGS(p, group_dead),
+
+	TP_STRUCT__entry(
+		__array(	char,	comm,	TASK_COMM_LEN	)
+		__field(	pid_t,	pid			)
+		__field(	int,	prio			)
+		__field(	bool,	group_dead		)
+	),
+
+	TP_fast_assign(
+		memcpy(__entry->comm, p->comm, TASK_COMM_LEN);
+		__entry->pid		= p->pid;
+		__entry->prio		= p->prio; /* XXX SCHED_DEADLINE */
+		__entry->group_dead	= group_dead;
+	),
+
+	TP_printk("comm=%s pid=%d prio=%d group_dead=%s",
+		  __entry->comm, __entry->pid, __entry->prio,
+		  __entry->group_dead ? "true" : "false"
+	)
+);
 
 /*
  * Tracepoint for waiting on task to unschedule:
