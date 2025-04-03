@@ -239,7 +239,7 @@ const char *zpool_get_type(struct zpool *zpool)
  * Returns: 0 on success, negative value on error.
  */
 int zpool_malloc(struct zpool *zpool, size_t size, gfp_t gfp,
-			unsigned long *handle, const int nid)
+		 unsigned long *handle, const int nid)
 {
 	return zpool->driver->malloc(zpool->pool, size, gfp, handle, nid);
 }
