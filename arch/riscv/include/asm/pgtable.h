@@ -339,8 +339,6 @@ static inline pte_t pfn_pte(unsigned long pfn, pgprot_t prot)
 	return __pte((pfn << _PAGE_PFN_SHIFT) | prot_val);
 }
 
-#define mk_pte(page, prot)       pfn_pte(page_to_pfn(page), prot)
-
 static inline int pte_present(pte_t pte)
 {
 	return (pte_val(pte) & (_PAGE_PRESENT | _PAGE_PROT_NONE));
