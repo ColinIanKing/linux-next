@@ -462,7 +462,7 @@ static void zs_zpool_destroy(void *pool)
 }
 
 static int zs_zpool_malloc(void *pool, size_t size, gfp_t gfp,
-			unsigned long *handle, const int nid)
+			   unsigned long *handle, const int nid)
 {
 	*handle = zs_malloc(pool, size, gfp, nid);
 
@@ -1043,8 +1043,8 @@ static void create_page_chain(struct size_class *class, struct zspage *zspage,
  * Allocate a zspage for the given size class
  */
 static struct zspage *alloc_zspage(struct zs_pool *pool,
-					struct size_class *class,
-					gfp_t gfp, const int nid)
+				   struct size_class *class,
+				   gfp_t gfp, const int nid)
 {
 	int i;
 	struct zpdesc *zpdescs[ZS_MAX_PAGES_PER_ZSPAGE];
@@ -1343,7 +1343,7 @@ static unsigned long obj_malloc(struct zs_pool *pool,
  * Allocation requests with size > ZS_MAX_ALLOC_SIZE will fail.
  */
 unsigned long zs_malloc(struct zs_pool *pool, size_t size, gfp_t gfp,
-				const int nid)
+			const int nid)
 {
 	unsigned long handle;
 	struct size_class *class;
