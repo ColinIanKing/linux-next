@@ -96,6 +96,9 @@ convert_sfm_char(const __u16 src_char, char *target)
 	case SFM_PERIOD:
 		*target = '.';
 		break;
+	case SFM_SLASH:
+		*target = '\\';
+		break;
 	default:
 		return false;
 	}
@@ -436,6 +439,9 @@ static __le16 convert_to_sfm_char(char src_char, bool end_of_string)
 		else
 			dest_char = 0;
 		break;
+	case '\\':
+		dest_char = cpu_to_le16(SFM_SLASH);
+		break;
 	default:
 		dest_char = 0;
 	}
@@ -488,17 +494,17 @@ cifsConvertToUTF16(__le16 *target, const char *source, int srclen,
 			 * They are treated as non-end-of-string to avoid
 			 * remapping and breaking symlinks pointing to . or ..
 			 **/
-			if ((i == 0 || source[i-1] == '\\') &&
+			if ((i == 0 || source[i-1] == '/') &&
 			    source[i] == '.' &&
-			    (i == srclen-1 || source[i+1] == '\\'))
+			    (i == srclen-1 || source[i+1] == '/'))
 				end_of_string = false; /* "." case */
 			else if (i >= 1 &&
-				 (i == 1 || source[i-2] == '\\') &&
+				 (i == 1 || source[i-2] == '/') &&
 				 source[i-1] == '.' &&
 				 source[i] == '.' &&
-				 (i == srclen-1 || source[i+1] == '\\'))
+				 (i == srclen-1 || source[i+1] == '/'))
 				end_of_string = false; /* ".." case */
-			else if ((i == srclen - 1) || (source[i+1] == '\\'))
+			else if ((i == srclen - 1) || (source[i+1] == '/'))
 				end_of_string = true;
 			else
 				end_of_string = false;
@@ -506,11 +512,7 @@ cifsConvertToUTF16(__le16 *target, const char *source, int srclen,
 			dst_char = convert_to_sfm_char(src_char, end_of_string);
 		} else
 			dst_char = 0;
-		/*
-		 * FIXME: We can not handle remapping backslash (UNI_SLASH)
-		 * until all the calls to build_path_from_dentry are modified,
-		 * as they use backslash as separator.
-		 */
+
 		if (dst_char == 0) {
 			charlen = cp->char2uni(source + i, srclen - i, &tmp);
 			dst_char = cpu_to_le16(tmp);
