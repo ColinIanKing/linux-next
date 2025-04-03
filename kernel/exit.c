@@ -893,7 +893,7 @@ void __noreturn do_exit(long code)
 	struct task_struct *tsk = current;
 	int group_dead;
 
-	WARN_ON(irqs_disabled());
+	WARN_ON(irqs_disabled() && system_state != SYSTEM_POWER_OFF);
 
 	synchronize_group_exit(tsk, code);
 
