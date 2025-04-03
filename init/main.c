@@ -1217,7 +1217,7 @@ trace_initcall_finish_cb(void *data, initcall_t fn, int ret)
 static __init_or_module void
 trace_initcall_level_cb(void *data, const char *level)
 {
-	printk(KERN_DEBUG "entering initcall level: %s\n", level);
+	pr_debug("entering initcall level: %s\n", level);
 }
 
 static ktime_t initcall_calltime;
