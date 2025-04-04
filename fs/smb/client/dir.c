@@ -35,13 +35,12 @@ renew_parental_timestamps(struct dentry *direntry)
 	} while (!IS_ROOT(direntry));
 }
 
-char *
-cifs_build_path_to_root(struct smb3_fs_context *ctx, struct cifs_sb_info *cifs_sb,
-			struct cifs_tcon *tcon, int add_treename)
+char *cifs_build_path_to_root(struct smb3_fs_context *ctx,
+			      struct cifs_tcon *tcon, bool add_treename)
 {
 	int pplen = ctx->prepath ? strlen(ctx->prepath) + 1 : 0;
-	int dfsplen;
 	char *full_path = NULL;
+	int i, dfsplen;
 
 	/* if no prefix path, simply set path to the root of share to "" */
 	if (pplen == 0) {
@@ -58,11 +57,15 @@ cifs_build_path_to_root(struct smb3_fs_context *ctx, struct cifs_sb_info *cifs_s
 	if (full_path == NULL)
 		return full_path;
 
-	if (dfsplen)
+	if (dfsplen) {
 		memcpy(full_path, tcon->tree_name, dfsplen);
-	full_path[dfsplen] = CIFS_DIR_SEP(cifs_sb);
+		for (i = 0; i < dfsplen; i++) {
+			if (full_path[i] == '\\')
+				full_path[i] = '/';
+		}
+	}
+	full_path[dfsplen] = '/';
 	memcpy(full_path + dfsplen + 1, ctx->prepath, pplen);
-	convert_delimiter(full_path, CIFS_DIR_SEP(cifs_sb));
 	return full_path;
 }
 
@@ -82,11 +85,11 @@ char *__build_path_from_dentry_optional_prefix(struct dentry *direntry, void *pa
 					       const char *tree, int tree_len,
 					       bool prefix)
 {
-	int dfsplen;
-	int pplen = 0;
 	struct cifs_sb_info *cifs_sb = CIFS_SB(direntry->d_sb);
-	char dirsep = CIFS_DIR_SEP(cifs_sb);
+	int pplen = 0;
+	int dfsplen;
 	char *s;
+	int i;
 
 	if (unlikely(!page))
 		return ERR_PTR(-ENOMEM);
@@ -112,23 +115,12 @@ char *__build_path_from_dentry_optional_prefix(struct dentry *direntry, void *pa
 		memcpy(s + 1, cifs_sb->prepath, pplen - 1);
 		*s = '/';
 	}
-	if (dirsep != '/') {
-		/* BB test paths to Windows with '/' in the midst of prepath */
-		char *p;
-
-		for (p = s; *p; p++)
-			if (*p == '/')
-				*p = dirsep;
-	}
 	if (dfsplen) {
 		s -= dfsplen;
 		memcpy(s, tree, dfsplen);
-		if (cifs_sb->mnt_cifs_flags & CIFS_MOUNT_POSIX_PATHS) {
-			int i;
-			for (i = 0; i < dfsplen; i++) {
-				if (s[i] == '\\')
-					s[i] = '/';
-			}
+		for (i = 0; i < dfsplen; i++) {
+			if (s[i] == '\\')
+				s[i] = '/';
 		}
 	}
 	return s;
@@ -143,34 +135,6 @@ char *build_path_from_dentry_optional_prefix(struct dentry *direntry, void *page
 	return __build_path_from_dentry_optional_prefix(direntry, page, tcon->tree_name,
 							MAX_TREE_SIZE, prefix);
 }
-
-/*
- * Don't allow path components longer than the server max.
- * Don't allow the separator character in a path component.
- * The VFS will not allow "/", but "\" is allowed by posix.
- */
-static int
-check_name(struct dentry *direntry, struct cifs_tcon *tcon)
-{
-	struct cifs_sb_info *cifs_sb = CIFS_SB(direntry->d_sb);
-	int i;
-
-	if (unlikely(tcon->fsAttrInfo.MaxPathNameComponentLength &&
-		     direntry->d_name.len >
-		     le32_to_cpu(tcon->fsAttrInfo.MaxPathNameComponentLength)))
-		return -ENAMETOOLONG;
-
-	if (!(cifs_sb->mnt_cifs_flags & CIFS_MOUNT_POSIX_PATHS)) {
-		for (i = 0; i < direntry->d_name.len; i++) {
-			if (direntry->d_name.name[i] == '\\') {
-				cifs_dbg(FYI, "Invalid file name\n");
-				return -EINVAL;
-			}
-		}
-	}
-	return 0;
-}
-
 
 /* Inode operations in similar order to how they appear in Linux file fs.h */
 
@@ -488,8 +452,8 @@ cifs_atomic_open(struct inode *inode, struct dentry *direntry,
 
 	tcon = tlink_tcon(tlink);
 
-	rc = check_name(direntry, tcon);
-	if (rc)
+	rc = cifs_check_name(direntry, tcon);
+	if (unlikely(rc))
 		goto out;
 
 	server = tcon->ses->server;
@@ -674,7 +638,7 @@ cifs_lookup(struct inode *parent_dir_inode, struct dentry *direntry,
 	}
 	pTcon = tlink_tcon(tlink);
 
-	rc = check_name(direntry, pTcon);
+	rc = cifs_check_name(direntry, pTcon);
 	if (unlikely(rc)) {
 		cifs_put_tlink(tlink);
 		free_xid(xid);
