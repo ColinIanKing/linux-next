@@ -853,9 +853,9 @@ static int parse_page_index(char *val, unsigned long nr_pages,
 	ret = kstrtoul(val, 10, lo);
 	if (ret)
 		return ret;
-	*hi = *lo + 1;
-	if (*lo >= nr_pages || *hi > nr_pages)
+	if (*lo >= nr_pages)
 		return -ERANGE;
+	*hi = *lo + 1;
 	return 0;
 }
 
