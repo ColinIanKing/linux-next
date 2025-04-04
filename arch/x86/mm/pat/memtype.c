@@ -992,8 +992,10 @@ int track_pfn_copy(struct vm_area_struct *dst_vma,
 	pgprot_t pgprot;
 	int rc;
 
-	if (!(src_vma->vm_flags & VM_PAT))
+	if (!(src_vma->vm_flags & VM_PAT)) {
+		*pfn = 0;
 		return 0;
+	}
 
 	/*
 	 * Duplicate the PAT information for the dst VMA based on the src
