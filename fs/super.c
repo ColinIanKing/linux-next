@@ -1979,25 +1979,33 @@ static inline int freeze_dec(struct super_block *sb, enum freeze_holder who)
 	return sb->s_writers.freeze_kcount + sb->s_writers.freeze_ucount;
 }
 
-static inline bool may_freeze(struct super_block *sb, enum freeze_holder who)
+static inline bool may_freeze(struct super_block *sb, enum freeze_holder who,
+			      const void *freeze_owner)
 {
+	lockdep_assert_held(&sb->s_umount);
+
 	WARN_ON_ONCE((who & ~FREEZE_FLAGS));
 	WARN_ON_ONCE(hweight32(who & FREEZE_HOLDERS) > 1);
 
 	if (who & FREEZE_EXCL) {
 		if (WARN_ON_ONCE(!(who & FREEZE_HOLDER_KERNEL)))
 			return false;
-
-		if (who & ~(FREEZE_EXCL | FREEZE_HOLDER_KERNEL))
+		if (WARN_ON_ONCE(who & ~(FREEZE_EXCL | FREEZE_HOLDER_KERNEL)))
 			return false;
-
-		return (sb->s_writers.freeze_kcount +
-			sb->s_writers.freeze_ucount) == 0;
+		if (WARN_ON_ONCE(!freeze_owner))
+			return false;
+		/* This freeze already has a specific owner. */
+		if (sb->s_writers.freeze_owner)
+			return false;
+		/*
+		 * This is already frozen multiple times so we're just
+		 * going to take a reference count and mark the freeze as
+		 * being owned by the caller.
+		 */
+		if (sb->s_writers.freeze_kcount + sb->s_writers.freeze_ucount)
+			sb->s_writers.freeze_owner = freeze_owner;
+		return true;
 	}
-
-	/* This filesystem is already exclusively frozen. */
-	if (sb->s_writers.freeze_owner)
-		return false;
 
 	if (who & FREEZE_HOLDER_KERNEL)
 		return (who & FREEZE_MAY_NEST) ||
@@ -2011,20 +2019,51 @@ static inline bool may_freeze(struct super_block *sb, enum freeze_holder who)
 static inline bool may_unfreeze(struct super_block *sb, enum freeze_holder who,
 				const void *freeze_owner)
 {
+	lockdep_assert_held(&sb->s_umount);
+
 	WARN_ON_ONCE((who & ~FREEZE_FLAGS));
 	WARN_ON_ONCE(hweight32(who & FREEZE_HOLDERS) > 1);
 
 	if (who & FREEZE_EXCL) {
-		if (WARN_ON_ONCE(sb->s_writers.freeze_owner == NULL))
-			return false;
 		if (WARN_ON_ONCE(!(who & FREEZE_HOLDER_KERNEL)))
 			return false;
-		if (who & ~(FREEZE_EXCL | FREEZE_HOLDER_KERNEL))
+		if (WARN_ON_ONCE(who & ~(FREEZE_EXCL | FREEZE_HOLDER_KERNEL)))
 			return false;
-		return sb->s_writers.freeze_owner == freeze_owner;
+		if (WARN_ON_ONCE(!freeze_owner))
+			return false;
+		if (WARN_ON_ONCE(sb->s_writers.freeze_kcount == 0))
+			return false;
+		/* This isn't exclusively frozen. */
+		if (!sb->s_writers.freeze_owner)
+			return false;
+		/* This isn't exclusively frozen by us. */
+		if (sb->s_writers.freeze_owner != freeze_owner)
+			return false;
+		/*
+		 * This is still frozen multiple times so we're just
+		 * going to drop our reference count and undo our
+		 * exclusive freeze.
+		 */
+		if ((sb->s_writers.freeze_kcount + sb->s_writers.freeze_ucount) > 1)
+			sb->s_writers.freeze_owner = NULL;
+		return true;
 	}
 
-	return sb->s_writers.freeze_owner == NULL;
+	if (who & FREEZE_HOLDER_KERNEL) {
+		/*
+		 * Someone's trying to steal the reference belonging to
+		 * @sb->s_writers.freeze_owner.
+		 */
+		if (sb->s_writers.freeze_kcount == 1 &&
+		    sb->s_writers.freeze_owner)
+			return false;
+		return sb->s_writers.freeze_kcount > 0;
+	}
+
+	if (who & FREEZE_HOLDER_USERSPACE)
+		return sb->s_writers.freeze_ucount > 0;
+
+	return false;
 }
 
 /**
@@ -2095,7 +2134,7 @@ int freeze_super(struct super_block *sb, enum freeze_holder who, const void *fre
 
 retry:
 	if (sb->s_writers.frozen == SB_FREEZE_COMPLETE) {
-		if (may_freeze(sb, who))
+		if (may_freeze(sb, who, freeze_owner))
 			ret = !!WARN_ON_ONCE(freeze_inc(sb, who) == 1);
 		else
 			ret = -EBUSY;
