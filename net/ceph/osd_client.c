@@ -220,16 +220,6 @@ void osd_req_op_extent_osd_data_pages(struct ceph_osd_request *osd_req,
 }
 EXPORT_SYMBOL(osd_req_op_extent_osd_data_pages);
 
-void osd_req_op_extent_osd_data_pagelist(struct ceph_osd_request *osd_req,
-			unsigned int which, struct ceph_pagelist *pagelist)
-{
-	struct ceph_osd_data *osd_data;
-
-	osd_data = osd_req_op_data(osd_req, which, extent, osd_data);
-	ceph_osd_data_pagelist_init(osd_data, pagelist);
-}
-EXPORT_SYMBOL(osd_req_op_extent_osd_data_pagelist);
-
 #ifdef CONFIG_BLOCK
 void osd_req_op_extent_osd_data_bio(struct ceph_osd_request *osd_req,
 				    unsigned int which,
@@ -296,19 +286,6 @@ static void osd_req_op_cls_request_info_pagelist(
 	osd_data = osd_req_op_data(osd_req, which, cls, request_info);
 	ceph_osd_data_pagelist_init(osd_data, pagelist);
 }
-
-void osd_req_op_cls_request_data_pagelist(
-			struct ceph_osd_request *osd_req,
-			unsigned int which, struct ceph_pagelist *pagelist)
-{
-	struct ceph_osd_data *osd_data;
-
-	osd_data = osd_req_op_data(osd_req, which, cls, request_data);
-	ceph_osd_data_pagelist_init(osd_data, pagelist);
-	osd_req->r_ops[which].cls.indata_len += pagelist->length;
-	osd_req->r_ops[which].indata_len += pagelist->length;
-}
-EXPORT_SYMBOL(osd_req_op_cls_request_data_pagelist);
 
 void osd_req_op_cls_request_data_pages(struct ceph_osd_request *osd_req,
 			unsigned int which, struct page **pages, u64 length,
@@ -5278,6 +5255,7 @@ out_mempool:
 	mempool_destroy(osdc->req_mempool);
 out_map:
 	ceph_osdmap_destroy(osdc->osdmap);
+	osdc->osdmap = NULL;
 out:
 	return err;
 }
@@ -5307,6 +5285,8 @@ void ceph_osdc_stop(struct ceph_osd_client *osdc)
 	WARN_ON(atomic_read(&osdc->num_homeless));
 
 	ceph_osdmap_destroy(osdc->osdmap);
+	osdc->osdmap = NULL;
+
 	mempool_destroy(osdc->req_mempool);
 	ceph_msgpool_destroy(&osdc->msgpool_op);
 	ceph_msgpool_destroy(&osdc->msgpool_op_reply);
