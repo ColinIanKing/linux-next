@@ -499,9 +499,8 @@ cifs_hardlink(struct dentry *old_file, struct inode *inode,
 
 #ifdef CONFIG_CIFS_ALLOW_INSECURE_LEGACY
 	if (tcon->unix_ext)
-		rc = CIFSUnixCreateHardLink(xid, tcon, from_name, to_name,
-					    cifs_sb->local_nls,
-					    cifs_remap(cifs_sb));
+		rc = CIFSUnixCreateHardLink(xid, tcon, from_name,
+					    to_name, cifs_sb);
 	else {
 #else
 	{
@@ -618,9 +617,7 @@ cifs_symlink(struct mnt_idmap *idmap, struct inode *inode,
 #ifdef CONFIG_CIFS_ALLOW_INSECURE_LEGACY
 		if (pTcon->unix_ext) {
 			rc = CIFSUnixCreateSymLink(xid, pTcon, full_path,
-						   symname,
-						   cifs_sb->local_nls,
-						   cifs_remap(cifs_sb));
+						   symname, cifs_sb);
 		}
 #endif /* CONFIG_CIFS_ALLOW_INSECURE_LEGACY */
 		break;
