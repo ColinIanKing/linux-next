@@ -5934,6 +5934,7 @@ static inline bool should_continue_reclaim(struct pglist_data *pgdat,
 	return inactive_lru_pages > pages_for_compaction;
 }
 
+#ifdef CONFIG_MEMCG
 static void shrink_node_memcgs(pg_data_t *pgdat, struct scan_control *sc)
 {
 	struct mem_cgroup *target_memcg = sc->target_mem_cgroup;
@@ -5970,6 +5971,10 @@ static void shrink_node_memcgs(pg_data_t *pgdat, struct scan_control *sc)
 		cond_resched();
 
 		mem_cgroup_calculate_protection(target_memcg, memcg);
+
+		/* Skip memcg with no usage */
+		if (!page_counter_read(&memcg->memory))
+			continue;
 
 		if (mem_cgroup_below_min(target_memcg, memcg)) {
 			/*
@@ -6012,6 +6017,11 @@ static void shrink_node_memcgs(pg_data_t *pgdat, struct scan_control *sc)
 		}
 	} while ((memcg = mem_cgroup_iter(target_memcg, memcg, partial)));
 }
+#else
+static inline void shrink_node_memcgs(pg_data_t *pgdat, struct scan_control *sc)
+{
+}
+#endif /* CONFIG_MEMCG */
 
 static void shrink_node(pg_data_t *pgdat, struct scan_control *sc)
 {
