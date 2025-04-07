@@ -1538,6 +1538,15 @@ void __meminit __init_page_from_nid(unsigned long pfn, int nid);
 unsigned long shrink_slab(gfp_t gfp_mask, int nid, struct mem_cgroup *memcg,
 			  int priority);
 
+#ifdef CONFIG_MEMCG
+unsigned long mem_cgroup_usage(struct mem_cgroup *memcg, bool swap);
+#else
+static inline unsigned long mem_cgroup_usage(struct mem_cgroup *memcg, bool swap)
+{
+	return 1UL;
+}
+#endif
+
 #ifdef CONFIG_SHRINKER_DEBUG
 static inline __printf(2, 0) int shrinker_debugfs_name_alloc(
 			struct shrinker *shrinker, const char *fmt, va_list ap)
