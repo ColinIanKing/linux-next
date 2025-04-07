@@ -1743,19 +1743,13 @@ struct posix_acl *cifs_get_acl(struct mnt_idmap *idmap,
 	/* return alt name if available as pseudo attr */
 	switch (type) {
 	case ACL_TYPE_ACCESS:
-		if (sb->s_flags & SB_POSIXACL)
-			rc = cifs_do_get_acl(xid, pTcon, full_path, &acl,
-					     ACL_TYPE_ACCESS,
-					     cifs_sb->local_nls,
-					     cifs_remap(cifs_sb));
-		break;
-
 	case ACL_TYPE_DEFAULT:
-		if (sb->s_flags & SB_POSIXACL)
-			rc = cifs_do_get_acl(xid, pTcon, full_path, &acl,
-					     ACL_TYPE_DEFAULT,
-					     cifs_sb->local_nls,
-					     cifs_remap(cifs_sb));
+		if (sb->s_flags & SB_POSIXACL) {
+			rc = cifs_do_get_acl(xid, pTcon, full_path,
+					     &acl, type, cifs_sb);
+		}
+		break;
+	default:
 		break;
 	}
 
@@ -1820,19 +1814,13 @@ int cifs_set_acl(struct mnt_idmap *idmap, struct dentry *dentry,
 
 	switch (type) {
 	case ACL_TYPE_ACCESS:
-		if (sb->s_flags & SB_POSIXACL)
-			rc = cifs_do_set_acl(xid, pTcon, full_path, acl,
-					     ACL_TYPE_ACCESS,
-					     cifs_sb->local_nls,
-					     cifs_remap(cifs_sb));
-		break;
-
 	case ACL_TYPE_DEFAULT:
-		if (sb->s_flags & SB_POSIXACL)
-			rc = cifs_do_set_acl(xid, pTcon, full_path, acl,
-					     ACL_TYPE_DEFAULT,
-					     cifs_sb->local_nls,
-					     cifs_remap(cifs_sb));
+		if (sb->s_flags & SB_POSIXACL) {
+			rc = cifs_do_set_acl(xid, pTcon, full_path,
+					     acl, type, cifs_sb);
+		}
+		break;
+	default:
 		break;
 	}
 

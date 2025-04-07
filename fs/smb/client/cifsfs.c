@@ -527,23 +527,14 @@ cifs_show_cache_flavor(struct seq_file *s, struct cifs_sb_info *cifs_sb)
 		seq_puts(s, "loose");
 }
 
-/*
- * cifs_show_devname() is used so we show the mount device name with correct
- * format (e.g. forward slashes vs. back slashes) in /proc/mounts
- */
 static int cifs_show_devname(struct seq_file *m, struct dentry *root)
 {
-	struct cifs_sb_info *cifs_sb = CIFS_SB(root->d_sb);
-	char *devname = kstrdup(cifs_sb->ctx->source, GFP_KERNEL);
+	const char *devname = CIFS_SB(root->d_sb)->ctx->source;
 
-	if (devname == NULL)
+	if (!devname)
 		seq_puts(m, "none");
-	else {
-		convert_delimiter(devname, '/');
-		/* escape all spaces in share names */
+	else
 		seq_escape(m, devname, " \t");
-		kfree(devname);
-	}
 	return 0;
 }
 
@@ -889,23 +880,22 @@ static const struct super_operations cifs_super_ops = {
 static struct dentry *
 cifs_get_root(struct smb3_fs_context *ctx, struct super_block *sb)
 {
-	struct dentry *dentry;
+	struct cifs_tcon *tcon = cifs_sb_master_tcon(CIFS_SB(sb));
 	struct cifs_sb_info *cifs_sb = CIFS_SB(sb);
 	char *full_path = NULL;
+	struct dentry *dentry;
+	char sep = '/';
 	char *s, *p;
-	char sep;
 
 	if (cifs_sb->mnt_cifs_flags & CIFS_MOUNT_USE_PREFIX_PATH)
 		return dget(sb->s_root);
 
-	full_path = cifs_build_path_to_root(ctx, cifs_sb,
-				cifs_sb_master_tcon(cifs_sb), 0);
+	full_path = cifs_build_path_to_root(ctx, tcon, false);
 	if (full_path == NULL)
 		return ERR_PTR(-ENOMEM);
 
 	cifs_dbg(FYI, "Get root dentry for %s\n", full_path);
 
-	sep = CIFS_DIR_SEP(cifs_sb);
 	dentry = dget(sb->s_root);
 	s = full_path;
 
@@ -929,7 +919,8 @@ cifs_get_root(struct smb3_fs_context *ctx, struct super_block *sb)
 		while (*s && *s != sep)
 			s++;
 
-		child = lookup_positive_unlocked(p, dentry, s - p);
+		child = lookup_noperm_positive_unlocked(&QSTR_LEN(p, s - p),
+							dentry);
 		dput(dentry);
 		dentry = child;
 	} while (!IS_ERR(dentry));
