@@ -268,7 +268,7 @@ static void test_card_set_id(struct kunit *test)
 
 	card->id[0] = '\0';
 	snd_card_set_id(card, NAME_W_SPACE);
-	kunit_info(test, "%s", card->id);
+	kunit_info(test, "%s", card->id ? card->id : "(null)");
 	KUNIT_EXPECT_STREQ(test, card->id, NAME_W_SPACE_REMOVED);
 }
 
