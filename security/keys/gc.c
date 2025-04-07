@@ -10,6 +10,10 @@
 #include <keys/keyring-type.h>
 #include "internal.h"
 
+LIST_HEAD(key_graveyard);
+DEFINE_SPINLOCK(key_graveyard_lock);
+
+
 /*
  * Delay between key revocation/expiry in seconds
  */
@@ -218,11 +222,6 @@ continue_scanning:
 		key = rb_entry(cursor, struct key, serial_node);
 		cursor = rb_next(cursor);
 
-		if (test_bit(KEY_FLAG_FINAL_PUT, &key->flags)) {
-			smp_mb(); /* Clobber key->user after FINAL_PUT seen. */
-			goto found_unreferenced_key;
-		}
-
 		if (unlikely(gc_state & KEY_GC_REAPING_DEAD_1)) {
 			if (key->type == key_gc_dead_keytype) {
 				gc_state |= KEY_GC_FOUND_DEAD_KEY;
@@ -286,6 +285,10 @@ maybe_resched:
 		key_schedule_gc(new_timer);
 	}
 
+	spin_lock(&key_graveyard_lock);
+	list_splice_init(&key_graveyard, &graveyard);
+	spin_unlock(&key_graveyard_lock);
+
 	if (unlikely(gc_state & KEY_GC_REAPING_DEAD_2) ||
 	    !list_empty(&graveyard)) {
 		/* Make sure that all pending keyring payload destructions are
@@ -327,18 +330,6 @@ maybe_resched:
 		schedule_work(&key_gc_work);
 	kleave(" [end %x]", gc_state);
 	return;
-
-	/* We found an unreferenced key - once we've removed it from the tree,
-	 * we can safely drop the lock.
-	 */
-found_unreferenced_key:
-	kdebug("unrefd key %d", key->serial);
-	rb_erase(&key->serial_node, &key_serial_tree);
-	spin_unlock(&key_serial_lock);
-
-	list_add_tail(&key->graveyard_link, &graveyard);
-	gc_state |= KEY_GC_REAP_AGAIN;
-	goto maybe_resched;
 
 	/* We found a restricted keyring and need to update the restriction if
 	 * it is associated with the dead key type.

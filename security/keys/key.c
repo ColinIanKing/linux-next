@@ -660,6 +660,12 @@ void key_put(struct key *key)
 			}
 			smp_mb(); /* key->user before FINAL_PUT set. */
 			set_bit(KEY_FLAG_FINAL_PUT, &key->flags);
+			spin_lock(&key_serial_lock);
+			rb_erase(&key->serial_node, &key_serial_tree);
+			spin_unlock(&key_serial_lock);
+			spin_lock(&key_graveyard_lock);
+			list_add_tail(&key->graveyard_link, &key_graveyard);
+			spin_unlock(&key_graveyard_lock);
 			schedule_work(&key_gc_work);
 		}
 	}

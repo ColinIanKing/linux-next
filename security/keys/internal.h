@@ -63,6 +63,9 @@ struct key_user {
 	int			qnbytes;	/* number of bytes allocated to this user */
 };
 
+extern struct list_head key_graveyard;
+extern spinlock_t key_graveyard_lock;
+
 extern struct rb_root	key_user_tree;
 extern spinlock_t	key_user_lock;
 extern struct key_user	root_key_user;
