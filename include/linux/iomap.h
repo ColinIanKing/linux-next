@@ -60,6 +60,9 @@ struct vm_fault;
  * IOMAP_F_ANON_WRITE indicates that (write) I/O does not have a target block
  * assigned to it yet and the file system will do that in the bio submission
  * handler, splitting the I/O as needed.
+ *
+ * IOMAP_F_ATOMIC_BIO indicates that (write) I/O will be issued as an atomic
+ * bio, i.e. set REQ_ATOMIC.
  */
 #define IOMAP_F_NEW		(1U << 0)
 #define IOMAP_F_DIRTY		(1U << 1)
@@ -73,6 +76,12 @@ struct vm_fault;
 #define IOMAP_F_XATTR		(1U << 5)
 #define IOMAP_F_BOUNDARY	(1U << 6)
 #define IOMAP_F_ANON_WRITE	(1U << 7)
+#define IOMAP_F_ATOMIC_BIO	(1U << 8)
+
+/*
+ * Flag reserved for file system specific usage
+ */
+#define IOMAP_F_PRIVATE		(1U << 12)
 
 /*
  * Flags set by the core iomap code during operations:
@@ -84,14 +93,8 @@ struct vm_fault;
  * range it covers needs to be remapped by the high level before the operation
  * can proceed.
  */
-#define IOMAP_F_SIZE_CHANGED	(1U << 8)
-#define IOMAP_F_STALE		(1U << 9)
-
-/*
- * Flags from 0x1000 up are for file system specific usage:
- */
-#define IOMAP_F_PRIVATE		(1U << 12)
-
+#define IOMAP_F_SIZE_CHANGED	(1U << 14)
+#define IOMAP_F_STALE		(1U << 15)
 
 /*
  * Magic value for addr:
@@ -189,9 +192,8 @@ struct iomap_folio_ops {
 #else
 #define IOMAP_DAX		0
 #endif /* CONFIG_FS_DAX */
-#define IOMAP_ATOMIC_HW		(1 << 9) /* HW-based torn-write protection */
+#define IOMAP_ATOMIC		(1 << 9) /* torn-write protection */
 #define IOMAP_DONTCACHE		(1 << 10)
-#define IOMAP_ATOMIC_SW		(1 << 11)/* SW-based torn-write protection */
 
 struct iomap_ops {
 	/*
@@ -502,11 +504,6 @@ struct iomap_dio_ops {
  * fault.
  */
 #define IOMAP_DIO_PARTIAL		(1 << 2)
-
-/*
- * Use software-based torn-write protection.
- */
-#define IOMAP_DIO_ATOMIC_SW		(1 << 3)
 
 ssize_t iomap_dio_rw(struct kiocb *iocb, struct iov_iter *iter,
 		const struct iomap_ops *ops, const struct iomap_dio_ops *dops,
