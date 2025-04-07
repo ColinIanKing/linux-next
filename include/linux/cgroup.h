@@ -344,7 +344,12 @@ static inline u64 cgroup_id(const struct cgroup *cgrp)
  */
 static inline bool css_is_dying(struct cgroup_subsys_state *css)
 {
-	return !(css->flags & CSS_NO_REF) && percpu_ref_is_dying(&css->refcnt);
+	return css->flags & CSS_DYING;
+}
+
+static inline bool css_is_cgroup(struct cgroup_subsys_state *css)
+{
+	return css->ss == NULL;
 }
 
 static inline void cgroup_get(struct cgroup *cgrp)
@@ -688,8 +693,8 @@ static inline void cgroup_path_from_kernfs_id(u64 id, char *buf, size_t buflen)
 /*
  * cgroup scalable recursive statistics.
  */
-void cgroup_rstat_updated(struct cgroup *cgrp, int cpu);
-void cgroup_rstat_flush(struct cgroup *cgrp);
+void css_rstat_updated(struct cgroup_subsys_state *css, int cpu);
+void css_rstat_flush(struct cgroup_subsys_state *css);
 
 /*
  * Basic resource stats.
