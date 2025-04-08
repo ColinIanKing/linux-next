@@ -527,12 +527,11 @@ cifs_is_path_accessible(const unsigned int xid, struct cifs_tcon *tcon,
 		return -ENOMEM;
 
 	rc = CIFSSMBQPathInfo(xid, tcon, full_path, file_info,
-			      0 /* not legacy */, cifs_sb->local_nls,
-			      cifs_remap(cifs_sb));
-
-	if (rc == -EOPNOTSUPP || rc == -EINVAL)
-		rc = SMBQueryInformation(xid, tcon, full_path, file_info,
-				cifs_sb->local_nls, cifs_remap(cifs_sb));
+			      0 /* not legacy */, cifs_sb);
+	if (rc == -EOPNOTSUPP || rc == -EINVAL) {
+		rc = SMBQueryInformation(xid, tcon, full_path,
+					 file_info, cifs_sb);
+	}
 	kfree(file_info);
 	return rc;
 }
@@ -550,16 +549,16 @@ static int cifs_query_path_info(const unsigned int xid,
 	data->adjust_tz = false;
 
 	/* could do find first instead but this returns more info */
-	rc = CIFSSMBQPathInfo(xid, tcon, full_path, &fi, 0 /* not legacy */, cifs_sb->local_nls,
-			      cifs_remap(cifs_sb));
+	rc = CIFSSMBQPathInfo(xid, tcon, full_path, &fi,
+			      0 /* not legacy */, cifs_sb);
 	/*
 	 * BB optimize code so we do not make the above call when server claims
 	 * no NT SMB support and the above call failed at least once - set flag
 	 * in tcon or mount.
 	 */
 	if ((rc == -EOPNOTSUPP) || (rc == -EINVAL)) {
-		rc = SMBQueryInformation(xid, tcon, full_path, &fi, cifs_sb->local_nls,
-					 cifs_remap(cifs_sb));
+		rc = SMBQueryInformation(xid, tcon, full_path,
+					 &fi, cifs_sb);
 		data->adjust_tz = true;
 	}
 
@@ -592,9 +591,7 @@ static int cifs_get_srv_inum(const unsigned int xid, struct cifs_tcon *tcon,
 	 */
 	if (tcon && !(tcon->ses->capabilities & CAP_INFOLEVEL_PASSTHRU))
 		return -EOPNOTSUPP;
-	return CIFSGetSrvInodeNumber(xid, tcon, full_path, uniqueid,
-				     cifs_sb->local_nls,
-				     cifs_remap(cifs_sb));
+	return CIFSGetSrvInodeNumber(xid, tcon, full_path, uniqueid, cifs_sb);
 }
 
 static int cifs_query_file_info(const unsigned int xid, struct cifs_tcon *tcon,
@@ -709,9 +706,8 @@ static int cifs_open_file(const unsigned int xid, struct cifs_open_parms *oparms
 				   oparms->disposition,
 				   oparms->desired_access,
 				   oparms->create_options,
-				   &oparms->fid->netfid, oplock, &fi,
-				   oparms->cifs_sb->local_nls,
-				   cifs_remap(oparms->cifs_sb));
+				   &oparms->fid->netfid, oplock,
+				   &fi, oparms->cifs_sb);
 	else
 		rc = CIFS_open(xid, oparms, oplock, &fi);
 
@@ -962,8 +958,8 @@ static int cifs_query_symlink(const unsigned int xid,
 	if (!cap_unix(tcon->ses))
 		return -EOPNOTSUPP;
 
-	rc = CIFSSMBUnixQuerySymLink(xid, tcon, full_path, target_path,
-				     cifs_sb->local_nls, cifs_remap(cifs_sb));
+	rc = CIFSSMBUnixQuerySymLink(xid, tcon, full_path,
+				     target_path, cifs_sb);
 	if (rc == -EREMOTE)
 		rc = cifs_unix_dfs_readlink(xid, tcon, full_path,
 					    target_path, cifs_sb->local_nls);
@@ -1039,9 +1035,8 @@ cifs_make_node(unsigned int xid, struct inode *inode,
 			args.uid = INVALID_UID; /* no change */
 			args.gid = INVALID_GID; /* no change */
 		}
-		rc = CIFSSMBUnixSetPathInfo(xid, tcon, full_path, &args,
-					    cifs_sb->local_nls,
-					    cifs_remap(cifs_sb));
+		rc = CIFSSMBUnixSetPathInfo(xid, tcon, full_path,
+					    &args, cifs_sb);
 		if (rc)
 			return rc;
 
