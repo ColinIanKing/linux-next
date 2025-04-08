@@ -649,7 +649,7 @@ static int mes_v11_0_misc_op(struct amdgpu_mes *mes,
 		break;
 	case MES_MISC_OP_CHANGE_CONFIG:
 		if ((mes->adev->mes.sched_version & AMDGPU_MES_VERSION_MASK) < 0x63) {
-			dev_err(mes->adev->dev, "MES FW versoin must be larger than 0x63 to support limit single process feature.\n");
+			dev_err(mes->adev->dev, "MES FW version must be larger than 0x63 to support limit single process feature.\n");
 			return -EINVAL;
 		}
 		misc_pkt.opcode = MESAPI_MISC__CHANGE_CONFIG;
@@ -893,6 +893,10 @@ static void mes_v11_0_free_ucode_buffers(struct amdgpu_device *adev,
 static void mes_v11_0_get_fw_version(struct amdgpu_device *adev)
 {
 	int pipe;
+
+	/* return early if we have already fetched these */
+	if (adev->mes.sched_version && adev->mes.kiq_version)
+		return;
 
 	/* get MES scheduler/KIQ versions */
 	mutex_lock(&adev->srbm_mutex);
