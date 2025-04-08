@@ -450,8 +450,7 @@ static int cifs_get_unix_fattr(const unsigned char *full_path,
 	server = tcon->ses->server;
 
 	/* could have done a find first instead but this returns more info */
-	rc = CIFSSMBUnixQPathInfo(xid, tcon, full_path, &find_data,
-				  cifs_sb->local_nls, cifs_remap(cifs_sb));
+	rc = CIFSSMBUnixQPathInfo(xid, tcon, full_path, &find_data, cifs_sb);
 	cifs_dbg(FYI, "%s: query path info: rc = %d\n", __func__, rc);
 	cifs_put_tlink(tlink);
 
@@ -1228,6 +1227,16 @@ static int reparse_info_to_fattr(struct cifs_open_info_data *data,
 				cifs_create_junction_fattr(fattr, sb);
 				goto out;
 			}
+			/*
+			 * If the reparse point is unsupported by the Linux SMB
+			 * client then let it process by the SMB server. So mask
+			 * the -EOPNOTSUPP error code. This will allow Linux SMB
+			 * client to send SMB OPEN request to server. If server
+			 * does not support this reparse point too then server
+			 * will return error during open the path.
+			 */
+			if (rc == -EOPNOTSUPP)
+				rc = 0;
 		}
 
 		if (data->reparse.tag == IO_REPARSE_TAG_SYMLINK && !rc) {
@@ -1675,7 +1684,6 @@ struct inode *cifs_root_iget(struct super_block *sb)
 		tcon->unix_ext = false;
 	}
 
-	convert_delimiter(path, CIFS_DIR_SEP(cifs_sb));
 	if (tcon->posix_extensions)
 		rc = smb311_posix_get_fattr(NULL, &fattr, path, sb, xid);
 	else
@@ -1849,9 +1857,7 @@ cifs_rename_pending_delete(const char *full_path, struct dentry *dentry,
 	}
 
 	/* rename the file */
-	rc = CIFSSMBRenameOpenFile(xid, tcon, fid.netfid, NULL,
-				   cifs_sb->local_nls,
-				   cifs_remap(cifs_sb));
+	rc = CIFSSMBRenameOpenFile(xid, tcon, fid.netfid, NULL, cifs_sb);
 	if (rc != 0) {
 		rc = -EBUSY;
 		goto undo_setattr;
@@ -1891,8 +1897,8 @@ out:
 	 * them anyway.
 	 */
 undo_rename:
-	CIFSSMBRenameOpenFile(xid, tcon, fid.netfid, dentry->d_name.name,
-				cifs_sb->local_nls, cifs_remap(cifs_sb));
+	CIFSSMBRenameOpenFile(xid, tcon, fid.netfid,
+			      dentry->d_name.name, cifs_sb);
 undo_setattr:
 	if (dosattr != origattr) {
 		info_buf->Attributes = cpu_to_le32(origattr);
@@ -1971,8 +1977,7 @@ int cifs_unlink(struct inode *dir, struct dentry *dentry)
 	if (cap_unix(tcon->ses) && (CIFS_UNIX_POSIX_PATH_OPS_CAP &
 				le64_to_cpu(tcon->fsUnixInfo.Capability))) {
 		rc = CIFSPOSIXDelFile(xid, tcon, full_path,
-			SMB_POSIX_UNLINK_FILE_TARGET, cifs_sb->local_nls,
-			cifs_remap(cifs_sb));
+				      SMB_POSIX_UNLINK_FILE_TARGET, cifs_sb);
 		cifs_dbg(FYI, "posix del rc %d\n", rc);
 		if ((rc == 0) || (rc == -ENOENT))
 			goto psx_del_no_retry;
@@ -2115,9 +2120,7 @@ cifs_mkdir_qinfo(struct inode *parent, struct dentry *dentry, umode_t mode,
 			args.uid = INVALID_UID; /* no change */
 			args.gid = INVALID_GID; /* no change */
 		}
-		CIFSSMBUnixSetPathInfo(xid, tcon, full_path, &args,
-				       cifs_sb->local_nls,
-				       cifs_remap(cifs_sb));
+		CIFSSMBUnixSetPathInfo(xid, tcon, full_path, &args, cifs_sb);
 	} else {
 #else
 	{
@@ -2163,7 +2166,7 @@ cifs_posix_mkdir(struct inode *inode, struct dentry *dentry, umode_t mode,
 	mode &= ~current_umask();
 	rc = CIFSPOSIXCreate(xid, tcon, SMB_O_DIRECTORY | SMB_O_CREAT, mode,
 			     NULL /* netfid */, info, &oplock, full_path,
-			     cifs_sb->local_nls, cifs_remap(cifs_sb));
+			     cifs_sb);
 	if (rc == -EOPNOTSUPP)
 		goto posix_mkdir_out;
 	else if (rc) {
@@ -2431,8 +2434,8 @@ cifs_do_rename(const unsigned int xid, struct dentry *from_dentry,
 	rc = CIFS_open(xid, &oparms, &oplock, NULL);
 	if (rc == 0) {
 		rc = CIFSSMBRenameOpenFile(xid, tcon, fid.netfid,
-				(const char *) to_dentry->d_name.name,
-				cifs_sb->local_nls, cifs_remap(cifs_sb));
+					   (const char *)to_dentry->d_name.name,
+					   cifs_sb);
 		CIFSSMBClose(xid, tcon, fid.netfid);
 	}
 #endif /* CONFIG_CIFS_ALLOW_INSECURE_LEGACY */
@@ -2531,17 +2534,12 @@ cifs_rename2(struct mnt_idmap *idmap, struct inode *source_dir,
 
 		info_buf_target = info_buf_source + 1;
 		tmprc = CIFSSMBUnixQPathInfo(xid, tcon, from_name,
-					     info_buf_source,
-					     cifs_sb->local_nls,
-					     cifs_remap(cifs_sb));
+					     info_buf_source, cifs_sb);
 		if (tmprc != 0)
 			goto unlink_target;
 
 		tmprc = CIFSSMBUnixQPathInfo(xid, tcon, to_name,
-					     info_buf_target,
-					     cifs_sb->local_nls,
-					     cifs_remap(cifs_sb));
-
+					     info_buf_target, cifs_sb);
 		if (tmprc == 0 && (info_buf_source->UniqueId ==
 				   info_buf_target->UniqueId)) {
 			/* same file, POSIX says that this is a noop */
@@ -3116,9 +3114,8 @@ cifs_setattr_unix(struct dentry *direntry, struct iattr *attrs)
 			goto out;
 		}
 		pTcon = tlink_tcon(tlink);
-		rc = CIFSSMBUnixSetPathInfo(xid, pTcon, full_path, args,
-				    cifs_sb->local_nls,
-				    cifs_remap(cifs_sb));
+		rc = CIFSSMBUnixSetPathInfo(xid, pTcon, full_path,
+					    args, cifs_sb);
 		cifs_put_tlink(tlink);
 	}
 
