@@ -11,6 +11,11 @@
 
 #include <crypto/acompress.h>
 #include <crypto/algapi.h>
+#include <crypto/scatterwalk.h>
+#include <linux/compiler_types.h>
+#include <linux/cpumask_types.h>
+#include <linux/spinlock.h>
+#include <linux/workqueue_types.h>
 
 #define ACOMP_REQUEST_ON_STACK(name, tfm) \
         char __##name##_req[sizeof(struct acomp_req) + \
@@ -37,7 +42,6 @@
  *
  * @reqsize:	Context size for (de)compression requests
  * @base:	Common crypto API algorithm data structure
- * @stream:	Per-cpu memory for algorithm
  * @calg:	Cmonn algorithm data structure shared with scomp
  */
 struct acomp_alg {
@@ -52,6 +56,55 @@ struct acomp_alg {
 		struct COMP_ALG_COMMON;
 		struct comp_alg_common calg;
 	};
+};
+
+struct crypto_acomp_stream {
+	spinlock_t lock;
+	void *ctx;
+};
+
+struct crypto_acomp_streams {
+	/* These must come first because of struct scomp_alg. */
+	void *(*alloc_ctx)(void);
+	union {
+		void (*free_ctx)(void *);
+		void (*cfree_ctx)(const void *);
+	};
+
+	struct crypto_acomp_stream __percpu *streams;
+	struct work_struct stream_work;
+	cpumask_t stream_want;
+};
+
+struct acomp_walk {
+	union {
+		/* Virtual address of the source. */
+		struct {
+			struct {
+				const void *const addr;
+			} virt;
+		} src;
+
+		/* Private field for the API, do not use. */
+		struct scatter_walk in;
+	};
+
+	union {
+		/* Virtual address of the destination. */
+		struct {
+			struct {
+				void *const addr;
+			} virt;
+		} dst;
+
+		/* Private field for the API, do not use. */
+		struct scatter_walk out;
+	};
+
+	unsigned int slen;
+	unsigned int dlen;
+
+	int flags;
 };
 
 /*
@@ -158,4 +211,27 @@ static inline bool crypto_acomp_req_chain(struct crypto_acomp *tfm)
 	return crypto_tfm_req_chain(&tfm->base);
 }
 
+void crypto_acomp_free_streams(struct crypto_acomp_streams *s);
+int crypto_acomp_alloc_streams(struct crypto_acomp_streams *s);
+
+struct crypto_acomp_stream *crypto_acomp_lock_stream_bh(
+	struct crypto_acomp_streams *s) __acquires(stream);
+
+static inline void crypto_acomp_unlock_stream_bh(
+	struct crypto_acomp_stream *stream) __releases(stream)
+{
+	spin_unlock_bh(&stream->lock);
+}
+
+void acomp_walk_done_src(struct acomp_walk *walk, int used);
+void acomp_walk_done_dst(struct acomp_walk *walk, int used);
+int acomp_walk_next_src(struct acomp_walk *walk);
+int acomp_walk_next_dst(struct acomp_walk *walk);
+int acomp_walk_virt(struct acomp_walk *__restrict walk,
+		    struct acomp_req *__restrict req);
+
+static inline bool acomp_walk_more_src(const struct acomp_walk *walk, int cur)
+{
+	return walk->slen != cur;
+}
 #endif
