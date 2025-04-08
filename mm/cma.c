@@ -722,14 +722,15 @@ static int __init __cma_declare_contiguous_nid(phys_addr_t *basep,
 	}
 
 	ret = cma_init_reserved_mem(base, size, order_per_bit, name, res_cma);
-	if (ret)
+	if (ret) {
 		memblock_phys_free(base, size);
-	else {
-		(*res_cma)->nid = nid;
-		*basep = base;
+		return ret;
 	}
 
-	return ret;
+	(*res_cma)->nid = nid;
+	*basep = base;
+
+	return 0;
 }
 
 static void cma_debug_show_areas(struct cma *cma)
