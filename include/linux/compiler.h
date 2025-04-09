@@ -110,7 +110,7 @@ void ftrace_likely_update(struct ftrace_likely_data *f, int val,
 /* Unreachable code */
 #ifdef CONFIG_OBJTOOL
 /* Annotate a C jump table to allow objtool to follow the code flow */
-#define __annotate_jump_table __section(".rodata..c_jump_table,\"a\",@progbits #")
+#define __annotate_jump_table __section(".data.rel.ro.c_jump_table")
 #else /* !CONFIG_OBJTOOL */
 #define __annotate_jump_table
 #endif /* CONFIG_OBJTOOL */
@@ -226,7 +226,37 @@ void ftrace_likely_update(struct ftrace_likely_data *f, int val,
 	__BUILD_BUG_ON_ZERO_MSG(!__is_noncstr(p), \
 				"must be non-C-string (not NUL-terminated)")
 
+/*
+ * Use __typeof_unqual__() when available.
+ *
+ * XXX: Remove test for __CHECKER__ once
+ * sparse learns about __typeof_unqual__().
+ */
+#if CC_HAS_TYPEOF_UNQUAL && !defined(__CHECKER__)
+# define USE_TYPEOF_UNQUAL 1
+#endif
+
+/*
+ * Define TYPEOF_UNQUAL() to use __typeof_unqual__() as typeof
+ * operator when available, to return an unqualified type of the exp.
+ */
+#if defined(USE_TYPEOF_UNQUAL)
+# define TYPEOF_UNQUAL(exp) __typeof_unqual__(exp)
+#else
+# define TYPEOF_UNQUAL(exp) __typeof__(exp)
+#endif
+
 #endif /* __KERNEL__ */
+
+#if defined(CONFIG_CFI_CLANG) && !defined(__DISABLE_EXPORTS) && !defined(BUILD_VDSO)
+/*
+ * Force a reference to the external symbol so the compiler generates
+ * __kcfi_typid.
+ */
+#define KCFI_REFERENCE(sym) __ADDRESSABLE(sym)
+#else
+#define KCFI_REFERENCE(sym)
+#endif
 
 /**
  * offset_to_ptr - convert a relative memory offset to an absolute pointer

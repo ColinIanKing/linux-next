@@ -447,21 +447,19 @@ static void kvm_timer_update_status(struct arch_timer_context *ctx, bool level)
 static void kvm_timer_update_irq(struct kvm_vcpu *vcpu, bool new_level,
 				 struct arch_timer_context *timer_ctx)
 {
-	int ret;
-
 	kvm_timer_update_status(timer_ctx, new_level);
 
 	timer_ctx->irq.level = new_level;
 	trace_kvm_timer_update_irq(vcpu->vcpu_id, timer_irq(timer_ctx),
 				   timer_ctx->irq.level);
 
-	if (!userspace_irqchip(vcpu->kvm)) {
-		ret = kvm_vgic_inject_irq(vcpu->kvm, vcpu,
-					  timer_irq(timer_ctx),
-					  timer_ctx->irq.level,
-					  timer_ctx);
-		WARN_ON(ret);
-	}
+	if (userspace_irqchip(vcpu->kvm))
+		return;
+
+	kvm_vgic_inject_irq(vcpu->kvm, vcpu,
+			    timer_irq(timer_ctx),
+			    timer_ctx->irq.level,
+			    timer_ctx);
 }
 
 /* Only called for a fully emulated timer */
@@ -1072,8 +1070,7 @@ static void timer_context_init(struct kvm_vcpu *vcpu, int timerid)
 	else
 		ctxt->offset.vm_offset = &kvm->arch.timer_data.poffset;
 
-	hrtimer_init(&ctxt->hrtimer, CLOCK_MONOTONIC, HRTIMER_MODE_ABS_HARD);
-	ctxt->hrtimer.function = kvm_hrtimer_expire;
+	hrtimer_setup(&ctxt->hrtimer, kvm_hrtimer_expire, CLOCK_MONOTONIC, HRTIMER_MODE_ABS_HARD);
 
 	switch (timerid) {
 	case TIMER_PTIMER:
@@ -1100,8 +1097,8 @@ void kvm_timer_vcpu_init(struct kvm_vcpu *vcpu)
 		timer_set_offset(vcpu_ptimer(vcpu), 0);
 	}
 
-	hrtimer_init(&timer->bg_timer, CLOCK_MONOTONIC, HRTIMER_MODE_ABS_HARD);
-	timer->bg_timer.function = kvm_bg_timer_expire;
+	hrtimer_setup(&timer->bg_timer, kvm_bg_timer_expire, CLOCK_MONOTONIC,
+		      HRTIMER_MODE_ABS_HARD);
 }
 
 void kvm_timer_init_vm(struct kvm *kvm)
