@@ -35,7 +35,7 @@ int ___ratelimit(struct ratelimit_state *rs, const char *func)
 	unsigned long flags;
 	int ret;
 
-	if (!interval)
+	if (!interval || !burst)
 		return 1;
 
 	/*
