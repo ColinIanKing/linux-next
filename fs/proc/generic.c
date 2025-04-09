@@ -668,6 +668,12 @@ struct proc_dir_entry *proc_create_single_data(const char *name, umode_t mode,
 }
 EXPORT_SYMBOL(proc_create_single_data);
 
+void proc_make_permanent(struct proc_dir_entry *de)
+{
+	pde_make_permanent(de);
+}
+EXPORT_SYMBOL(proc_make_permanent);
+
 void proc_set_size(struct proc_dir_entry *de, loff_t size)
 {
 	de->size = size;
