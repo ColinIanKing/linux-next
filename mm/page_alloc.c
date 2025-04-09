@@ -2979,7 +2979,6 @@ struct page *rmqueue_buddy(struct zone *preferred_zone, struct zone *zone,
 {
 	struct page *page;
 	unsigned long flags;
-	enum rmqueue_mode rmqm = RMQUEUE_NORMAL;
 
 	do {
 		page = NULL;
@@ -2992,6 +2991,8 @@ struct page *rmqueue_buddy(struct zone *preferred_zone, struct zone *zone,
 		if (alloc_flags & ALLOC_HIGHATOMIC)
 			page = __rmqueue_smallest(zone, order, MIGRATE_HIGHATOMIC);
 		if (!page) {
+			enum rmqueue_mode rmqm = RMQUEUE_NORMAL;
+
 			page = __rmqueue(zone, order, migratetype, alloc_flags, &rmqm);
 
 			/*
