@@ -1392,17 +1392,20 @@ static int mes_v12_0_queue_init(struct amdgpu_device *adev,
 		mes_v12_0_queue_init_register(ring);
 	}
 
-	/* get MES scheduler/KIQ versions */
-	mutex_lock(&adev->srbm_mutex);
-	soc21_grbm_select(adev, 3, pipe, 0, 0);
+	if (((pipe == AMDGPU_MES_SCHED_PIPE) && !adev->mes.sched_version) ||
+	    ((pipe == AMDGPU_MES_KIQ_PIPE) && !adev->mes.kiq_version)) {
+		/* get MES scheduler/KIQ versions */
+		mutex_lock(&adev->srbm_mutex);
+		soc21_grbm_select(adev, 3, pipe, 0, 0);
 
-	if (pipe == AMDGPU_MES_SCHED_PIPE)
-		adev->mes.sched_version = RREG32_SOC15(GC, 0, regCP_MES_GP3_LO);
-	else if (pipe == AMDGPU_MES_KIQ_PIPE && adev->enable_mes_kiq)
-		adev->mes.kiq_version = RREG32_SOC15(GC, 0, regCP_MES_GP3_LO);
+		if (pipe == AMDGPU_MES_SCHED_PIPE)
+			adev->mes.sched_version = RREG32_SOC15(GC, 0, regCP_MES_GP3_LO);
+		else if (pipe == AMDGPU_MES_KIQ_PIPE && adev->enable_mes_kiq)
+			adev->mes.kiq_version = RREG32_SOC15(GC, 0, regCP_MES_GP3_LO);
 
-	soc21_grbm_select(adev, 0, 0, 0, 0);
-	mutex_unlock(&adev->srbm_mutex);
+		soc21_grbm_select(adev, 0, 0, 0, 0);
+		mutex_unlock(&adev->srbm_mutex);
+	}
 
 	return 0;
 }
@@ -1808,21 +1811,10 @@ static int mes_v12_0_early_init(struct amdgpu_ip_block *ip_block)
 	return 0;
 }
 
-static int mes_v12_0_late_init(struct amdgpu_ip_block *ip_block)
-{
-	struct amdgpu_device *adev = ip_block->adev;
-
-	/* it's only intended for use in mes_self_test case, not for s0ix and reset */
-	if (!amdgpu_in_reset(adev) && !adev->in_s0ix && !adev->in_suspend)
-		amdgpu_mes_self_test(adev);
-
-	return 0;
-}
-
 static const struct amd_ip_funcs mes_v12_0_ip_funcs = {
 	.name = "mes_v12_0",
 	.early_init = mes_v12_0_early_init,
-	.late_init = mes_v12_0_late_init,
+	.late_init = NULL,
 	.sw_init = mes_v12_0_sw_init,
 	.sw_fini = mes_v12_0_sw_fini,
 	.hw_init = mes_v12_0_hw_init,
