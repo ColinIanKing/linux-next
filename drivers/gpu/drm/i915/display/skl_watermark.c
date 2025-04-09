@@ -19,6 +19,7 @@
 #include "intel_de.h"
 #include "intel_display.h"
 #include "intel_display_power.h"
+#include "intel_display_rpm.h"
 #include "intel_display_types.h"
 #include "intel_fb.h"
 #include "intel_fixed.h"
@@ -249,7 +250,8 @@ static void skl_sagv_post_plane_update(struct intel_atomic_state *state)
 
 static void icl_sagv_pre_plane_update(struct intel_atomic_state *state)
 {
-	struct drm_i915_private *i915 = to_i915(state->base.dev);
+	struct intel_display *display = to_intel_display(state);
+	struct drm_i915_private *i915 = to_i915(display->drm);
 	const struct intel_bw_state *old_bw_state =
 		intel_atomic_get_old_bw_state(state);
 	const struct intel_bw_state *new_bw_state =
@@ -276,12 +278,13 @@ static void icl_sagv_pre_plane_update(struct intel_atomic_state *state)
 	 * time. Also masking should be done before updating the configuration
 	 * and unmasking afterwards.
 	 */
-	icl_pcode_restrict_qgv_points(i915, new_mask);
+	icl_pcode_restrict_qgv_points(display, new_mask);
 }
 
 static void icl_sagv_post_plane_update(struct intel_atomic_state *state)
 {
-	struct drm_i915_private *i915 = to_i915(state->base.dev);
+	struct intel_display *display = to_intel_display(state);
+	struct drm_i915_private *i915 = to_i915(display->drm);
 	const struct intel_bw_state *old_bw_state =
 		intel_atomic_get_old_bw_state(state);
 	const struct intel_bw_state *new_bw_state =
@@ -308,7 +311,7 @@ static void icl_sagv_post_plane_update(struct intel_atomic_state *state)
 	 * time. Also masking should be done before updating the configuration
 	 * and unmasking afterwards.
 	 */
-	icl_pcode_restrict_qgv_points(i915, new_mask);
+	icl_pcode_restrict_qgv_points(display, new_mask);
 }
 
 void intel_sagv_pre_plane_update(struct intel_atomic_state *state)
@@ -423,12 +426,20 @@ static bool tgl_crtc_can_enable_sagv(const struct intel_crtc_state *crtc_state)
 	return true;
 }
 
-static bool intel_crtc_can_enable_sagv(const struct intel_crtc_state *crtc_state)
+bool intel_crtc_can_enable_sagv(const struct intel_crtc_state *crtc_state)
 {
 	struct intel_crtc *crtc = to_intel_crtc(crtc_state->uapi.crtc);
 	struct drm_i915_private *i915 = to_i915(crtc->base.dev);
 
 	if (!i915->display.params.enable_sagv)
+		return false;
+
+	/*
+	 * SAGV is initially forced off because its current
+	 * state can't be queried from pcode. Allow SAGV to
+	 * be enabled upon the first real commit.
+	 */
+	if (crtc_state->inherited)
 		return false;
 
 	if (DISPLAY_VER(i915) >= 12)
@@ -445,80 +456,6 @@ bool intel_can_enable_sagv(struct drm_i915_private *i915,
 		return false;
 
 	return bw_state->pipe_sagv_reject == 0;
-}
-
-static int intel_compute_sagv_mask(struct intel_atomic_state *state)
-{
-	struct intel_display *display = to_intel_display(state);
-	struct drm_i915_private *i915 = to_i915(state->base.dev);
-	int ret;
-	struct intel_crtc *crtc;
-	struct intel_crtc_state *new_crtc_state;
-	struct intel_bw_state *new_bw_state = NULL;
-	const struct intel_bw_state *old_bw_state = NULL;
-	int i;
-
-	for_each_new_intel_crtc_in_state(state, crtc,
-					 new_crtc_state, i) {
-		struct skl_pipe_wm *pipe_wm = &new_crtc_state->wm.skl.optimal;
-
-		new_bw_state = intel_atomic_get_bw_state(state);
-		if (IS_ERR(new_bw_state))
-			return PTR_ERR(new_bw_state);
-
-		old_bw_state = intel_atomic_get_old_bw_state(state);
-
-		/*
-		 * We store use_sagv_wm in the crtc state rather than relying on
-		 * that bw state since we have no convenient way to get at the
-		 * latter from the plane commit hooks (especially in the legacy
-		 * cursor case).
-		 *
-		 * drm_atomic_check_only() gets upset if we pull more crtcs
-		 * into the state, so we have to calculate this based on the
-		 * individual intel_crtc_can_enable_sagv() rather than
-		 * the overall intel_can_enable_sagv(). Otherwise the
-		 * crtcs not included in the commit would not switch to the
-		 * SAGV watermarks when we are about to enable SAGV, and that
-		 * would lead to underruns. This does mean extra power draw
-		 * when only a subset of the crtcs are blocking SAGV as the
-		 * other crtcs can't be allowed to use the more optimal
-		 * normal (ie. non-SAGV) watermarks.
-		 */
-		pipe_wm->use_sagv_wm = !HAS_HW_SAGV_WM(display) &&
-			DISPLAY_VER(i915) >= 12 &&
-			intel_crtc_can_enable_sagv(new_crtc_state);
-
-		if (intel_crtc_can_enable_sagv(new_crtc_state))
-			new_bw_state->pipe_sagv_reject &= ~BIT(crtc->pipe);
-		else
-			new_bw_state->pipe_sagv_reject |= BIT(crtc->pipe);
-	}
-
-	if (!new_bw_state)
-		return 0;
-
-	new_bw_state->active_pipes =
-		intel_calc_active_pipes(state, old_bw_state->active_pipes);
-
-	if (new_bw_state->active_pipes != old_bw_state->active_pipes) {
-		ret = intel_atomic_lock_global_state(&new_bw_state->base);
-		if (ret)
-			return ret;
-	}
-
-	if (intel_can_enable_sagv(i915, new_bw_state) !=
-	    intel_can_enable_sagv(i915, old_bw_state)) {
-		ret = intel_atomic_serialize_global_state(&new_bw_state->base);
-		if (ret)
-			return ret;
-	} else if (new_bw_state->pipe_sagv_reject != old_bw_state->pipe_sagv_reject) {
-		ret = intel_atomic_lock_global_state(&new_bw_state->base);
-		if (ret)
-			return ret;
-	}
-
-	return 0;
 }
 
 static u16 skl_ddb_entry_init(struct skl_ddb_entry *entry,
@@ -3055,6 +2992,7 @@ intel_program_dpkgc_latency(struct intel_atomic_state *state)
 static int
 skl_compute_wm(struct intel_atomic_state *state)
 {
+	struct intel_display *display = to_intel_display(state);
 	struct intel_crtc *crtc;
 	struct intel_crtc_state __maybe_unused *new_crtc_state;
 	int ret, i;
@@ -3069,16 +3007,35 @@ skl_compute_wm(struct intel_atomic_state *state)
 	if (ret)
 		return ret;
 
-	ret = intel_compute_sagv_mask(state);
-	if (ret)
-		return ret;
-
 	/*
 	 * skl_compute_ddb() will have adjusted the final watermarks
 	 * based on how much ddb is available. Now we can actually
 	 * check if the final watermarks changed.
 	 */
 	for_each_new_intel_crtc_in_state(state, crtc, new_crtc_state, i) {
+		struct skl_pipe_wm *pipe_wm = &new_crtc_state->wm.skl.optimal;
+
+		/*
+		 * We store use_sagv_wm in the crtc state rather than relying on
+		 * that bw state since we have no convenient way to get at the
+		 * latter from the plane commit hooks (especially in the legacy
+		 * cursor case).
+		 *
+		 * drm_atomic_check_only() gets upset if we pull more crtcs
+		 * into the state, so we have to calculate this based on the
+		 * individual intel_crtc_can_enable_sagv() rather than
+		 * the overall intel_can_enable_sagv(). Otherwise the
+		 * crtcs not included in the commit would not switch to the
+		 * SAGV watermarks when we are about to enable SAGV, and that
+		 * would lead to underruns. This does mean extra power draw
+		 * when only a subset of the crtcs are blocking SAGV as the
+		 * other crtcs can't be allowed to use the more optimal
+		 * normal (ie. non-SAGV) watermarks.
+		 */
+		pipe_wm->use_sagv_wm = !HAS_HW_SAGV_WM(display) &&
+			DISPLAY_VER(display) >= 12 &&
+			intel_crtc_can_enable_sagv(new_crtc_state);
+
 		ret = skl_wm_add_affected_planes(state, crtc);
 		if (ret)
 			return ret;
@@ -4055,7 +4012,7 @@ static ssize_t skl_watermark_ipc_status_write(struct file *file,
 {
 	struct seq_file *m = file->private_data;
 	struct drm_i915_private *i915 = m->private;
-	intel_wakeref_t wakeref;
+	struct intel_display *display = &i915->display;
 	bool enable;
 	int ret;
 
@@ -4063,11 +4020,11 @@ static ssize_t skl_watermark_ipc_status_write(struct file *file,
 	if (ret < 0)
 		return ret;
 
-	with_intel_runtime_pm(&i915->runtime_pm, wakeref) {
+	with_intel_display_rpm(display) {
 		if (!skl_watermark_ipc_enabled(i915) && enable)
-			drm_info(&i915->drm,
+			drm_info(display->drm,
 				 "Enabling IPC: WM will be proper only after next commit\n");
-		i915->display.wm.ipc_enabled = enable;
+		display->wm.ipc_enabled = enable;
 		skl_watermark_ipc_update(i915);
 	}
 
