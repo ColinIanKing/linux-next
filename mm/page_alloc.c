@@ -2183,21 +2183,13 @@ try_to_claim_block(struct zone *zone, struct page *page,
 }
 
 /*
- * Try finding a free buddy page on the fallback list.
- *
- * This will attempt to claim a whole pageblock for the requested type
- * to ensure grouping of such requests in the future.
- *
- * If a whole block cannot be claimed, steal an individual page, regressing to
- * __rmqueue_smallest() logic to at least break up as little contiguity as
- * possible.
+ * Try to allocate from some fallback migratetype by claiming the entire block,
+ * i.e. converting it to the allocation's start migratetype.
  *
  * The use of signed ints for order and current_order is a deliberate
  * deviation from the rest of this file, to make the for loop
  * condition simpler.
  */
-
-/* Try to claim a whole foreign block, take a page, expand the remainder */
 static __always_inline struct page *
 __rmqueue_claim(struct zone *zone, int order, int start_migratetype,
 						unsigned int alloc_flags)
@@ -2247,7 +2239,10 @@ __rmqueue_claim(struct zone *zone, int order, int start_migratetype,
 	return NULL;
 }
 
-/* Try to steal a single page from a foreign block */
+/*
+ * Try to steal a single page from some fallback migratetype. Leave the rest of
+ * the block as its current migratetype, potentially causing fragmentation.
+ */
 static __always_inline struct page *
 __rmqueue_steal(struct zone *zone, int order, int start_migratetype)
 {
@@ -2307,7 +2302,8 @@ __rmqueue(struct zone *zone, unsigned int order, int migratetype,
 	}
 
 	/*
-	 * Try the different freelists, native then foreign.
+	 * First try the freelists of the requested migratetype, then try
+	 * fallbacks modes with increasing levels of fragmentation risk.
 	 *
 	 * The fallback logic is expensive and rmqueue_bulk() calls in
 	 * a loop with the zone->lock held, meaning the freelists are
@@ -2332,7 +2328,7 @@ __rmqueue(struct zone *zone, unsigned int order, int migratetype,
 	case RMQUEUE_CLAIM:
 		page = __rmqueue_claim(zone, order, migratetype, alloc_flags);
 		if (page) {
-			/* Replenished native freelist, back to normal mode */
+			/* Replenished preferred freelist, back to normal mode. */
 			*mode = RMQUEUE_NORMAL;
 			return page;
 		}
