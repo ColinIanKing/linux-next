@@ -649,7 +649,7 @@ static int mes_v11_0_misc_op(struct amdgpu_mes *mes,
 		break;
 	case MES_MISC_OP_CHANGE_CONFIG:
 		if ((mes->adev->mes.sched_version & AMDGPU_MES_VERSION_MASK) < 0x63) {
-			dev_err(mes->adev->dev, "MES FW versoin must be larger than 0x63 to support limit single process feature.\n");
+			dev_err(mes->adev->dev, "MES FW version must be larger than 0x63 to support limit single process feature.\n");
 			return -EINVAL;
 		}
 		misc_pkt.opcode = MESAPI_MISC__CHANGE_CONFIG;
@@ -694,7 +694,8 @@ static int mes_v11_0_set_hw_resources(struct amdgpu_mes *mes)
 			mes->compute_hqd_mask[i];
 
 	for (i = 0; i < MAX_GFX_PIPES; i++)
-		mes_set_hw_res_pkt.gfx_hqd_mask[i] = mes->gfx_hqd_mask[i];
+		mes_set_hw_res_pkt.gfx_hqd_mask[i] =
+			mes->gfx_hqd_mask[i];
 
 	for (i = 0; i < MAX_SDMA_PIPES; i++)
 		mes_set_hw_res_pkt.sdma_hqd_mask[i] = mes->sdma_hqd_mask[i];
@@ -893,6 +894,10 @@ static void mes_v11_0_free_ucode_buffers(struct amdgpu_device *adev,
 static void mes_v11_0_get_fw_version(struct amdgpu_device *adev)
 {
 	int pipe;
+
+	/* return early if we have already fetched these */
+	if (adev->mes.sched_version && adev->mes.kiq_version)
+		return;
 
 	/* get MES scheduler/KIQ versions */
 	mutex_lock(&adev->srbm_mutex);
@@ -1697,22 +1702,10 @@ static int mes_v11_0_early_init(struct amdgpu_ip_block *ip_block)
 	return 0;
 }
 
-static int mes_v11_0_late_init(struct amdgpu_ip_block *ip_block)
-{
-	struct amdgpu_device *adev = ip_block->adev;
-
-	/* it's only intended for use in mes_self_test case, not for s0ix and reset */
-	if (!amdgpu_in_reset(adev) && !adev->in_s0ix && !adev->in_suspend &&
-	    (amdgpu_ip_version(adev, GC_HWIP, 0) != IP_VERSION(11, 0, 3)))
-		amdgpu_mes_self_test(adev);
-
-	return 0;
-}
-
 static const struct amd_ip_funcs mes_v11_0_ip_funcs = {
 	.name = "mes_v11_0",
 	.early_init = mes_v11_0_early_init,
-	.late_init = mes_v11_0_late_init,
+	.late_init = NULL,
 	.sw_init = mes_v11_0_sw_init,
 	.sw_fini = mes_v11_0_sw_fini,
 	.hw_init = mes_v11_0_hw_init,
