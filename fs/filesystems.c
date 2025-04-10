@@ -34,6 +34,23 @@
 static struct file_system_type *file_systems;
 static DEFINE_RWLOCK(file_systems_lock);
 
+#ifdef CONFIG_PROC_FS
+static unsigned long file_systems_gen;
+
+struct file_systems_string {
+	struct rcu_head rcufree;
+	unsigned long gen;
+	size_t len;
+	char string[];
+};
+static struct file_systems_string *file_systems_string;
+static void invalidate_filesystems_string(void);
+#else
+static void invalidate_filesystems_string(void)
+{
+}
+#endif
+
 /* WARNING: This can be used only if we _already_ own a reference */
 struct file_system_type *get_filesystem(struct file_system_type *fs)
 {
@@ -83,10 +100,12 @@ int register_filesystem(struct file_system_type * fs)
 		return -EBUSY;
 	write_lock(&file_systems_lock);
 	p = find_filesystem(fs->name, strlen(fs->name));
-	if (*p)
+	if (*p) {
 		res = -EBUSY;
-	else
+	} else {
 		*p = fs;
+		invalidate_filesystems_string();
+	}
 	write_unlock(&file_systems_lock);
 	return res;
 }
@@ -115,6 +134,7 @@ int unregister_filesystem(struct file_system_type * fs)
 		if (fs == *tmp) {
 			*tmp = fs->next;
 			fs->next = NULL;
+			invalidate_filesystems_string();
 			write_unlock(&file_systems_lock);
 			synchronize_rcu();
 			return 0;
@@ -234,25 +254,139 @@ int __init list_bdev_fs_names(char *buf, size_t size)
 }
 
 #ifdef CONFIG_PROC_FS
-static int filesystems_proc_show(struct seq_file *m, void *v)
+/*
+ * The fs list gets queried a lot by userspace, including rather surprising
+ * programs (would you guess *sed* is on the list?). In order to reduce the
+ * overhead we cache the resulting string, which normally hangs around below
+ * 512 bytes in size.
+ *
+ * As the list almost never changes, its creation is not particularly optimized
+ * for simplicity.
+ *
+ * We sort it out on read in order to not introduce a failure point for fs
+ * registration (in principle we may be unable to alloc memory for the list).
+ */
+static void invalidate_filesystems_string(void)
 {
-	struct file_system_type * tmp;
+	struct file_systems_string *fss;
 
-	read_lock(&file_systems_lock);
+	lockdep_assert_held_write(&file_systems_lock);
+	file_systems_gen++;
+	fss = file_systems_string;
+	WRITE_ONCE(file_systems_string, NULL);
+	kfree_rcu(fss, rcufree);
+}
+
+static noinline int regen_filesystems_string(void)
+{
+	struct file_system_type *tmp;
+	struct file_systems_string *old, *new;
+	size_t newlen, usedlen;
+	unsigned long gen;
+
+retry:
+	lockdep_assert_not_held(&file_systems_lock);
+
+	newlen = 0;
+	write_lock(&file_systems_lock);
+	gen = file_systems_gen;
+	tmp = file_systems;
+	/* pre-calc space for "%s\t%s\n" for each fs */
+	while (tmp) {
+		if (!(tmp->fs_flags & FS_REQUIRES_DEV))
+			newlen += strlen("nodev");
+		newlen += strlen("\t");
+		newlen += strlen(tmp->name);
+		newlen += strlen("\n");
+		tmp = tmp->next;
+	}
+	write_unlock(&file_systems_lock);
+
+	new = kmalloc(offsetof(struct file_systems_string, string) + newlen + 1,
+		      GFP_KERNEL);
+	if (!new)
+		return -ENOMEM;
+
+	new->gen = gen;
+	new->len = newlen;
+	new->string[newlen] = '\0';
+	write_lock(&file_systems_lock);
+	old = file_systems_string;
+
+	/*
+	 * Did someone beat us to it?
+	 */
+	if (old && old->gen == file_systems_gen) {
+		write_unlock(&file_systems_lock);
+		kfree(new);
+		return 0;
+	}
+
+	/*
+	 * Did the list change in the meantime?
+	 */
+	if (gen != file_systems_gen) {
+		write_unlock(&file_systems_lock);
+		kfree(new);
+		goto retry;
+	}
+
+	/*
+	 * Populated the string.
+	 *
+	 * We know we have just enough space because we calculated the right
+	 * size the previous time we had the lock and confirmed the list has
+	 * not changed after reacquiring it.
+	 */
+	usedlen = 0;
 	tmp = file_systems;
 	while (tmp) {
-		seq_printf(m, "%s\t%s\n",
+		usedlen += sprintf(&new->string[usedlen], "%s\t%s\n",
 			(tmp->fs_flags & FS_REQUIRES_DEV) ? "" : "nodev",
 			tmp->name);
 		tmp = tmp->next;
 	}
-	read_unlock(&file_systems_lock);
+	BUG_ON(new->len != strlen(new->string));
+
+	/*
+	 * Pairs with consume fence in READ_ONCE() in filesystems_proc_show().
+	 */
+	smp_store_release(&file_systems_string, new);
+	write_unlock(&file_systems_lock);
+	kfree_rcu(old, rcufree);
 	return 0;
+}
+
+static int filesystems_proc_show(struct seq_file *m, void *v)
+{
+	struct file_systems_string *fss;
+
+	for (;;) {
+		scoped_guard(rcu) {
+			/*
+			 * Pairs with smp_store_release() in regen_filesystems_string().
+			 */
+			fss = READ_ONCE(file_systems_string);
+			if (likely(fss)) {
+				seq_write(m, fss->string, fss->len);
+				return 0;
+			}
+		}
+
+		int err = regen_filesystems_string();
+		if (unlikely(err))
+			return err;
+	}
 }
 
 static int __init proc_filesystems_init(void)
 {
-	proc_create_single("filesystems", 0, NULL, filesystems_proc_show);
+	struct proc_dir_entry *pde;
+
+	pde = proc_create_single("filesystems", 0, NULL, filesystems_proc_show);
+	if (!pde)
+		return -ENOMEM;
+	proc_make_permanent(pde);
 	return 0;
 }
 module_init(proc_filesystems_init);
