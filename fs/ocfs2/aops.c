@@ -1130,6 +1130,7 @@ static int ocfs2_write_cluster(struct address_space *mapping,
 				(unsigned long long)OCFS2_I(inode)->ip_blkno);
 		if (ret < 0) {
 			mlog_errno(ret);
+			wc->w_folios[i] = NULL;
 			goto out;
 		}
 	} else if (clear_unwritten) {
