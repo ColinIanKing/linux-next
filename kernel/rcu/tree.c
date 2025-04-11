@@ -801,6 +801,10 @@ static int rcu_watching_snap_save(struct rcu_data *rdp)
 	return 0;
 }
 
+#ifndef arch_irq_stat_cpu
+#define arch_irq_stat_cpu(cpu) 0
+#endif
+
 /*
  * Returns positive if the specified CPU has passed through a quiescent state
  * by virtue of being in or having passed through an dynticks idle state since
@@ -936,9 +940,9 @@ static int rcu_watching_snap_recheck(struct rcu_data *rdp)
 			rsrp->cputime_irq     = kcpustat_field(kcsp, CPUTIME_IRQ, cpu);
 			rsrp->cputime_softirq = kcpustat_field(kcsp, CPUTIME_SOFTIRQ, cpu);
 			rsrp->cputime_system  = kcpustat_field(kcsp, CPUTIME_SYSTEM, cpu);
-			rsrp->nr_hardirqs = kstat_cpu_irqs_sum(rdp->cpu);
-			rsrp->nr_softirqs = kstat_cpu_softirqs_sum(rdp->cpu);
-			rsrp->nr_csw = nr_context_switches_cpu(rdp->cpu);
+			rsrp->nr_hardirqs = kstat_cpu_irqs_sum(cpu) + arch_irq_stat_cpu(cpu);
+			rsrp->nr_softirqs = kstat_cpu_softirqs_sum(cpu);
+			rsrp->nr_csw = nr_context_switches_cpu(cpu);
 			rsrp->jiffies = jiffies;
 			rsrp->gp_seq = rdp->gp_seq;
 		}
@@ -1060,38 +1064,6 @@ static bool rcu_future_gp_cleanup(struct rcu_node *rnp)
 	return needmore;
 }
 
-static void swake_up_one_online_ipi(void *arg)
-{
-	struct swait_queue_head *wqh = arg;
-
-	swake_up_one(wqh);
-}
-
-static void swake_up_one_online(struct swait_queue_head *wqh)
-{
-	int cpu = get_cpu();
-
-	/*
-	 * If called from rcutree_report_cpu_starting(), wake up
-	 * is dangerous that late in the CPU-down hotplug process. The
-	 * scheduler might queue an ignored hrtimer. Defer the wake up
-	 * to an online CPU instead.
-	 */
-	if (unlikely(cpu_is_offline(cpu))) {
-		int target;
-
-		target = cpumask_any_and(housekeeping_cpumask(HK_TYPE_RCU),
-					 cpu_online_mask);
-
-		smp_call_function_single(target, swake_up_one_online_ipi,
-					 wqh, 0);
-		put_cpu();
-	} else {
-		put_cpu();
-		swake_up_one(wqh);
-	}
-}
-
 /*
  * Awaken the grace-period kthread.  Don't do a self-awaken (unless in an
  * interrupt or softirq handler, in which case we just might immediately
@@ -1116,7 +1088,7 @@ static void rcu_gp_kthread_wake(void)
 		return;
 	WRITE_ONCE(rcu_state.gp_wake_time, jiffies);
 	WRITE_ONCE(rcu_state.gp_wake_seq, READ_ONCE(rcu_state.gp_seq));
-	swake_up_one_online(&rcu_state.gp_wq);
+	swake_up_one(&rcu_state.gp_wq);
 }
 
 /*
@@ -1798,6 +1770,7 @@ static noinline_for_stack bool rcu_gp_init(void)
 	struct rcu_data *rdp;
 	struct rcu_node *rnp = rcu_get_root();
 	bool start_new_poll;
+	unsigned long old_gp_seq;
 
 	WRITE_ONCE(rcu_state.gp_activity, jiffies);
 	raw_spin_lock_irq_rcu_node(rnp);
@@ -1825,7 +1798,12 @@ static noinline_for_stack bool rcu_gp_init(void)
 	 */
 	start_new_poll = rcu_sr_normal_gp_init();
 	/* Record GP times before starting GP, hence rcu_seq_start(). */
+	old_gp_seq = rcu_state.gp_seq;
 	rcu_seq_start(&rcu_state.gp_seq);
+	/* Ensure that rcu_seq_done_exact() guardband doesn't give false positives. */
+	WARN_ON_ONCE(IS_ENABLED(CONFIG_PROVE_RCU) &&
+		     rcu_seq_done_exact(&old_gp_seq, rcu_seq_snap(&rcu_state.gp_seq)));
+
 	ASSERT_EXCLUSIVE_WRITER(rcu_state.gp_seq);
 	trace_rcu_grace_period(rcu_state.name, rcu_state.gp_seq, TPS("start"));
 	rcu_poll_gp_seq_start(&rcu_state.gp_seq_polled_snap);
