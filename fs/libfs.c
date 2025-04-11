@@ -1627,18 +1627,19 @@ void kfree_link(void *p)
 }
 EXPORT_SYMBOL(kfree_link);
 
+const struct address_space_operations anon_inode_aops = {
+	.dirty_folio = noop_dirty_folio,
+};
+
 struct inode *alloc_anon_inode(struct super_block *s)
 {
-	static const struct address_space_operations anon_aops = {
-		.dirty_folio	= noop_dirty_folio,
-	};
 	struct inode *inode = new_inode_pseudo(s);
 
 	if (!inode)
 		return ERR_PTR(-ENOMEM);
 
 	inode->i_ino = get_next_ino();
-	inode->i_mapping->a_ops = &anon_aops;
+	inode->i_mapping->a_ops = &anon_inode_aops;
 
 	/*
 	 * Mark the inode dirty from the very beginning,
