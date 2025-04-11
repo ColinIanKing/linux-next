@@ -1576,8 +1576,8 @@ static void handle_control_message(struct virtio_device *vdev,
 		break;
 	case VIRTIO_CONSOLE_RESIZE: {
 		struct {
-			__u16 rows;
 			__u16 cols;
+			__u16 rows;
 		} size;
 
 		if (!is_console_port(port))
