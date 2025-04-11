@@ -2260,6 +2260,10 @@ int zap_huge_pmd(struct mmu_gather *tlb, struct vm_area_struct *vma,
 			add_mm_counter(tlb->mm, mm_counter_file(folio),
 				       -HPAGE_PMD_NR);
 
+			/*
+			 * Use flush_needed to indicate whether the PMD entry
+			 * is present, instead of checking pmd_present() again.
+			 */
 			if (flush_needed && pmd_young(orig_pmd) &&
 			    likely(vma_has_recency(vma)))
 				folio_mark_accessed(folio);
