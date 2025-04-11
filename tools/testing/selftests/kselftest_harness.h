@@ -173,13 +173,13 @@
 #define TEST_SIGNAL(test_name, signal) __TEST_IMPL(test_name, signal)
 
 #define __TEST_IMPL(test_name, _signal) \
-	static void test_name(struct __test_metadata *_metadata); \
+	static void test_name(struct __test_metadata *_metadata, void *self, const void *variant); \
 	static void wrapper_##test_name( \
 		struct __test_metadata *_metadata, \
 		struct __fixture_variant_metadata __attribute__((unused)) *variant) \
 	{ \
 		if (setjmp(_metadata->env) == 0) \
-			test_name(_metadata); \
+			test_name(_metadata, NULL, NULL); \
 		__test_check_assert(_metadata); \
 	} \
 	static struct __test_metadata _##test_name##_object = \
@@ -193,7 +193,9 @@
 		__register_test(&_##test_name##_object); \
 	} \
 	static void test_name( \
-		struct __test_metadata __attribute__((unused)) *_metadata)
+		struct __test_metadata __attribute__((unused)) *_metadata, \
+		void __attribute__((unused)) *self, \
+		const void __attribute__((unused)) *variant)
 
 /**
  * FIXTURE_DATA() - Wraps the struct name so we have one less
