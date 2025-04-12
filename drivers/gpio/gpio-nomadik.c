@@ -262,8 +262,11 @@ static unsigned int nmk_gpio_irq_startup(struct irq_data *d)
 {
 	struct gpio_chip *gc = irq_data_get_irq_chip_data(d);
 	struct nmk_gpio_chip *nmk_chip = gpiochip_get_data(gc);
+	int ret;
 
-	clk_enable(nmk_chip->clk);
+	ret = clk_enable(nmk_chip->clk);
+	if (ret)
+		return ret;
 	nmk_gpio_irq_unmask(d);
 	return 0;
 }
