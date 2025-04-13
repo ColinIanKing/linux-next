@@ -2129,18 +2129,16 @@ size_t fault_in_writeable(char __user *uaddr, size_t size)
 {
 	const unsigned long start = (unsigned long)uaddr;
 	const unsigned long end = start + size;
-	unsigned long cur = start;
+	unsigned long cur;
 
 	if (unlikely(size == 0))
 		return 0;
-
 	if (!user_write_access_begin(uaddr, size))
 		return size;
 
 	/* Stop once we overflow to 0. */
-	for (; cur && cur < end; cur = PAGE_ALIGN_DOWN(cur + PAGE_SIZE))
+	for (cur = start; cur && cur < end; cur = PAGE_ALIGN_DOWN(cur + PAGE_SIZE))
 		unsafe_put_user(0, (char __user *)cur, out);
-
 out:
 	user_write_access_end();
 	if (size > cur - start)
@@ -2200,7 +2198,7 @@ size_t fault_in_safe_writeable(const char __user *uaddr, size_t size)
 {
 	const unsigned long start = (unsigned long)uaddr;
 	const unsigned long end = start + size;
-	unsigned long cur = start;
+	unsigned long cur;
 	struct mm_struct *mm = current->mm;
 	bool unlocked = false;
 
@@ -2209,7 +2207,7 @@ size_t fault_in_safe_writeable(const char __user *uaddr, size_t size)
 
 	mmap_read_lock(mm);
 	/* Stop once we overflow to 0. */
-	for (; cur && cur < end; cur = PAGE_ALIGN_DOWN(cur + PAGE_SIZE))
+	for (cur = start; cur && cur < end; cur = PAGE_ALIGN_DOWN(cur + PAGE_SIZE))
 		if (fixup_user_fault(mm, cur, FAULT_FLAG_WRITE, &unlocked))
 			break;
 	mmap_read_unlock(mm);
@@ -2232,15 +2230,16 @@ size_t fault_in_readable(const char __user *uaddr, size_t size)
 {
 	const unsigned long start = (unsigned long)uaddr;
 	const unsigned long end = start + size;
-	unsigned long cur = start;
+	unsigned long cur;
 	volatile char c;
 
 	if (unlikely(size == 0))
 		return 0;
 	if (!user_read_access_begin(uaddr, size))
 		return size;
+
 	/* Stop once we overflow to 0. */
-	for (; cur && cur < end; cur = PAGE_ALIGN_DOWN(cur + PAGE_SIZE))
+	for (cur = start; cur && cur < end; cur = PAGE_ALIGN_DOWN(cur + PAGE_SIZE))
 		unsafe_get_user(c, (const char __user *)cur, out);
 out:
 	user_read_access_end();
