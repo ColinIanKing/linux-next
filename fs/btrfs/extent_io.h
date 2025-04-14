@@ -38,16 +38,10 @@ struct btrfs_tree_parent_check;
 enum {
 	EXTENT_BUFFER_UPTODATE,
 	EXTENT_BUFFER_DIRTY,
-	EXTENT_BUFFER_CORRUPT,
-	/* this got triggered by readahead */
-	EXTENT_BUFFER_READAHEAD,
 	EXTENT_BUFFER_TREE_REF,
 	EXTENT_BUFFER_STALE,
 	EXTENT_BUFFER_WRITEBACK,
-	/* read IO error */
-	EXTENT_BUFFER_READ_ERR,
 	EXTENT_BUFFER_UNMAPPED,
-	EXTENT_BUFFER_IN_TREE,
 	/* write IO error */
 	EXTENT_BUFFER_WRITE_ERR,
 	/* Indicate the extent buffer is written zeroed out (for zoned) */
@@ -64,12 +58,6 @@ enum {
 	ENUM_BIT(PAGE_END_WRITEBACK),
 	ENUM_BIT(PAGE_SET_ORDERED),
 };
-
-/*
- * Folio private values.  Every page that is controlled by the extent map has
- * folio private set to this value.
- */
-#define EXTENT_FOLIO_PRIVATE			1
 
 /*
  * The extent buffer bitmap operations are done with byte granularity instead of
@@ -247,8 +235,8 @@ int btrfs_writepages(struct address_space *mapping, struct writeback_control *wb
 int btree_write_cache_pages(struct address_space *mapping,
 			    struct writeback_control *wbc);
 void btrfs_readahead(struct readahead_control *rac);
-int set_folio_extent_mapped(struct folio *folio);
-void clear_folio_extent_mapped(struct folio *folio);
+int btrfs_set_folio_subpage(struct folio *folio);
+void btrfs_clear_folio_subpage(struct folio *folio);
 
 struct extent_buffer *alloc_extent_buffer(struct btrfs_fs_info *fs_info,
 					  u64 start, u64 owner_root, int level);
