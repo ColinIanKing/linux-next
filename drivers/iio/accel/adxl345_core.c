@@ -36,8 +36,6 @@ struct adxl345_state {
 	struct regmap *regmap;
 	bool fifo_delay; /* delay: delay is needed for SPI */
 	int irq;
-	u8 intio;
-	u8 int_map;
 	u8 watermark;
 	u8 fifo_mode;
 	__le16 fifo_buf[ADXL345_DIRS * ADXL345_FIFO_SIZE + 1] __aligned(IIO_DMA_MINALIGN);
@@ -76,6 +74,25 @@ static const unsigned long adxl345_scan_masks[] = {
 	0
 };
 
+bool adxl345_is_volatile_reg(struct device *dev, unsigned int reg)
+{
+	switch (reg) {
+	case ADXL345_REG_DATA_AXIS(0):
+	case ADXL345_REG_DATA_AXIS(1):
+	case ADXL345_REG_DATA_AXIS(2):
+	case ADXL345_REG_DATA_AXIS(3):
+	case ADXL345_REG_DATA_AXIS(4):
+	case ADXL345_REG_DATA_AXIS(5):
+	case ADXL345_REG_ACT_TAP_STATUS:
+	case ADXL345_REG_FIFO_STATUS:
+	case ADXL345_REG_INT_SOURCE:
+		return true;
+	default:
+		return false;
+	}
+}
+EXPORT_SYMBOL_NS_GPL(adxl345_is_volatile_reg, "IIO_ADXL345");
+
 /**
  * adxl345_set_measure_en() - Enable and disable measuring.
  *
@@ -94,26 +111,6 @@ static int adxl345_set_measure_en(struct adxl345_state *st, bool en)
 	unsigned int val = en ? ADXL345_POWER_CTL_MEASURE : ADXL345_POWER_CTL_STANDBY;
 
 	return regmap_write(st->regmap, ADXL345_REG_POWER_CTL, val);
-}
-
-static int adxl345_set_interrupts(struct adxl345_state *st)
-{
-	int ret;
-	unsigned int int_enable = st->int_map;
-	unsigned int int_map;
-
-	/*
-	 * Any bits set to 0 in the INT map register send their respective
-	 * interrupts to the INT1 pin, whereas bits set to 1 send their respective
-	 * interrupts to the INT2 pin. The intio shall convert this accordingly.
-	 */
-	int_map = st->intio ? st->int_map : ~st->int_map;
-
-	ret = regmap_write(st->regmap, ADXL345_REG_INT_MAP, int_map);
-	if (ret)
-		return ret;
-
-	return regmap_write(st->regmap, ADXL345_REG_INT_ENABLE, int_enable);
 }
 
 static int adxl345_read_raw(struct iio_dev *indio_dev,
@@ -136,7 +133,7 @@ static int adxl345_read_raw(struct iio_dev *indio_dev,
 		ret = regmap_bulk_read(st->regmap,
 				       ADXL345_REG_DATA_AXIS(chan->address),
 				       &accel, sizeof(accel));
-		if (ret < 0)
+		if (ret)
 			return ret;
 
 		*val = sign_extend32(le16_to_cpu(accel), 12);
@@ -148,7 +145,7 @@ static int adxl345_read_raw(struct iio_dev *indio_dev,
 	case IIO_CHAN_INFO_CALIBBIAS:
 		ret = regmap_read(st->regmap,
 				  ADXL345_REG_OFS_AXIS(chan->address), &regval);
-		if (ret < 0)
+		if (ret)
 			return ret;
 		/*
 		 * 8-bit resolution at +/- 2g, that is 4x accel data scale
@@ -159,7 +156,7 @@ static int adxl345_read_raw(struct iio_dev *indio_dev,
 		return IIO_VAL_INT;
 	case IIO_CHAN_INFO_SAMP_FREQ:
 		ret = regmap_read(st->regmap, ADXL345_REG_BW_RATE, &regval);
-		if (ret < 0)
+		if (ret)
 			return ret;
 
 		samp_freq_nhz = ADXL345_BASE_RATE_NANO_HZ <<
@@ -214,7 +211,7 @@ static int adxl345_reg_access(struct iio_dev *indio_dev, unsigned int reg,
 static int adxl345_set_watermark(struct iio_dev *indio_dev, unsigned int value)
 {
 	struct adxl345_state *st = iio_priv(indio_dev);
-	unsigned int fifo_mask = 0x1F;
+	const unsigned int fifo_mask = 0x1F, watermark_mask = 0x02;
 	int ret;
 
 	value = min(value, ADXL345_FIFO_SIZE - 1);
@@ -224,9 +221,8 @@ static int adxl345_set_watermark(struct iio_dev *indio_dev, unsigned int value)
 		return ret;
 
 	st->watermark = value;
-	st->int_map |= ADXL345_INT_WATERMARK;
-
-	return 0;
+	return regmap_update_bits(st->regmap, ADXL345_REG_INT_ENABLE,
+				  watermark_mask, ADXL345_INT_WATERMARK);
 }
 
 static int adxl345_write_raw_get_fmt(struct iio_dev *indio_dev,
@@ -265,21 +261,25 @@ static const struct attribute_group adxl345_attrs_group = {
 
 static int adxl345_set_fifo(struct adxl345_state *st)
 {
+	unsigned int intio;
 	int ret;
 
 	/* FIFO should only be configured while in standby mode */
 	ret = adxl345_set_measure_en(st, false);
-	if (ret < 0)
+	if (ret)
+		return ret;
+
+	ret = regmap_read(st->regmap, ADXL345_REG_INT_MAP, &intio);
+	if (ret)
 		return ret;
 
 	ret = regmap_write(st->regmap, ADXL345_REG_FIFO_CTL,
 			   FIELD_PREP(ADXL345_FIFO_CTL_SAMPLES_MSK,
 				      st->watermark) |
-			   FIELD_PREP(ADXL345_FIFO_CTL_TRIGGER_MSK,
-				      st->intio) |
+			   FIELD_PREP(ADXL345_FIFO_CTL_TRIGGER_MSK, intio) |
 			   FIELD_PREP(ADXL345_FIFO_CTL_MODE_MSK,
 				      st->fifo_mode));
-	if (ret < 0)
+	if (ret)
 		return ret;
 
 	return adxl345_set_measure_en(st, true);
@@ -300,7 +300,7 @@ static int adxl345_get_samples(struct adxl345_state *st)
 	int ret;
 
 	ret = regmap_read(st->regmap, ADXL345_REG_FIFO_STATUS, &regval);
-	if (ret < 0)
+	if (ret)
 		return ret;
 
 	return FIELD_GET(ADXL345_REG_FIFO_STATUS_MSK, regval);
@@ -328,7 +328,7 @@ static int adxl345_fifo_transfer(struct adxl345_state *st, int samples)
 		/* read 3x 2 byte elements from base address into next fifo_buf position */
 		ret = regmap_bulk_read(st->regmap, ADXL345_REG_XYZ_BASE,
 				       st->fifo_buf + (i * count / 2), count);
-		if (ret < 0)
+		if (ret)
 			return ret;
 
 		/*
@@ -374,11 +374,6 @@ static void adxl345_fifo_reset(struct adxl345_state *st)
 static int adxl345_buffer_postenable(struct iio_dev *indio_dev)
 {
 	struct adxl345_state *st = iio_priv(indio_dev);
-	int ret;
-
-	ret = adxl345_set_interrupts(st);
-	if (ret < 0)
-		return ret;
 
 	st->fifo_mode = ADXL345_FIFO_STREAM;
 	return adxl345_set_fifo(st);
@@ -391,11 +386,10 @@ static int adxl345_buffer_predisable(struct iio_dev *indio_dev)
 
 	st->fifo_mode = ADXL345_FIFO_BYPASS;
 	ret = adxl345_set_fifo(st);
-	if (ret < 0)
+	if (ret)
 		return ret;
 
-	st->int_map = 0x00;
-	return adxl345_set_interrupts(st);
+	return regmap_write(st->regmap, ADXL345_REG_INT_ENABLE, 0x00);
 }
 
 static const struct iio_buffer_setup_ops adxl345_buffer_ops = {
@@ -492,6 +486,7 @@ int adxl345_core_probe(struct device *dev, struct regmap *regmap,
 	struct adxl345_state *st;
 	struct iio_dev *indio_dev;
 	u32 regval;
+	u8 intio = ADXL345_INT1;
 	unsigned int data_format_mask = (ADXL345_DATA_FORMAT_RANGE |
 					 ADXL345_DATA_FORMAT_JUSTIFY |
 					 ADXL345_DATA_FORMAT_FULL_RES |
@@ -515,6 +510,11 @@ int adxl345_core_probe(struct device *dev, struct regmap *regmap,
 	indio_dev->channels = adxl345_channels;
 	indio_dev->num_channels = ARRAY_SIZE(adxl345_channels);
 	indio_dev->available_scan_masks = adxl345_scan_masks;
+
+	/* Reset interrupts at start up */
+	ret = regmap_write(st->regmap, ADXL345_REG_INT_ENABLE, 0x00);
+	if (ret)
+		return ret;
 
 	if (setup) {
 		/* Perform optional initial bus specific configuration */
@@ -540,7 +540,7 @@ int adxl345_core_probe(struct device *dev, struct regmap *regmap,
 	}
 
 	ret = regmap_read(st->regmap, ADXL345_REG_DEVID, &regval);
-	if (ret < 0)
+	if (ret)
 		return dev_err_probe(dev, ret, "Error reading device ID\n");
 
 	if (regval != ADXL345_DEVID)
@@ -549,23 +549,33 @@ int adxl345_core_probe(struct device *dev, struct regmap *regmap,
 
 	/* Enable measurement mode */
 	ret = adxl345_set_measure_en(st, true);
-	if (ret < 0)
+	if (ret)
 		return dev_err_probe(dev, ret, "Failed to enable measurement mode\n");
 
 	ret = devm_add_action_or_reset(dev, adxl345_powerdown, st);
-	if (ret < 0)
+	if (ret)
 		return ret;
 
-	st->intio = ADXL345_INT1;
 	st->irq = fwnode_irq_get_byname(dev_fwnode(dev), "INT1");
 	if (st->irq < 0) {
-		st->intio = ADXL345_INT2;
+		intio = ADXL345_INT2;
 		st->irq = fwnode_irq_get_byname(dev_fwnode(dev), "INT2");
 		if (st->irq < 0)
-			st->intio = ADXL345_INT_NONE;
+			intio = ADXL345_INT_NONE;
 	}
 
-	if (st->intio != ADXL345_INT_NONE) {
+	if (intio != ADXL345_INT_NONE) {
+		/*
+		 * Any bits set to 0 in the INT map register send their respective
+		 * interrupts to the INT1 pin, whereas bits set to 1 send their respective
+		 * interrupts to the INT2 pin. The intio shall convert this accordingly.
+		 */
+		regval = intio ? 0xff : 0;
+
+		ret = regmap_write(st->regmap, ADXL345_REG_INT_MAP, regval);
+		if (ret)
+			return ret;
+
 		/* FIFO_STREAM mode is going to be activated later */
 		ret = devm_iio_kfifo_buffer_setup(dev, indio_dev, &adxl345_buffer_ops);
 		if (ret)
@@ -581,7 +591,7 @@ int adxl345_core_probe(struct device *dev, struct regmap *regmap,
 		ret = regmap_write(st->regmap, ADXL345_REG_FIFO_CTL,
 				   FIELD_PREP(ADXL345_FIFO_CTL_MODE_MSK,
 					      ADXL345_FIFO_BYPASS));
-		if (ret < 0)
+		if (ret)
 			return ret;
 	}
 
