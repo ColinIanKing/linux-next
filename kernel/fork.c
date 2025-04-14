@@ -2071,7 +2071,7 @@ static int __pidfd_prepare(struct pid *pid, unsigned int flags, struct file **re
 	if (pidfd < 0)
 		return pidfd;
 
-	pidfd_file = pidfs_alloc_file(pid, flags | O_RDWR);
+	pidfd_file = pidfs_alloc_file(pid, flags);
 	if (IS_ERR(pidfd_file))
 		return PTR_ERR(pidfd_file);
 
