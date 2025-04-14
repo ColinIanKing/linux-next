@@ -49,8 +49,6 @@
 #include "gt/intel_workarounds.h"
 #include "gt/uc/intel_uc.h"
 
-#include "soc/intel_pch.h"
-
 #include "i915_drm_client.h"
 #include "i915_gem.h"
 #include "i915_gpu_error.h"
@@ -272,9 +270,6 @@ struct drm_i915_private {
 	/* pm private clock gating functions */
 	const struct drm_i915_clock_gating_funcs *clock_gating_funcs;
 
-	/* PCH chipset type */
-	enum intel_pch pch_type;
-
 	unsigned long gem_quirks;
 
 	struct i915_gem_mm mm;
@@ -306,6 +301,7 @@ struct drm_i915_private {
 			INTEL_DRAM_LPDDR5,
 			INTEL_DRAM_GDDR,
 			INTEL_DRAM_GDDR_ECC,
+			__INTEL_DRAM_TYPE_MAX,
 		} type;
 		u8 num_qgv_points;
 		u8 num_psf_gv_points;

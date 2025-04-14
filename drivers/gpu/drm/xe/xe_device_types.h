@@ -31,7 +31,6 @@
 #endif
 
 #if IS_ENABLED(CONFIG_DRM_XE_DISPLAY)
-#include "soc/intel_pch.h"
 #include "intel_display_core.h"
 #include "intel_display_device.h"
 #endif
@@ -570,7 +569,6 @@ struct xe_device {
 	 * migrating to the right sub-structs
 	 */
 	struct intel_display display;
-	enum intel_pch pch_type;
 
 	struct dram_info {
 		bool wm_lv_0_adjust_needed;
@@ -586,6 +584,7 @@ struct xe_device {
 			INTEL_DRAM_LPDDR5,
 			INTEL_DRAM_GDDR,
 			INTEL_DRAM_GDDR_ECC,
+			__INTEL_DRAM_TYPE_MAX,
 		} type;
 		u8 num_qgv_points;
 		u8 num_psf_gv_points;
