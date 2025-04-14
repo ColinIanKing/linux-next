@@ -124,6 +124,7 @@
 #include <linux/psi.h>
 #include <linux/syscalls.h>
 #include <linux/file.h>
+#include <linux/fs.h>
 #include <linux/mm_inline.h>
 #include <linux/blk-cgroup.h>
 #include <linux/fadvise.h>
@@ -701,8 +702,9 @@ ssize_t ksys_readahead(int fd, loff_t offset, size_t count)
 	 * on this file, then we must return -EINVAL.
 	 */
 	if (!fd_file(f)->f_mapping || !fd_file(f)->f_mapping->a_ops ||
+	    (fd_file(f)->f_mapping->a_ops == &anon_inode_aops) ||
 	    (!S_ISREG(file_inode(fd_file(f))->i_mode) &&
-	    !S_ISBLK(file_inode(fd_file(f))->i_mode)))
+	     !S_ISBLK(file_inode(fd_file(f))->i_mode)))
 		return -EINVAL;
 
 	return vfs_fadvise(fd_file(f), offset, count, POSIX_FADV_WILLNEED);
