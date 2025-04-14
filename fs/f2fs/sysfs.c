@@ -494,12 +494,12 @@ out:
 		return ret;
 #ifdef CONFIG_F2FS_FAULT_INJECTION
 	if (a->struct_type == FAULT_INFO_TYPE) {
-		if (f2fs_build_fault_attr(sbi, 0, t))
+		if (f2fs_build_fault_attr(sbi, 0, t, FAULT_TYPE))
 			return -EINVAL;
 		return count;
 	}
 	if (a->struct_type == FAULT_INFO_RATE) {
-		if (f2fs_build_fault_attr(sbi, t, 0))
+		if (f2fs_build_fault_attr(sbi, t, 0, FAULT_RATE))
 			return -EINVAL;
 		return count;
 	}
@@ -1679,6 +1679,24 @@ static int __maybe_unused disk_map_seq_show(struct seq_file *seq,
 	return 0;
 }
 
+#ifdef CONFIG_F2FS_FAULT_INJECTION
+static int __maybe_unused inject_stats_seq_show(struct seq_file *seq,
+						void *offset)
+{
+	struct super_block *sb = seq->private;
+	struct f2fs_sb_info *sbi = F2FS_SB(sb);
+	struct f2fs_fault_info *ffi = &F2FS_OPTION(sbi).fault_info;
+	int i;
+
+	seq_puts(seq, "fault_type		injected_count\n");
+
+	for (i = 0; i < FAULT_MAX; i++)
+		seq_printf(seq, "%-24s%-10u\n", f2fs_fault_name[i],
+						ffi->inject_count[i]);
+	return 0;
+}
+#endif
+
 int __init f2fs_init_sysfs(void)
 {
 	int ret;
@@ -1770,6 +1788,10 @@ int f2fs_register_sysfs(struct f2fs_sb_info *sbi)
 				discard_plist_seq_show, sb);
 	proc_create_single_data("disk_map", 0444, sbi->s_proc,
 				disk_map_seq_show, sb);
+#ifdef CONFIG_F2FS_FAULT_INJECTION
+	proc_create_single_data("inject_stats", 0444, sbi->s_proc,
+				inject_stats_seq_show, sb);
+#endif
 	return 0;
 put_feature_list_kobj:
 	kobject_put(&sbi->s_feature_list_kobj);
