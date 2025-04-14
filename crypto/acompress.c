@@ -8,19 +8,35 @@
  */
 
 #include <crypto/internal/acompress.h>
+#include <crypto/scatterwalk.h>
 #include <linux/cryptouser.h>
+#include <linux/cpumask.h>
 #include <linux/errno.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/page-flags.h>
+#include <linux/percpu.h>
+#include <linux/scatterlist.h>
+#include <linux/sched.h>
 #include <linux/seq_file.h>
 #include <linux/slab.h>
+#include <linux/smp.h>
+#include <linux/spinlock.h>
 #include <linux/string.h>
+#include <linux/workqueue.h>
 #include <net/netlink.h>
 
 #include "compress.h"
 
 struct crypto_scomp;
+
+enum {
+	ACOMP_WALK_SLEEP = 1 << 0,
+	ACOMP_WALK_SRC_LINEAR = 1 << 1,
+	ACOMP_WALK_SRC_FOLIO = 1 << 2,
+	ACOMP_WALK_DST_LINEAR = 1 << 3,
+	ACOMP_WALK_DST_FOLIO = 1 << 4,
+};
 
 static const struct crypto_type crypto_acomp_type;
 
@@ -433,6 +449,222 @@ void crypto_unregister_acomps(struct acomp_alg *algs, int count)
 		crypto_unregister_acomp(&algs[i]);
 }
 EXPORT_SYMBOL_GPL(crypto_unregister_acomps);
+
+static void acomp_stream_workfn(struct work_struct *work)
+{
+	struct crypto_acomp_streams *s =
+		container_of(work, struct crypto_acomp_streams, stream_work);
+	struct crypto_acomp_stream __percpu *streams = s->streams;
+	int cpu;
+
+	for_each_cpu(cpu, &s->stream_want) {
+		struct crypto_acomp_stream *ps;
+		void *ctx;
+
+		ps = per_cpu_ptr(streams, cpu);
+		if (ps->ctx)
+			continue;
+
+		ctx = s->alloc_ctx();
+		if (IS_ERR(ctx))
+			break;
+
+		spin_lock_bh(&ps->lock);
+		ps->ctx = ctx;
+		spin_unlock_bh(&ps->lock);
+
+		cpumask_clear_cpu(cpu, &s->stream_want);
+	}
+}
+
+void crypto_acomp_free_streams(struct crypto_acomp_streams *s)
+{
+	struct crypto_acomp_stream __percpu *streams = s->streams;
+	void (*free_ctx)(void *);
+	int i;
+
+	s->streams = NULL;
+	if (!streams)
+		return;
+
+	cancel_work_sync(&s->stream_work);
+	free_ctx = s->free_ctx;
+
+	for_each_possible_cpu(i) {
+		struct crypto_acomp_stream *ps = per_cpu_ptr(streams, i);
+
+		if (!ps->ctx)
+			continue;
+
+		free_ctx(ps->ctx);
+	}
+
+	free_percpu(streams);
+}
+EXPORT_SYMBOL_GPL(crypto_acomp_free_streams);
+
+int crypto_acomp_alloc_streams(struct crypto_acomp_streams *s)
+{
+	struct crypto_acomp_stream __percpu *streams;
+	struct crypto_acomp_stream *ps;
+	unsigned int i;
+	void *ctx;
+
+	if (s->streams)
+		return 0;
+
+	streams = alloc_percpu(struct crypto_acomp_stream);
+	if (!streams)
+		return -ENOMEM;
+
+	ctx = s->alloc_ctx();
+	if (IS_ERR(ctx)) {
+		free_percpu(streams);
+		return PTR_ERR(ctx);
+	}
+
+	i = cpumask_first(cpu_possible_mask);
+	ps = per_cpu_ptr(streams, i);
+	ps->ctx = ctx;
+
+	for_each_possible_cpu(i) {
+		ps = per_cpu_ptr(streams, i);
+		spin_lock_init(&ps->lock);
+	}
+
+	s->streams = streams;
+
+	INIT_WORK(&s->stream_work, acomp_stream_workfn);
+	return 0;
+}
+EXPORT_SYMBOL_GPL(crypto_acomp_alloc_streams);
+
+struct crypto_acomp_stream *crypto_acomp_lock_stream_bh(
+	struct crypto_acomp_streams *s) __acquires(stream)
+{
+	struct crypto_acomp_stream __percpu *streams = s->streams;
+	int cpu = raw_smp_processor_id();
+	struct crypto_acomp_stream *ps;
+
+	ps = per_cpu_ptr(streams, cpu);
+	spin_lock_bh(&ps->lock);
+	if (likely(ps->ctx))
+		return ps;
+	spin_unlock(&ps->lock);
+
+	cpumask_set_cpu(cpu, &s->stream_want);
+	schedule_work(&s->stream_work);
+
+	ps = per_cpu_ptr(streams, cpumask_first(cpu_possible_mask));
+	spin_lock(&ps->lock);
+	return ps;
+}
+EXPORT_SYMBOL_GPL(crypto_acomp_lock_stream_bh);
+
+void acomp_walk_done_src(struct acomp_walk *walk, int used)
+{
+	walk->slen -= used;
+	if ((walk->flags & ACOMP_WALK_SRC_LINEAR))
+		scatterwalk_advance(&walk->in, used);
+	else
+		scatterwalk_done_src(&walk->in, used);
+
+	if ((walk->flags & ACOMP_WALK_SLEEP))
+		cond_resched();
+}
+EXPORT_SYMBOL_GPL(acomp_walk_done_src);
+
+void acomp_walk_done_dst(struct acomp_walk *walk, int used)
+{
+	walk->dlen -= used;
+	if ((walk->flags & ACOMP_WALK_DST_LINEAR))
+		scatterwalk_advance(&walk->out, used);
+	else
+		scatterwalk_done_dst(&walk->out, used);
+
+	if ((walk->flags & ACOMP_WALK_SLEEP))
+		cond_resched();
+}
+EXPORT_SYMBOL_GPL(acomp_walk_done_dst);
+
+int acomp_walk_next_src(struct acomp_walk *walk)
+{
+	unsigned int slen = walk->slen;
+	unsigned int max = UINT_MAX;
+
+	if (!preempt_model_preemptible() && (walk->flags & ACOMP_WALK_SLEEP))
+		max = PAGE_SIZE;
+	if ((walk->flags & ACOMP_WALK_SRC_LINEAR)) {
+		walk->in.__addr = (void *)(((u8 *)walk->in.sg) +
+					   walk->in.offset);
+		return min(slen, max);
+	}
+
+	return slen ? scatterwalk_next(&walk->in, slen) : 0;
+}
+EXPORT_SYMBOL_GPL(acomp_walk_next_src);
+
+int acomp_walk_next_dst(struct acomp_walk *walk)
+{
+	unsigned int dlen = walk->dlen;
+	unsigned int max = UINT_MAX;
+
+	if (!preempt_model_preemptible() && (walk->flags & ACOMP_WALK_SLEEP))
+		max = PAGE_SIZE;
+	if ((walk->flags & ACOMP_WALK_DST_LINEAR)) {
+		walk->out.__addr = (void *)(((u8 *)walk->out.sg) +
+					    walk->out.offset);
+		return min(dlen, max);
+	}
+
+	return dlen ? scatterwalk_next(&walk->out, dlen) : 0;
+}
+EXPORT_SYMBOL_GPL(acomp_walk_next_dst);
+
+int acomp_walk_virt(struct acomp_walk *__restrict walk,
+		    struct acomp_req *__restrict req)
+{
+	struct scatterlist *src = req->src;
+	struct scatterlist *dst = req->dst;
+
+	walk->slen = req->slen;
+	walk->dlen = req->dlen;
+
+	if (!walk->slen || !walk->dlen)
+		return -EINVAL;
+
+	walk->flags = 0;
+	if ((req->base.flags & CRYPTO_TFM_REQ_MAY_SLEEP))
+		walk->flags |= ACOMP_WALK_SLEEP;
+	if ((req->base.flags & CRYPTO_ACOMP_REQ_SRC_VIRT))
+		walk->flags |= ACOMP_WALK_SRC_LINEAR;
+	else if ((req->base.flags & CRYPTO_ACOMP_REQ_SRC_FOLIO)) {
+		src = &req->chain.ssg;
+		sg_init_table(src, 1);
+		sg_set_folio(src, req->sfolio, walk->slen, req->soff);
+	}
+	if ((req->base.flags & CRYPTO_ACOMP_REQ_DST_VIRT))
+		walk->flags |= ACOMP_WALK_DST_LINEAR;
+	else if ((req->base.flags & CRYPTO_ACOMP_REQ_DST_FOLIO)) {
+		dst = &req->chain.dsg;
+		sg_init_table(dst, 1);
+		sg_set_folio(dst, req->dfolio, walk->dlen, req->doff);
+	}
+
+	if ((walk->flags & ACOMP_WALK_SRC_LINEAR)) {
+		walk->in.sg = (void *)req->svirt;
+		walk->in.offset = 0;
+	} else
+		scatterwalk_start(&walk->in, src);
+	if ((walk->flags & ACOMP_WALK_DST_LINEAR)) {
+		walk->out.sg = (void *)req->dvirt;
+		walk->out.offset = 0;
+	} else
+		scatterwalk_start(&walk->out, dst);
+
+	return 0;
+}
+EXPORT_SYMBOL_GPL(acomp_walk_virt);
 
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("Asynchronous compression type");
