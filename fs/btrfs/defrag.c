@@ -191,10 +191,7 @@ static struct inode_defrag *btrfs_pick_defrag_inode(
 
 	if (parent && compare_inode_defrag(&tmp, entry) > 0) {
 		parent = rb_next(parent);
-		if (parent)
-			entry = rb_entry(parent, struct inode_defrag, rb_node);
-		else
-			entry = NULL;
+		entry = rb_entry_safe(parent, struct inode_defrag, rb_node);
 	}
 out:
 	if (entry)
@@ -624,7 +621,7 @@ static struct extent_map *defrag_get_extent(struct btrfs_inode *inode,
 	u64 ino = btrfs_ino(inode);
 	int ret;
 
-	em = alloc_extent_map();
+	em = btrfs_alloc_extent_map();
 	if (!em) {
 		ret = -ENOMEM;
 		goto err;
@@ -734,12 +731,12 @@ next:
 
 not_found:
 	btrfs_release_path(&path);
-	free_extent_map(em);
+	btrfs_free_extent_map(em);
 	return NULL;
 
 err:
 	btrfs_release_path(&path);
-	free_extent_map(em);
+	btrfs_free_extent_map(em);
 	return ERR_PTR(ret);
 }
 
@@ -756,7 +753,7 @@ static struct extent_map *defrag_lookup_extent(struct inode *inode, u64 start,
 	 * full extent lock.
 	 */
 	read_lock(&em_tree->lock);
-	em = lookup_extent_mapping(em_tree, start, sectorsize);
+	em = btrfs_lookup_extent_mapping(em_tree, start, sectorsize);
 	read_unlock(&em_tree->lock);
 
 	/*
@@ -769,7 +766,7 @@ static struct extent_map *defrag_lookup_extent(struct inode *inode, u64 start,
 	 * file extent items in the inode's subvolume tree).
 	 */
 	if (em && (em->flags & EXTENT_FLAG_MERGED)) {
-		free_extent_map(em);
+		btrfs_free_extent_map(em);
 		em = NULL;
 	}
 
@@ -779,10 +776,10 @@ static struct extent_map *defrag_lookup_extent(struct inode *inode, u64 start,
 
 		/* Get the big lock and read metadata off disk. */
 		if (!locked)
-			lock_extent(io_tree, start, end, &cached);
+			btrfs_lock_extent(io_tree, start, end, &cached);
 		em = defrag_get_extent(BTRFS_I(inode), start, newer_than);
 		if (!locked)
-			unlock_extent(io_tree, start, end, &cached);
+			btrfs_unlock_extent(io_tree, start, end, &cached);
 
 		if (IS_ERR(em))
 			return NULL;
@@ -794,7 +791,7 @@ static struct extent_map *defrag_lookup_extent(struct inode *inode, u64 start,
 static u32 get_extent_max_capacity(const struct btrfs_fs_info *fs_info,
 				   const struct extent_map *em)
 {
-	if (extent_map_is_compressed(em))
+	if (btrfs_extent_map_is_compressed(em))
 		return BTRFS_MAX_COMPRESSED;
 	return fs_info->max_extent_size;
 }
@@ -837,7 +834,7 @@ static bool defrag_check_next_extent(struct inode *inode, struct extent_map *em,
 
 	ret = true;
 out:
-	free_extent_map(next);
+	btrfs_free_extent_map(next);
 	return ret;
 }
 
@@ -883,7 +880,7 @@ again:
 		return ERR_PTR(-ETXTBSY);
 	}
 
-	ret = set_folio_extent_mapped(folio);
+	ret = btrfs_set_folio_subpage(folio);
 	if (ret < 0) {
 		folio_unlock(folio);
 		folio_put(folio);
@@ -894,10 +891,10 @@ again:
 	while (1) {
 		struct btrfs_ordered_extent *ordered;
 
-		lock_extent(&inode->io_tree, page_start, page_end, &cached_state);
+		btrfs_lock_extent(&inode->io_tree, page_start, page_end, &cached_state);
 		ordered = btrfs_lookup_ordered_range(inode, page_start, PAGE_SIZE);
-		unlock_extent(&inode->io_tree, page_start, page_end,
-			      &cached_state);
+		btrfs_unlock_extent(&inode->io_tree, page_start, page_end,
+				    &cached_state);
 		if (!ordered)
 			break;
 
@@ -1027,8 +1024,8 @@ static int defrag_collect_targets(struct btrfs_inode *inode,
 		 *    very likely resulting in a larger extent after writeback is
 		 *    triggered (except in a case of free space fragmentation).
 		 */
-		if (test_range_bit_exists(&inode->io_tree, cur, cur + range_len - 1,
-					  EXTENT_DELALLOC))
+		if (btrfs_test_range_bit_exists(&inode->io_tree, cur, cur + range_len - 1,
+						EXTENT_DELALLOC))
 			goto next;
 
 		/*
@@ -1077,7 +1074,7 @@ static int defrag_collect_targets(struct btrfs_inode *inode,
 
 add:
 		last_is_target = true;
-		range_len = min(extent_map_end(em), start + len) - cur;
+		range_len = min(btrfs_extent_map_end(em), start + len) - cur;
 		/*
 		 * This one is a good target, check if it can be merged into
 		 * last range of the target list.
@@ -1099,7 +1096,7 @@ add:
 		/* Allocate new defrag_target_range */
 		new = kmalloc(sizeof(*new), GFP_NOFS);
 		if (!new) {
-			free_extent_map(em);
+			btrfs_free_extent_map(em);
 			ret = -ENOMEM;
 			break;
 		}
@@ -1108,8 +1105,8 @@ add:
 		list_add_tail(&new->list, target_list);
 
 next:
-		cur = extent_map_end(em);
-		free_extent_map(em);
+		cur = btrfs_extent_map_end(em);
+		btrfs_free_extent_map(em);
 	}
 	if (ret < 0) {
 		struct defrag_target_range *entry;
@@ -1173,11 +1170,11 @@ static int defrag_one_locked_target(struct btrfs_inode *inode,
 	ret = btrfs_delalloc_reserve_space(inode, &data_reserved, start, len);
 	if (ret < 0)
 		return ret;
-	clear_extent_bit(&inode->io_tree, start, start + len - 1,
-			 EXTENT_DELALLOC | EXTENT_DO_ACCOUNTING |
-			 EXTENT_DEFRAG, cached_state);
-	set_extent_bit(&inode->io_tree, start, start + len - 1,
-		       EXTENT_DELALLOC | EXTENT_DEFRAG, cached_state);
+	btrfs_clear_extent_bit(&inode->io_tree, start, start + len - 1,
+			       EXTENT_DELALLOC | EXTENT_DO_ACCOUNTING |
+			       EXTENT_DEFRAG, cached_state);
+	btrfs_set_extent_bit(&inode->io_tree, start, start + len - 1,
+			     EXTENT_DELALLOC | EXTENT_DEFRAG, cached_state);
 
 	/* Update the page status */
 	for (i = start_index - first_index; i <= last_index - first_index; i++) {
@@ -1226,9 +1223,9 @@ static int defrag_one_range(struct btrfs_inode *inode, u64 start, u32 len,
 		folio_wait_writeback(folios[i]);
 
 	/* Lock the pages range */
-	lock_extent(&inode->io_tree, start_index << PAGE_SHIFT,
-		    (last_index << PAGE_SHIFT) + PAGE_SIZE - 1,
-		    &cached_state);
+	btrfs_lock_extent(&inode->io_tree, start_index << PAGE_SHIFT,
+			  (last_index << PAGE_SHIFT) + PAGE_SIZE - 1,
+			  &cached_state);
 	/*
 	 * Now we have a consistent view about the extent map, re-check
 	 * which range really needs to be defragged.
@@ -1254,9 +1251,9 @@ static int defrag_one_range(struct btrfs_inode *inode, u64 start, u32 len,
 		kfree(entry);
 	}
 unlock_extent:
-	unlock_extent(&inode->io_tree, start_index << PAGE_SHIFT,
-		      (last_index << PAGE_SHIFT) + PAGE_SIZE - 1,
-		      &cached_state);
+	btrfs_unlock_extent(&inode->io_tree, start_index << PAGE_SHIFT,
+			    (last_index << PAGE_SHIFT) + PAGE_SIZE - 1,
+			    &cached_state);
 free_folios:
 	for (i = 0; i < nr_pages; i++) {
 		folio_unlock(folios[i]);

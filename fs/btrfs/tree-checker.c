@@ -2229,13 +2229,13 @@ int btrfs_verify_level_key(struct extent_buffer *eb,
 	int ret;
 
 	found_level = btrfs_header_level(eb);
-	if (found_level != check->level) {
+	if (unlikely(found_level != check->level)) {
 		WARN(IS_ENABLED(CONFIG_BTRFS_DEBUG),
 		     KERN_ERR "BTRFS: tree level check failed\n");
 		btrfs_err(fs_info,
 "tree level mismatch detected, bytenr=%llu level expected=%u has=%u",
 			  eb->start, check->level, found_level);
-		return -EIO;
+		return -EUCLEAN;
 	}
 
 	if (!check->has_first_key)
@@ -2251,7 +2251,7 @@ int btrfs_verify_level_key(struct extent_buffer *eb,
 		return 0;
 
 	/* We have @first_key, so this @eb must have at least one item */
-	if (btrfs_header_nritems(eb) == 0) {
+	if (unlikely(btrfs_header_nritems(eb) == 0)) {
 		btrfs_err(fs_info,
 		"invalid tree nritems, bytenr=%llu nritems=0 expect >0",
 			  eb->start);
@@ -2263,9 +2263,9 @@ int btrfs_verify_level_key(struct extent_buffer *eb,
 		btrfs_node_key_to_cpu(eb, &found_key, 0);
 	else
 		btrfs_item_key_to_cpu(eb, &found_key, 0);
-	ret = btrfs_comp_cpu_keys(&check->first_key, &found_key);
 
-	if (ret) {
+	ret = btrfs_comp_cpu_keys(&check->first_key, &found_key);
+	if (unlikely(ret)) {
 		WARN(IS_ENABLED(CONFIG_BTRFS_DEBUG),
 		     KERN_ERR "BTRFS: tree first key check failed\n");
 		btrfs_err(fs_info,
