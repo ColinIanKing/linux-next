@@ -337,6 +337,9 @@ int bch2_opt_parse(struct bch_fs *c,
 {
 	ssize_t ret;
 
+	if (err)
+		printbuf_indent_add_nextline(err, 2);
+
 	switch (opt->type) {
 	case BCH_OPT_BOOL:
 		if (val) {
@@ -360,9 +363,15 @@ int bch2_opt_parse(struct bch_fs *c,
 			return -EINVAL;
 		}
 
-		ret = opt->flags & OPT_HUMAN_READABLE
-			? bch2_strtou64_h(val, res)
-			: kstrtou64(val, 10, res);
+		if (*val != '-') {
+			ret = opt->flags & OPT_HUMAN_READABLE
+			    ? bch2_strtou64_h(val, res)
+			    : kstrtou64(val, 10, res);
+		} else {
+			prt_printf(err, "%s: must be a non-negative number", opt->attr.name);
+			return -BCH_ERR_option_negative;
+		}
+
 		if (ret < 0) {
 			if (err)
 				prt_printf(err, "%s: must be a number",
@@ -497,6 +506,14 @@ int bch2_opt_check_may_set(struct bch_fs *c, struct bch_dev *ca, int id, u64 v)
 	case Opt_erasure_code:
 		if (v)
 			bch2_check_set_feature(c, BCH_FEATURE_ec);
+		break;
+	case Opt_single_device:
+		if (v) {
+			mutex_lock(&c->sb_lock);
+			if (bch2_sb_nr_devices(c->disk_sb.sb) > 1)
+				ret = -BCH_ERR_not_single_device_filesystem;
+			mutex_unlock(&c->sb_lock);
+		}
 		break;
 	}
 
