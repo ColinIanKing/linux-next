@@ -37,7 +37,7 @@ static u64 hv_apic_icr_read(void)
 {
 	u64 reg_val;
 
-	rdmsrl(HV_X64_MSR_ICR, reg_val);
+	rdmsrq(HV_X64_MSR_ICR, reg_val);
 	return reg_val;
 }
 
@@ -49,7 +49,7 @@ static void hv_apic_icr_write(u32 low, u32 id)
 	reg_val = reg_val << 32;
 	reg_val |= low;
 
-	wrmsrl(HV_X64_MSR_ICR, reg_val);
+	wrmsrq(HV_X64_MSR_ICR, reg_val);
 }
 
 static u32 hv_apic_read(u32 reg)

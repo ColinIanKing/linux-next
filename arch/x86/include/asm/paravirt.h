@@ -209,12 +209,12 @@ do {						\
 	paravirt_write_msr(msr, val1, val2);	\
 } while (0)
 
-#define rdmsrl(msr, val)			\
+#define rdmsrq(msr, val)			\
 do {						\
 	val = paravirt_read_msr(msr);		\
 } while (0)
 
-static inline void wrmsrl(unsigned msr, u64 val)
+static inline void wrmsrq(unsigned msr, u64 val)
 {
 	wrmsr(msr, (u32)val, (u32)(val>>32));
 }
@@ -231,7 +231,7 @@ static inline void wrmsrl(unsigned msr, u64 val)
 	_err;						\
 })
 
-static inline int rdmsrl_safe(unsigned msr, unsigned long long *p)
+static inline int rdmsrq_safe(unsigned msr, u64 *p)
 {
 	int err;
 
@@ -239,7 +239,7 @@ static inline int rdmsrl_safe(unsigned msr, unsigned long long *p)
 	return err;
 }
 
-static inline unsigned long long paravirt_read_pmc(int counter)
+static inline u64 paravirt_read_pmc(int counter)
 {
 	return PVOP_CALL1(u64, cpu.read_pmc, counter);
 }
