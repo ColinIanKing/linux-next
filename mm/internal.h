@@ -435,6 +435,9 @@ void unmap_page_range(struct mmu_gather *tlb,
 			     struct vm_area_struct *vma,
 			     unsigned long addr, unsigned long end,
 			     struct zap_details *details);
+void zap_page_range_single_batched(struct mmu_gather *tlb,
+		struct vm_area_struct *vma, unsigned long addr,
+		unsigned long size, struct zap_details *details);
 int folio_unmap_invalidate(struct address_space *mapping, struct folio *folio,
 			   gfp_t gfp);
 
@@ -915,7 +918,7 @@ static inline void init_cma_pageblock(struct page *page)
 
 
 int find_suitable_fallback(struct free_area *area, unsigned int order,
-			int migratetype, bool claim_only, bool *claim_block);
+			   int migratetype, bool claimable);
 
 static inline bool free_area_empty(struct free_area *area, int migratetype)
 {
