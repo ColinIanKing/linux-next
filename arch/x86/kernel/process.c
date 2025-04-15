@@ -344,7 +344,7 @@ static void set_cpuid_faulting(bool on)
 	msrval &= ~MSR_MISC_FEATURES_ENABLES_CPUID_FAULT;
 	msrval |= (on << MSR_MISC_FEATURES_ENABLES_CPUID_FAULT_BIT);
 	this_cpu_write(msr_misc_features_shadow, msrval);
-	wrmsrl(MSR_MISC_FEATURES_ENABLES, msrval);
+	wrmsrq(MSR_MISC_FEATURES_ENABLES, msrval);
 }
 
 static void disable_cpuid(void)
@@ -561,7 +561,7 @@ static __always_inline void amd_set_core_ssb_state(unsigned long tifn)
 
 	if (!static_cpu_has(X86_FEATURE_ZEN)) {
 		msr |= ssbd_tif_to_amd_ls_cfg(tifn);
-		wrmsrl(MSR_AMD64_LS_CFG, msr);
+		wrmsrq(MSR_AMD64_LS_CFG, msr);
 		return;
 	}
 
@@ -578,7 +578,7 @@ static __always_inline void amd_set_core_ssb_state(unsigned long tifn)
 		raw_spin_lock(&st->shared_state->lock);
 		/* First sibling enables SSBD: */
 		if (!st->shared_state->disable_state)
-			wrmsrl(MSR_AMD64_LS_CFG, msr);
+			wrmsrq(MSR_AMD64_LS_CFG, msr);
 		st->shared_state->disable_state++;
 		raw_spin_unlock(&st->shared_state->lock);
 	} else {
@@ -588,7 +588,7 @@ static __always_inline void amd_set_core_ssb_state(unsigned long tifn)
 		raw_spin_lock(&st->shared_state->lock);
 		st->shared_state->disable_state--;
 		if (!st->shared_state->disable_state)
-			wrmsrl(MSR_AMD64_LS_CFG, msr);
+			wrmsrq(MSR_AMD64_LS_CFG, msr);
 		raw_spin_unlock(&st->shared_state->lock);
 	}
 }
@@ -597,7 +597,7 @@ static __always_inline void amd_set_core_ssb_state(unsigned long tifn)
 {
 	u64 msr = x86_amd_ls_cfg_base | ssbd_tif_to_amd_ls_cfg(tifn);
 
-	wrmsrl(MSR_AMD64_LS_CFG, msr);
+	wrmsrq(MSR_AMD64_LS_CFG, msr);
 }
 #endif
 
@@ -607,7 +607,7 @@ static __always_inline void amd_set_ssb_virt_state(unsigned long tifn)
 	 * SSBD has the same definition in SPEC_CTRL and VIRT_SPEC_CTRL,
 	 * so ssbd_tif_to_spec_ctrl() just works.
 	 */
-	wrmsrl(MSR_AMD64_VIRT_SPEC_CTRL, ssbd_tif_to_spec_ctrl(tifn));
+	wrmsrq(MSR_AMD64_VIRT_SPEC_CTRL, ssbd_tif_to_spec_ctrl(tifn));
 }
 
 /*
@@ -710,11 +710,11 @@ void __switch_to_xtra(struct task_struct *prev_p, struct task_struct *next_p)
 	    arch_has_block_step()) {
 		unsigned long debugctl, msk;
 
-		rdmsrl(MSR_IA32_DEBUGCTLMSR, debugctl);
+		rdmsrq(MSR_IA32_DEBUGCTLMSR, debugctl);
 		debugctl &= ~DEBUGCTLMSR_BTF;
 		msk = tifn & _TIF_BLOCKSTEP;
 		debugctl |= (msk >> TIF_BLOCKSTEP) << DEBUGCTLMSR_BTF_SHIFT;
-		wrmsrl(MSR_IA32_DEBUGCTLMSR, debugctl);
+		wrmsrq(MSR_IA32_DEBUGCTLMSR, debugctl);
 	}
 
 	if ((tifp ^ tifn) & _TIF_NOTSC)
@@ -907,13 +907,10 @@ static __init bool prefer_mwait_c1_over_halt(void)
 static __cpuidle void mwait_idle(void)
 {
 	if (!current_set_polling_and_test()) {
-		if (this_cpu_has(X86_BUG_CLFLUSH_MONITOR)) {
-			mb(); /* quirk */
-			clflush((void *)&current_thread_info()->flags);
-			mb(); /* quirk */
-		}
+		const void *addr = &current_thread_info()->flags;
 
-		__monitor((void *)&current_thread_info()->flags, 0, 0);
+		alternative_input("", "clflush (%[addr])", X86_BUG_CLFLUSH_MONITOR, [addr] "a" (addr));
+		__monitor(addr, 0, 0);
 		if (!need_resched()) {
 			__sti_mwait(0, 0);
 			raw_local_irq_disable();
