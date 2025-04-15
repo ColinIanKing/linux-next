@@ -1915,13 +1915,13 @@ static const char *pick_link(struct nameidata *nd, struct path *link,
 			unlikely(link->mnt->mnt_flags & MNT_NOSYMFOLLOW))
 		return ERR_PTR(-ELOOP);
 
-	if (!(nd->flags & LOOKUP_RCU)) {
+	if (unlikely(atime_needs_update(&last->link, inode))) {
+		if (nd->flags & LOOKUP_RCU) {
+			if (!try_to_unlazy(nd))
+				return ERR_PTR(-ECHILD);
+		}
 		touch_atime(&last->link);
 		cond_resched();
-	} else if (atime_needs_update(&last->link, inode)) {
-		if (!try_to_unlazy(nd))
-			return ERR_PTR(-ECHILD);
-		touch_atime(&last->link);
 	}
 
 	error = security_inode_follow_link(link->dentry, inode,
@@ -2434,9 +2434,12 @@ static int link_path_walk(const char *name, struct nameidata *nd)
 	nd->flags |= LOOKUP_PARENT;
 	if (IS_ERR(name))
 		return PTR_ERR(name);
-	while (*name=='/')
-		name++;
-	if (!*name) {
+	if (*name == '/') {
+		do {
+			name++;
+		} while (unlikely(*name == '/'));
+	}
+	if (unlikely(!*name)) {
 		nd->dir_mode = 0; // short-circuit the 'hardening' idiocy
 		return 0;
 	}
@@ -2449,7 +2452,7 @@ static int link_path_walk(const char *name, struct nameidata *nd)
 
 		idmap = mnt_idmap(nd->path.mnt);
 		err = may_lookup(idmap, nd);
-		if (err)
+		if (unlikely(err))
 			return err;
 
 		nd->last.name = name;

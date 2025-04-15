@@ -476,6 +476,7 @@ struct address_space_operations {
 };
 
 extern const struct address_space_operations empty_aops;
+extern const struct address_space_operations anon_inode_aops;
 
 /**
  * struct address_space - Contents of a cacheable, mappable object.
