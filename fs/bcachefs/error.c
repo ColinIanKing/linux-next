@@ -104,7 +104,7 @@ int __bch2_topology_error(struct bch_fs *c, struct printbuf *out)
 		__bch2_inconsistent_error(c, out);
 		return -BCH_ERR_btree_need_topology_repair;
 	} else {
-		return bch2_run_explicit_recovery_pass(c, BCH_RECOVERY_PASS_check_topology) ?:
+		return bch2_run_explicit_recovery_pass_printbuf(c, out, BCH_RECOVERY_PASS_check_topology) ?:
 			-BCH_ERR_btree_node_read_validate_error;
 	}
 }
@@ -379,15 +379,21 @@ static struct fsck_err_state *count_fsck_err_locked(struct bch_fs *c,
 	return s;
 }
 
-void __bch2_count_fsck_err(struct bch_fs *c,
-			   enum bch_sb_error_id id, const char *msg,
-			   bool *repeat, bool *print, bool *suppress)
+bool __bch2_count_fsck_err(struct bch_fs *c,
+			   enum bch_sb_error_id id, struct printbuf *msg)
 {
 	bch2_sb_error_count(c, id);
 
 	mutex_lock(&c->fsck_error_msgs_lock);
-	count_fsck_err_locked(c, id, msg, repeat, print, suppress);
+	bool print = true, repeat = false, suppress = false;
+
+	count_fsck_err_locked(c, id, msg->buf, &repeat, &print, &suppress);
 	mutex_unlock(&c->fsck_error_msgs_lock);
+
+	if (suppress)
+		prt_printf(msg, "Ratelimiting new instances of previous error\n");
+
+	return print && !repeat;
 }
 
 int __bch2_fsck_err(struct bch_fs *c,

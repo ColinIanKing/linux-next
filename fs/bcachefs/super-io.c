@@ -73,13 +73,29 @@ int bch2_set_version_incompat(struct bch_fs *c, enum bcachefs_metadata_version v
 		? 0
 		: -BCH_ERR_may_not_use_incompat_feature;
 
+	mutex_lock(&c->sb_lock);
 	if (!ret) {
-		mutex_lock(&c->sb_lock);
 		SET_BCH_SB_VERSION_INCOMPAT(c->disk_sb.sb,
 			max(BCH_SB_VERSION_INCOMPAT(c->disk_sb.sb), version));
 		bch2_write_super(c);
-		mutex_unlock(&c->sb_lock);
+	} else {
+		darray_for_each(c->incompat_versions_requested, i)
+			if (version == *i)
+				goto out;
+
+		darray_push(&c->incompat_versions_requested, version);
+		struct printbuf buf = PRINTBUF;
+		prt_str(&buf, "requested incompat feature ");
+		bch2_version_to_text(&buf, version);
+		prt_str(&buf, " currently not enabled");
+		prt_printf(&buf, "\n  set version_upgrade=incompat to enable");
+
+		bch_notice(c, "%s", buf.buf);
+		printbuf_exit(&buf);
 	}
+
+out:
+	mutex_unlock(&c->sb_lock);
 
 	return ret;
 }
@@ -452,6 +468,9 @@ int bch2_sb_validate(struct bch_sb *sb, u64 read_offset,
 			SET_BCH_SB_VERSION_INCOMPAT_ALLOWED(sb, BCH_SB_VERSION_INCOMPAT(sb));
 	}
 
+	if (sb->nr_devices > 1)
+		SET_BCH_SB_MULTI_DEVICE(sb, true);
+
 	if (!flags) {
 		/*
 		 * Been seeing a bug where these are getting inexplicably
@@ -596,6 +615,7 @@ static void bch2_sb_update(struct bch_fs *c)
 
 	c->sb.features		= le64_to_cpu(src->features[0]);
 	c->sb.compat		= le64_to_cpu(src->compat[0]);
+	c->sb.multi_device	= BCH_SB_MULTI_DEVICE(src);
 
 	memset(c->sb.errors_silent, 0, sizeof(c->sb.errors_silent));
 
@@ -1006,7 +1026,7 @@ int bch2_write_super(struct bch_fs *c)
 
 	trace_and_count(c, write_super, c, _RET_IP_);
 
-	if (c->opts.very_degraded)
+	if (c->opts.degraded == BCH_DEGRADED_very)
 		degraded_flags |= BCH_FORCE_IF_LOST;
 
 	lockdep_assert_held(&c->sb_lock);
@@ -1251,6 +1271,31 @@ void bch2_sb_upgrade(struct bch_fs *c, unsigned new_version, bool incompat)
 		SET_BCH_SB_VERSION_INCOMPAT_ALLOWED(c->disk_sb.sb,
 			max(BCH_SB_VERSION_INCOMPAT_ALLOWED(c->disk_sb.sb), new_version));
 	}
+}
+
+void bch2_sb_upgrade_incompat(struct bch_fs *c)
+{
+	mutex_lock(&c->sb_lock);
+	if (c->sb.version == c->sb.version_incompat_allowed)
+		goto unlock;
+
+	struct printbuf buf = PRINTBUF;
+
+	prt_str(&buf, "Now allowing incompatible features up to ");
+	bch2_version_to_text(&buf, c->sb.version);
+	prt_str(&buf, ", previously allowed up to ");
+	bch2_version_to_text(&buf, c->sb.version_incompat_allowed);
+	prt_newline(&buf);
+
+	bch_notice(c, "%s", buf.buf);
+	printbuf_exit(&buf);
+
+	c->disk_sb.sb->features[0] |= cpu_to_le64(BCH_SB_FEATURES_ALL);
+	SET_BCH_SB_VERSION_INCOMPAT_ALLOWED(c->disk_sb.sb,
+			max(BCH_SB_VERSION_INCOMPAT_ALLOWED(c->disk_sb.sb), c->sb.version));
+	bch2_write_super(c);
+unlock:
+	mutex_unlock(&c->sb_lock);
 }
 
 static int bch2_sb_ext_validate(struct bch_sb *sb, struct bch_sb_field *f,
