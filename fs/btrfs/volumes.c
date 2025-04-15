@@ -404,7 +404,7 @@ static void btrfs_free_device(struct btrfs_device *device)
 {
 	WARN_ON(!list_empty(&device->post_commit_list));
 	rcu_string_free(device->name);
-	extent_io_tree_release(&device->alloc_state);
+	btrfs_extent_io_tree_release(&device->alloc_state);
 	btrfs_destroy_dev_zone_info(device);
 	kfree(device);
 }
@@ -1225,7 +1225,7 @@ static void btrfs_close_one_device(struct btrfs_device *device)
 
 	device->fs_info = NULL;
 	atomic_set(&device->dev_stats_ccnt, 0);
-	extent_io_tree_release(&device->alloc_state);
+	btrfs_extent_io_tree_release(&device->alloc_state);
 
 	/*
 	 * Reset the flush error record. We might have a transient flush error
@@ -1600,9 +1600,9 @@ static bool contains_pending_extent(struct btrfs_device *device, u64 *start,
 
 	lockdep_assert_held(&device->fs_info->chunk_mutex);
 
-	if (find_first_extent_bit(&device->alloc_state, *start,
-				  &physical_start, &physical_end,
-				  CHUNK_ALLOCATED, NULL)) {
+	if (btrfs_find_first_extent_bit(&device->alloc_state, *start,
+					&physical_start, &physical_end,
+					CHUNK_ALLOCATED, NULL)) {
 
 		if (in_range(physical_start, *start, len) ||
 		    in_range(*start, physical_start,
@@ -3534,7 +3534,8 @@ int btrfs_relocate_chunk(struct btrfs_fs_info *fs_info, u64 chunk_offset)
 	 * filesystem's point of view.
 	 */
 	if (btrfs_is_zoned(fs_info)) {
-		ret = btrfs_discard_extent(fs_info, chunk_offset, length, NULL);
+		ret = btrfs_discard_extent(fs_info, chunk_offset, length, NULL,
+					   BTRFS_CLEAR_OP_DISCARD);
 		if (ret)
 			btrfs_info(fs_info,
 				"failed to reset zone %llu after relocation",
@@ -5088,8 +5089,8 @@ again:
 
 	mutex_lock(&fs_info->chunk_mutex);
 	/* Clear all state bits beyond the shrunk device size */
-	clear_extent_bits(&device->alloc_state, new_size, (u64)-1,
-			  CHUNK_STATE_MASK);
+	btrfs_clear_extent_bits(&device->alloc_state, new_size, (u64)-1,
+				CHUNK_STATE_MASK);
 
 	btrfs_device_set_disk_total_bytes(device, new_size);
 	if (list_empty(&device->post_commit_list))
@@ -5496,9 +5497,9 @@ static void chunk_map_device_set_bits(struct btrfs_chunk_map *map, unsigned int 
 		struct btrfs_io_stripe *stripe = &map->stripes[i];
 		struct btrfs_device *device = stripe->dev;
 
-		set_extent_bit(&device->alloc_state, stripe->physical,
-			       stripe->physical + map->stripe_size - 1,
-			       bits | EXTENT_NOWAIT, NULL);
+		btrfs_set_extent_bit(&device->alloc_state, stripe->physical,
+				     stripe->physical + map->stripe_size - 1,
+				     bits | EXTENT_NOWAIT, NULL);
 	}
 }
 
@@ -5508,10 +5509,9 @@ static void chunk_map_device_clear_bits(struct btrfs_chunk_map *map, unsigned in
 		struct btrfs_io_stripe *stripe = &map->stripes[i];
 		struct btrfs_device *device = stripe->dev;
 
-		__clear_extent_bit(&device->alloc_state, stripe->physical,
-				   stripe->physical + map->stripe_size - 1,
-				   bits | EXTENT_NOWAIT,
-				   NULL, NULL);
+		btrfs_clear_extent_bits(&device->alloc_state, stripe->physical,
+					stripe->physical + map->stripe_size - 1,
+					bits | EXTENT_NOWAIT);
 	}
 }
 
@@ -6953,7 +6953,7 @@ struct btrfs_device *btrfs_alloc_device(struct btrfs_fs_info *fs_info,
 
 	atomic_set(&dev->dev_stats_ccnt, 0);
 	btrfs_device_data_ordered_init(dev);
-	extent_io_tree_init(fs_info, &dev->alloc_state, IO_TREE_DEVICE_ALLOC_STATE);
+	btrfs_extent_io_tree_init(fs_info, &dev->alloc_state, IO_TREE_DEVICE_ALLOC_STATE);
 
 	if (devid)
 		tmp = *devid;
@@ -7845,7 +7845,7 @@ void btrfs_dev_stat_inc_and_print(struct btrfs_device *dev, int index)
 
 	if (!dev->dev_stats_valid)
 		return;
-	btrfs_err_rl_in_rcu(dev->fs_info,
+	btrfs_debug_rl_in_rcu(dev->fs_info,
 		"bdev %s errs: wr %u, rd %u, flush %u, corrupt %u, gen %u",
 			   btrfs_dev_name(dev),
 			   btrfs_dev_stat_read(dev, BTRFS_DEV_STAT_WRITE_ERRS),
@@ -8076,6 +8076,11 @@ static int verify_chunk_dev_extent_mapping(struct btrfs_fs_info *fs_info)
 out:
 	read_unlock(&fs_info->mapping_tree_lock);
 	return ret;
+}
+
+void btrfs_chunk_map_clear_bits(struct btrfs_chunk_map *map, unsigned int bits)
+{
+	chunk_map_device_clear_bits(map, bits);
 }
 
 /*

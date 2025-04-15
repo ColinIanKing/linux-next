@@ -45,6 +45,11 @@ static unsigned int m_hash_shift __ro_after_init;
 static unsigned int mp_hash_mask __ro_after_init;
 static unsigned int mp_hash_shift __ro_after_init;
 
+struct deferred_free_mounts {
+	struct rcu_work rwork;
+	struct hlist_head release_list;
+};
+
 static __initdata unsigned long mhash_entries;
 static int __init set_mhash_entries(char *str)
 {
@@ -77,8 +82,9 @@ static struct hlist_head *mount_hashtable __ro_after_init;
 static struct hlist_head *mountpoint_hashtable __ro_after_init;
 static struct kmem_cache *mnt_cache __ro_after_init;
 static DECLARE_RWSEM(namespace_sem);
-static HLIST_HEAD(unmounted);	/* protected by namespace_sem */
-static LIST_HEAD(ex_mountpoints); /* protected by namespace_sem */
+static bool defer_unmount;		/* protected by namespace_sem */
+static HLIST_HEAD(unmounted);		/* protected by namespace_sem */
+static LIST_HEAD(ex_mountpoints);	/* protected by namespace_sem */
 static DEFINE_SEQLOCK(mnt_ns_tree_lock);
 
 #ifdef CONFIG_FSNOTIFY
@@ -1789,15 +1795,35 @@ static bool need_notify_mnt_list(void)
 }
 #endif
 
-static void namespace_unlock(void)
+static void free_mounts(struct hlist_head *mount_list)
 {
-	struct hlist_head head;
 	struct hlist_node *p;
 	struct mount *m;
+
+	hlist_for_each_entry_safe(m, p, mount_list, mnt_umount) {
+		hlist_del(&m->mnt_umount);
+		mntput(&m->mnt);
+	}
+}
+
+static void defer_free_mounts(struct work_struct *work)
+{
+	struct deferred_free_mounts *d;
+
+	d = container_of(to_rcu_work(work), struct deferred_free_mounts, rwork);
+	free_mounts(&d->release_list);
+	kfree(d);
+}
+
+static void namespace_unlock(void)
+{
+	HLIST_HEAD(head);
 	LIST_HEAD(list);
+	bool defer = defer_unmount;
 
 	hlist_move_list(&unmounted, &head);
 	list_splice_init(&ex_mountpoints, &list);
+	defer_unmount = false;
 
 	if (need_notify_mnt_list()) {
 		/*
@@ -1817,12 +1843,19 @@ static void namespace_unlock(void)
 	if (likely(hlist_empty(&head)))
 		return;
 
-	synchronize_rcu_expedited();
+	if (defer) {
+		struct deferred_free_mounts *d;
 
-	hlist_for_each_entry_safe(m, p, &head, mnt_umount) {
-		hlist_del(&m->mnt_umount);
-		mntput(&m->mnt);
+		d = kmalloc(sizeof(struct deferred_free_mounts), GFP_KERNEL);
+		if (d) {
+			hlist_move_list(&head, &d->release_list);
+			INIT_RCU_WORK(&d->rwork, defer_free_mounts);
+			queue_rcu_work(system_unbound_wq, &d->rwork);
+			return;
+		}
 	}
+	synchronize_rcu_expedited();
+	free_mounts(&head);
 }
 
 static inline void namespace_lock(void)
@@ -1939,6 +1972,10 @@ static void umount_tree(struct mount *mnt, enum umount_tree_flags how)
 		 */
 		mnt_notify_add(p);
 	}
+
+	/* Let namespace_unlock() know that it can defer freeing the mounts. */
+	if (!(how & UMOUNT_SYNC))
+		defer_unmount = true;
 }
 
 static void shrink_submounts(struct mount *mnt);
