@@ -11,6 +11,26 @@
 #include <linux/bitfield.h>
 
 /**
+ * struct pll - Structure for PLL configuration
+ *
+ * @offset: STBY register offset
+ * @has_clkn: Flag to indicate if CLK1/2 are accessible or not
+ */
+struct pll {
+	unsigned int offset:9;
+	unsigned int has_clkn:1;
+};
+
+#define PLL_PACK(_offset, _has_clkn) \
+	((struct pll){ \
+		.offset = _offset, \
+		.has_clkn = _has_clkn \
+	})
+
+#define PLLCA55		PLL_PACK(0x60, 1)
+#define PLLGPU		PLL_PACK(0x120, 1)
+
+/**
  * struct ddiv - Structure for dynamic switching divider
  *
  * @offset: register offset
@@ -44,6 +64,7 @@ struct ddiv {
 #define CDDIV1_DIVCTL1	DDIV_PACK(CPG_CDDIV1, 4, 2, 5)
 #define CDDIV1_DIVCTL2	DDIV_PACK(CPG_CDDIV1, 8, 2, 6)
 #define CDDIV1_DIVCTL3	DDIV_PACK(CPG_CDDIV1, 12, 2, 7)
+#define CDDIV3_DIVCTL1	DDIV_PACK(CPG_CDDIV3, 4, 3, 13)
 #define CDDIV3_DIVCTL2	DDIV_PACK(CPG_CDDIV3, 8, 3, 14)
 #define CDDIV3_DIVCTL3	DDIV_PACK(CPG_CDDIV3, 12, 1, 15)
 #define CDDIV4_DIVCTL0	DDIV_PACK(CPG_CDDIV4, 0, 1, 16)
@@ -74,6 +95,7 @@ struct cpg_core_clk {
 	union {
 		unsigned int conf;
 		struct ddiv ddiv;
+		struct pll pll;
 	} cfg;
 	const struct clk_div_table *dtable;
 	u32 flag;
@@ -87,18 +109,12 @@ enum clk_types {
 	CLK_TYPE_DDIV,		/* Dynamic Switching Divider */
 };
 
-/* BIT(31) indicates if CLK1/2 are accessible or not */
-#define PLL_CONF(n)		(BIT(31) | ((n) & ~GENMASK(31, 16)))
-#define PLL_CLK_ACCESS(n)	((n) & BIT(31) ? 1 : 0)
-#define PLL_CLK1_OFFSET(n)	((n) & ~GENMASK(31, 16))
-#define PLL_CLK2_OFFSET(n)	(((n) & ~GENMASK(31, 16)) + (0x4))
-
 #define DEF_TYPE(_name, _id, _type...) \
 	{ .name = _name, .id = _id, .type = _type }
 #define DEF_BASE(_name, _id, _type, _parent...) \
 	DEF_TYPE(_name, _id, _type, .parent = _parent)
-#define DEF_PLL(_name, _id, _parent, _conf) \
-	DEF_TYPE(_name, _id, CLK_TYPE_PLL, .parent = _parent, .cfg.conf = _conf)
+#define DEF_PLL(_name, _id, _parent, _pll_packed) \
+	DEF_TYPE(_name, _id, CLK_TYPE_PLL, .parent = _parent, .cfg.pll = _pll_packed)
 #define DEF_INPUT(_name, _id) \
 	DEF_TYPE(_name, _id, CLK_TYPE_IN)
 #define DEF_FIXED(_name, _id, _parent, _mult, _div) \
@@ -221,6 +237,7 @@ struct rzv2h_cpg_info {
 };
 
 extern const struct rzv2h_cpg_info r9a09g047_cpg_info;
+extern const struct rzv2h_cpg_info r9a09g056_cpg_info;
 extern const struct rzv2h_cpg_info r9a09g057_cpg_info;
 
 #endif	/* __RENESAS_RZV2H_CPG_H__ */
