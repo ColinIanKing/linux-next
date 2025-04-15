@@ -18,6 +18,7 @@
 #include <linux/mod_devicetable.h>
 #include <linux/module.h>
 #include <linux/regmap.h>
+#include <linux/regulator/consumer.h>
 #include <linux/types.h>
 
 static const struct mfd_cell adp5585_devs[] = {
@@ -848,6 +849,10 @@ static int adp5585_i2c_probe(struct i2c_client *i2c)
 	adp5585->info = info;
 	adp5585->dev = &i2c->dev;
 	adp5585->irq = i2c->irq;
+
+	ret = devm_regulator_get_enable(&i2c->dev, "vdd");
+	if (ret)
+		return ret;
 
 	adp5585->regmap = devm_regmap_init_i2c(i2c, info->regmap_config);
 	if (IS_ERR(adp5585->regmap))
