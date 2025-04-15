@@ -1072,7 +1072,6 @@
 		"AP DMIC", "AUDGLB",
 		"AP DMIC", "MIC_BIAS_0",
 		"AP DMIC", "MIC_BIAS_2";
-	mediatek,accdet = <&accdet>;
 	mediatek,adsp = <&adsp>;
 	status = "okay";
 
