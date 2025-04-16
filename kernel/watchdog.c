@@ -47,6 +47,7 @@ int __read_mostly watchdog_user_enabled = 1;
 static int __read_mostly watchdog_hardlockup_user_enabled = WATCHDOG_HARDLOCKUP_DEFAULT;
 static int __read_mostly watchdog_softlockup_user_enabled = 1;
 int __read_mostly watchdog_thresh = 10;
+static int __read_mostly watchdog_thresh_shadow;
 static int __read_mostly watchdog_hardlockup_available;
 
 struct cpumask watchdog_cpumask __read_mostly;
@@ -876,6 +877,7 @@ static void __lockup_detector_reconfigure(void)
 	watchdog_hardlockup_stop();
 
 	softlockup_stop_all();
+	watchdog_thresh = READ_ONCE(watchdog_thresh_shadow);
 	set_sample_period();
 	lockup_detector_update_enable();
 	if (watchdog_enabled && watchdog_thresh)
@@ -1035,10 +1037,12 @@ static int proc_watchdog_thresh(const struct ctl_table *table, int write,
 
 	mutex_lock(&watchdog_mutex);
 
-	old = READ_ONCE(watchdog_thresh);
+	watchdog_thresh_shadow = READ_ONCE(watchdog_thresh);
+
+	old = watchdog_thresh_shadow;
 	err = proc_dointvec_minmax(table, write, buffer, lenp, ppos);
 
-	if (!err && write && old != READ_ONCE(watchdog_thresh))
+	if (!err && write && old != READ_ONCE(watchdog_thresh_shadow))
 		proc_watchdog_update();
 
 	mutex_unlock(&watchdog_mutex);
@@ -1080,7 +1084,7 @@ static const struct ctl_table watchdog_sysctls[] = {
 	},
 	{
 		.procname	= "watchdog_thresh",
-		.data		= &watchdog_thresh,
+		.data		= &watchdog_thresh_shadow,
 		.maxlen		= sizeof(int),
 		.mode		= 0644,
 		.proc_handler	= proc_watchdog_thresh,
