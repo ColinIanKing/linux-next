@@ -544,12 +544,9 @@ static int split_state(struct extent_io_tree *tree, struct extent_state *orig,
  * If no bits are set on the state struct after clearing things, the
  * struct is freed and removed from the tree
  */
-static struct extent_state *clear_state_bit(struct extent_io_tree *tree,
-					    struct extent_state *state,
-					    u32 bits, int wake,
-					    struct extent_changeset *changeset)
+static void clear_state_bit(struct extent_io_tree *tree, struct extent_state *state,
+			    u32 bits, int wake, struct extent_changeset *changeset)
 {
-	struct extent_state *next;
 	u32 bits_to_clear = bits & ~EXTENT_CTLBITS;
 	int ret;
 
@@ -562,7 +559,6 @@ static struct extent_state *clear_state_bit(struct extent_io_tree *tree,
 	if (wake)
 		wake_up(&state->wq);
 	if (state->state == 0) {
-		next = next_state(state);
 		if (extent_state_in_tree(state)) {
 			rb_erase(&state->rb_node, &tree->state);
 			RB_CLEAR_NODE(&state->rb_node);
@@ -572,9 +568,7 @@ static struct extent_state *clear_state_bit(struct extent_io_tree *tree,
 		}
 	} else {
 		merge_state(tree, state);
-		next = next_state(state);
 	}
-	return next;
 }
 
 /*
@@ -585,6 +579,18 @@ static void set_gfp_mask_from_bits(u32 *bits, gfp_t *mask)
 {
 	*mask = (*bits & EXTENT_NOWAIT ? GFP_NOWAIT : GFP_NOFS);
 	*bits &= EXTENT_NOWAIT - 1;
+}
+
+/*
+ * Use this during tree iteration to avoid doing next node searches when it's
+ * not needed (the current record ends at or after the target range's end).
+ */
+static inline struct extent_state *next_search_state(struct extent_state *state, u64 end)
+{
+	if (state->end < end)
+		return next_state(state);
+
+	return NULL;
 }
 
 /*
@@ -601,6 +607,7 @@ int btrfs_clear_extent_bit_changeset(struct extent_io_tree *tree, u64 start, u64
 				     struct extent_changeset *changeset)
 {
 	struct extent_state *state;
+	struct extent_state *next;
 	struct extent_state *cached;
 	struct extent_state *prealloc = NULL;
 	u64 last_end;
@@ -666,7 +673,7 @@ hit_next:
 
 	/* The state doesn't have the wanted bits, go ahead. */
 	if (!(state->state & bits)) {
-		state = next_state(state);
+		next = next_search_state(state, end);
 		goto next;
 	}
 
@@ -696,7 +703,8 @@ hit_next:
 			goto out;
 		}
 		if (state->end <= end) {
-			state = clear_state_bit(tree, state, bits, wake, changeset);
+			next = next_search_state(state, end);
+			clear_state_bit(tree, state, bits, wake, changeset);
 			goto next;
 		}
 		if (need_resched())
@@ -732,11 +740,13 @@ hit_next:
 		goto out;
 	}
 
-	state = clear_state_bit(tree, state, bits, wake, changeset);
+	next = next_search_state(state, end);
+	clear_state_bit(tree, state, bits, wake, changeset);
 next:
 	if (last_end >= end)
 		goto out;
 	start = last_end + 1;
+	state = next;
 	if (state && !need_resched())
 		goto hit_next;
 
@@ -1292,6 +1302,7 @@ int btrfs_convert_extent_bit(struct extent_io_tree *tree, u64 start, u64 end,
 			     struct extent_state **cached_state)
 {
 	struct extent_state *state;
+	struct extent_state *next;
 	struct extent_state *prealloc = NULL;
 	struct rb_node **p = NULL;
 	struct rb_node *parent = NULL;
@@ -1357,10 +1368,12 @@ hit_next:
 	if (state->start == start && state->end <= end) {
 		set_state_bits(tree, state, bits, NULL);
 		cache_state(state, cached_state);
-		state = clear_state_bit(tree, state, clear_bits, 0, NULL);
+		next = next_search_state(state, end);
+		clear_state_bit(tree, state, clear_bits, 0, NULL);
 		if (last_end == (u64)-1)
 			goto out;
 		start = last_end + 1;
+		state = next;
 		if (start < end && state && state->start == start &&
 		    !need_resched())
 			goto hit_next;
@@ -1397,10 +1410,12 @@ hit_next:
 		if (state->end <= end) {
 			set_state_bits(tree, state, bits, NULL);
 			cache_state(state, cached_state);
-			state = clear_state_bit(tree, state, clear_bits, 0, NULL);
+			next = next_search_state(state, end);
+			clear_state_bit(tree, state, clear_bits, 0, NULL);
 			if (last_end == (u64)-1)
 				goto out;
 			start = last_end + 1;
+			state = next;
 			if (start < end && state && state->start == start &&
 			    !need_resched())
 				goto hit_next;
