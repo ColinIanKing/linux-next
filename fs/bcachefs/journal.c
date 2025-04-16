@@ -314,16 +314,6 @@ static void __journal_entry_close(struct journal *j, unsigned closed_val, bool t
 	__bch2_journal_buf_put(j, le64_to_cpu(buf->data->seq));
 }
 
-void bch2_journal_halt(struct journal *j)
-{
-	spin_lock(&j->lock);
-	__journal_entry_close(j, JOURNAL_ENTRY_ERROR_VAL, true);
-	if (!j->err_seq)
-		j->err_seq = journal_cur_seq(j);
-	journal_wake(j);
-	spin_unlock(&j->lock);
-}
-
 void bch2_journal_halt_locked(struct journal *j)
 {
 	lockdep_assert_held(&j->lock);
@@ -332,6 +322,13 @@ void bch2_journal_halt_locked(struct journal *j)
 	if (!j->err_seq)
 		j->err_seq = journal_cur_seq(j);
 	journal_wake(j);
+}
+
+void bch2_journal_halt(struct journal *j)
+{
+	spin_lock(&j->lock);
+	bch2_journal_halt_locked(j);
+	spin_unlock(&j->lock);
 }
 
 static bool journal_entry_want_write(struct journal *j)
@@ -1281,6 +1278,9 @@ int bch2_set_nr_journal_buckets(struct bch_fs *c, struct bch_dev *ca,
 
 int bch2_dev_journal_alloc(struct bch_dev *ca, bool new_fs)
 {
+	if (!(ca->mi.data_allowed & BIT(BCH_DATA_journal)))
+		return 0;
+
 	unsigned nr;
 	int ret;
 
@@ -1412,13 +1412,11 @@ int bch2_fs_journal_start(struct journal *j, u64 cur_seq)
 	 */
 	nr += nr / 4;
 
-	if (nr + 1 > j->pin.size) {
-		free_fifo(&j->pin);
-		init_fifo(&j->pin, roundup_pow_of_two(nr + 1), GFP_KERNEL);
-		if (!j->pin.data) {
-			bch_err(c, "error reallocating journal fifo (%llu open entries)", nr);
-			return -BCH_ERR_ENOMEM_journal_pin_fifo;
-		}
+	nr = max(nr, JOURNAL_PIN);
+	init_fifo(&j->pin, roundup_pow_of_two(nr), GFP_KERNEL);
+	if (!j->pin.data) {
+		bch_err(c, "error reallocating journal fifo (%llu open entries)", nr);
+		return -BCH_ERR_ENOMEM_journal_pin_fifo;
 	}
 
 	j->replay_journal_seq	= last_seq;
@@ -1462,7 +1460,6 @@ int bch2_fs_journal_start(struct journal *j, u64 cur_seq)
 		j->last_empty_seq = cur_seq - 1; /* to match j->seq */
 
 	spin_lock(&j->lock);
-
 	set_bit(JOURNAL_running, &j->flags);
 	j->last_flush_write = jiffies;
 
@@ -1560,7 +1557,7 @@ void bch2_fs_journal_exit(struct journal *j)
 	free_fifo(&j->pin);
 }
 
-int bch2_fs_journal_init(struct journal *j)
+void bch2_fs_journal_init_early(struct journal *j)
 {
 	static struct lock_class_key res_key;
 
@@ -1579,10 +1576,10 @@ int bch2_fs_journal_init(struct journal *j)
 	atomic64_set(&j->reservations.counter,
 		((union journal_res_state)
 		 { .cur_entry_offset = JOURNAL_ENTRY_CLOSED_VAL }).v);
+}
 
-	if (!(init_fifo(&j->pin, JOURNAL_PIN, GFP_KERNEL)))
-		return -BCH_ERR_ENOMEM_journal_pin_fifo;
-
+int bch2_fs_journal_init(struct journal *j)
+{
 	j->free_buf_size = j->buf_size_want = JOURNAL_ENTRY_SIZE_MIN;
 	j->free_buf = kvmalloc(j->free_buf_size, GFP_KERNEL);
 	if (!j->free_buf)
@@ -1590,8 +1587,6 @@ int bch2_fs_journal_init(struct journal *j)
 
 	for (unsigned i = 0; i < ARRAY_SIZE(j->buf); i++)
 		j->buf[i].idx = i;
-
-	j->pin.front = j->pin.back = 1;
 
 	j->wq = alloc_workqueue("bcachefs_journal",
 				WQ_HIGHPRI|WQ_FREEZABLE|WQ_UNBOUND|WQ_MEM_RECLAIM, 512);

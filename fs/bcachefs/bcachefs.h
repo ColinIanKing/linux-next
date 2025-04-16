@@ -614,6 +614,7 @@ struct bch_dev {
 	x(accounting_replay_done)	\
 	x(may_go_rw)			\
 	x(rw)				\
+	x(rw_init_done)			\
 	x(was_rw)			\
 	x(stopping)			\
 	x(emergency_ro)			\
@@ -650,6 +651,9 @@ struct btree_transaction_stats {
 	unsigned		nr_max_paths;
 	unsigned		journal_entries_size;
 	unsigned		max_mem;
+#ifdef CONFIG_BCACHEFS_DEBUG
+	darray_trans_kmalloc_trace trans_kmalloc_trace;
+#endif
 	char			*max_paths_text;
 };
 
@@ -776,6 +780,7 @@ struct bch_fs {
 
 		u8		nr_devices;
 		u8		clean;
+		bool		multi_device; /* true if we've ever had more than one device */
 
 		u8		encryption_type;
 
@@ -788,6 +793,8 @@ struct bch_fs {
 		unsigned long	errors_silent[BITS_TO_LONGS(BCH_FSCK_ERR_MAX)];
 		u64		btrees_lost_data;
 	}			sb;
+	DARRAY(enum bcachefs_metadata_version)
+				incompat_versions_requested;
 
 #ifdef CONFIG_UNICODE
 	struct unicode_map	*cf_encoding;
@@ -872,7 +879,7 @@ struct bch_fs {
 	struct btree_write_buffer btree_write_buffer;
 
 	struct workqueue_struct	*btree_update_wq;
-	struct workqueue_struct	*btree_io_complete_wq;
+	struct workqueue_struct	*btree_write_complete_wq;
 	/* copygc needs its own workqueue for index updates.. */
 	struct workqueue_struct	*copygc_wq;
 	/*

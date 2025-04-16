@@ -1096,6 +1096,57 @@ enum btrfs_err_code {
 	BTRFS_ERROR_DEV_RAID1C4_MIN_NOT_MET,
 };
 
+/*
+ * Type of operation that will be used to clear unused blocks.
+ */
+enum btrfs_clear_op_type {
+	BTRFS_CLEAR_OP_DISCARD,
+	/*
+	 * Write zeros to the range, either overwrite or with hardware offload
+	 * that can unmap the blocks internally.
+	 * (Same as blkdev_issue_zeroout() with 0 flags).
+	 */
+	BTRFS_CLEAR_OP_ZERO,
+	/*
+	 * Do a secure erase operation on the range. If supported by the
+	 * underlying hardware, this works as regular discard except that all
+	 * copies of the discarded blocks that were possibly created by
+	 * garbage collection must also be erased.
+	 */
+	BTRFS_CLEAR_OP_SECURE_ERASE,
+
+	/* Overwrite by zeros, do not try to unmap blocks. */
+	BTRFS_CLEAR_OP_ZERO_NOUNMAP,
+	/* Request unmapping the blocks and don't fall back to writing zeros. */
+	BTRFS_CLEAR_OP_ZERO_NOFALLBACK,
+
+	/*
+	 * Only reset status of previously cleared (by any operation) chunks,
+	 * tracked in memory since the last mount. Without that repeated calls
+	 * to clear will skip already processed chunks.
+	 */
+	BTRFS_CLEAR_OP_RESET_CHUNK_STATUS_CACHE,
+	BTRFS_NR_CLEAR_OP_TYPES,
+};
+
+struct btrfs_ioctl_clear_free_args {
+	/* In, type of clearing operation, enumerated in btrfs_clear_free_op_type. */
+	__u32 type;
+	/* Reserved must be zero. */
+	__u32 reserved1;
+	/*
+	 * In. Starting offset to clear from in the logical address space (same
+	 * as fstrim_range::start).
+	 */
+	__u64 start;			/* in */
+	/* In, out. Length from the start to clear (same as fstrim_range::length). */
+	__u64 length;
+	/* In. Minimal length to clear (same as fstrim_range::minlen). */
+	__u64 minlen;
+	/* Reserved, must be zero. */
+	__u64 reserved2[4];
+};
+
 #define BTRFS_IOC_SNAP_CREATE _IOW(BTRFS_IOCTL_MAGIC, 1, \
 				   struct btrfs_ioctl_vol_args)
 #define BTRFS_IOC_DEFRAG _IOW(BTRFS_IOCTL_MAGIC, 2, \
@@ -1216,6 +1267,8 @@ enum btrfs_err_code {
 				     struct btrfs_ioctl_encoded_io_args)
 #define BTRFS_IOC_SUBVOL_SYNC_WAIT _IOW(BTRFS_IOCTL_MAGIC, 65, \
 					struct btrfs_ioctl_subvol_wait)
+#define BTRFS_IOC_CLEAR_FREE _IOWR(BTRFS_IOCTL_MAGIC, 66, \
+				   struct btrfs_ioctl_clear_free_args)
 
 #ifdef __cplusplus
 }

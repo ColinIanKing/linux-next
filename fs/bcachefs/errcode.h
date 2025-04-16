@@ -201,6 +201,7 @@
 	x(EINVAL,			device_has_been_removed)		\
 	x(EINVAL,			device_splitbrain)			\
 	x(EINVAL,			device_already_online)			\
+	x(EINVAL,			filesystem_uuid_already_open)		\
 	x(EINVAL,			insufficient_devices_to_start)		\
 	x(EINVAL,			invalid)				\
 	x(EINVAL,			internal_fsck_err)			\
@@ -211,6 +212,7 @@
 	x(EINVAL,			inode_unpack_error)			\
 	x(EINVAL,			varint_decode_error)			\
 	x(EINVAL,			erasure_coding_found_btree_node)	\
+	x(EINVAL,			option_negative)			\
 	x(EOPNOTSUPP,			may_not_use_incompat_feature)		\
 	x(EROFS,			erofs_trans_commit)			\
 	x(EROFS,			erofs_no_writes)			\
@@ -287,7 +289,7 @@
 	x(EIO,				mark_stripe)				\
 	x(EIO,				stripe_reconstruct)			\
 	x(EIO,				key_type_error)				\
-	x(EIO,				extent_poisened)			\
+	x(EIO,				extent_poisoned)			\
 	x(EIO,				missing_indirect_extent)		\
 	x(EIO,				invalidate_stripe_to_dev)		\
 	x(EIO,				no_encryption_key)			\

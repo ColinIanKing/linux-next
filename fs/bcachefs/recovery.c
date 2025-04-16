@@ -666,7 +666,7 @@ static bool check_version_upgrade(struct bch_fs *c)
 				     bch2_recovery_passes_from_stable(le64_to_cpu(passes)));
 		}
 
-		bch_info(c, "%s", buf.buf);
+		bch_notice(c, "%s", buf.buf);
 		printbuf_exit(&buf);
 
 		ret = true;
@@ -682,7 +682,7 @@ static bool check_version_upgrade(struct bch_fs *c)
 		bch2_version_to_text(&buf, c->sb.version_incompat_allowed);
 		prt_newline(&buf);
 
-		bch_info(c, "%s", buf.buf);
+		bch_notice(c, "%s", buf.buf);
 		printbuf_exit(&buf);
 
 		ret = true;
@@ -1125,7 +1125,10 @@ int bch2_fs_initialize(struct bch_fs *c)
 	 * journal_res_get() will crash if called before this has
 	 * set up the journal.pin FIFO and journal.cur pointer:
 	 */
-	bch2_fs_journal_start(&c->journal, 1);
+	ret = bch2_fs_journal_start(&c->journal, 1);
+	if (ret)
+		goto err;
+
 	set_bit(BCH_FS_accounting_replay_done, &c->flags);
 	bch2_journal_set_replay_done(&c->journal);
 
