@@ -1370,12 +1370,11 @@ hit_next:
 		cache_state(state, cached_state);
 		next = next_search_state(state, end);
 		clear_state_bit(tree, state, clear_bits, 0, NULL);
-		if (last_end == (u64)-1)
+		if (last_end >= end)
 			goto out;
 		start = last_end + 1;
 		state = next;
-		if (start < end && state && state->start == start &&
-		    !need_resched())
+		if (state && state->start == start && !need_resched())
 			goto hit_next;
 		goto search_again;
 	}
@@ -1412,12 +1411,11 @@ hit_next:
 			cache_state(state, cached_state);
 			next = next_search_state(state, end);
 			clear_state_bit(tree, state, clear_bits, 0, NULL);
-			if (last_end == (u64)-1)
+			if (last_end >= end)
 				goto out;
 			start = last_end + 1;
 			state = next;
-			if (start < end && state && state->start == start &&
-			    !need_resched())
+			if (state && state->start == start && !need_resched())
 				goto hit_next;
 		}
 		goto search_again;
