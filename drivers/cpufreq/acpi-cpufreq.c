@@ -89,8 +89,9 @@ static bool boost_state(unsigned int cpu)
 	return false;
 }
 
-static int boost_set_msr(bool enable)
+static void boost_set_msr_each(void *p_en)
 {
+	bool enable = (bool) p_en;
 	u32 msr_addr;
 	u64 msr_mask, val;
 
@@ -107,7 +108,7 @@ static int boost_set_msr(bool enable)
 		msr_mask = MSR_K7_HWCR_CPB_DIS;
 		break;
 	default:
-		return -EINVAL;
+		return;
 	}
 
 	rdmsrl(msr_addr, val);
@@ -118,14 +119,6 @@ static int boost_set_msr(bool enable)
 		val |= msr_mask;
 
 	wrmsrl(msr_addr, val);
-	return 0;
-}
-
-static void boost_set_msr_each(void *p_en)
-{
-	bool enable = (bool) p_en;
-
-	boost_set_msr(enable);
 }
 
 static int set_boost(struct cpufreq_policy *policy, int val)
@@ -532,15 +525,6 @@ static void free_acpi_perf_data(void)
 	free_percpu(acpi_perf_data);
 }
 
-static int cpufreq_boost_down_prep(unsigned int cpu)
-{
-	/*
-	 * Clear the boost-disable bit on the CPU_DOWN path so that
-	 * this cpu cannot block the remaining ones from boosting.
-	 */
-	return boost_set_msr(1);
-}
-
 /*
  * acpi_cpufreq_early_init - initialize ACPI P-States library
  *
@@ -931,7 +915,6 @@ static void acpi_cpufreq_cpu_exit(struct cpufreq_policy *policy)
 
 	pr_debug("%s\n", __func__);
 
-	cpufreq_boost_down_prep(policy->cpu);
 	policy->fast_switch_possible = false;
 	policy->driver_data = NULL;
 	acpi_processor_unregister_performance(data->acpi_perf_cpu);
