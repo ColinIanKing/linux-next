@@ -1299,6 +1299,14 @@ void __init e820__memblock_setup(void)
 		memblock_add(entry->addr, entry->size);
 	}
 
+#ifdef CONFIG_X86_32
+	/*
+	 * Discard memory above 4GB because 32-bit systems are limited to 4GB
+	 * of memory even with HIGHMEM.
+	 */
+	memblock_remove(PFN_PHYS(MAX_NONPAE_PFN), -1);
+#endif
+
 	/* Throw away partial pages: */
 	memblock_trim_memory(PAGE_SIZE);
 
