@@ -55,15 +55,16 @@ static inline size_t buf_pages(void *p, size_t len)
 			    PAGE_SIZE);
 }
 
-static inline void *bch2_kvmalloc(size_t n, gfp_t flags)
+static inline void *bch2_kvmalloc_noprof(size_t n, gfp_t flags)
 {
 	void *p = unlikely(n >= INT_MAX)
-		? vmalloc(n)
-		: kvmalloc(n, flags & ~__GFP_ZERO);
+		? vmalloc_noprof(n)
+		: kvmalloc_noprof(n, flags & ~__GFP_ZERO);
 	if (p && (flags & __GFP_ZERO))
 		memset(p, 0, n);
 	return p;
 }
+#define bch2_kvmalloc(...)			alloc_hooks(bch2_kvmalloc_noprof(__VA_ARGS__))
 
 #define init_heap(heap, _size, gfp)					\
 ({									\
@@ -211,8 +212,7 @@ u64 bch2_read_flag_list(const char *, const char * const[]);
 void bch2_prt_u64_base2_nbits(struct printbuf *, u64, unsigned);
 void bch2_prt_u64_base2(struct printbuf *, u64);
 
-void bch2_print_string_as_lines(const char *prefix, const char *lines);
-void bch2_print_string_as_lines_nonblocking(const char *prefix, const char *lines);
+void bch2_print_string_as_lines(const char *, const char *, bool);
 
 typedef DARRAY(unsigned long) bch_stacktrace;
 int bch2_save_backtrace(bch_stacktrace *stack, struct task_struct *, unsigned, gfp_t);
