@@ -480,6 +480,10 @@ struct pipe_ctx {
 	struct pixel_rate_divider pixel_rate_divider;
 	/* pixels borrowed from hblank to hactive */
 	uint8_t hblank_borrow;
+	/* next vupdate */
+	uint32_t next_vupdate;
+	uint32_t wait_frame_count;
+	bool wait_is_required;
 };
 
 /* Data used for dynamic link encoder assignment.
@@ -507,7 +511,7 @@ struct resource_context {
 	unsigned int hpo_dp_link_enc_to_link_idx[MAX_HPO_DP2_LINK_ENCODERS];
 	int hpo_dp_link_enc_ref_cnts[MAX_HPO_DP2_LINK_ENCODERS];
 	bool is_mpc_3dlut_acquired[MAX_PIPES];
-	/* solely used for build scalar data in dml2 */
+	/* used to build scalar data in dml2 and for edp backlight programming */
 	struct pipe_ctx temp_pipe;
 };
 
@@ -630,7 +634,7 @@ struct dc_state {
 	 */
 	struct bw_context bw_ctx;
 
-	struct block_sequence block_sequence[100];
+	struct block_sequence block_sequence[MAX_HWSS_BLOCK_SEQUENCE_SIZE];
 	unsigned int block_sequence_steps;
 	struct dc_dmub_cmd dc_dmub_cmd[10];
 	unsigned int dmub_cmd_count;
