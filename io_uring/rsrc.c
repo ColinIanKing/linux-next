@@ -1093,12 +1093,13 @@ static int io_import_fixed(int ddir, struct iov_iter *iter,
 			seg_skip = 1 + (offset >> folio_shift);
 
 			iter->bvec += seg_skip;
-			iter->nr_segs -= seg_skip;
 			iter->count -= bvec->bv_len + offset;
 			iter->iov_offset = offset & ((1UL << folio_shift) - 1);
 		}
 	}
 
+	iter->nr_segs = (iter->bvec->bv_offset + iter->iov_offset +
+		iter->count + ((1UL << folio_shift) - 1)) >> folio_shift;
 	return 0;
 }
 
