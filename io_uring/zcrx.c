@@ -26,6 +26,11 @@
 #include "zcrx.h"
 #include "rsrc.h"
 
+static inline struct io_zcrx_ifq *io_pp_to_ifq(struct page_pool *pp)
+{
+	return pp->mp_priv;
+}
+
 #define IO_DMA_ATTR (DMA_ATTR_SKIP_CPU_SYNC | DMA_ATTR_WEAK_ORDERING)
 
 static void __io_zcrx_unmap_area(struct io_zcrx_ifq *ifq,
@@ -354,7 +359,8 @@ int io_register_zcrx_ifq(struct io_ring_ctx *ctx,
 		return -EFAULT;
 	if (copy_from_user(&rd, u64_to_user_ptr(reg.region_ptr), sizeof(rd)))
 		return -EFAULT;
-	if (memchr_inv(&reg.__resv, 0, sizeof(reg.__resv)))
+	if (memchr_inv(&reg.__resv, 0, sizeof(reg.__resv)) ||
+	    reg.__resv2 || reg.zcrx_id)
 		return -EINVAL;
 	if (reg.if_rxq == -1 || !reg.rq_entries || reg.flags)
 		return -EINVAL;
@@ -585,7 +591,7 @@ static void io_zcrx_refill_slow(struct page_pool *pp, struct io_zcrx_ifq *ifq)
 
 static netmem_ref io_pp_zc_alloc_netmems(struct page_pool *pp, gfp_t gfp)
 {
-	struct io_zcrx_ifq *ifq = pp->mp_priv;
+	struct io_zcrx_ifq *ifq = io_pp_to_ifq(pp);
 
 	/* pp should already be ensuring that */
 	if (unlikely(pp->alloc.count))
@@ -617,7 +623,7 @@ static bool io_pp_zc_release_netmem(struct page_pool *pp, netmem_ref netmem)
 
 static int io_pp_zc_init(struct page_pool *pp)
 {
-	struct io_zcrx_ifq *ifq = pp->mp_priv;
+	struct io_zcrx_ifq *ifq = io_pp_to_ifq(pp);
 
 	if (WARN_ON_ONCE(!ifq))
 		return -EINVAL;
@@ -636,7 +642,7 @@ static int io_pp_zc_init(struct page_pool *pp)
 
 static void io_pp_zc_destroy(struct page_pool *pp)
 {
-	struct io_zcrx_ifq *ifq = pp->mp_priv;
+	struct io_zcrx_ifq *ifq = io_pp_to_ifq(pp);
 	struct io_zcrx_area *area = ifq->area;
 
 	if (WARN_ON_ONCE(area->free_count != area->nia.num_niovs))
@@ -791,7 +797,7 @@ static int io_zcrx_recv_frag(struct io_kiocb *req, struct io_zcrx_ifq *ifq,
 
 	niov = netmem_to_net_iov(frag->netmem);
 	if (niov->pp->mp_ops != &io_uring_pp_zc_ops ||
-	    niov->pp->mp_priv != ifq)
+	    io_pp_to_ifq(niov->pp) != ifq)
 		return -EFAULT;
 
 	if (!io_zcrx_queue_cqe(req, niov, ifq, off + skb_frag_off(frag), len))
