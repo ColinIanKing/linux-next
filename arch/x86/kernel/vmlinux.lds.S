@@ -468,8 +468,10 @@ SECTIONS
 /*
  * The ASSERT() sink to . is intentional, for binutils 2.14 compatibility:
  */
+#ifndef CONFIG_COMPILE_TEST
 . = ASSERT((_end - LOAD_OFFSET <= KERNEL_IMAGE_SIZE),
 	   "kernel image bigger than KERNEL_IMAGE_SIZE");
+#endif
 
 /* needed for Clang - see arch/x86/entry/entry.S */
 PROVIDE(__ref_stack_chk_guard = __stack_chk_guard);
