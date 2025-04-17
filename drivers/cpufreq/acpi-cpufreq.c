@@ -79,11 +79,11 @@ static bool boost_state(unsigned int cpu)
 	case X86_VENDOR_INTEL:
 	case X86_VENDOR_CENTAUR:
 	case X86_VENDOR_ZHAOXIN:
-		rdmsrl_on_cpu(cpu, MSR_IA32_MISC_ENABLE, &msr);
+		rdmsrq_on_cpu(cpu, MSR_IA32_MISC_ENABLE, &msr);
 		return !(msr & MSR_IA32_MISC_ENABLE_TURBO_DISABLE);
 	case X86_VENDOR_HYGON:
 	case X86_VENDOR_AMD:
-		rdmsrl_on_cpu(cpu, MSR_K7_HWCR, &msr);
+		rdmsrq_on_cpu(cpu, MSR_K7_HWCR, &msr);
 		return !(msr & MSR_K7_HWCR_CPB_DIS);
 	}
 	return false;
@@ -111,14 +111,14 @@ static void boost_set_msr_each(void *p_en)
 		return;
 	}
 
-	rdmsrl(msr_addr, val);
+	rdmsrq(msr_addr, val);
 
 	if (enable)
 		val &= ~msr_mask;
 	else
 		val |= msr_mask;
 
-	wrmsrl(msr_addr, val);
+	wrmsrq(msr_addr, val);
 }
 
 static int set_boost(struct cpufreq_policy *policy, int val)
