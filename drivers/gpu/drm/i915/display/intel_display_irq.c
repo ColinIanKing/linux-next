@@ -1960,8 +1960,22 @@ void vlv_display_irq_postinstall(struct intel_display *display)
 	intel_display_irq_regs_init(display, VLV_IRQ_REGS, dev_priv->irq_mask, enable_mask);
 }
 
+void ibx_display_irq_reset(struct intel_display *display)
+{
+	struct drm_i915_private *i915 = to_i915(display->drm);
+
+	if (HAS_PCH_NOP(i915))
+		return;
+
+	gen2_irq_reset(to_intel_uncore(display->drm), SDE_IRQ_REGS);
+
+	if (HAS_PCH_CPT(i915) || HAS_PCH_LPT(i915))
+		intel_de_write(display, SERR_INT, 0xffffffff);
+}
+
 void gen8_display_irq_reset(struct intel_display *display)
 {
+	struct drm_i915_private *i915 = to_i915(display->drm);
 	enum pipe pipe;
 
 	if (!HAS_DISPLAY(display))
@@ -1977,6 +1991,9 @@ void gen8_display_irq_reset(struct intel_display *display)
 
 	intel_display_irq_regs_reset(display, GEN8_DE_PORT_IRQ_REGS);
 	intel_display_irq_regs_reset(display, GEN8_DE_MISC_IRQ_REGS);
+
+	if (HAS_PCH_SPLIT(i915))
+		ibx_display_irq_reset(display);
 }
 
 void gen11_display_irq_reset(struct intel_display *display)
@@ -2328,4 +2345,32 @@ void intel_display_irq_init(struct intel_display *display)
 	intel_hotplug_irq_init(display);
 
 	INIT_WORK(&display->irq.vblank_dc_work, intel_display_vblank_dc_work);
+}
+
+struct intel_display_irq_snapshot {
+	u32 derrmr;
+};
+
+struct intel_display_irq_snapshot *
+intel_display_irq_snapshot_capture(struct intel_display *display)
+{
+	struct intel_display_irq_snapshot *snapshot;
+
+	snapshot = kzalloc(sizeof(*snapshot), GFP_ATOMIC);
+	if (!snapshot)
+		return NULL;
+
+	if (DISPLAY_VER(display) >= 6 && DISPLAY_VER(display) < 20 && !HAS_GMCH(display))
+		snapshot->derrmr = intel_de_read(display, DERRMR);
+
+	return snapshot;
+}
+
+void intel_display_irq_snapshot_print(const struct intel_display_irq_snapshot *snapshot,
+				      struct drm_printer *p)
+{
+	if (!snapshot)
+		return;
+
+	drm_printf(p, "DERRMR: 0x%08x\n", snapshot->derrmr);
 }
