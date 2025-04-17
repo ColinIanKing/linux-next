@@ -1523,6 +1523,7 @@ static inline int of_get_available_child_count(const struct device_node *np)
 }
 
 #define _OF_DECLARE_STUB(table, name, compat, fn, fn_type)		\
+	static_assert((fn) != NULL);	\
 	static const struct of_device_id __of_table_##name		\
 		__attribute__((unused))					\
 		 = { .compatible = compat,				\
@@ -1530,6 +1531,7 @@ static inline int of_get_available_child_count(const struct device_node *np)
 
 #if defined(CONFIG_OF) && !defined(MODULE)
 #define _OF_DECLARE(table, name, compat, fn, fn_type)			\
+	static_assert((fn) != NULL);	\
 	static const struct of_device_id __of_table_##name		\
 		__used __section("__" #table "_of_table")		\
 		__aligned(__alignof__(struct of_device_id))		\
