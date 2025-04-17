@@ -25,6 +25,7 @@
 #include "subvolume.h"
 #include "trace.h"
 
+#include <linux/moduleparam.h>
 #include <linux/random.h>
 #include <linux/sched/mm.h>
 
@@ -33,6 +34,12 @@ static unsigned bch2_read_corrupt_ratio;
 module_param_named(read_corrupt_ratio, bch2_read_corrupt_ratio, uint, 0644);
 MODULE_PARM_DESC(read_corrupt_ratio, "");
 #endif
+
+static bool bch2_poison_extents_on_checksum_error;
+module_param_named(poison_extents_on_checksum_error,
+		   bch2_poison_extents_on_checksum_error, bool, 0644);
+MODULE_PARM_DESC(poison_extents_on_checksum_error,
+		 "Extents with checksum errors are marked as poisoned - unsafe without read fua support");
 
 #ifndef CONFIG_BCACHEFS_NO_LATENCY_ACCT
 
@@ -296,6 +303,13 @@ static struct bch_read_bio *promote_alloc(struct btree_trans *trans,
 					bool *read_full,
 					struct bch_io_failures *failed)
 {
+	/*
+	 * We're in the retry path, but we don't know what to repair yet, and we
+	 * don't want to do a promote here:
+	 */
+	if (failed && !failed->nr)
+		return NULL;
+
 	struct bch_fs *c = trans->c;
 	/*
 	 * if failed != NULL we're not actually doing a promote, we're
@@ -430,6 +444,74 @@ static void bch2_rbio_done(struct bch_read_bio *rbio)
 	bio_endio(&rbio->bio);
 }
 
+static void get_rbio_extent(struct btree_trans *trans,
+			    struct bch_read_bio *rbio,
+			    struct bkey_buf *sk)
+{
+	struct btree_iter iter;
+	struct bkey_s_c k;
+	int ret = lockrestart_do(trans,
+			bkey_err(k = bch2_bkey_get_iter(trans, &iter,
+						rbio->data_btree, rbio->data_pos, 0)));
+	if (ret)
+		return;
+
+	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
+	bkey_for_each_ptr(ptrs, ptr)
+		if (bch2_extent_ptr_eq(*ptr, rbio->pick.ptr)) {
+			bch2_bkey_buf_reassemble(sk, trans->c, k);
+			break;
+		}
+
+	bch2_trans_iter_exit(trans, &iter);
+}
+
+static noinline int maybe_poison_extent(struct btree_trans *trans, struct bch_read_bio *rbio,
+					enum btree_id btree, struct bkey_s_c read_k)
+{
+	if (!bch2_poison_extents_on_checksum_error)
+		return 0;
+
+	struct bch_fs *c = trans->c;
+
+	struct data_update *u = rbio_data_update(rbio);
+	if (u)
+		read_k = bkey_i_to_s_c(u->k.k);
+
+	u64 flags = bch2_bkey_extent_flags(read_k);
+	if (flags & BIT_ULL(BCH_EXTENT_FLAG_poisoned))
+		return 0;
+
+	struct btree_iter iter;
+	struct bkey_s_c k = bch2_bkey_get_iter(trans, &iter, btree, bkey_start_pos(read_k.k),
+					       BTREE_ITER_intent);
+	int ret = bkey_err(k);
+	if (ret)
+		return ret;
+
+	if (!bkey_and_val_eq(k, read_k))
+		goto out;
+
+	struct bkey_i *new = bch2_trans_kmalloc(trans,
+					bkey_bytes(k.k) + sizeof(struct bch_extent_flags));
+	ret =   PTR_ERR_OR_ZERO(new) ?:
+		(bkey_reassemble(new, k), 0) ?:
+		bch2_bkey_extent_flags_set(c, new, flags|BIT_ULL(BCH_EXTENT_FLAG_poisoned)) ?:
+		bch2_trans_update(trans, &iter, new, BTREE_UPDATE_internal_snapshot_node) ?:
+		bch2_trans_commit(trans, NULL, NULL, 0);
+
+	/*
+	 * Propagate key change back to data update path, in particular so it
+	 * knows the extent has been poisoned and it's safe to change the
+	 * checksum
+	 */
+	if (u && !ret)
+		bch2_bkey_buf_copy(&u->k, c, new);
+out:
+	bch2_trans_iter_exit(trans, &iter);
+	return ret;
+}
+
 static noinline int bch2_read_retry_nodecode(struct btree_trans *trans,
 					struct bch_read_bio *rbio,
 					struct bvec_iter bvec_iter,
@@ -463,7 +545,8 @@ retry:
 err:
 	bch2_trans_iter_exit(trans, &iter);
 
-	if (bch2_err_matches(ret, BCH_ERR_data_read_retry))
+	if (bch2_err_matches(ret, BCH_ERR_transaction_restart) ||
+	    bch2_err_matches(ret, BCH_ERR_data_read_retry))
 		goto retry;
 
 	if (ret) {
@@ -487,13 +570,22 @@ static void bch2_rbio_retry(struct work_struct *work)
 		.inum	= rbio->read_pos.inode,
 	};
 	struct bch_io_failures failed = { .nr = 0 };
+	int orig_error = rbio->ret;
+
 	struct btree_trans *trans = bch2_trans_get(c);
+
+	struct bkey_buf sk;
+	bch2_bkey_buf_init(&sk);
+	bkey_init(&sk.k->k);
 
 	trace_io_read_retry(&rbio->bio);
 	this_cpu_add(c->counters[BCH_COUNTER_io_read_retry],
 		     bvec_iter_sectors(rbio->bvec_iter));
 
-	if (bch2_err_matches(rbio->ret, BCH_ERR_data_read_retry_avoid))
+	get_rbio_extent(trans, rbio, &sk);
+
+	if (!bkey_deleted(&sk.k->k) &&
+	    bch2_err_matches(rbio->ret, BCH_ERR_data_read_retry_avoid))
 		bch2_mark_io_failure(&failed, &rbio->pick,
 				     rbio->ret == -BCH_ERR_data_read_retry_csum_err);
 
@@ -514,12 +606,14 @@ static void bch2_rbio_retry(struct work_struct *work)
 
 	int ret = rbio->data_update
 		? bch2_read_retry_nodecode(trans, rbio, iter, &failed, flags)
-		: __bch2_read(trans, rbio, iter, inum, &failed, flags);
+		: __bch2_read(trans, rbio, iter, inum, &failed, &sk, flags);
 
 	if (ret) {
 		rbio->ret = ret;
 		rbio->bio.bi_status = BLK_STS_IOERR;
-	} else {
+	} else if (orig_error != -BCH_ERR_data_read_retry_csum_err_maybe_userspace &&
+		   orig_error != -BCH_ERR_data_read_ptr_stale_race &&
+		   !failed.nr) {
 		struct printbuf buf = PRINTBUF;
 
 		lockrestart_do(trans,
@@ -535,6 +629,7 @@ static void bch2_rbio_retry(struct work_struct *work)
 	}
 
 	bch2_rbio_done(rbio);
+	bch2_bkey_buf_exit(&sk, c);
 	bch2_trans_put(trans);
 }
 
@@ -959,6 +1054,10 @@ int __bch2_read_extent(struct btree_trans *trans, struct bch_read_bio *orig,
 			     bvec_iter_sectors(iter));
 		goto out_read_done;
 	}
+
+	if ((bch2_bkey_extent_flags(k) & BIT_ULL(BCH_EXTENT_FLAG_poisoned)) &&
+	    !orig->data_update)
+		return -BCH_ERR_extent_poisoned;
 retry_pick:
 	ret = bch2_bkey_pick_read_device(c, k, failed, &pick, dev);
 
@@ -967,6 +1066,16 @@ retry_pick:
 		goto hole;
 
 	if (unlikely(ret < 0)) {
+		if (ret == -BCH_ERR_data_read_csum_err) {
+			int ret2 = maybe_poison_extent(trans, orig, data_btree, k);
+			if (ret2) {
+				ret = ret2;
+				goto err;
+			}
+
+			trace_and_count(c, io_read_fail_and_poison, &orig->bio);
+		}
+
 		struct printbuf buf = PRINTBUF;
 		bch2_read_err_msg_trans(trans, &buf, orig, read_pos);
 		prt_printf(&buf, "%s\n  ", bch2_err_str(ret));
@@ -1261,12 +1370,15 @@ out_read_done:
 
 int __bch2_read(struct btree_trans *trans, struct bch_read_bio *rbio,
 		struct bvec_iter bvec_iter, subvol_inum inum,
-		struct bch_io_failures *failed, unsigned flags)
+		struct bch_io_failures *failed,
+		struct bkey_buf *prev_read,
+		unsigned flags)
 {
 	struct bch_fs *c = trans->c;
 	struct btree_iter iter;
 	struct bkey_buf sk;
 	struct bkey_s_c k;
+	enum btree_id data_btree;
 	int ret;
 
 	EBUG_ON(rbio->data_update);
@@ -1277,7 +1389,7 @@ int __bch2_read(struct btree_trans *trans, struct bch_read_bio *rbio,
 			     BTREE_ITER_slots);
 
 	while (1) {
-		enum btree_id data_btree = BTREE_ID_extents;
+		data_btree = BTREE_ID_extents;
 
 		bch2_trans_begin(trans);
 
@@ -1308,6 +1420,12 @@ int __bch2_read(struct btree_trans *trans, struct bch_read_bio *rbio,
 			goto err;
 
 		k = bkey_i_to_s_c(sk.k);
+
+		if (unlikely(flags & BCH_READ_in_retry)) {
+			if (!bkey_and_val_eq(k, bkey_i_to_s_c(prev_read->k)))
+				failed->nr = 0;
+			bch2_bkey_buf_copy(prev_read, c, sk.k);
+		}
 
 		/*
 		 * With indirect extents, the amount of data to read is the min
@@ -1343,16 +1461,16 @@ err:
 			break;
 	}
 
-	bch2_trans_iter_exit(trans, &iter);
-
-	if (ret) {
-		struct printbuf buf = PRINTBUF;
-		lockrestart_do(trans,
-			bch2_inum_offset_err_msg_trans(trans, &buf, inum,
-						       bvec_iter.bi_sector << 9));
-		prt_printf(&buf, "read error: %s", bch2_err_str(ret));
-		bch_err_ratelimited(c, "%s", buf.buf);
-		printbuf_exit(&buf);
+	if (unlikely(ret)) {
+		if (ret != -BCH_ERR_extent_poisoned) {
+			struct printbuf buf = PRINTBUF;
+			lockrestart_do(trans,
+				       bch2_inum_offset_err_msg_trans(trans, &buf, inum,
+								      bvec_iter.bi_sector << 9));
+			prt_printf(&buf, "data read error: %s", bch2_err_str(ret));
+			bch_err_ratelimited(c, "%s", buf.buf);
+			printbuf_exit(&buf);
+		}
 
 		rbio->bio.bi_status	= BLK_STS_IOERR;
 		rbio->ret		= ret;
@@ -1361,6 +1479,7 @@ err:
 			bch2_rbio_done(rbio);
 	}
 
+	bch2_trans_iter_exit(trans, &iter);
 	bch2_bkey_buf_exit(&sk, c);
 	return ret;
 }
@@ -1371,10 +1490,18 @@ void bch2_fs_io_read_exit(struct bch_fs *c)
 		rhashtable_destroy(&c->promote_table);
 	bioset_exit(&c->bio_read_split);
 	bioset_exit(&c->bio_read);
+	mempool_exit(&c->bio_bounce_pages);
 }
 
 int bch2_fs_io_read_init(struct bch_fs *c)
 {
+	if (mempool_init_page_pool(&c->bio_bounce_pages,
+				   max_t(unsigned,
+					 c->opts.btree_node_size,
+					 c->opts.encoded_extent_max) /
+				   PAGE_SIZE, 0))
+		return -BCH_ERR_ENOMEM_bio_bounce_pages_init;
+
 	if (bioset_init(&c->bio_read, 1, offsetof(struct bch_read_bio, bio),
 			BIOSET_NEED_BVECS))
 		return -BCH_ERR_ENOMEM_bio_read_init;

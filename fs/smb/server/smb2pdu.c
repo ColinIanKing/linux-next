@@ -1602,8 +1602,10 @@ static int krb5_authenticate(struct ksmbd_work *work,
 	if (prev_sess_id && prev_sess_id != sess->id)
 		destroy_previous_session(conn, sess->user, prev_sess_id);
 
-	if (sess->state == SMB2_SESSION_VALID)
+	if (sess->state == SMB2_SESSION_VALID) {
 		ksmbd_free_user(sess->user);
+		sess->user = NULL;
+	}
 
 	retval = ksmbd_krb5_authenticate(sess, in_blob, in_len,
 					 out_blob, &out_len);
@@ -4117,9 +4119,10 @@ static int process_query_dir_entries(struct smb2_query_dir_private *priv)
 			return -EINVAL;
 
 		lock_dir(priv->dir_fp);
-		dent = lookup_one(idmap, priv->d_info->name,
-				  priv->dir_fp->filp->f_path.dentry,
-				  priv->d_info->name_len);
+		dent = lookup_one(idmap,
+				  &QSTR_LEN(priv->d_info->name,
+					    priv->d_info->name_len),
+				  priv->dir_fp->filp->f_path.dentry);
 		unlock_dir(priv->dir_fp);
 
 		if (IS_ERR(dent)) {

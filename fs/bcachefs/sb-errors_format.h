@@ -290,14 +290,15 @@ enum bch_fsck_flags {
 	x(btree_node_bkey_bad_u64s,				260,	0)		\
 	x(btree_node_topology_empty_interior_node,		261,	0)		\
 	x(btree_ptr_v2_min_key_bad,				262,	0)		\
-	x(btree_root_unreadable_and_scan_found_nothing,		263,	0)		\
-	x(snapshot_node_missing,				264,	0)		\
+	x(btree_root_unreadable_and_scan_found_nothing,		263,	FSCK_AUTOFIX)	\
+	x(snapshot_node_missing,				264,	FSCK_AUTOFIX)	\
 	x(dup_backpointer_to_bad_csum_extent,			265,	0)		\
 	x(btree_bitmap_not_marked,				266,	FSCK_AUTOFIX)	\
 	x(sb_clean_entry_overrun,				267,	0)		\
 	x(btree_ptr_v2_written_0,				268,	0)		\
 	x(subvol_snapshot_bad,					269,	0)		\
 	x(subvol_inode_bad,					270,	0)		\
+	x(subvol_missing,					308,	FSCK_AUTOFIX)	\
 	x(alloc_key_stripe_sectors_wrong,			271,	FSCK_AUTOFIX)	\
 	x(accounting_mismatch,					272,	FSCK_AUTOFIX)	\
 	x(accounting_replicas_not_marked,			273,	0)		\
@@ -317,7 +318,7 @@ enum bch_fsck_flags {
 	x(directory_size_mismatch,				303,	FSCK_AUTOFIX)	\
 	x(dirent_cf_name_too_big,				304,	0)		\
 	x(dirent_stray_data_after_cf_name,			305,	0)		\
-	x(MAX,							308,	0)
+	x(MAX,							309,	0)
 
 enum bch_sb_error_id {
 #define x(t, n, ...) BCH_FSCK_ERR_##t = n,
