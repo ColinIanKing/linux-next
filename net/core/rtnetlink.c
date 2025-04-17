@@ -3580,7 +3580,7 @@ static int rtnl_dellink(struct sk_buff *skb, struct nlmsghdr *nlh,
 int rtnl_configure_link(struct net_device *dev, const struct ifinfomsg *ifm,
 			u32 portid, const struct nlmsghdr *nlh)
 {
-	unsigned int old_flags;
+	unsigned int old_flags, changed;
 	int err;
 
 	old_flags = dev->flags;
@@ -3591,12 +3591,13 @@ int rtnl_configure_link(struct net_device *dev, const struct ifinfomsg *ifm,
 			return err;
 	}
 
-	if (dev->rtnl_link_state == RTNL_LINK_INITIALIZED) {
-		__dev_notify_flags(dev, old_flags, (old_flags ^ dev->flags), portid, nlh);
-	} else {
-		dev->rtnl_link_state = RTNL_LINK_INITIALIZED;
-		__dev_notify_flags(dev, old_flags, ~0U, portid, nlh);
+	changed = old_flags ^ dev->flags;
+	if (dev->rtnl_link_initializing) {
+		dev->rtnl_link_initializing = false;
+		changed = ~0U;
 	}
+
+	__dev_notify_flags(dev, old_flags, changed, portid, nlh);
 	return 0;
 }
 EXPORT_SYMBOL(rtnl_configure_link);
@@ -3654,7 +3655,7 @@ struct net_device *rtnl_create_link(struct net *net, const char *ifname,
 
 	dev_net_set(dev, net);
 	dev->rtnl_link_ops = ops;
-	dev->rtnl_link_state = RTNL_LINK_INITIALIZING;
+	dev->rtnl_link_initializing = true;
 
 	if (tb[IFLA_MTU]) {
 		u32 mtu = nla_get_u32(tb[IFLA_MTU]);
@@ -4886,12 +4887,12 @@ static int valid_fdb_dump_strict(const struct nlmsghdr *nlh,
 	struct ndmsg *ndm;
 	int err, i;
 
-	if (nlh->nlmsg_len < nlmsg_msg_size(sizeof(*ndm))) {
+	ndm = nlmsg_payload(nlh, sizeof(*ndm));
+	if (!ndm) {
 		NL_SET_ERR_MSG(extack, "Invalid header for fdb dump request");
 		return -EINVAL;
 	}
 
-	ndm = nlmsg_data(nlh);
 	if (ndm->ndm_pad1  || ndm->ndm_pad2  || ndm->ndm_state ||
 	    ndm->ndm_flags || ndm->ndm_type) {
 		NL_SET_ERR_MSG(extack, "Invalid values in header for fdb dump request");
