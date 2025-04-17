@@ -73,6 +73,7 @@ struct io_uring_sqe {
 		__u32		futex_flags;
 		__u32		install_fd_flags;
 		__u32		nop_flags;
+		__u32		pipe_flags;
 	};
 	__u64	user_data;	/* data to be passed back at completion time */
 	/* pack this to avoid bogus arm OABI complaints */
@@ -283,6 +284,7 @@ enum io_uring_op {
 	IORING_OP_EPOLL_WAIT,
 	IORING_OP_READV_FIXED,
 	IORING_OP_WRITEV_FIXED,
+	IORING_OP_PIPE,
 
 	/* this goes last, obviously */
 	IORING_OP_LAST,
@@ -1010,7 +1012,9 @@ struct io_uring_zcrx_ifq_reg {
 	__u64	region_ptr; /* struct io_uring_region_desc * */
 
 	struct io_uring_zcrx_offsets offsets;
-	__u64	__resv[4];
+	__u32	zcrx_id;
+	__u32	__resv2;
+	__u64	__resv[3];
 };
 
 #ifdef __cplusplus

@@ -1036,6 +1036,7 @@ static int io_import_fixed(int ddir, struct iov_iter *iter,
 			   struct io_mapped_ubuf *imu,
 			   u64 buf_addr, size_t len)
 {
+	unsigned int folio_shift;
 	size_t offset;
 	int ret;
 
@@ -1052,6 +1053,7 @@ static int io_import_fixed(int ddir, struct iov_iter *iter,
 	 * and advance us to the beginning.
 	 */
 	offset = buf_addr - imu->ubuf;
+	folio_shift = imu->folio_shift;
 	iov_iter_bvec(iter, ddir, imu->bvec, imu->nr_bvecs, offset + len);
 
 	if (offset) {
@@ -1088,15 +1090,16 @@ static int io_import_fixed(int ddir, struct iov_iter *iter,
 
 			/* skip first vec */
 			offset -= bvec->bv_len;
-			seg_skip = 1 + (offset >> imu->folio_shift);
+			seg_skip = 1 + (offset >> folio_shift);
 
 			iter->bvec += seg_skip;
-			iter->nr_segs -= seg_skip;
 			iter->count -= bvec->bv_len + offset;
-			iter->iov_offset = offset & ((1UL << imu->folio_shift) - 1);
+			iter->iov_offset = offset & ((1UL << folio_shift) - 1);
 		}
 	}
 
+	iter->nr_segs = (iter->bvec->bv_offset + iter->iov_offset +
+		iter->count + ((1UL << folio_shift) - 1)) >> folio_shift;
 	return 0;
 }
 
