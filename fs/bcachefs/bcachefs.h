@@ -524,8 +524,8 @@ struct bch_dev {
 	struct percpu_ref	ref;
 #endif
 	struct completion	ref_completion;
-	struct percpu_ref	io_ref;
-	struct completion	io_ref_completion;
+	struct percpu_ref	io_ref[2];
+	struct completion	io_ref_completion[2];
 
 	struct bch_fs		*fs;
 
@@ -562,7 +562,8 @@ struct bch_dev {
 	unsigned long		*bucket_backpointer_mismatches;
 	unsigned long		*bucket_backpointer_empty;
 
-	struct bch_dev_usage __percpu	*usage;
+	struct bch_dev_usage_full __percpu
+				*usage;
 
 	/* Allocator: */
 	u64			alloc_cursor[3];
@@ -980,8 +981,8 @@ struct bch_fs {
 	mempool_t		compress_workspace[BCH_COMPRESSION_OPT_NR];
 	size_t			zstd_workspace_size;
 
-	struct crypto_sync_skcipher *chacha20;
-	struct crypto_shash	*poly1305;
+	struct bch_key		chacha20_key;
+	bool			chacha20_key_set;
 
 	atomic64_t		key_version;
 

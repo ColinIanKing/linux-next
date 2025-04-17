@@ -350,8 +350,8 @@ static ssize_t bch2_data_job_read(struct file *file, char __user *buf,
 	if (ctx->arg.op == BCH_DATA_OP_scrub) {
 		struct bch_dev *ca = bch2_dev_tryget(c, ctx->arg.scrub.dev);
 		if (ca) {
-			struct bch_dev_usage u;
-			bch2_dev_usage_read_fast(ca, &u);
+			struct bch_dev_usage_full u;
+			bch2_dev_usage_full_read_fast(ca, &u);
 			for (unsigned i = BCH_DATA_btree; i < ARRAY_SIZE(u.d); i++)
 				if (ctx->arg.scrub.data_types & BIT(i))
 					e.p.sectors_total += u.d[i].sectors;
@@ -426,10 +426,8 @@ static long bch2_ioctl_fs_usage(struct bch_fs *c,
 	arg.replica_entries_bytes = replicas.nr;
 
 	for (unsigned i = 0; i < BCH_REPLICAS_MAX; i++) {
-		struct disk_accounting_pos k = {
-			.type = BCH_DISK_ACCOUNTING_persistent_reserved,
-			.persistent_reserved.nr_replicas = i,
-		};
+		struct disk_accounting_pos k;
+		disk_accounting_key_init(k, persistent_reserved, .nr_replicas = i);
 
 		bch2_accounting_mem_read(c,
 					 disk_accounting_pos_to_bpos(&k),
@@ -475,7 +473,7 @@ static long bch2_ioctl_dev_usage(struct bch_fs *c,
 				 struct bch_ioctl_dev_usage __user *user_arg)
 {
 	struct bch_ioctl_dev_usage arg;
-	struct bch_dev_usage src;
+	struct bch_dev_usage_full src;
 	struct bch_dev *ca;
 	unsigned i;
 
@@ -495,7 +493,7 @@ static long bch2_ioctl_dev_usage(struct bch_fs *c,
 	if (IS_ERR(ca))
 		return PTR_ERR(ca);
 
-	src = bch2_dev_usage_read(ca);
+	src = bch2_dev_usage_full_read(ca);
 
 	arg.state		= ca->mi.state;
 	arg.bucket_size		= ca->mi.bucket_size;
@@ -516,7 +514,7 @@ static long bch2_ioctl_dev_usage_v2(struct bch_fs *c,
 				 struct bch_ioctl_dev_usage_v2 __user *user_arg)
 {
 	struct bch_ioctl_dev_usage_v2 arg;
-	struct bch_dev_usage src;
+	struct bch_dev_usage_full src;
 	struct bch_dev *ca;
 	int ret = 0;
 
@@ -536,7 +534,7 @@ static long bch2_ioctl_dev_usage_v2(struct bch_fs *c,
 	if (IS_ERR(ca))
 		return PTR_ERR(ca);
 
-	src = bch2_dev_usage_read(ca);
+	src = bch2_dev_usage_full_read(ca);
 
 	arg.state		= ca->mi.state;
 	arg.bucket_size		= ca->mi.bucket_size;
@@ -617,7 +615,7 @@ static long bch2_ioctl_disk_get_idx(struct bch_fs *c,
 
 	for_each_online_member(c, ca)
 		if (ca->dev == dev) {
-			percpu_ref_put(&ca->io_ref);
+			percpu_ref_put(&ca->io_ref[READ]);
 			return ca->dev_idx;
 		}
 

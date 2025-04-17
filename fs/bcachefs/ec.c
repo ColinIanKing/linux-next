@@ -105,6 +105,7 @@ struct ec_bio {
 	struct bch_dev		*ca;
 	struct ec_stripe_buf	*buf;
 	size_t			idx;
+	int			rw;
 	u64			submit_time;
 	struct bio		bio;
 };
@@ -320,7 +321,7 @@ static int mark_stripe_bucket(struct btree_trans *trans,
 
 	if (flags & BTREE_TRIGGER_gc) {
 		struct bucket *g = gc_bucket(ca, bucket.offset);
-		if (bch2_fs_inconsistent_on(!g, c, "reference to invalid bucket on device %u\n  %s",
+		if (bch2_fs_inconsistent_on(!g, c, "reference to invalid bucket on device %u\n%s",
 					    ptr->dev,
 					    (bch2_bkey_val_to_text(&buf, c, s.s_c), buf.buf))) {
 			ret = -BCH_ERR_mark_stripe;
@@ -453,24 +454,25 @@ int bch2_trigger_stripe(struct btree_trans *trans,
 		if (new_s) {
 			s64 sectors = (u64) le16_to_cpu(new_s->sectors) * new_s->nr_redundant;
 
-			struct disk_accounting_pos acc = {
-				.type = BCH_DISK_ACCOUNTING_replicas,
-			};
+			struct disk_accounting_pos acc;
+			memset(&acc, 0, sizeof(acc));
+			acc.type = BCH_DISK_ACCOUNTING_replicas;
 			bch2_bkey_to_replicas(&acc.replicas, new);
 			int ret = bch2_disk_accounting_mod(trans, &acc, &sectors, 1, gc);
 			if (ret)
 				return ret;
 
 			if (gc)
-				memcpy(&gc->r.e, &acc.replicas, replicas_entry_bytes(&acc.replicas));
+				unsafe_memcpy(&gc->r.e, &acc.replicas,
+					      replicas_entry_bytes(&acc.replicas), "VLA");
 		}
 
 		if (old_s) {
 			s64 sectors = -((s64) le16_to_cpu(old_s->sectors)) * old_s->nr_redundant;
 
-			struct disk_accounting_pos acc = {
-				.type = BCH_DISK_ACCOUNTING_replicas,
-			};
+			struct disk_accounting_pos acc;
+			memset(&acc, 0, sizeof(acc));
+			acc.type = BCH_DISK_ACCOUNTING_replicas;
 			bch2_bkey_to_replicas(&acc.replicas, old);
 			int ret = bch2_disk_accounting_mod(trans, &acc, &sectors, 1, gc);
 			if (ret)
@@ -703,6 +705,7 @@ static void ec_block_endio(struct bio *bio)
 	struct bch_extent_ptr *ptr = &v->ptrs[ec_bio->idx];
 	struct bch_dev *ca = ec_bio->ca;
 	struct closure *cl = bio->bi_private;
+	int rw = ec_bio->rw;
 
 	bch2_account_io_completion(ca, bio_data_dir(bio),
 				   ec_bio->submit_time, !bio->bi_status);
@@ -724,7 +727,7 @@ static void ec_block_endio(struct bio *bio)
 	}
 
 	bio_put(&ec_bio->bio);
-	percpu_ref_put(&ca->io_ref);
+	percpu_ref_put(&ca->io_ref[rw]);
 	closure_put(cl);
 }
 
@@ -775,6 +778,7 @@ static void ec_block_io(struct bch_fs *c, struct ec_stripe_buf *buf,
 		ec_bio->ca			= ca;
 		ec_bio->buf			= buf;
 		ec_bio->idx			= idx;
+		ec_bio->rw			= rw;
 		ec_bio->submit_time		= local_clock();
 
 		ec_bio->bio.bi_iter.bi_sector	= ptr->offset + buf->offset + (offset >> 9);
@@ -784,14 +788,14 @@ static void ec_block_io(struct bch_fs *c, struct ec_stripe_buf *buf,
 		bch2_bio_map(&ec_bio->bio, buf->data[idx] + offset, b);
 
 		closure_get(cl);
-		percpu_ref_get(&ca->io_ref);
+		percpu_ref_get(&ca->io_ref[rw]);
 
 		submit_bio(&ec_bio->bio);
 
 		offset += b;
 	}
 
-	percpu_ref_put(&ca->io_ref);
+	percpu_ref_put(&ca->io_ref[rw]);
 }
 
 static int get_stripe_key_trans(struct btree_trans *trans, u64 idx,
@@ -1264,7 +1268,7 @@ static void zero_out_rest_of_ec_bucket(struct bch_fs *c,
 			ob->sectors_free,
 			GFP_KERNEL, 0);
 
-	percpu_ref_put(&ca->io_ref);
+	percpu_ref_put(&ca->io_ref[WRITE]);
 
 	if (ret)
 		s->err = ret;
@@ -1836,7 +1840,7 @@ static int __get_existing_stripe(struct btree_trans *trans,
 		ret = 1;
 	}
 out:
-	bch2_set_btree_iter_dontneed(&iter);
+	bch2_set_btree_iter_dontneed(trans, &iter);
 err:
 	bch2_trans_iter_exit(trans, &iter);
 	return ret;
@@ -1949,7 +1953,7 @@ static int __bch2_ec_stripe_head_reserve(struct btree_trans *trans, struct ec_st
 		if (bkey_gt(k.k->p, POS(0, U32_MAX))) {
 			if (start_pos.offset) {
 				start_pos = min_pos;
-				bch2_btree_iter_set_pos(&iter, start_pos);
+				bch2_btree_iter_set_pos(trans, &iter, start_pos);
 				continue;
 			}
 
@@ -2110,14 +2114,14 @@ static int bch2_invalidate_stripe_to_dev(struct btree_trans *trans, struct bkey_
 	if (ret)
 		return ret;
 
-	struct disk_accounting_pos acc = {
-		.type = BCH_DISK_ACCOUNTING_replicas,
-	};
+	struct disk_accounting_pos acc;
 
 	s64 sectors = 0;
 	for (unsigned i = 0; i < s->v.nr_blocks; i++)
 		sectors -= stripe_blockcount_get(&s->v, i);
 
+	memset(&acc, 0, sizeof(acc));
+	acc.type = BCH_DISK_ACCOUNTING_replicas;
 	bch2_bkey_to_replicas(&acc.replicas, bkey_i_to_s_c(&s->k_i));
 	acc.replicas.data_type = BCH_DATA_user;
 	ret = bch2_disk_accounting_mod(trans, &acc, &sectors, 1, false);
@@ -2131,6 +2135,8 @@ static int bch2_invalidate_stripe_to_dev(struct btree_trans *trans, struct bkey_
 
 	sectors = -sectors;
 
+	memset(&acc, 0, sizeof(acc));
+	acc.type = BCH_DISK_ACCOUNTING_replicas;
 	bch2_bkey_to_replicas(&acc.replicas, bkey_i_to_s_c(&s->k_i));
 	acc.replicas.data_type = BCH_DATA_user;
 	ret = bch2_disk_accounting_mod(trans, &acc, &sectors, 1, false);

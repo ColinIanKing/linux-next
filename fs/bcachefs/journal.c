@@ -62,8 +62,7 @@ static void bch2_journal_buf_to_text(struct printbuf *out, struct journal *j, u6
 		prt_newline(out);
 	}
 
-	prt_printf(out, "expires:\t");
-	prt_printf(out, "%li jiffies\n", buf->expires - jiffies);
+	prt_printf(out, "expires:\t%li jiffies\n", buf->expires - jiffies);
 
 	prt_printf(out, "flags:\t");
 	if (buf->noflush)
@@ -142,6 +141,8 @@ journal_error_check_stuck(struct journal *j, int error, unsigned flags)
 	bool stuck = false;
 	struct printbuf buf = PRINTBUF;
 
+	buf.atomic++;
+
 	if (!(error == -BCH_ERR_journal_full ||
 	      error == -BCH_ERR_journal_pin_full) ||
 	    nr_unwritten_journal_entries(j) ||
@@ -167,12 +168,12 @@ journal_error_check_stuck(struct journal *j, int error, unsigned flags)
 		return stuck;
 	}
 	j->err_seq = journal_cur_seq(j);
-	spin_unlock(&j->lock);
 
-	bch_err(c, "Journal stuck! Hava a pre-reservation but journal full (error %s)",
-		bch2_err_str(error));
-	bch2_journal_debug_to_text(&buf, j);
-	bch_err(c, "%s", buf.buf);
+	__bch2_journal_debug_to_text(&buf, j);
+	spin_unlock(&j->lock);
+	prt_printf(&buf, bch2_fmt(c, "Journal stuck! Hava a pre-reservation but journal full (error %s)"),
+				  bch2_err_str(error));
+	bch2_print_string_as_lines(KERN_ERR, buf.buf);
 
 	printbuf_reset(&buf);
 	bch2_journal_pins_to_text(&buf, j);
@@ -728,8 +729,8 @@ int bch2_journal_res_get_slowpath(struct journal *j, struct journal_res *res,
 
 	struct printbuf buf = PRINTBUF;
 	bch2_journal_debug_to_text(&buf, j);
-	bch_err(c, "Journal stuck? Waited for 10 seconds...\n%s",
-		buf.buf);
+	bch2_print_string_as_lines(KERN_ERR, buf.buf);
+	prt_printf(&buf, bch2_fmt(c, "Journal stuck? Waited for 10 seconds, err %s"), bch2_err_str(ret));
 	printbuf_exit(&buf);
 
 	closure_wait_event(&j->async_wait,
@@ -1314,7 +1315,7 @@ int bch2_fs_journal_alloc(struct bch_fs *c)
 
 		int ret = bch2_dev_journal_alloc(ca, true);
 		if (ret) {
-			percpu_ref_put(&ca->io_ref);
+			percpu_ref_put(&ca->io_ref[READ]);
 			return ret;
 		}
 	}
@@ -1403,6 +1404,14 @@ int bch2_fs_journal_start(struct journal *j, u64 cur_seq)
 
 	nr = cur_seq - last_seq;
 
+	/*
+	 * Extra fudge factor, in case we crashed when the journal pin fifo was
+	 * nearly or completely full. We'll need to be able to open additional
+	 * journal entries (at least a few) in order for journal replay to get
+	 * going:
+	 */
+	nr += nr / 4;
+
 	if (nr + 1 > j->pin.size) {
 		free_fifo(&j->pin);
 		init_fifo(&j->pin, roundup_pow_of_two(nr + 1), GFP_KERNEL);
@@ -1460,11 +1469,9 @@ int bch2_fs_journal_start(struct journal *j, u64 cur_seq)
 	j->reservations.idx = journal_cur_seq(j);
 
 	c->last_bucket_seq_cleanup = journal_cur_seq(j);
-
-	bch2_journal_space_available(j);
 	spin_unlock(&j->lock);
 
-	return bch2_journal_reclaim_start(j);
+	return 0;
 }
 
 /* init/exit: */

@@ -22,6 +22,13 @@
 
 #include <linux/ioprio.h>
 
+static const char * const bch2_data_update_type_strs[] = {
+#define x(t, n, ...) [n] = #t,
+	BCH_DATA_UPDATE_TYPES()
+#undef x
+	NULL
+};
+
 static void bkey_put_dev_refs(struct bch_fs *c, struct bkey_s_c k)
 {
 	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
@@ -181,6 +188,7 @@ static int __bch2_data_update_index_update(struct btree_trans *trans,
 		container_of(op, struct data_update, op);
 	struct keylist *keys = &op->insert_keys;
 	struct bkey_buf _new, _insert;
+	struct printbuf journal_msg = PRINTBUF;
 	int ret = 0;
 
 	bch2_bkey_buf_init(&_new);
@@ -208,7 +216,7 @@ static int __bch2_data_update_index_update(struct btree_trans *trans,
 
 		bch2_trans_begin(trans);
 
-		k = bch2_btree_iter_peek_slot(&iter);
+		k = bch2_btree_iter_peek_slot(trans, &iter);
 		ret = bkey_err(k);
 		if (ret)
 			goto err;
@@ -372,7 +380,12 @@ restart_drop_extra_replicas:
 			printbuf_exit(&buf);
 		}
 
-		ret =   bch2_insert_snapshot_whiteouts(trans, m->btree_id,
+		printbuf_reset(&journal_msg);
+		prt_str(&journal_msg, bch2_data_update_type_strs[m->type]);
+
+		ret =   bch2_trans_log_msg(trans, &journal_msg) ?:
+			bch2_trans_log_bkey(trans, m->btree_id, 0, m->k.k) ?:
+			bch2_insert_snapshot_whiteouts(trans, m->btree_id,
 						k.k->p, bkey_start_pos(&insert->k)) ?:
 			bch2_insert_snapshot_whiteouts(trans, m->btree_id,
 						k.k->p, insert->k.p) ?:
@@ -385,7 +398,7 @@ restart_drop_extra_replicas:
 				BCH_TRANS_COMMIT_no_enospc|
 				m->data_opts.btree_insert_flags);
 		if (!ret) {
-			bch2_btree_iter_set_pos(&iter, next_pos);
+			bch2_btree_iter_set_pos(trans, &iter, next_pos);
 
 			this_cpu_add(c->counters[BCH_COUNTER_io_move_finish], new->k.size);
 			if (trace_io_move_finish_enabled())
@@ -413,10 +426,11 @@ nowork:
 
 		count_event(c, io_move_fail);
 
-		bch2_btree_iter_advance(&iter);
+		bch2_btree_iter_advance(trans, &iter);
 		goto next;
 	}
 out:
+	printbuf_exit(&journal_msg);
 	bch2_trans_iter_exit(trans, &iter);
 	bch2_bkey_buf_exit(&_insert, c);
 	bch2_bkey_buf_exit(&_new, c);
@@ -483,7 +497,7 @@ static int bch2_update_unwritten_extent(struct btree_trans *trans,
 		bch2_trans_iter_init(trans, &iter, update->btree_id, update->op.pos,
 				     BTREE_ITER_slots);
 		ret = lockrestart_do(trans, ({
-			k = bch2_btree_iter_peek_slot(&iter);
+			k = bch2_btree_iter_peek_slot(trans, &iter);
 			bkey_err(k);
 		}));
 		bch2_trans_iter_exit(trans, &iter);
@@ -577,6 +591,9 @@ void bch2_data_update_opts_to_text(struct printbuf *out, struct bch_fs *c,
 
 void bch2_data_update_to_text(struct printbuf *out, struct data_update *m)
 {
+	prt_str(out, bch2_data_update_type_strs[m->type]);
+	prt_newline(out);
+
 	bch2_data_update_opts_to_text(out, m->op.c, &m->op.opts, &m->data_opts);
 	prt_newline(out);
 
@@ -590,7 +607,7 @@ void bch2_data_update_inflight_to_text(struct printbuf *out, struct data_update 
 	prt_newline(out);
 	printbuf_indent_add(out, 2);
 	bch2_data_update_opts_to_text(out, m->op.c, &m->op.opts, &m->data_opts);
-	prt_printf(out, "read_done:\t\%u\n", m->read_done);
+	prt_printf(out, "read_done:\t%u\n", m->read_done);
 	bch2_write_op_to_text(out, &m->op);
 	printbuf_indent_sub(out, 2);
 }
@@ -738,6 +755,9 @@ int bch2_data_update_init(struct btree_trans *trans,
 
 	bch2_bkey_buf_init(&m->k);
 	bch2_bkey_buf_reassemble(&m->k, c, k);
+	m->type		= data_opts.btree_insert_flags & BCH_WATERMARK_copygc
+		? BCH_DATA_UPDATE_copygc
+		: BCH_DATA_UPDATE_rebalance;
 	m->btree_id	= btree_id;
 	m->data_opts	= data_opts;
 	m->ctxt		= ctxt;

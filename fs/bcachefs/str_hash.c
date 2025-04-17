@@ -195,7 +195,7 @@ int __bch2_str_hash_check_key(struct btree_trans *trans,
 			      struct btree_iter *k_iter, struct bkey_s_c hash_k)
 {
 	struct bch_fs *c = trans->c;
-	struct btree_iter iter = { NULL };
+	struct btree_iter iter = {};
 	struct printbuf buf = PRINTBUF;
 	struct bkey_s_c k;
 	int ret = 0;
@@ -232,7 +232,7 @@ bad_hash:
 		goto out;
 
 	if (fsck_err(trans, hash_table_key_wrong_offset,
-		     "hash table key at wrong offset: btree %s inode %llu offset %llu, hashed to %llu\n  %s",
+		     "hash table key at wrong offset: btree %s inode %llu offset %llu, hashed to %llu\n%s",
 		     bch2_btree_id_str(desc->btree_id), hash_k.k->p.inode, hash_k.k->p.offset, hash,
 		     (printbuf_reset(&buf),
 		      bch2_bkey_val_to_text(&buf, c, hash_k), buf.buf))) {

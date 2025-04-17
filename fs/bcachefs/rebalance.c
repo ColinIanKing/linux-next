@@ -233,7 +233,7 @@ int bch2_set_rebalance_needs_scan_trans(struct btree_trans *trans, u64 inum)
 	bch2_trans_iter_init(trans, &iter, BTREE_ID_rebalance_work,
 			     SPOS(inum, REBALANCE_WORK_SCAN_OFFSET, U32_MAX),
 			     BTREE_ITER_intent);
-	k = bch2_btree_iter_peek_slot(&iter);
+	k = bch2_btree_iter_peek_slot(trans, &iter);
 	ret = bkey_err(k);
 	if (ret)
 		goto err;
@@ -281,7 +281,7 @@ static int bch2_clear_rebalance_needs_scan(struct btree_trans *trans, u64 inum, 
 	bch2_trans_iter_init(trans, &iter, BTREE_ID_rebalance_work,
 			     SPOS(inum, REBALANCE_WORK_SCAN_OFFSET, U32_MAX),
 			     BTREE_ITER_intent);
-	k = bch2_btree_iter_peek_slot(&iter);
+	k = bch2_btree_iter_peek_slot(trans, &iter);
 	ret = bkey_err(k);
 	if (ret)
 		goto err;
@@ -301,7 +301,7 @@ static struct bkey_s_c next_rebalance_entry(struct btree_trans *trans,
 					    struct btree_iter *work_iter)
 {
 	return !kthread_should_stop()
-		? bch2_btree_iter_peek(work_iter)
+		? bch2_btree_iter_peek(trans, work_iter)
 		: bkey_s_c_null;
 }
 
@@ -335,7 +335,7 @@ static struct bkey_s_c next_rebalance_extent(struct btree_trans *trans,
 			     work_pos.inode ? BTREE_ID_extents : BTREE_ID_reflink,
 			     work_pos,
 			     BTREE_ITER_all_snapshots);
-	struct bkey_s_c k = bch2_btree_iter_peek_slot(extent_iter);
+	struct bkey_s_c k = bch2_btree_iter_peek_slot(trans, extent_iter);
 	if (bkey_err(k))
 		return k;
 
@@ -511,7 +511,7 @@ static int do_rebalance(struct moving_context *ctxt)
 	struct btree_trans *trans = ctxt->trans;
 	struct bch_fs *c = trans->c;
 	struct bch_fs_rebalance *r = &c->rebalance;
-	struct btree_iter rebalance_work_iter, extent_iter = { NULL };
+	struct btree_iter rebalance_work_iter, extent_iter = {};
 	struct bkey_s_c k;
 	int ret = 0;
 
@@ -552,7 +552,7 @@ static int do_rebalance(struct moving_context *ctxt)
 		if (ret)
 			break;
 
-		bch2_btree_iter_advance(&rebalance_work_iter);
+		bch2_btree_iter_advance(trans, &rebalance_work_iter);
 	}
 
 	bch2_trans_iter_exit(trans, &extent_iter);
@@ -600,12 +600,13 @@ void bch2_rebalance_status_to_text(struct printbuf *out, struct bch_fs *c)
 	struct bch_fs_rebalance *r = &c->rebalance;
 
 	/* print pending work */
-	struct disk_accounting_pos acc = { .type = BCH_DISK_ACCOUNTING_rebalance_work, };
+	struct disk_accounting_pos acc;
+	disk_accounting_key_init(acc, rebalance_work);
 	u64 v;
 	bch2_accounting_mem_read(c, disk_accounting_pos_to_bpos(&acc), &v, 1);
 
 	prt_printf(out, "pending work:\t");
-	prt_human_readable_u64(out, v);
+	prt_human_readable_u64(out, v << 9);
 	prt_printf(out, "\n\n");
 
 	prt_str(out, bch2_rebalance_state_strs[r->state]);

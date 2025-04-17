@@ -341,7 +341,7 @@ static void xe_svm_garbage_collector_work_func(struct work_struct *w)
 
 static struct xe_vram_region *page_to_vr(struct page *page)
 {
-	return container_of(page->pgmap, struct xe_vram_region, pagemap);
+	return container_of(page_pgmap(page), struct xe_vram_region, pagemap);
 }
 
 static struct xe_tile *vr_to_tile(struct xe_vram_region *vr)
@@ -696,11 +696,14 @@ retry:
 	list_for_each_entry(block, blocks, link)
 		block->private = vr;
 
+	xe_bo_get(bo);
 	err = drm_gpusvm_migrate_to_devmem(&vm->svm.gpusvm, &range->base,
 					   &bo->devmem_allocation, ctx);
-	xe_bo_unlock(bo);
 	if (err)
-		xe_bo_put(bo);	/* Creation ref */
+		xe_svm_devmem_release(&bo->devmem_allocation);
+
+	xe_bo_unlock(bo);
+	xe_bo_put(bo);
 
 unlock:
 	mmap_read_unlock(mm);
