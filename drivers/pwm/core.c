@@ -229,8 +229,12 @@ static int __pwm_write_waveform(struct pwm_chip *chip, struct pwm_device *pwm, c
  * these two calls and the waveform determined by
  * pwm_round_waveform_might_sleep() cannot be implemented any more.
  *
- * Returns 0 on success, 1 if there is no valid hardware configuration matching
- * the input waveform under the PWM rounding rules or a negative errno.
+ * Usually all values passed in *wf are rounded down to the nearest possible
+ * value (in the order period_length_ns, duty_length_ns and then
+ * duty_offset_ns). Only if this isn't possible, a value might grow.
+ *
+ * Returns 0 on success, 1 if at least one value had to be rounded up or a
+ * negative errno.
  */
 int pwm_round_waveform_might_sleep(struct pwm_device *pwm, struct pwm_waveform *wf)
 {
@@ -270,10 +274,10 @@ int pwm_round_waveform_might_sleep(struct pwm_device *pwm, struct pwm_waveform *
 			wf_req.duty_length_ns, wf_req.period_length_ns, wf_req.duty_offset_ns, ret_tohw);
 
 	if (IS_ENABLED(CONFIG_PWM_DEBUG) &&
-	    ret_tohw == 0 && !pwm_check_rounding(&wf_req, wf))
-		dev_err(&chip->dev, "Wrong rounding: requested %llu/%llu [+%llu], result %llu/%llu [+%llu]\n",
+	    (ret_tohw == 0) != pwm_check_rounding(&wf_req, wf))
+		dev_err(&chip->dev, "Wrong rounding: requested %llu/%llu [+%llu], result %llu/%llu [+%llu], ret: %d\n",
 			wf_req.duty_length_ns, wf_req.period_length_ns, wf_req.duty_offset_ns,
-			wf->duty_length_ns, wf->period_length_ns, wf->duty_offset_ns);
+			wf->duty_length_ns, wf->period_length_ns, wf->duty_offset_ns, ret_tohw);
 
 	return ret_tohw;
 }
@@ -341,10 +345,10 @@ static int __pwm_set_waveform(struct pwm_device *pwm,
 		if (err)
 			return err;
 
-		if (IS_ENABLED(CONFIG_PWM_DEBUG) && ret_tohw == 0 && !pwm_check_rounding(wf, &wf_rounded))
-			dev_err(&chip->dev, "Wrong rounding: requested %llu/%llu [+%llu], result %llu/%llu [+%llu]\n",
+		if (IS_ENABLED(CONFIG_PWM_DEBUG) && (ret_tohw == 0) != pwm_check_rounding(wf, &wf_rounded))
+			dev_err(&chip->dev, "Wrong rounding: requested %llu/%llu [+%llu], result %llu/%llu [+%llu], ret: %d\n",
 				wf->duty_length_ns, wf->period_length_ns, wf->duty_offset_ns,
-				wf_rounded.duty_length_ns, wf_rounded.period_length_ns, wf_rounded.duty_offset_ns);
+				wf_rounded.duty_length_ns, wf_rounded.period_length_ns, wf_rounded.duty_offset_ns, ret_tohw);
 
 		if (exact && pwmwfcmp(wf, &wf_rounded)) {
 			dev_dbg(&chip->dev, "Requested no rounding, but %llu/%llu [+%llu] -> %llu/%llu [+%llu]\n",
@@ -2221,25 +2225,28 @@ static void pwm_dbg_show(struct pwm_chip *chip, struct seq_file *s)
 
 	for (i = 0; i < chip->npwm; i++) {
 		struct pwm_device *pwm = &chip->pwms[i];
-		struct pwm_state state;
+		struct pwm_state state, hwstate;
 
 		pwm_get_state(pwm, &state);
+		pwm_get_state_hw(pwm, &hwstate);
 
 		seq_printf(s, " pwm-%-3d (%-20.20s):", i, pwm->label);
 
 		if (test_bit(PWMF_REQUESTED, &pwm->flags))
 			seq_puts(s, " requested");
 
-		if (state.enabled)
-			seq_puts(s, " enabled");
+		seq_puts(s, "\n");
 
-		seq_printf(s, " period: %llu ns", state.period);
-		seq_printf(s, " duty: %llu ns", state.duty_cycle);
-		seq_printf(s, " polarity: %s",
+		seq_printf(s, "  requested configuration: %3sabled, %llu/%llu ns, %s polarity",
+			   state.enabled ? "en" : "dis", state.duty_cycle, state.period,
 			   state.polarity ? "inverse" : "normal");
-
 		if (state.usage_power)
-			seq_puts(s, " usage_power");
+			seq_puts(s, ", usage_power");
+		seq_puts(s, "\n");
+
+		seq_printf(s, "  actual configuration:    %3sabled, %llu/%llu ns, %s polarity",
+			   hwstate.enabled ? "en" : "dis", hwstate.duty_cycle, hwstate.period,
+			   hwstate.polarity ? "inverse" : "normal");
 
 		seq_puts(s, "\n");
 	}
