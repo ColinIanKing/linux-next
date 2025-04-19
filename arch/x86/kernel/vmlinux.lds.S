@@ -473,7 +473,6 @@ SECTIONS
  */
 #ifndef CONFIG_COMPILE_TEST
 /*
-/*
  * The ASSERT() sync to . is intentional, for binutils 2.14 compatibility:
  */
 . = ASSERT((_end - LOAD_OFFSET <= KERNEL_IMAGE_SIZE),
