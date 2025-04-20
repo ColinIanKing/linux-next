@@ -15,7 +15,7 @@
 #include <linux/delay.h>
 #include <linux/mm.h>
 #include <linux/rcupdate.h>
-#include <linux/srcutree.h>
+#include <linux/srcu.h>
 #include <linux/slab.h>
 
 #define __param(type, name, init, msg)		\
