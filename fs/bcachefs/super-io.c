@@ -384,7 +384,6 @@ static int bch2_sb_compatible(struct bch_sb *sb, struct printbuf *out)
 int bch2_sb_validate(struct bch_sb *sb, u64 read_offset,
 		     enum bch_validate_flags flags, struct printbuf *out)
 {
-	struct bch_sb_field_members_v1 *mi;
 	enum bch_opt_id opt_id;
 	int ret;
 
@@ -468,6 +467,9 @@ int bch2_sb_validate(struct bch_sb *sb, u64 read_offset,
 			SET_BCH_SB_VERSION_INCOMPAT_ALLOWED(sb, BCH_SB_VERSION_INCOMPAT(sb));
 	}
 
+	if (sb->nr_devices > 1)
+		SET_BCH_SB_MULTI_DEVICE(sb, true);
+
 	if (!flags) {
 		/*
 		 * Been seeing a bug where these are getting inexplicably
@@ -536,14 +538,17 @@ int bch2_sb_validate(struct bch_sb *sb, u64 read_offset,
 		}
 	}
 
+	struct bch_sb_field *mi =
+		bch2_sb_field_get_id(sb, BCH_SB_FIELD_members_v2) ?:
+		bch2_sb_field_get_id(sb, BCH_SB_FIELD_members_v1);
+
 	/* members must be validated first: */
-	mi = bch2_sb_field_get(sb, members_v1);
 	if (!mi) {
 		prt_printf(out, "Invalid superblock: member info area missing");
 		return -BCH_ERR_invalid_sb_members_missing;
 	}
 
-	ret = bch2_sb_field_validate(sb, &mi->field, flags, out);
+	ret = bch2_sb_field_validate(sb, mi, flags, out);
 	if (ret)
 		return ret;
 
@@ -612,6 +617,7 @@ static void bch2_sb_update(struct bch_fs *c)
 
 	c->sb.features		= le64_to_cpu(src->features[0]);
 	c->sb.compat		= le64_to_cpu(src->compat[0]);
+	c->sb.multi_device	= BCH_SB_MULTI_DEVICE(src);
 
 	memset(c->sb.errors_silent, 0, sizeof(c->sb.errors_silent));
 
@@ -1022,7 +1028,7 @@ int bch2_write_super(struct bch_fs *c)
 
 	trace_and_count(c, write_super, c, _RET_IP_);
 
-	if (c->opts.very_degraded)
+	if (c->opts.degraded == BCH_DEGRADED_very)
 		degraded_flags |= BCH_FORCE_IF_LOST;
 
 	lockdep_assert_held(&c->sb_lock);
@@ -1267,6 +1273,31 @@ void bch2_sb_upgrade(struct bch_fs *c, unsigned new_version, bool incompat)
 		SET_BCH_SB_VERSION_INCOMPAT_ALLOWED(c->disk_sb.sb,
 			max(BCH_SB_VERSION_INCOMPAT_ALLOWED(c->disk_sb.sb), new_version));
 	}
+}
+
+void bch2_sb_upgrade_incompat(struct bch_fs *c)
+{
+	mutex_lock(&c->sb_lock);
+	if (c->sb.version == c->sb.version_incompat_allowed)
+		goto unlock;
+
+	struct printbuf buf = PRINTBUF;
+
+	prt_str(&buf, "Now allowing incompatible features up to ");
+	bch2_version_to_text(&buf, c->sb.version);
+	prt_str(&buf, ", previously allowed up to ");
+	bch2_version_to_text(&buf, c->sb.version_incompat_allowed);
+	prt_newline(&buf);
+
+	bch_notice(c, "%s", buf.buf);
+	printbuf_exit(&buf);
+
+	c->disk_sb.sb->features[0] |= cpu_to_le64(BCH_SB_FEATURES_ALL);
+	SET_BCH_SB_VERSION_INCOMPAT_ALLOWED(c->disk_sb.sb,
+			max(BCH_SB_VERSION_INCOMPAT_ALLOWED(c->disk_sb.sb), c->sb.version));
+	bch2_write_super(c);
+unlock:
+	mutex_unlock(&c->sb_lock);
 }
 
 static int bch2_sb_ext_validate(struct bch_sb *sb, struct bch_sb_field *f,

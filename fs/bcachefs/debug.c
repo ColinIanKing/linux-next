@@ -770,6 +770,12 @@ static ssize_t btree_transaction_stats_read(struct file *file, char __user *buf,
 		mutex_lock(&s->lock);
 
 		prt_printf(&i->buf, "Max mem used: %u\n", s->max_mem);
+#ifdef CONFIG_BCACHEFS_DEBUG
+		printbuf_indent_add(&i->buf, 2);
+		bch2_trans_kmalloc_trace_to_text(&i->buf, &s->trans_kmalloc_trace);
+		printbuf_indent_sub(&i->buf, 2);
+#endif
+
 		prt_printf(&i->buf, "Transaction duration:\n");
 
 		printbuf_indent_add(&i->buf, 2);
@@ -927,7 +933,11 @@ void bch2_fs_debug_init(struct bch_fs *c)
 	if (IS_ERR_OR_NULL(bch_debug))
 		return;
 
-	snprintf(name, sizeof(name), "%pU", c->sb.user_uuid.b);
+	if (c->sb.multi_device)
+		snprintf(name, sizeof(name), "%pU", c->sb.user_uuid.b);
+	else
+		strscpy(name, c->name, sizeof(name));
+
 	c->fs_debug_dir = debugfs_create_dir(name, bch_debug);
 	if (IS_ERR_OR_NULL(c->fs_debug_dir))
 		return;
