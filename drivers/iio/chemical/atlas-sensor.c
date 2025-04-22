@@ -518,13 +518,12 @@ static int atlas_read_raw(struct iio_dev *indio_dev,
 		case IIO_CONCENTRATION:
 		case IIO_ELECTRICALCONDUCTIVITY:
 		case IIO_VOLTAGE:
-			ret = iio_device_claim_direct_mode(indio_dev);
-			if (ret)
-				return ret;
+			if (!iio_device_claim_direct(indio_dev))
+				return -EBUSY;
 
 			ret = atlas_read_measurement(data, chan->address, &reg);
 
-			iio_device_release_direct_mode(indio_dev);
+			iio_device_release_direct(indio_dev);
 			break;
 		default:
 			ret = -EINVAL;
@@ -594,7 +593,7 @@ static const struct i2c_device_id atlas_id[] = {
 	{ "atlas-orp-sm", (kernel_ulong_t)&atlas_devices[ATLAS_ORP_SM] },
 	{ "atlas-do-sm", (kernel_ulong_t)&atlas_devices[ATLAS_DO_SM] },
 	{ "atlas-rtd-sm", (kernel_ulong_t)&atlas_devices[ATLAS_RTD_SM] },
-	{}
+	{ }
 };
 MODULE_DEVICE_TABLE(i2c, atlas_id);
 
