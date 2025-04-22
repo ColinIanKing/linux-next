@@ -678,7 +678,7 @@ out_put:
 	}
 out:
 	up_read(&sb->s_umount);
-	kfree(rec);
+	ocfs2_free_quota_recovery(rec);
 	return status;
 }
 
