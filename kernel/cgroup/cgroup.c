@@ -90,7 +90,7 @@
 DEFINE_MUTEX(cgroup_mutex);
 DEFINE_SPINLOCK(css_set_lock);
 
-#ifdef CONFIG_PROVE_RCU
+#if (defined CONFIG_PROVE_RCU || defined CONFIG_LOCKDEP)
 EXPORT_SYMBOL_GPL(cgroup_mutex);
 EXPORT_SYMBOL_GPL(css_set_lock);
 #endif
@@ -161,10 +161,14 @@ static struct static_key_true *cgroup_subsys_on_dfl_key[] = {
 };
 #undef SUBSYS
 
-static DEFINE_PER_CPU(struct cgroup_rstat_cpu, cgrp_dfl_root_rstat_cpu);
+static DEFINE_PER_CPU(struct cgroup_rstat_cpu, root_rstat_cpu);
+static DEFINE_PER_CPU(struct cgroup_rstat_base_cpu, root_rstat_base_cpu);
 
 /* the default hierarchy */
-struct cgroup_root cgrp_dfl_root = { .cgrp.rstat_cpu = &cgrp_dfl_root_rstat_cpu };
+struct cgroup_root cgrp_dfl_root = {
+	.cgrp.rstat_cpu = &root_rstat_cpu,
+	.cgrp.rstat_base_cpu = &root_rstat_base_cpu,
+};
 EXPORT_SYMBOL_GPL(cgrp_dfl_root);
 
 /*
@@ -1371,7 +1375,7 @@ static void cgroup_destroy_root(struct cgroup_root *root)
 
 	cgroup_unlock();
 
-	cgroup_rstat_exit(cgrp);
+	css_rstat_exit(&cgrp->self);
 	kernfs_destroy_root(root->kf_root);
 	cgroup_free_root(root);
 }
@@ -1715,7 +1719,7 @@ static void css_clear_dir(struct cgroup_subsys_state *css)
 
 	css->flags &= ~CSS_VISIBLE;
 
-	if (!css->ss) {
+	if (css_is_cgroup(css)) {
 		if (cgroup_on_dfl(cgrp)) {
 			cgroup_addrm_files(css, cgrp,
 					   cgroup_base_files, false);
@@ -1747,7 +1751,7 @@ static int css_populate_dir(struct cgroup_subsys_state *css)
 	if (css->flags & CSS_VISIBLE)
 		return 0;
 
-	if (!css->ss) {
+	if (css_is_cgroup(css)) {
 		if (cgroup_on_dfl(cgrp)) {
 			ret = cgroup_addrm_files(css, cgrp,
 						 cgroup_base_files, true);
@@ -2146,7 +2150,7 @@ int cgroup_setup_root(struct cgroup_root *root, u16 ss_mask)
 	if (ret)
 		goto destroy_root;
 
-	ret = cgroup_rstat_init(root_cgrp);
+	ret = css_rstat_init(&root_cgrp->self);
 	if (ret)
 		goto destroy_root;
 
@@ -2188,7 +2192,7 @@ int cgroup_setup_root(struct cgroup_root *root, u16 ss_mask)
 	goto out;
 
 exit_stats:
-	cgroup_rstat_exit(root_cgrp);
+	css_rstat_exit(&root_cgrp->self);
 destroy_root:
 	kernfs_destroy_root(root->kf_root);
 	root->kf_root = NULL;
@@ -2353,9 +2357,37 @@ static struct file_system_type cgroup2_fs_type = {
 };
 
 #ifdef CONFIG_CPUSETS_V1
+enum cpuset_param {
+	Opt_cpuset_v2_mode,
+};
+
+static const struct fs_parameter_spec cpuset_fs_parameters[] = {
+	fsparam_flag  ("cpuset_v2_mode", Opt_cpuset_v2_mode),
+	{}
+};
+
+static int cpuset_parse_param(struct fs_context *fc, struct fs_parameter *param)
+{
+	struct cgroup_fs_context *ctx = cgroup_fc2context(fc);
+	struct fs_parse_result result;
+	int opt;
+
+	opt = fs_parse(fc, cpuset_fs_parameters, param, &result);
+	if (opt < 0)
+		return opt;
+
+	switch (opt) {
+	case Opt_cpuset_v2_mode:
+		ctx->flags |= CGRP_ROOT_CPUSET_V2_MODE;
+		return 0;
+	}
+	return -EINVAL;
+}
+
 static const struct fs_context_operations cpuset_fs_context_ops = {
 	.get_tree	= cgroup1_get_tree,
 	.free		= cgroup_fs_context_free,
+	.parse_param	= cpuset_parse_param,
 };
 
 /*
@@ -2392,6 +2424,7 @@ static int cpuset_init_fs_context(struct fs_context *fc)
 static struct file_system_type cpuset_fs_type = {
 	.name			= "cpuset",
 	.init_fs_context	= cpuset_init_fs_context,
+	.parameters		= cpuset_fs_parameters,
 	.fs_flags		= FS_USERNS_MOUNT,
 };
 #endif
@@ -5445,7 +5478,7 @@ static void css_free_rwork_fn(struct work_struct *work)
 			cgroup_put(cgroup_parent(cgrp));
 			kernfs_put(cgrp->kn);
 			psi_cgroup_free(cgrp);
-			cgroup_rstat_exit(cgrp);
+			css_rstat_exit(css);
 			kfree(cgrp);
 		} else {
 			/*
@@ -5475,7 +5508,7 @@ static void css_release_work_fn(struct work_struct *work)
 
 		/* css release path */
 		if (!list_empty(&css->rstat_css_node)) {
-			cgroup_rstat_flush(cgrp);
+			css_rstat_flush(css);
 			list_del_rcu(&css->rstat_css_node);
 		}
 
@@ -5503,7 +5536,7 @@ static void css_release_work_fn(struct work_struct *work)
 		/* cgroup release path */
 		TRACE_CGROUP_PATH(release, cgrp);
 
-		cgroup_rstat_flush(cgrp);
+		css_rstat_flush(css);
 
 		spin_lock_irq(&css_set_lock);
 		for (tcgrp = cgroup_parent(cgrp); tcgrp;
@@ -5696,17 +5729,13 @@ static struct cgroup *cgroup_create(struct cgroup *parent, const char *name,
 	if (ret)
 		goto out_free_cgrp;
 
-	ret = cgroup_rstat_init(cgrp);
-	if (ret)
-		goto out_cancel_ref;
-
 	/* create the directory */
 	kn = kernfs_create_dir_ns(parent->kn, name, mode,
 				  current_fsuid(), current_fsgid(),
 				  cgrp, NULL);
 	if (IS_ERR(kn)) {
 		ret = PTR_ERR(kn);
-		goto out_stat_exit;
+		goto out_cancel_ref;
 	}
 	cgrp->kn = kn;
 
@@ -5715,6 +5744,14 @@ static struct cgroup *cgroup_create(struct cgroup *parent, const char *name,
 	cgrp->self.parent = &parent->self;
 	cgrp->root = root;
 	cgrp->level = level;
+
+	/*
+	 * Now that init_cgroup_housekeeping() has been called and cgrp->self
+	 * is setup, it is safe to perform rstat initialization on it.
+	 */
+	ret = css_rstat_init(&cgrp->self);
+	if (ret)
+		goto out_stat_exit;
 
 	ret = psi_cgroup_alloc(cgrp);
 	if (ret)
@@ -5786,10 +5823,10 @@ static struct cgroup *cgroup_create(struct cgroup *parent, const char *name,
 
 out_psi_free:
 	psi_cgroup_free(cgrp);
+out_stat_exit:
+	css_rstat_exit(&cgrp->self);
 out_kernfs_remove:
 	kernfs_remove(cgrp->kn);
-out_stat_exit:
-	cgroup_rstat_exit(cgrp);
 out_cancel_ref:
 	percpu_ref_exit(&cgrp->self.refcnt);
 out_free_cgrp:
