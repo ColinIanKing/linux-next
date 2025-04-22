@@ -3,18 +3,19 @@
  * Xilinx ZynqMP SHA Driver.
  * Copyright (c) 2022 Xilinx Inc.
  */
-#include <linux/cacheflush.h>
 #include <crypto/hash.h>
 #include <crypto/internal/hash.h>
 #include <crypto/sha3.h>
-#include <linux/crypto.h>
+#include <linux/cacheflush.h>
+#include <linux/cleanup.h>
 #include <linux/device.h>
 #include <linux/dma-mapping.h>
+#include <linux/err.h>
 #include <linux/firmware/xlnx-zynqmp.h>
-#include <linux/init.h>
 #include <linux/io.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <linux/spinlock.h>
 #include <linux/platform_device.h>
 
 #define ZYNQMP_DMA_BIT_MASK		32U
@@ -43,6 +44,8 @@ struct zynqmp_sha_desc_ctx {
 static dma_addr_t update_dma_addr, final_dma_addr;
 static char *ubuf, *fbuf;
 
+static DEFINE_SPINLOCK(zynqmp_sha_lock);
+
 static int zynqmp_sha_init_tfm(struct crypto_shash *hash)
 {
 	const char *fallback_driver_name = crypto_shash_alg_name(hash);
@@ -60,8 +63,14 @@ static int zynqmp_sha_init_tfm(struct crypto_shash *hash)
 	if (IS_ERR(fallback_tfm))
 		return PTR_ERR(fallback_tfm);
 
+	if (crypto_shash_descsize(hash) <
+	    sizeof(struct zynqmp_sha_desc_ctx) +
+	    crypto_shash_descsize(tfm_ctx->fbk_tfm)) {
+		crypto_free_shash(fallback_tfm);
+		return -EINVAL;
+	}
+
 	tfm_ctx->fbk_tfm = fallback_tfm;
-	hash->descsize += crypto_shash_descsize(tfm_ctx->fbk_tfm);
 
 	return 0;
 }
@@ -124,7 +133,8 @@ static int zynqmp_sha_export(struct shash_desc *desc, void *out)
 	return crypto_shash_export(&dctx->fbk_req, out);
 }
 
-static int zynqmp_sha_digest(struct shash_desc *desc, const u8 *data, unsigned int len, u8 *out)
+static int __zynqmp_sha_digest(struct shash_desc *desc, const u8 *data,
+			       unsigned int len, u8 *out)
 {
 	unsigned int remaining_len = len;
 	int update_size;
@@ -159,6 +169,12 @@ static int zynqmp_sha_digest(struct shash_desc *desc, const u8 *data, unsigned i
 	return ret;
 }
 
+static int zynqmp_sha_digest(struct shash_desc *desc, const u8 *data, unsigned int len, u8 *out)
+{
+	scoped_guard(spinlock_bh, &zynqmp_sha_lock)
+		return __zynqmp_sha_digest(desc, data, len, out);
+}
+
 static struct zynqmp_sha_drv_ctx sha3_drv_ctx = {
 	.sha3_384 = {
 		.init = zynqmp_sha_init,
@@ -170,7 +186,8 @@ static struct zynqmp_sha_drv_ctx sha3_drv_ctx = {
 		.import = zynqmp_sha_import,
 		.init_tfm = zynqmp_sha_init_tfm,
 		.exit_tfm = zynqmp_sha_exit_tfm,
-		.descsize = sizeof(struct zynqmp_sha_desc_ctx),
+		.descsize = sizeof(struct zynqmp_sha_desc_ctx) +
+			    sizeof(struct sha3_state),
 		.statesize = sizeof(struct sha3_state),
 		.digestsize = SHA3_384_DIGEST_SIZE,
 		.base = {
