@@ -269,7 +269,8 @@ do {									\
 
 #define bch2_fmt(_c, fmt)		bch2_log_msg(_c, fmt "\n")
 
-void bch2_print_str(struct bch_fs *, const char *);
+void bch2_print_str(struct bch_fs *, const char *, const char *);
+void bch2_print_str_nonblocking(struct bch_fs *, const char *, const char *);
 
 __printf(2, 3)
 void bch2_print_opts(struct bch_opts *, const char *, ...);
@@ -614,6 +615,7 @@ struct bch_dev {
 	x(accounting_replay_done)	\
 	x(may_go_rw)			\
 	x(rw)				\
+	x(rw_init_done)			\
 	x(was_rw)			\
 	x(stopping)			\
 	x(emergency_ro)			\
@@ -650,6 +652,9 @@ struct btree_transaction_stats {
 	unsigned		nr_max_paths;
 	unsigned		journal_entries_size;
 	unsigned		max_mem;
+#ifdef CONFIG_BCACHEFS_DEBUG
+	darray_trans_kmalloc_trace trans_kmalloc_trace;
+#endif
 	char			*max_paths_text;
 };
 
@@ -776,6 +781,7 @@ struct bch_fs {
 
 		u8		nr_devices;
 		u8		clean;
+		bool		multi_device; /* true if we've ever had more than one device */
 
 		u8		encryption_type;
 
@@ -874,7 +880,7 @@ struct bch_fs {
 	struct btree_write_buffer btree_write_buffer;
 
 	struct workqueue_struct	*btree_update_wq;
-	struct workqueue_struct	*btree_io_complete_wq;
+	struct workqueue_struct	*btree_write_complete_wq;
 	/* copygc needs its own workqueue for index updates.. */
 	struct workqueue_struct	*copygc_wq;
 	/*
