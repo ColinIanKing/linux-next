@@ -426,8 +426,8 @@ int bch2_journal_flush(struct journal *);
 bool bch2_journal_noflush_seq(struct journal *, u64, u64);
 int bch2_journal_meta(struct journal *);
 
-void bch2_journal_halt(struct journal *);
 void bch2_journal_halt_locked(struct journal *);
+void bch2_journal_halt(struct journal *);
 
 static inline int bch2_journal_error(struct journal *j)
 {
@@ -436,12 +436,6 @@ static inline int bch2_journal_error(struct journal *j)
 }
 
 struct bch_dev;
-
-static inline void bch2_journal_set_replay_done(struct journal *j)
-{
-	BUG_ON(!test_bit(JOURNAL_running, &j->flags));
-	set_bit(JOURNAL_replay_done, &j->flags);
-}
 
 void bch2_journal_unblock(struct journal *);
 void bch2_journal_block(struct journal *);
@@ -459,10 +453,12 @@ void bch2_dev_journal_stop(struct journal *, struct bch_dev *);
 
 void bch2_fs_journal_stop(struct journal *);
 int bch2_fs_journal_start(struct journal *, u64);
+void bch2_journal_set_replay_done(struct journal *);
 
 void bch2_dev_journal_exit(struct bch_dev *);
 int bch2_dev_journal_init(struct bch_dev *, struct bch_sb *);
 void bch2_fs_journal_exit(struct journal *);
+void bch2_fs_journal_init_early(struct journal *);
 int bch2_fs_journal_init(struct journal *);
 
 #endif /* _BCACHEFS_JOURNAL_H */

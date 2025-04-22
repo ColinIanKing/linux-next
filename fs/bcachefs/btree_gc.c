@@ -22,6 +22,7 @@
 #include "debug.h"
 #include "disk_accounting.h"
 #include "ec.h"
+#include "enumerated_ref.h"
 #include "error.h"
 #include "extents.h"
 #include "journal.h"
@@ -1233,26 +1234,21 @@ static void bch2_gc_gens_work(struct work_struct *work)
 {
 	struct bch_fs *c = container_of(work, struct bch_fs, gc_gens_work);
 	bch2_gc_gens(c);
-	bch2_write_ref_put(c, BCH_WRITE_REF_gc_gens);
+	enumerated_ref_put(&c->writes, BCH_WRITE_REF_gc_gens);
 }
 
 void bch2_gc_gens_async(struct bch_fs *c)
 {
-	if (bch2_write_ref_tryget(c, BCH_WRITE_REF_gc_gens) &&
+	if (enumerated_ref_tryget(&c->writes, BCH_WRITE_REF_gc_gens) &&
 	    !queue_work(c->write_ref_wq, &c->gc_gens_work))
-		bch2_write_ref_put(c, BCH_WRITE_REF_gc_gens);
+		enumerated_ref_put(&c->writes, BCH_WRITE_REF_gc_gens);
 }
 
-void bch2_fs_btree_gc_exit(struct bch_fs *c)
-{
-}
-
-int bch2_fs_btree_gc_init(struct bch_fs *c)
+void bch2_fs_btree_gc_init_early(struct bch_fs *c)
 {
 	seqcount_init(&c->gc_pos_lock);
 	INIT_WORK(&c->gc_gens_work, bch2_gc_gens_work);
 
 	init_rwsem(&c->gc_lock);
 	mutex_init(&c->gc_gens_lock);
-	return 0;
 }

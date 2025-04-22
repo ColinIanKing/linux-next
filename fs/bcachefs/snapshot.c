@@ -6,6 +6,7 @@
 #include "btree_key_cache.h"
 #include "btree_update.h"
 #include "buckets.h"
+#include "enumerated_ref.h"
 #include "errcode.h"
 #include "error.h"
 #include "fs.h"
@@ -281,6 +282,16 @@ fsck_err:
 	return ret;
 }
 
+static int bch2_snapshot_table_make_room(struct bch_fs *c, u32 id)
+{
+	mutex_lock(&c->snapshot_table_lock);
+	int ret = snapshot_t_mut(c, id)
+		? 0
+		: -BCH_ERR_ENOMEM_mark_snapshot;
+	mutex_unlock(&c->snapshot_table_lock);
+	return ret;
+}
+
 static int __bch2_mark_snapshot(struct btree_trans *trans,
 		       enum btree_id btree, unsigned level,
 		       struct bkey_s_c old, struct bkey_s_c new,
@@ -396,7 +407,7 @@ u32 bch2_snapshot_tree_oldest_subvol(struct bch_fs *c, u32 snapshot_root)
 	u32 subvol = 0, s;
 
 	rcu_read_lock();
-	while (id) {
+	while (id && bch2_snapshot_exists(c, id)) {
 		s = snapshot_t(c, id)->subvol;
 
 		if (s && (!subvol || s < subvol))
@@ -887,9 +898,8 @@ static int check_snapshot_exists(struct btree_trans *trans, u32 id)
 	}
 	bch2_trans_iter_exit(trans, &iter);
 
-	return  bch2_btree_insert_trans(trans, BTREE_ID_snapshots, &snapshot->k_i, 0) ?:
-		bch2_mark_snapshot(trans, BTREE_ID_snapshots, 0,
-				   bkey_s_c_null, bkey_i_to_s(&snapshot->k_i), 0);
+	return  bch2_snapshot_table_make_room(c, id) ?:
+		bch2_btree_insert_trans(trans, BTREE_ID_snapshots, &snapshot->k_i, 0);
 }
 
 /* Figure out which snapshot nodes belong in the same tree: */
@@ -1652,18 +1662,18 @@ void bch2_delete_dead_snapshots_work(struct work_struct *work)
 	set_worker_desc("bcachefs-delete-dead-snapshots/%s", c->name);
 
 	bch2_delete_dead_snapshots(c);
-	bch2_write_ref_put(c, BCH_WRITE_REF_delete_dead_snapshots);
+	enumerated_ref_put(&c->writes, BCH_WRITE_REF_delete_dead_snapshots);
 }
 
 void bch2_delete_dead_snapshots_async(struct bch_fs *c)
 {
-	if (!bch2_write_ref_tryget(c, BCH_WRITE_REF_delete_dead_snapshots))
+	if (!enumerated_ref_tryget(&c->writes, BCH_WRITE_REF_delete_dead_snapshots))
 		return;
 
 	BUG_ON(!test_bit(BCH_FS_may_go_rw, &c->flags));
 
 	if (!queue_work(c->write_ref_wq, &c->snapshot_delete_work))
-		bch2_write_ref_put(c, BCH_WRITE_REF_delete_dead_snapshots);
+		enumerated_ref_put(&c->writes, BCH_WRITE_REF_delete_dead_snapshots);
 }
 
 int __bch2_key_has_snapshot_overwrites(struct btree_trans *trans,
