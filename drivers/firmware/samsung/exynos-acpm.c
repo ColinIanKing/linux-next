@@ -649,7 +649,7 @@ static int acpm_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, acpm);
 
-	return 0;
+	return devm_of_platform_populate(dev);
 }
 
 /**
@@ -683,37 +683,24 @@ static void devm_acpm_release(struct device *dev, void *res)
  *
  * Return: pointer to handle on success, ERR_PTR(-errno) otherwise.
  */
-static const struct acpm_handle *acpm_get_by_phandle(struct device *dev,
-						     const char *property)
+static const struct acpm_handle *acpm_get_by_node(struct device *dev,
+						  struct device_node *acpm_np)
 {
 	struct platform_device *pdev;
-	struct device_node *acpm_np;
 	struct device_link *link;
 	struct acpm_info *acpm;
 
-	acpm_np = of_parse_phandle(dev->of_node, property, 0);
-	if (!acpm_np)
-		return ERR_PTR(-ENODEV);
-
 	pdev = of_find_device_by_node(acpm_np);
-	if (!pdev) {
-		dev_err(dev, "Cannot find device node %s\n", acpm_np->name);
-		of_node_put(acpm_np);
+	if (!pdev)
 		return ERR_PTR(-EPROBE_DEFER);
-	}
-
-	of_node_put(acpm_np);
 
 	acpm = platform_get_drvdata(pdev);
 	if (!acpm) {
-		dev_err(dev, "Cannot get drvdata from %s\n",
-			dev_name(&pdev->dev));
 		platform_device_put(pdev);
 		return ERR_PTR(-EPROBE_DEFER);
 	}
 
 	if (!try_module_get(pdev->dev.driver->owner)) {
-		dev_err(dev, "Cannot get module reference.\n");
 		platform_device_put(pdev);
 		return ERR_PTR(-EPROBE_DEFER);
 	}
@@ -732,14 +719,14 @@ static const struct acpm_handle *acpm_get_by_phandle(struct device *dev,
 }
 
 /**
- * devm_acpm_get_by_phandle() - managed get handle using phandle.
- * @dev:        device pointer requesting ACPM handle.
- * @property:   property name containing phandle on ACPM node.
+ * devm_acpm_get_by_node() - managed get handle using node pointer.
+ * @dev: device pointer requesting ACPM handle.
+ * @np:  ACPM device tree node.
  *
  * Return: pointer to handle on success, ERR_PTR(-errno) otherwise.
  */
-const struct acpm_handle *devm_acpm_get_by_phandle(struct device *dev,
-						   const char *property)
+const struct acpm_handle *devm_acpm_get_by_node(struct device *dev,
+						struct device_node *np)
 {
 	const struct acpm_handle **ptr, *handle;
 
@@ -747,7 +734,7 @@ const struct acpm_handle *devm_acpm_get_by_phandle(struct device *dev,
 	if (!ptr)
 		return ERR_PTR(-ENOMEM);
 
-	handle = acpm_get_by_phandle(dev, property);
+	handle = acpm_get_by_node(dev, np);
 	if (!IS_ERR(handle)) {
 		*ptr = handle;
 		devres_add(dev, ptr);
@@ -757,6 +744,7 @@ const struct acpm_handle *devm_acpm_get_by_phandle(struct device *dev,
 
 	return handle;
 }
+EXPORT_SYMBOL_GPL(devm_acpm_get_by_node);
 
 static const struct acpm_match_data acpm_gs101 = {
 	.initdata_base = ACPM_GS101_INITDATA_BASE,
