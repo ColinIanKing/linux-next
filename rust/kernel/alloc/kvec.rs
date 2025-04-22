@@ -193,6 +193,9 @@ where
     #[inline]
     pub unsafe fn set_len(&mut self, new_len: usize) {
         debug_assert!(new_len <= self.capacity());
+
+        // INVARIANT: By the safety requirements of this method `new_len` represents the exact
+        // number of elements stored within `self`.
         self.len = new_len;
     }
 
@@ -285,15 +288,10 @@ where
     pub fn push(&mut self, v: T, flags: Flags) -> Result<(), AllocError> {
         self.reserve(1, flags)?;
 
-        // SAFETY:
-        // - `self.len` is smaller than `self.capacity` and hence, the resulting pointer is
-        //   guaranteed to be part of the same allocated object.
-        // - `self.len` can not overflow `isize`.
-        let ptr = unsafe { self.as_mut_ptr().add(self.len) };
+        let spare = self.spare_capacity_mut();
 
-        // SAFETY:
-        // - `ptr` is properly aligned and valid for writes.
-        unsafe { core::ptr::write(ptr, v) };
+        // SAFETY: The call to `reserve` was successful so the spare capacity is at least 1.
+        unsafe { spare.get_unchecked_mut(0) }.write(v);
 
         // SAFETY: We just initialised the first spare entry, so it is safe to increase the length
         // by 1. We also know that the new length is <= capacity because of the previous call to
@@ -452,6 +450,41 @@ where
 
         Ok(())
     }
+
+    /// Shortens the vector, setting the length to `len` and drops the removed values.
+    /// If `len` is greater than or equal to the current length, this does nothing.
+    ///
+    /// This has no effect on the capacity and will not allocate.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut v = kernel::kvec![1, 2, 3]?;
+    /// v.truncate(1);
+    /// assert_eq!(v.len(), 1);
+    /// assert_eq!(&v, &[1]);
+    ///
+    /// # Ok::<(), Error>(())
+    /// ```
+    pub fn truncate(&mut self, len: usize) {
+        if len >= self.len() {
+            return;
+        }
+
+        let drop_range = len..self.len();
+
+        // SAFETY: `drop_range` is a subrange of `[0, len)` by the bounds check above.
+        let ptr: *mut [T] = unsafe { self.get_unchecked_mut(drop_range) };
+
+        // SAFETY: By the above bounds check, it is guaranteed that `len < self.capacity()`.
+        unsafe { self.set_len(len) };
+
+        // SAFETY:
+        // - the dropped values are valid `T`s by the type invariant
+        // - we are allowed to invalidate [`new_len`, `old_len`) because we just changed the
+        //   len, therefore we have exclusive access to [`new_len`, `old_len`)
+        unsafe { ptr::drop_in_place(ptr) };
+    }
 }
 
 impl<T: Clone, A: Allocator> Vec<T, A> {
@@ -517,6 +550,33 @@ impl<T: Clone, A: Allocator> Vec<T, A> {
         v.extend_with(n, value, flags)?;
 
         Ok(v)
+    }
+
+    /// Resizes the [`Vec`] so that `len` is equal to `new_len`.
+    ///
+    /// If `new_len` is smaller than `len`, the `Vec` is [`Vec::truncate`]d.
+    /// If `new_len` is larger, each new slot is filled with clones of `value`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let mut v = kernel::kvec![1, 2, 3]?;
+    /// v.resize(1, 42, GFP_KERNEL)?;
+    /// assert_eq!(&v, &[1]);
+    ///
+    /// v.resize(3, 42, GFP_KERNEL)?;
+    /// assert_eq!(&v, &[1, 42, 42]);
+    ///
+    /// # Ok::<(), Error>(())
+    /// ```
+    pub fn resize(&mut self, new_len: usize, value: T, flags: Flags) -> Result<(), AllocError> {
+        match new_len.checked_sub(self.len()) {
+            Some(n) => self.extend_with(n, value, flags),
+            None => {
+                self.truncate(new_len);
+                Ok(())
+            }
+        }
     }
 }
 
