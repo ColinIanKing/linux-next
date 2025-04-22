@@ -74,14 +74,15 @@ bool amdgpu_gfx_is_mec_queue_enabled(struct amdgpu_device *adev,
 			adev->gfx.mec_bitmap[xcc_id].queue_bitmap);
 }
 
-int amdgpu_gfx_me_queue_to_bit(struct amdgpu_device *adev,
-			       int me, int pipe, int queue)
+static int amdgpu_gfx_me_queue_to_bit(struct amdgpu_device *adev,
+				      int me, int pipe, int queue)
 {
+	int num_queue_per_pipe = 1; /* we only enable 1 KGQ per pipe */
 	int bit = 0;
 
 	bit += me * adev->gfx.me.num_pipe_per_me
-		* adev->gfx.me.num_queue_per_pipe;
-	bit += pipe * adev->gfx.me.num_queue_per_pipe;
+		* num_queue_per_pipe;
+	bit += pipe * num_queue_per_pipe;
 	bit += queue;
 
 	return bit;
@@ -238,8 +239,8 @@ void amdgpu_gfx_graphics_queue_acquire(struct amdgpu_device *adev)
 {
 	int i, queue, pipe;
 	bool multipipe_policy = amdgpu_gfx_is_graphics_multipipe_capable(adev);
-	int max_queues_per_me = adev->gfx.me.num_pipe_per_me *
-					adev->gfx.me.num_queue_per_pipe;
+	int num_queue_per_pipe = 1; /* we only enable 1 KGQ per pipe */
+	int max_queues_per_me = adev->gfx.me.num_pipe_per_me * num_queue_per_pipe;
 
 	if (multipipe_policy) {
 		/* policy: amdgpu owns the first queue per pipe at this stage
@@ -247,9 +248,9 @@ void amdgpu_gfx_graphics_queue_acquire(struct amdgpu_device *adev)
 		for (i = 0; i < max_queues_per_me; i++) {
 			pipe = i % adev->gfx.me.num_pipe_per_me;
 			queue = (i / adev->gfx.me.num_pipe_per_me) %
-				adev->gfx.me.num_queue_per_pipe;
+				num_queue_per_pipe;
 
-			set_bit(pipe * adev->gfx.me.num_queue_per_pipe + queue,
+			set_bit(pipe * num_queue_per_pipe + queue,
 				adev->gfx.me.queue_bitmap);
 		}
 	} else {
@@ -258,8 +259,9 @@ void amdgpu_gfx_graphics_queue_acquire(struct amdgpu_device *adev)
 	}
 
 	/* update the number of active graphics rings */
-	adev->gfx.num_gfx_rings =
-		bitmap_weight(adev->gfx.me.queue_bitmap, AMDGPU_MAX_GFX_QUEUES);
+	if (adev->gfx.num_gfx_rings)
+		adev->gfx.num_gfx_rings =
+			bitmap_weight(adev->gfx.me.queue_bitmap, AMDGPU_MAX_GFX_QUEUES);
 }
 
 static int amdgpu_gfx_kiq_acquire(struct amdgpu_device *adev,
@@ -1466,6 +1468,8 @@ static int amdgpu_gfx_run_cleaner_shader_job(struct amdgpu_ring *ring)
 		goto err;
 
 	job->enforce_isolation = true;
+	/* always run the cleaner shader */
+	job->run_cleaner_shader = true;
 
 	ib = &job->ibs[0];
 	for (i = 0; i <= ring->funcs->align_mask; ++i)
@@ -1552,6 +1556,9 @@ static ssize_t amdgpu_gfx_set_run_cleaner_shader(struct device *dev,
 	if (adev->in_suspend && !adev->in_runpm)
 		return -EPERM;
 
+	if (adev->gfx.disable_kq)
+		return -EPERM;
+
 	ret = kstrtol(buf, 0, &value);
 
 	if (ret)
@@ -1594,7 +1601,7 @@ static ssize_t amdgpu_gfx_set_run_cleaner_shader(struct device *dev,
  * Provides the sysfs read interface to get the current settings of the 'enforce_isolation'
  * feature for each GPU partition. Reading from the 'enforce_isolation'
  * sysfs file returns the isolation settings for all partitions, where '0'
- * indicates disabled and '1' indicates enabled.
+ * indicates disabled, '1' indicates enabled, and '2' indicates enabled in legacy mode.
  *
  * Return: The number of bytes read from the sysfs file.
  */
@@ -1629,9 +1636,10 @@ static ssize_t amdgpu_gfx_get_enforce_isolation(struct device *dev,
  * @count: The size of the input data
  *
  * This function allows control over the 'enforce_isolation' feature, which
- * serializes access to the graphics engine. Writing '1' or '0' to the
- * 'enforce_isolation' sysfs file enables or disables process isolation for
- * each partition. The input should specify the setting for all partitions.
+ * serializes access to the graphics engine. Writing '1', '2', or '0' to the
+ * 'enforce_isolation' sysfs file enables (full or legacy) or disables process
+ * isolation for each partition. The input should specify the setting for all
+ * partitions.
  *
  * Return: The number of bytes written to the sysfs file.
  */
@@ -1668,13 +1676,29 @@ static ssize_t amdgpu_gfx_set_enforce_isolation(struct device *dev,
 		return -EINVAL;
 
 	for (i = 0; i < num_partitions; i++) {
-		if (partition_values[i] != 0 && partition_values[i] != 1)
+		if (partition_values[i] != 0 &&
+		    partition_values[i] != 1 &&
+		    partition_values[i] != 2)
 			return -EINVAL;
 	}
 
 	mutex_lock(&adev->enforce_isolation_mutex);
-	for (i = 0; i < num_partitions; i++)
-		adev->enforce_isolation[i] = partition_values[i];
+	for (i = 0; i < num_partitions; i++) {
+		switch (partition_values[i]) {
+		case 0:
+		default:
+			adev->enforce_isolation[i] = AMDGPU_ENFORCE_ISOLATION_DISABLE;
+			break;
+		case 1:
+			adev->enforce_isolation[i] =
+				AMDGPU_ENFORCE_ISOLATION_ENABLE;
+			break;
+		case 2:
+			adev->enforce_isolation[i] =
+				AMDGPU_ENFORCE_ISOLATION_ENABLE_LEGACY;
+			break;
+		}
+	}
 	mutex_unlock(&adev->enforce_isolation_mutex);
 
 	amdgpu_mes_update_enforce_isolation(adev);
@@ -1923,39 +1947,43 @@ void amdgpu_gfx_cleaner_shader_init(struct amdgpu_device *adev,
 static void amdgpu_gfx_kfd_sch_ctrl(struct amdgpu_device *adev, u32 idx,
 				    bool enable)
 {
-	mutex_lock(&adev->gfx.kfd_sch_mutex);
+	mutex_lock(&adev->gfx.userq_sch_mutex);
 
 	if (enable) {
 		/* If the count is already 0, it means there's an imbalance bug somewhere.
 		 * Note that the bug may be in a different caller than the one which triggers the
 		 * WARN_ON_ONCE.
 		 */
-		if (WARN_ON_ONCE(adev->gfx.kfd_sch_req_count[idx] == 0)) {
+		if (WARN_ON_ONCE(adev->gfx.userq_sch_req_count[idx] == 0)) {
 			dev_err(adev->dev, "Attempted to enable KFD scheduler when reference count is already zero\n");
 			goto unlock;
 		}
 
-		adev->gfx.kfd_sch_req_count[idx]--;
+		adev->gfx.userq_sch_req_count[idx]--;
 
-		if (adev->gfx.kfd_sch_req_count[idx] == 0 &&
-		    adev->gfx.kfd_sch_inactive[idx]) {
+		if (adev->gfx.userq_sch_req_count[idx] == 0 &&
+		    adev->gfx.userq_sch_inactive[idx]) {
 			schedule_delayed_work(&adev->gfx.enforce_isolation[idx].work,
 					      msecs_to_jiffies(adev->gfx.enforce_isolation_time[idx]));
 		}
 	} else {
-		if (adev->gfx.kfd_sch_req_count[idx] == 0) {
+		if (adev->gfx.userq_sch_req_count[idx] == 0) {
 			cancel_delayed_work_sync(&adev->gfx.enforce_isolation[idx].work);
-			if (!adev->gfx.kfd_sch_inactive[idx]) {
-				amdgpu_amdkfd_stop_sched(adev, idx);
-				adev->gfx.kfd_sch_inactive[idx] = true;
+			if (!adev->gfx.userq_sch_inactive[idx]) {
+#ifdef CONFIG_DRM_AMDGPU_NAVI3X_USERQ
+				amdgpu_userq_stop_sched_for_enforce_isolation(adev, idx);
+#endif
+				if (adev->kfd.init_complete)
+					amdgpu_amdkfd_stop_sched(adev, idx);
+				adev->gfx.userq_sch_inactive[idx] = true;
 			}
 		}
 
-		adev->gfx.kfd_sch_req_count[idx]++;
+		adev->gfx.userq_sch_req_count[idx]++;
 	}
 
 unlock:
-	mutex_unlock(&adev->gfx.kfd_sch_mutex);
+	mutex_unlock(&adev->gfx.userq_sch_mutex);
 }
 
 /**
@@ -2000,12 +2028,14 @@ void amdgpu_gfx_enforce_isolation_handler(struct work_struct *work)
 				      msecs_to_jiffies(1));
 	} else {
 		/* Tell KFD to resume the runqueue */
-		if (adev->kfd.init_complete) {
-			WARN_ON_ONCE(!adev->gfx.kfd_sch_inactive[idx]);
-			WARN_ON_ONCE(adev->gfx.kfd_sch_req_count[idx]);
+		WARN_ON_ONCE(!adev->gfx.userq_sch_inactive[idx]);
+		WARN_ON_ONCE(adev->gfx.userq_sch_req_count[idx]);
+#ifdef CONFIG_DRM_AMDGPU_NAVI3X_USERQ
+		amdgpu_userq_start_sched_for_enforce_isolation(adev, idx);
+#endif
+		if (adev->kfd.init_complete)
 			amdgpu_amdkfd_start_sched(adev, idx);
-			adev->gfx.kfd_sch_inactive[idx] = false;
-		}
+		adev->gfx.userq_sch_inactive[idx] = false;
 	}
 	mutex_unlock(&adev->enforce_isolation_mutex);
 }
@@ -2029,7 +2059,7 @@ amdgpu_gfx_enforce_isolation_wait_for_kfd(struct amdgpu_device *adev,
 	bool wait = false;
 
 	mutex_lock(&adev->enforce_isolation_mutex);
-	if (adev->enforce_isolation[idx]) {
+	if (adev->enforce_isolation[idx] == AMDGPU_ENFORCE_ISOLATION_ENABLE) {
 		/* set the initial values if nothing is set */
 		if (!adev->gfx.enforce_isolation_jiffies[idx]) {
 			adev->gfx.enforce_isolation_jiffies[idx] = jiffies;
@@ -2096,7 +2126,7 @@ void amdgpu_gfx_enforce_isolation_ring_begin_use(struct amdgpu_ring *ring)
 	amdgpu_gfx_enforce_isolation_wait_for_kfd(adev, idx);
 
 	mutex_lock(&adev->enforce_isolation_mutex);
-	if (adev->enforce_isolation[idx]) {
+	if (adev->enforce_isolation[idx] == AMDGPU_ENFORCE_ISOLATION_ENABLE) {
 		if (adev->kfd.init_complete)
 			sched_work = true;
 	}
@@ -2133,7 +2163,7 @@ void amdgpu_gfx_enforce_isolation_ring_end_use(struct amdgpu_ring *ring)
 		return;
 
 	mutex_lock(&adev->enforce_isolation_mutex);
-	if (adev->enforce_isolation[idx]) {
+	if (adev->enforce_isolation[idx] == AMDGPU_ENFORCE_ISOLATION_ENABLE) {
 		if (adev->kfd.init_complete)
 			sched_work = true;
 	}
