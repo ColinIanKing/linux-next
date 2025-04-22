@@ -18,6 +18,7 @@
 	compatible = "renesas,rzg3e-smarcm", "renesas,r9a09g047e57", "renesas,r9a09g047";
 
 	aliases {
+		i2c2 = &i2c2;
 		mmc0 = &sdhi0;
 		mmc2 = &sdhi2;
 	};
@@ -45,13 +46,65 @@
 		regulator-boot-on;
 		regulator-always-on;
 	};
+
+	reg_vdd0p8v_others: regulator-vdd0p8v-others {
+		compatible = "regulator-fixed";
+
+		regulator-name = "fixed-0.8V";
+		regulator-min-microvolt = <800000>;
+		regulator-max-microvolt = <800000>;
+		regulator-boot-on;
+		regulator-always-on;
+	};
+
+	/* 32.768kHz crystal */
+	x3: x3-clock {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <32768>;
+	};
 };
 
 &audio_extal_clk {
 	clock-frequency = <48000000>;
 };
 
+&gpu {
+	status = "okay";
+	mali-supply = <&reg_vdd0p8v_others>;
+};
+
+&i2c2 {
+	pinctrl-0 = <&i2c2_pins>;
+	pinctrl-names = "default";
+	clock-frequency = <1000000>;
+	status = "okay";
+
+	raa215300: pmic@12 {
+		compatible = "renesas,raa215300";
+		reg = <0x12>, <0x6f>;
+		reg-names = "main", "rtc";
+		clocks = <&x3>;
+		clock-names = "xin";
+
+		pinctrl-0 = <&rtc_irq_pin>;
+		pinctrl-names = "default";
+
+		interrupts-extended = <&pinctrl RZG3E_GPIO(S, 1) IRQ_TYPE_EDGE_FALLING>;
+	};
+};
+
 &pinctrl {
+	i2c2_pins: i2c {
+		pinmux = <RZG3E_PORT_PINMUX(3, 4, 1)>, /* SCL2 */
+			 <RZG3E_PORT_PINMUX(3, 5, 1)>; /* SDA2 */
+	};
+
+	rtc_irq_pin: rtc-irq {
+		pins = "PS1";
+		bias-pull-up;
+	};
+
 	sdhi0_emmc_pins: sd0-emmc {
 		sd0-ctrl {
 			pins = "SD0CLK", "SD0CMD";
