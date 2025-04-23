@@ -29,8 +29,6 @@
  * some size calculation constants
  */
 #define DEV_TABLE_ENTRY_SIZE		32
-#define ALIAS_TABLE_ENTRY_SIZE		2
-#define RLOOKUP_TABLE_ENTRY_SIZE	(sizeof(void *))
 
 /* Capability offsets used by the driver */
 #define MMIO_CAP_HDR_OFFSET	0x00
@@ -316,6 +314,7 @@
 #define DTE_IRQ_REMAP_INTCTL    (2ULL << 60)
 #define DTE_IRQ_REMAP_ENABLE    1ULL
 
+#define DTE_INTTAB_ALIGNMENT    128
 #define DTE_INTTABLEN_MASK      (0xfULL << 1)
 #define DTE_INTTABLEN_VALUE_512 9ULL
 #define DTE_INTTABLEN_512       (DTE_INTTABLEN_VALUE_512 << 1)
@@ -615,12 +614,6 @@ struct amd_iommu_pci_seg {
 
 	/* Size of the device table */
 	u32 dev_table_size;
-
-	/* Size of the alias table */
-	u32 alias_table_size;
-
-	/* Size of the rlookup table */
-	u32 rlookup_table_size;
 
 	/*
 	 * device table virtual address
