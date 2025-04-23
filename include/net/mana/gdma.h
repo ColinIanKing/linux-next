@@ -407,6 +407,8 @@ struct gdma_context {
 
 	/* Azure RDMA adapter */
 	struct gdma_dev		mana_ib;
+
+	u64 pf_cap_flags1;
 };
 
 static inline bool mana_gd_is_mana(struct gdma_dev *gd)
@@ -553,6 +555,7 @@ enum {
  */
 #define GDMA_DRV_CAP_FLAG_1_NAPI_WKDONE_FIX BIT(2)
 #define GDMA_DRV_CAP_FLAG_1_HWC_TIMEOUT_RECONFIG BIT(3)
+#define GDMA_DRV_CAP_FLAG_1_GDMA_PAGES_4MB_1GB_2GB BIT(4)
 #define GDMA_DRV_CAP_FLAG_1_VARIABLE_INDIRECTION_TABLE_SUPPORT BIT(5)
 
 /* Driver can handle holes (zeros) in the device list */
@@ -707,20 +710,6 @@ struct gdma_query_hwc_timeout_resp {
 	u32 reserved;
 };
 
-enum atb_page_size {
-	ATB_PAGE_SIZE_4K,
-	ATB_PAGE_SIZE_8K,
-	ATB_PAGE_SIZE_16K,
-	ATB_PAGE_SIZE_32K,
-	ATB_PAGE_SIZE_64K,
-	ATB_PAGE_SIZE_128K,
-	ATB_PAGE_SIZE_256K,
-	ATB_PAGE_SIZE_512K,
-	ATB_PAGE_SIZE_1M,
-	ATB_PAGE_SIZE_2M,
-	ATB_PAGE_SIZE_MAX,
-};
-
 enum gdma_mr_access_flags {
 	GDMA_ACCESS_FLAG_LOCAL_READ = BIT_ULL(0),
 	GDMA_ACCESS_FLAG_LOCAL_WRITE = BIT_ULL(1),
@@ -815,6 +804,8 @@ enum gdma_mr_type {
 	 * address that is set up in the MST
 	 */
 	GDMA_MR_TYPE_GVA = 2,
+	/* Guest zero-based address MRs */
+	GDMA_MR_TYPE_ZBVA = 4,
 };
 
 struct gdma_create_mr_params {
@@ -826,6 +817,10 @@ struct gdma_create_mr_params {
 			u64 virtual_address;
 			enum gdma_mr_access_flags access_flags;
 		} gva;
+		struct {
+			u64 dma_region_handle;
+			enum gdma_mr_access_flags access_flags;
+		} zbva;
 	};
 };
 
@@ -841,7 +836,10 @@ struct gdma_create_mr_request {
 			u64 virtual_address;
 			enum gdma_mr_access_flags access_flags;
 		} gva;
-
+		struct {
+			u64 dma_region_handle;
+			enum gdma_mr_access_flags access_flags;
+		} zbva;
 	};
 	u32 reserved_2;
 };/* HW DATA */
