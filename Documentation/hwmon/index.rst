@@ -106,6 +106,7 @@ Hardware Monitoring Kernel Drivers
    jc42
    k10temp
    k8temp
+   kbatt
    lan966x
    lineage-pem
    lm25066
@@ -125,6 +126,7 @@ Hardware Monitoring Kernel Drivers
    lm95234
    lm95245
    lochnagar
+   lt3074
    lt7182s
    ltc2992
    ltc2945
