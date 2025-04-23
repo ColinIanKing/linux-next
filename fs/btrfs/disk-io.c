@@ -193,10 +193,11 @@ static int btrfs_repair_eb_io_failure(const struct extent_buffer *eb,
 		u64 end = min_t(u64, eb->start + eb->len,
 				folio_pos(folio) + eb->folio_size);
 		u32 len = end - start;
+		phys_addr_t paddr = PFN_PHYS(folio_pfn(folio)) +
+				    offset_in_folio(folio, start);
 
-		ret = btrfs_repair_io_failure(fs_info, 0, start, len,
-					      start, folio, offset_in_folio(folio, start),
-					      mirror_num);
+		ret = btrfs_repair_io_failure(fs_info, 0, start, len, start,
+					      paddr, mirror_num);
 		if (ret)
 			break;
 	}
@@ -224,7 +225,6 @@ int btrfs_read_extent_buffer(struct extent_buffer *eb,
 	ASSERT(check);
 
 	while (1) {
-		clear_bit(EXTENT_BUFFER_CORRUPT, &eb->bflags);
 		ret = read_extent_buffer_pages(eb, mirror_num, check);
 		if (!ret)
 			break;
@@ -452,15 +452,9 @@ int btrfs_validate_extent_buffer(struct extent_buffer *eb,
 			goto out;
 	}
 
-	/*
-	 * If this is a leaf block and it is corrupt, set the corrupt bit so
-	 * that we don't try and read the other copies of this block, just
-	 * return -EIO.
-	 */
-	if (found_level == 0 && btrfs_check_leaf(eb)) {
-		set_bit(EXTENT_BUFFER_CORRUPT, &eb->bflags);
+	/* If this is a leaf block and it is corrupt, just return -EIO. */
+	if (found_level == 0 && btrfs_check_leaf(eb))
 		ret = -EIO;
-	}
 
 	if (found_level > 0 && btrfs_check_node(eb))
 		ret = -EIO;
@@ -698,10 +692,10 @@ static void __setup_root(struct btrfs_root *root, struct btrfs_fs_info *fs_info,
 	btrfs_set_root_last_log_commit(root, 0);
 	root->anon_dev = 0;
 	if (!dummy) {
-		extent_io_tree_init(fs_info, &root->dirty_log_pages,
-				    IO_TREE_ROOT_DIRTY_LOG_PAGES);
-		extent_io_tree_init(fs_info, &root->log_csum_range,
-				    IO_TREE_LOG_CSUM_RANGE);
+		btrfs_extent_io_tree_init(fs_info, &root->dirty_log_pages,
+					  IO_TREE_ROOT_DIRTY_LOG_PAGES);
+		btrfs_extent_io_tree_init(fs_info, &root->log_csum_range,
+					  IO_TREE_LOG_CSUM_RANGE);
 	}
 
 	spin_lock_init(&root->root_item_lock);
@@ -1863,8 +1857,8 @@ void btrfs_free_fs_roots(struct btrfs_fs_info *fs_info)
 	int i;
 
 	while (!list_empty(&fs_info->dead_roots)) {
-		gang[0] = list_entry(fs_info->dead_roots.next,
-				     struct btrfs_root, root_list);
+		gang[0] = list_first_entry(&fs_info->dead_roots,
+					   struct btrfs_root, root_list);
 		list_del(&gang[0]->root_list);
 
 		if (test_bit(BTRFS_ROOT_IN_RADIX, &gang[0]->state))
@@ -1927,9 +1921,9 @@ static int btrfs_init_btree_inode(struct super_block *sb)
 	inode->i_mapping->a_ops = &btree_aops;
 	mapping_set_gfp_mask(inode->i_mapping, GFP_NOFS);
 
-	extent_io_tree_init(fs_info, &BTRFS_I(inode)->io_tree,
-			    IO_TREE_BTREE_INODE_IO);
-	extent_map_tree_init(&BTRFS_I(inode)->extent_tree);
+	btrfs_extent_io_tree_init(fs_info, &BTRFS_I(inode)->io_tree,
+				  IO_TREE_BTREE_INODE_IO);
+	btrfs_extent_map_tree_init(&BTRFS_I(inode)->extent_tree);
 
 	BTRFS_I(inode)->root = btrfs_grab_root(fs_info->tree_root);
 	set_bit(BTRFS_INODE_DUMMY, &BTRFS_I(inode)->runtime_flags);
@@ -2769,10 +2763,22 @@ static int __cold init_tree_roots(struct btrfs_fs_info *fs_info)
 	return ret;
 }
 
+/*
+ * lockdep gets confused between our buffer_tree which requires IRQ locking
+ * because we modify marks in the IRQ context, and our delayed inode xarray
+ * which doesn't have these requirements. Use a class key so lockdep doesn't get
+ * them mixed up.
+ */
+static struct lock_class_key buffer_xa_class;
+
 void btrfs_init_fs_info(struct btrfs_fs_info *fs_info)
 {
 	INIT_RADIX_TREE(&fs_info->fs_roots_radix, GFP_ATOMIC);
-	INIT_RADIX_TREE(&fs_info->buffer_radix, GFP_ATOMIC);
+
+	/* Use the same flags as mapping->i_pages. */
+	xa_init_flags(&fs_info->buffer_tree, XA_FLAGS_LOCK_IRQ | XA_FLAGS_ACCOUNT);
+	lockdep_set_class(&fs_info->buffer_tree.xa_lock, &buffer_xa_class);
+
 	INIT_LIST_HEAD(&fs_info->trans_list);
 	INIT_LIST_HEAD(&fs_info->dead_roots);
 	INIT_LIST_HEAD(&fs_info->delayed_iputs);
@@ -2784,7 +2790,6 @@ void btrfs_init_fs_info(struct btrfs_fs_info *fs_info)
 	spin_lock_init(&fs_info->delayed_iput_lock);
 	spin_lock_init(&fs_info->defrag_inodes_lock);
 	spin_lock_init(&fs_info->super_lock);
-	spin_lock_init(&fs_info->buffer_lock);
 	spin_lock_init(&fs_info->unused_bgs_lock);
 	spin_lock_init(&fs_info->treelog_bg_lock);
 	spin_lock_init(&fs_info->zone_active_bgs_lock);
@@ -2829,6 +2834,7 @@ void btrfs_init_fs_info(struct btrfs_fs_info *fs_info)
 			     BTRFS_BLOCK_RSV_GLOBAL);
 	btrfs_init_block_rsv(&fs_info->trans_block_rsv, BTRFS_BLOCK_RSV_TRANS);
 	btrfs_init_block_rsv(&fs_info->chunk_block_rsv, BTRFS_BLOCK_RSV_CHUNK);
+	btrfs_init_block_rsv(&fs_info->treelog_rsv, BTRFS_BLOCK_RSV_TREELOG);
 	btrfs_init_block_rsv(&fs_info->empty_block_rsv, BTRFS_BLOCK_RSV_EMPTY);
 	btrfs_init_block_rsv(&fs_info->delayed_block_rsv,
 			     BTRFS_BLOCK_RSV_DELOPS);
@@ -2862,8 +2868,8 @@ void btrfs_init_fs_info(struct btrfs_fs_info *fs_info)
 	rwlock_init(&fs_info->block_group_cache_lock);
 	fs_info->block_group_cache_tree = RB_ROOT_CACHED;
 
-	extent_io_tree_init(fs_info, &fs_info->excluded_extents,
-			    IO_TREE_FS_EXCLUDED_EXTENTS);
+	btrfs_extent_io_tree_init(fs_info, &fs_info->excluded_extents,
+				  IO_TREE_FS_EXCLUDED_EXTENTS);
 
 	mutex_init(&fs_info->ordered_operations_mutex);
 	mutex_init(&fs_info->tree_log_mutex);
@@ -4244,8 +4250,9 @@ static void warn_about_uncommitted_trans(struct btrfs_fs_info *fs_info)
 		u64 found_end;
 
 		found = true;
-		while (find_first_extent_bit(&trans->dirty_pages, cur,
-			&found_start, &found_end, EXTENT_DIRTY, &cached)) {
+		while (btrfs_find_first_extent_bit(&trans->dirty_pages, cur,
+						   &found_start, &found_end,
+						   EXTENT_DIRTY, &cached)) {
 			dirty_bytes += found_end + 1 - found_start;
 			cur = found_end + 1;
 		}
@@ -4441,7 +4448,7 @@ void __cold close_ctree(struct btrfs_fs_info *fs_info)
 	set_bit(BTRFS_FS_CLOSING_DONE, &fs_info->flags);
 
 	if (btrfs_check_quota_leak(fs_info)) {
-		WARN_ON(IS_ENABLED(CONFIG_BTRFS_DEBUG));
+		DEBUG_WARN("qgroup reserved space leaked");
 		btrfs_err(fs_info, "qgroup reserved space leaked");
 	}
 
@@ -4698,9 +4705,9 @@ static void btrfs_destroy_marked_extents(struct btrfs_fs_info *fs_info,
 	u64 start = 0;
 	u64 end;
 
-	while (find_first_extent_bit(dirty_pages, start, &start, &end,
-				     mark, NULL)) {
-		clear_extent_bits(dirty_pages, start, end, mark);
+	while (btrfs_find_first_extent_bit(dirty_pages, start, &start, &end,
+					   mark, NULL)) {
+		btrfs_clear_extent_bits(dirty_pages, start, end, mark);
 		while (start <= end) {
 			eb = find_extent_buffer(fs_info, start);
 			start += fs_info->nodesize;
@@ -4733,14 +4740,14 @@ static void btrfs_destroy_pinned_extent(struct btrfs_fs_info *fs_info,
 		 * the same extent range.
 		 */
 		mutex_lock(&fs_info->unused_bg_unpin_mutex);
-		if (!find_first_extent_bit(unpin, 0, &start, &end,
-					   EXTENT_DIRTY, &cached_state)) {
+		if (!btrfs_find_first_extent_bit(unpin, 0, &start, &end,
+						 EXTENT_DIRTY, &cached_state)) {
 			mutex_unlock(&fs_info->unused_bg_unpin_mutex);
 			break;
 		}
 
-		clear_extent_dirty(unpin, start, end, &cached_state);
-		free_extent_state(cached_state);
+		btrfs_clear_extent_dirty(unpin, start, end, &cached_state);
+		btrfs_free_extent_state(cached_state);
 		btrfs_error_unpin_extent_range(fs_info, start, end);
 		mutex_unlock(&fs_info->unused_bg_unpin_mutex);
 		cond_resched();
