@@ -11,6 +11,7 @@
 #ifndef __LINUX_OPP_H__
 #define __LINUX_OPP_H__
 
+#include <linux/cleanup.h>
 #include <linux/energy_model.h>
 #include <linux/err.h>
 #include <linux/notifier.h>
@@ -709,5 +710,11 @@ static inline unsigned long dev_pm_opp_get_freq(struct dev_pm_opp *opp)
 {
 	return dev_pm_opp_get_freq_indexed(opp, 0);
 }
+
+/* Scope based cleanup macro for OPP reference counting */
+DEFINE_FREE(put_opp, struct dev_pm_opp *, if (!IS_ERR_OR_NULL(_T)) dev_pm_opp_put(_T))
+
+/* Scope based cleanup macro for OPP table reference counting */
+DEFINE_FREE(put_opp_table, struct opp_table *, if (!IS_ERR_OR_NULL(_T)) dev_pm_opp_put_opp_table(_T))
 
 #endif		/* __LINUX_OPP_H__ */
