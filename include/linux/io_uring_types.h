@@ -40,8 +40,6 @@ enum io_uring_cmd_flags {
 	IO_URING_F_TASK_DEAD		= (1 << 13),
 };
 
-struct io_zcrx_ifq;
-
 struct io_wq_work_node {
 	struct io_wq_work_node *next;
 };
@@ -394,7 +392,8 @@ struct io_ring_ctx {
 	struct wait_queue_head		poll_wq;
 	struct io_restriction		restrictions;
 
-	struct io_zcrx_ifq		*ifq;
+	/* Stores zcrx object pointers of type struct io_zcrx_ifq */
+	struct xarray			zcrx_ctxs;
 
 	u32			pers_next;
 	struct xarray		personalities;
@@ -448,8 +447,6 @@ struct io_ring_ctx {
 	struct io_mapped_region		ring_region;
 	/* used for optimised request parameter and wait argument passing  */
 	struct io_mapped_region		param_region;
-	/* just one zcrx per ring for now, will move to io_zcrx_ifq eventually */
-	struct io_mapped_region		zcrx_region;
 };
 
 /*
@@ -653,8 +650,7 @@ struct io_kiocb {
 	u8				iopoll_completed;
 	/*
 	 * Can be either a fixed buffer index, or used with provided buffers.
-	 * For the latter, before issue it points to the buffer group ID,
-	 * and after selection it points to the buffer ID itself.
+	 * For the latter, it points to the selected buffer ID.
 	 */
 	u16				buf_index;
 
