@@ -4773,15 +4773,16 @@ out_notrans:
  *
  * @inode - inode that we're zeroing
  * @from - the offset to start zeroing
- * @len - the length to zero, 0 to zero the entire range respective to the
- *	offset
- * @front - zero up to the offset instead of from the offset on
+ * @end - the inclusive end to finish zeroing, can be -1 meaning truncating
+ *	  everything beyond @from.
+ * @where - Head or tail block to truncate.
  *
  * This will find the block for the "from" offset and cow the block and zero the
  * part we want to zero.  This is used with truncate and hole punching.
  */
-int btrfs_truncate_block(struct btrfs_inode *inode, loff_t from, loff_t len,
-			 int front)
+int btrfs_truncate_block(struct btrfs_inode *inode, loff_t from, loff_t end,
+			 u64 orig_start, u64 orig_end,
+			 enum btrfs_truncate_where where)
 {
 	struct btrfs_fs_info *fs_info = inode->root->fs_info;
 	struct address_space *mapping = inode->vfs_inode.i_mapping;
@@ -4791,20 +4792,30 @@ int btrfs_truncate_block(struct btrfs_inode *inode, loff_t from, loff_t len,
 	struct extent_changeset *data_reserved = NULL;
 	bool only_release_metadata = false;
 	u32 blocksize = fs_info->sectorsize;
-	pgoff_t index = from >> PAGE_SHIFT;
-	unsigned offset = from & (blocksize - 1);
+	pgoff_t index = (where == BTRFS_TRUNCATE_HEAD_BLOCK) ?
+			(from >> PAGE_SHIFT) : (end >> PAGE_SHIFT);
 	struct folio *folio;
 	gfp_t mask = btrfs_alloc_write_mask(mapping);
 	size_t write_bytes = blocksize;
 	int ret = 0;
 	u64 block_start;
 	u64 block_end;
+	u64 clamp_start;
+	u64 clamp_end;
 
-	if (IS_ALIGNED(offset, blocksize) &&
-	    (!len || IS_ALIGNED(len, blocksize)))
+	ASSERT(where == BTRFS_TRUNCATE_HEAD_BLOCK ||
+	       where == BTRFS_TRUNCATE_TAIL_BLOCK);
+
+	if (end == (loff_t)-1)
+		ASSERT(where == BTRFS_TRUNCATE_HEAD_BLOCK);
+
+	if (IS_ALIGNED(from, blocksize) && IS_ALIGNED(end + 1, blocksize))
 		goto out;
 
-	block_start = round_down(from, blocksize);
+	if (where == BTRFS_TRUNCATE_HEAD_BLOCK)
+		block_start = round_down(from, blocksize);
+	else
+		block_start = round_down(end, blocksize);
 	block_end = block_start + blocksize - 1;
 
 	ret = btrfs_check_data_free_space(inode, &data_reserved, block_start,
@@ -4884,17 +4895,22 @@ again:
 		goto out_unlock;
 	}
 
-	if (offset != blocksize) {
-		if (!len)
-			len = blocksize - offset;
-		if (front)
-			folio_zero_range(folio, block_start - folio_pos(folio),
-					 offset);
-		else
-			folio_zero_range(folio,
-					 (block_start - folio_pos(folio)) + offset,
-					 len);
-	}
+	/*
+	 * Although we have only reserved space for the one block, we still should
+	 * zero out all blocks in the original range.
+	 * The remaining blocks normally are already holes thus no need to zero again,
+	 * but it's possible for fs block size < page size cases to have memory mapped
+	 * writes to pollute ranges beyond EOF.
+	 *
+	 * In that case although the polluted blocks beyond EOF will not reach disk,
+	 * it still affects our page cache.
+	 */
+	clamp_start = max_t(u64, folio_pos(folio), orig_start);
+	clamp_end = min_t(u64, folio_pos(folio) + folio_size(folio) - 1,
+			  orig_end);
+	folio_zero_range(folio, clamp_start - folio_pos(folio),
+			 clamp_end - clamp_start + 1);
+
 	btrfs_folio_clear_checked(fs_info, folio, block_start,
 				  block_end + 1 - block_start);
 	btrfs_folio_set_dirty(fs_info, folio, block_start,
@@ -4996,7 +5012,8 @@ int btrfs_cont_expand(struct btrfs_inode *inode, loff_t oldsize, loff_t size)
 	 * rest of the block before we expand the i_size, otherwise we could
 	 * expose stale data.
 	 */
-	ret = btrfs_truncate_block(inode, oldsize, 0, 0);
+	ret = btrfs_truncate_block(inode, oldsize, -1, oldsize, -1,
+				   BTRFS_TRUNCATE_HEAD_BLOCK);
 	if (ret)
 		return ret;
 
@@ -7633,7 +7650,9 @@ static int btrfs_truncate(struct btrfs_inode *inode, bool skip_writeback)
 		btrfs_end_transaction(trans);
 		btrfs_btree_balance_dirty(fs_info);
 
-		ret = btrfs_truncate_block(inode, inode->vfs_inode.i_size, 0, 0);
+		ret = btrfs_truncate_block(inode, inode->vfs_inode.i_size, -1,
+					   inode->vfs_inode.i_size, -1,
+					   BTRFS_TRUNCATE_HEAD_BLOCK);
 		if (ret)
 			goto out;
 		trans = btrfs_start_transaction(root, 1);

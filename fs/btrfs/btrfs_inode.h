@@ -547,8 +547,14 @@ int btrfs_add_link(struct btrfs_trans_handle *trans,
 		   struct btrfs_inode *parent_inode, struct btrfs_inode *inode,
 		   const struct fscrypt_str *name, int add_backref, u64 index);
 int btrfs_delete_subvolume(struct btrfs_inode *dir, struct dentry *dentry);
-int btrfs_truncate_block(struct btrfs_inode *inode, loff_t from, loff_t len,
-			 int front);
+
+enum btrfs_truncate_where {
+	BTRFS_TRUNCATE_HEAD_BLOCK,
+	BTRFS_TRUNCATE_TAIL_BLOCK,
+};
+int btrfs_truncate_block(struct btrfs_inode *inode, loff_t from, loff_t end,
+			 u64 orig_start, u64 orig_end,
+			 enum btrfs_truncate_where where);
 
 int btrfs_start_delalloc_snapshot(struct btrfs_root *root, bool in_reclaim_context);
 int btrfs_start_delalloc_roots(struct btrfs_fs_info *fs_info, long nr,
