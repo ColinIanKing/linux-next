@@ -639,7 +639,11 @@ allOf:
         compatible:
           contains:
             enum:
+              - qcom,pcie-ipq6018
+              - qcom,pcie-ipq8074
+              - qcom,pcie-ipq8074-gen3
               - qcom,pcie-msm8996
+              - qcom,pcie-msm8998
               - qcom,pcie-sdm845
     then:
       oneOf:
@@ -652,8 +656,9 @@ allOf:
         - properties:
             interrupts:
               minItems: 8
-              maxItems: 8
+              maxItems: 9
             interrupt-names:
+              minItems: 8
               items:
                 - const: msi0
                 - const: msi1
@@ -663,6 +668,7 @@ allOf:
                 - const: msi5
                 - const: msi6
                 - const: msi7
+                - const: global
 
   - if:
       properties:
@@ -672,11 +678,8 @@ allOf:
               - qcom,pcie-apq8064
               - qcom,pcie-apq8084
               - qcom,pcie-ipq4019
-              - qcom,pcie-ipq6018
               - qcom,pcie-ipq8064
               - qcom,pcie-ipq8064-v2
-              - qcom,pcie-ipq8074
-              - qcom,pcie-ipq8074-gen3
               - qcom,pcie-qcs404
     then:
       properties:
