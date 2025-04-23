@@ -769,7 +769,7 @@ intel_hdmi_compute_spd_infoframe(struct intel_encoder *encoder,
 				 struct intel_crtc_state *crtc_state,
 				 struct drm_connector_state *conn_state)
 {
-	struct drm_i915_private *i915 = to_i915(encoder->base.dev);
+	struct intel_display *display = to_intel_display(crtc_state);
 	struct hdmi_spd_infoframe *frame = &crtc_state->infoframes.spd.spd;
 	int ret;
 
@@ -779,7 +779,7 @@ intel_hdmi_compute_spd_infoframe(struct intel_encoder *encoder,
 	crtc_state->infoframes.enable |=
 		intel_hdmi_infoframe_enable(HDMI_INFOFRAME_TYPE_SPD);
 
-	if (IS_DGFX(i915))
+	if (display->platform.dgfx)
 		ret = hdmi_spd_infoframe_init(frame, "Intel", "Discrete gfx");
 	else
 		ret = hdmi_spd_infoframe_init(frame, "Intel", "Integrated gfx");
@@ -979,7 +979,6 @@ static bool intel_hdmi_set_gcp_infoframe(struct intel_encoder *encoder,
 					 const struct drm_connector_state *conn_state)
 {
 	struct intel_display *display = to_intel_display(encoder);
-	struct drm_i915_private *dev_priv = to_i915(encoder->base.dev);
 	struct intel_crtc *crtc = to_intel_crtc(crtc_state->uapi.crtc);
 	i915_reg_t reg;
 
@@ -989,9 +988,9 @@ static bool intel_hdmi_set_gcp_infoframe(struct intel_encoder *encoder,
 
 	if (HAS_DDI(display))
 		reg = HSW_TVIDEO_DIP_GCP(display, crtc_state->cpu_transcoder);
-	else if (IS_VALLEYVIEW(dev_priv) || IS_CHERRYVIEW(dev_priv))
+	else if (display->platform.valleyview || display->platform.cherryview)
 		reg = VLV_TVIDEO_DIP_GCP(crtc->pipe);
-	else if (HAS_PCH_SPLIT(dev_priv))
+	else if (HAS_PCH_SPLIT(display))
 		reg = TVIDEO_DIP_GCP(crtc->pipe);
 	else
 		return false;
@@ -1005,7 +1004,6 @@ void intel_hdmi_read_gcp_infoframe(struct intel_encoder *encoder,
 				   struct intel_crtc_state *crtc_state)
 {
 	struct intel_display *display = to_intel_display(encoder);
-	struct drm_i915_private *dev_priv = to_i915(encoder->base.dev);
 	struct intel_crtc *crtc = to_intel_crtc(crtc_state->uapi.crtc);
 	i915_reg_t reg;
 
@@ -1015,9 +1013,9 @@ void intel_hdmi_read_gcp_infoframe(struct intel_encoder *encoder,
 
 	if (HAS_DDI(display))
 		reg = HSW_TVIDEO_DIP_GCP(display, crtc_state->cpu_transcoder);
-	else if (IS_VALLEYVIEW(dev_priv) || IS_CHERRYVIEW(dev_priv))
+	else if (display->platform.valleyview || display->platform.cherryview)
 		reg = VLV_TVIDEO_DIP_GCP(crtc->pipe);
-	else if (HAS_PCH_SPLIT(dev_priv))
+	else if (HAS_PCH_SPLIT(display))
 		reg = TVIDEO_DIP_GCP(crtc->pipe);
 	else
 		return;
@@ -1029,9 +1027,9 @@ static void intel_hdmi_compute_gcp_infoframe(struct intel_encoder *encoder,
 					     struct intel_crtc_state *crtc_state,
 					     struct drm_connector_state *conn_state)
 {
-	struct drm_i915_private *dev_priv = to_i915(encoder->base.dev);
+	struct intel_display *display = to_intel_display(encoder);
 
-	if (IS_G4X(dev_priv) || !crtc_state->has_infoframe)
+	if (display->platform.g4x || !crtc_state->has_infoframe)
 		return;
 
 	crtc_state->infoframes.enable |=
@@ -1539,7 +1537,6 @@ int intel_hdmi_hdcp_toggle_signalling(struct intel_digital_port *dig_port,
 	struct intel_display *display = to_intel_display(dig_port);
 	struct intel_hdmi *hdmi = &dig_port->hdmi;
 	struct intel_connector *connector = hdmi->attached_connector;
-	struct drm_i915_private *dev_priv = to_i915(connector->base.dev);
 	int ret;
 
 	if (!enable)
@@ -1558,7 +1555,7 @@ int intel_hdmi_hdcp_toggle_signalling(struct intel_digital_port *dig_port,
 	 * WA: To fix incorrect positioning of the window of
 	 * opportunity and enc_en signalling in KABYLAKE.
 	 */
-	if (IS_KABYLAKE(dev_priv) && enable)
+	if (display->platform.kabylake && enable)
 		return kbl_repositioning_enc_en_signal(connector,
 						       cpu_transcoder);
 
@@ -1814,14 +1811,13 @@ static const struct intel_hdcp_shim intel_hdmi_hdcp_shim = {
 static int intel_hdmi_source_max_tmds_clock(struct intel_encoder *encoder)
 {
 	struct intel_display *display = to_intel_display(encoder);
-	struct drm_i915_private *dev_priv = to_i915(encoder->base.dev);
 	int max_tmds_clock, vbt_max_tmds_clock;
 
-	if (DISPLAY_VER(display) >= 13 || IS_ALDERLAKE_S(dev_priv))
+	if (DISPLAY_VER(display) >= 13 || display->platform.alderlake_s)
 		max_tmds_clock = 600000;
 	else if (DISPLAY_VER(display) >= 10)
 		max_tmds_clock = 594000;
-	else if (DISPLAY_VER(display) >= 8 || IS_HASWELL(dev_priv))
+	else if (DISPLAY_VER(display) >= 8 || display->platform.haswell)
 		max_tmds_clock = 300000;
 	else if (DISPLAY_VER(display) >= 5)
 		max_tmds_clock = 225000;
@@ -1880,7 +1876,6 @@ hdmi_port_clock_valid(struct intel_hdmi *hdmi,
 		      bool has_hdmi_sink)
 {
 	struct intel_display *display = to_intel_display(hdmi);
-	struct drm_i915_private *dev_priv = to_i915(display->drm);
 	struct intel_encoder *encoder = &hdmi_to_dig_port(hdmi)->base;
 
 	if (clock < 25000)
@@ -1890,16 +1885,16 @@ hdmi_port_clock_valid(struct intel_hdmi *hdmi,
 		return MODE_CLOCK_HIGH;
 
 	/* GLK DPLL can't generate 446-480 MHz */
-	if (IS_GEMINILAKE(dev_priv) && clock > 446666 && clock < 480000)
+	if (display->platform.geminilake && clock > 446666 && clock < 480000)
 		return MODE_CLOCK_RANGE;
 
 	/* BXT/GLK DPLL can't generate 223-240 MHz */
-	if ((IS_GEMINILAKE(dev_priv) || IS_BROXTON(dev_priv)) &&
+	if ((display->platform.geminilake || display->platform.broxton) &&
 	    clock > 223333 && clock < 240000)
 		return MODE_CLOCK_RANGE;
 
 	/* CHV DPLL can't generate 216-240 MHz */
-	if (IS_CHERRYVIEW(dev_priv) && clock > 216000 && clock < 240000)
+	if (display->platform.cherryview && clock > 216000 && clock < 240000)
 		return MODE_CLOCK_RANGE;
 
 	/* ICL+ combo PHY PLL can't generate 500-533.2 MHz */
@@ -2440,7 +2435,6 @@ static void
 intel_hdmi_dp_dual_mode_detect(struct drm_connector *connector)
 {
 	struct intel_display *display = to_intel_display(connector->dev);
-	struct drm_i915_private *dev_priv = to_i915(connector->dev);
 	struct intel_hdmi *hdmi = intel_attached_hdmi(to_intel_connector(connector));
 	struct intel_encoder *encoder = &hdmi_to_dig_port(hdmi)->base;
 	struct i2c_adapter *ddc = connector->ddc;
@@ -2481,7 +2475,7 @@ intel_hdmi_dp_dual_mode_detect(struct drm_connector *connector)
 		    hdmi->dp_dual_mode.max_tmds_clock);
 
 	/* Older VBTs are often buggy and can't be trusted :( Play it safe. */
-	if ((DISPLAY_VER(display) >= 8 || IS_HASWELL(dev_priv)) &&
+	if ((DISPLAY_VER(display) >= 8 || display->platform.haswell) &&
 	    !intel_bios_encoder_supports_dp_dual_mode(encoder->devdata)) {
 		drm_dbg_kms(display->drm,
 			    "Ignoring DP dual mode adaptor max TMDS clock for native HDMI port\n");
@@ -2811,7 +2805,7 @@ static u8 mcc_encoder_to_ddc_pin(struct intel_encoder *encoder)
 
 static u8 rkl_encoder_to_ddc_pin(struct intel_encoder *encoder)
 {
-	struct drm_i915_private *dev_priv = to_i915(encoder->base.dev);
+	struct intel_display *display = to_intel_display(encoder);
 	enum phy phy = intel_encoder_to_phy(encoder);
 
 	WARN_ON(encoder->port == PORT_C);
@@ -2822,7 +2816,7 @@ static u8 rkl_encoder_to_ddc_pin(struct intel_encoder *encoder)
 	 * combo outputs.  With CMP, the traditional DDI A-D pins are used for
 	 * all outputs.
 	 */
-	if (INTEL_PCH_TYPE(dev_priv) >= PCH_TGP && phy >= PHY_C)
+	if (INTEL_PCH_TYPE(display) >= PCH_TGP && phy >= PHY_C)
 		return GMBUS_PIN_9_TC1_ICP + phy - PHY_C;
 
 	return GMBUS_PIN_1_BXT + phy;
@@ -2831,7 +2825,6 @@ static u8 rkl_encoder_to_ddc_pin(struct intel_encoder *encoder)
 static u8 gen9bc_tgp_encoder_to_ddc_pin(struct intel_encoder *encoder)
 {
 	struct intel_display *display = to_intel_display(encoder);
-	struct drm_i915_private *i915 = to_i915(encoder->base.dev);
 	enum phy phy = intel_encoder_to_phy(encoder);
 
 	drm_WARN_ON(display->drm, encoder->port == PORT_A);
@@ -2842,7 +2835,7 @@ static u8 gen9bc_tgp_encoder_to_ddc_pin(struct intel_encoder *encoder)
 	 * combo outputs.  With CMP, the traditional DDI A-D pins are used for
 	 * all outputs.
 	 */
-	if (INTEL_PCH_TYPE(i915) >= PCH_TGP && phy >= PHY_C)
+	if (INTEL_PCH_TYPE(display) >= PCH_TGP && phy >= PHY_C)
 		return GMBUS_PIN_9_TC1_ICP + phy - PHY_C;
 
 	return GMBUS_PIN_1_BXT + phy;
@@ -2895,27 +2888,26 @@ static u8 g4x_encoder_to_ddc_pin(struct intel_encoder *encoder)
 static u8 intel_hdmi_default_ddc_pin(struct intel_encoder *encoder)
 {
 	struct intel_display *display = to_intel_display(encoder);
-	struct drm_i915_private *dev_priv = to_i915(encoder->base.dev);
 	u8 ddc_pin;
 
-	if (IS_ALDERLAKE_S(dev_priv))
+	if (display->platform.alderlake_s)
 		ddc_pin = adls_encoder_to_ddc_pin(encoder);
-	else if (INTEL_PCH_TYPE(dev_priv) >= PCH_DG1)
+	else if (INTEL_PCH_TYPE(display) >= PCH_DG1)
 		ddc_pin = dg1_encoder_to_ddc_pin(encoder);
-	else if (IS_ROCKETLAKE(dev_priv))
+	else if (display->platform.rocketlake)
 		ddc_pin = rkl_encoder_to_ddc_pin(encoder);
-	else if (DISPLAY_VER(display) == 9 && HAS_PCH_TGP(dev_priv))
+	else if (DISPLAY_VER(display) == 9 && HAS_PCH_TGP(display))
 		ddc_pin = gen9bc_tgp_encoder_to_ddc_pin(encoder);
-	else if ((IS_JASPERLAKE(dev_priv) || IS_ELKHARTLAKE(dev_priv)) &&
-		 HAS_PCH_TGP(dev_priv))
+	else if ((display->platform.jasperlake || display->platform.elkhartlake) &&
+		 HAS_PCH_TGP(display))
 		ddc_pin = mcc_encoder_to_ddc_pin(encoder);
-	else if (INTEL_PCH_TYPE(dev_priv) >= PCH_ICP)
+	else if (INTEL_PCH_TYPE(display) >= PCH_ICP)
 		ddc_pin = icl_encoder_to_ddc_pin(encoder);
-	else if (HAS_PCH_CNP(dev_priv))
+	else if (HAS_PCH_CNP(display))
 		ddc_pin = cnp_encoder_to_ddc_pin(encoder);
-	else if (IS_GEMINILAKE(dev_priv) || IS_BROXTON(dev_priv))
+	else if (display->platform.geminilake || display->platform.broxton)
 		ddc_pin = bxt_encoder_to_ddc_pin(encoder);
-	else if (IS_CHERRYVIEW(dev_priv))
+	else if (display->platform.cherryview)
 		ddc_pin = chv_encoder_to_ddc_pin(encoder);
 	else
 		ddc_pin = g4x_encoder_to_ddc_pin(encoder);
@@ -2989,15 +2981,13 @@ static u8 intel_hdmi_ddc_pin(struct intel_encoder *encoder)
 void intel_infoframe_init(struct intel_digital_port *dig_port)
 {
 	struct intel_display *display = to_intel_display(dig_port);
-	struct drm_i915_private *dev_priv =
-		to_i915(dig_port->base.base.dev);
 
-	if (IS_VALLEYVIEW(dev_priv) || IS_CHERRYVIEW(dev_priv)) {
+	if (display->platform.valleyview || display->platform.cherryview) {
 		dig_port->write_infoframe = vlv_write_infoframe;
 		dig_port->read_infoframe = vlv_read_infoframe;
 		dig_port->set_infoframes = vlv_set_infoframes;
 		dig_port->infoframes_enabled = vlv_infoframes_enabled;
-	} else if (IS_G4X(dev_priv)) {
+	} else if (display->platform.g4x) {
 		dig_port->write_infoframe = g4x_write_infoframe;
 		dig_port->read_infoframe = g4x_read_infoframe;
 		dig_port->set_infoframes = g4x_set_infoframes;
@@ -3014,7 +3004,7 @@ void intel_infoframe_init(struct intel_digital_port *dig_port)
 			dig_port->set_infoframes = hsw_set_infoframes;
 			dig_port->infoframes_enabled = hsw_infoframes_enabled;
 		}
-	} else if (HAS_PCH_IBX(dev_priv)) {
+	} else if (HAS_PCH_IBX(display)) {
 		dig_port->write_infoframe = ibx_write_infoframe;
 		dig_port->read_infoframe = ibx_read_infoframe;
 		dig_port->set_infoframes = ibx_set_infoframes;
