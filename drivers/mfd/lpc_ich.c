@@ -187,32 +187,34 @@ static struct resource *apl_gpio_mem_resources[APL_GPIO_NR_RESOURCES] = {
 	[APL_GPIO_SOUTHWEST] = &apl_gpio_resources[APL_GPIO_SOUTHWEST][0],
 };
 
+#define ARRAY2D_SIZE(arr) (sizeof(arr) / sizeof((arr)[0][0]) / (sizeof((arr)[0]) / sizeof((arr)[0][0])))
+
 static const struct mfd_cell apl_gpio_devices[APL_GPIO_NR_DEVICES] = {
 	[APL_GPIO_NORTH] = {
 		.name = "apollolake-pinctrl",
 		.id = APL_GPIO_NORTH,
-		.num_resources = ARRAY_SIZE(apl_gpio_resources[APL_GPIO_NORTH]),
+		.num_resources = ARRAY2D_SIZE(apl_gpio_resources),
 		.resources = apl_gpio_resources[APL_GPIO_NORTH],
 		.ignore_resource_conflicts = true,
 	},
 	[APL_GPIO_NORTHWEST] = {
 		.name = "apollolake-pinctrl",
 		.id = APL_GPIO_NORTHWEST,
-		.num_resources = ARRAY_SIZE(apl_gpio_resources[APL_GPIO_NORTHWEST]),
+		.num_resources = ARRAY2D_SIZE(apl_gpio_resources),
 		.resources = apl_gpio_resources[APL_GPIO_NORTHWEST],
 		.ignore_resource_conflicts = true,
 	},
 	[APL_GPIO_WEST] = {
 		.name = "apollolake-pinctrl",
 		.id = APL_GPIO_WEST,
-		.num_resources = ARRAY_SIZE(apl_gpio_resources[APL_GPIO_WEST]),
+		.num_resources = ARRAY2D_SIZE(apl_gpio_resources),
 		.resources = apl_gpio_resources[APL_GPIO_WEST],
 		.ignore_resource_conflicts = true,
 	},
 	[APL_GPIO_SOUTHWEST] = {
 		.name = "apollolake-pinctrl",
 		.id = APL_GPIO_SOUTHWEST,
-		.num_resources = ARRAY_SIZE(apl_gpio_resources[APL_GPIO_SOUTHWEST]),
+		.num_resources = ARRAY2D_SIZE(apl_gpio_resources),
 		.resources = apl_gpio_resources[APL_GPIO_SOUTHWEST],
 		.ignore_resource_conflicts = true,
 	},
