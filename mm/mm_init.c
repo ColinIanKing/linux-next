@@ -577,7 +577,7 @@ out:
 	node_states[N_MEMORY] = saved_node_state;
 }
 
-void __meminit __init_single_page(struct page *page, unsigned long pfn,
+void __init_memblock __init_single_page(struct page *page, unsigned long pfn,
 				unsigned long zone, int nid)
 {
 	mm_zero_struct_page(page);
@@ -668,7 +668,7 @@ static inline void fixup_hashdist(void) {}
 /*
  * Initialize a reserved page unconditionally, finding its zone first.
  */
-void __meminit __init_page_from_nid(unsigned long pfn, int nid)
+void __init_memblock __init_page_from_nid(unsigned long pfn, int nid)
 {
 	pg_data_t *pgdat;
 	int zid;
@@ -743,7 +743,7 @@ defer_init(int nid, unsigned long pfn, unsigned long end_pfn)
 	return false;
 }
 
-static void __meminit __init_deferred_page(unsigned long pfn, int nid)
+static void __init_memblock __init_deferred_page(unsigned long pfn, int nid)
 {
 	if (early_page_initialised(pfn, nid))
 		return;
@@ -768,7 +768,7 @@ static inline void __init_deferred_page(unsigned long pfn, int nid)
 }
 #endif /* CONFIG_DEFERRED_STRUCT_PAGE_INIT */
 
-void __meminit init_deferred_page(unsigned long pfn, int nid)
+void __init_memblock init_deferred_page(unsigned long pfn, int nid)
 {
 	__init_deferred_page(pfn, nid);
 }

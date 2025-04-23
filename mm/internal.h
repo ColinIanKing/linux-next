@@ -9,6 +9,7 @@
 
 #include <linux/fs.h>
 #include <linux/khugepaged.h>
+#include <linux/memblock.h>
 #include <linux/mm.h>
 #include <linux/mm_inline.h>
 #include <linux/pagemap.h>
@@ -543,7 +544,7 @@ extern int defrag_mode;
 
 void setup_per_zone_wmarks(void);
 void calculate_min_free_kbytes(void);
-int __meminit init_per_zone_wmark_min(void);
+int __init_memblock init_per_zone_wmark_min(void);
 void page_alloc_sysctl_init(void);
 
 /*
@@ -1532,9 +1533,9 @@ static inline bool pte_needs_soft_dirty_wp(struct vm_area_struct *vma, pte_t pte
 	return vma_soft_dirty_enabled(vma) && !pte_soft_dirty(pte);
 }
 
-void __meminit __init_single_page(struct page *page, unsigned long pfn,
+void __init_memblock __init_single_page(struct page *page, unsigned long pfn,
 				unsigned long zone, int nid);
-void __meminit __init_page_from_nid(unsigned long pfn, int nid);
+void __init_memblock __init_page_from_nid(unsigned long pfn, int nid);
 
 /* shrinker related functions */
 unsigned long shrink_slab(gfp_t gfp_mask, int nid, struct mem_cgroup *memcg,
