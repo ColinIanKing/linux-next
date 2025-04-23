@@ -4769,6 +4769,80 @@ out_notrans:
 }
 
 /*
+ * A helper to zero out all blocks inside range [@orig_start, @orig_end) of
+ * the target folio.
+ * The target folio is the one containing the head or tail block of the range
+ * [@from, @end].
+ *
+ * This is a special case for fs block size < page size, where even if the range
+ * [from, end] is already block aligned, we can still have blocks beyond EOF being
+ * polluted by memory mapped write.
+ */
+static int zero_range_folio(struct btrfs_inode *inode, u64 from, u64 end,
+			    u64 orig_start, u64 orig_end,
+			    enum btrfs_truncate_where where)
+{
+	const u32 blocksize = inode->root->fs_info->sectorsize;
+	struct address_space *mapping = inode->vfs_inode.i_mapping;
+	struct extent_io_tree *io_tree = &inode->io_tree;
+	struct extent_state *cached_state = NULL;
+	struct btrfs_ordered_extent *ordered;
+	pgoff_t index = (where == BTRFS_TRUNCATE_HEAD_BLOCK) ?
+			(from >> PAGE_SHIFT) : (end >> PAGE_SHIFT);
+	struct folio *folio;
+	u64 block_start;
+	u64 block_end;
+	u64 clamp_start;
+	u64 clamp_end;
+	int ret = 0;
+
+again:
+	folio = filemap_lock_folio(mapping, index);
+	/* No folio present. */
+	if (IS_ERR(folio))
+		return 0;
+
+	if (!folio_test_uptodate(folio)) {
+		ret = btrfs_read_folio(NULL, folio);
+		folio_lock(folio);
+		if (folio->mapping != mapping) {
+			folio_unlock(folio);
+			folio_put(folio);
+			goto again;
+		}
+		if (!folio_test_uptodate(folio)) {
+			ret = -EIO;
+			goto out_unlock;
+		}
+	}
+	folio_wait_writeback(folio);
+
+	clamp_start = max_t(u64, folio_pos(folio), orig_start);
+	clamp_end = min_t(u64, folio_pos(folio) + folio_size(folio) - 1,
+			  orig_end);
+	block_start = round_down(clamp_start, blocksize);
+	block_end = round_up(clamp_end + 1, blocksize) - 1;
+	lock_extent(io_tree, block_start, block_end, &cached_state);
+	ordered = btrfs_lookup_ordered_range(inode, block_start, block_end + 1 - block_end);
+	if (ordered) {
+		unlock_extent(io_tree, block_start, block_end, &cached_state);
+		folio_unlock(folio);
+		folio_put(folio);
+		btrfs_start_ordered_extent(ordered);
+		btrfs_put_ordered_extent(ordered);
+		goto again;
+	}
+	folio_zero_range(folio, clamp_start - folio_pos(folio),
+			 clamp_end - clamp_start + 1);
+	unlock_extent(io_tree, block_start, block_end, &cached_state);
+
+out_unlock:
+	folio_unlock(folio);
+	folio_put(folio);
+	return ret;
+}
+
+/*
  * Read, zero a chunk and write a block.
  *
  * @inode - inode that we're zeroing
@@ -4809,8 +4883,20 @@ int btrfs_truncate_block(struct btrfs_inode *inode, loff_t from, loff_t end,
 	if (end == (loff_t)-1)
 		ASSERT(where == BTRFS_TRUNCATE_HEAD_BLOCK);
 
-	if (IS_ALIGNED(from, blocksize) && IS_ALIGNED(end + 1, blocksize))
-		goto out;
+	if (IS_ALIGNED(from, blocksize) && IS_ALIGNED(end + 1, blocksize)) {
+		/*
+		 * The target head/tail range is already block aligned.
+		 * If block size >= PAGE_SIZE, meaning it's impossible to mmap a
+		 * page containing anything other than the target block.
+		 * So we can safely exit.
+		 *
+		 * Otherwise we still need to zero out the range inside the folio
+		 * to avoid memory mapped write to pollute beyond EOF.
+		 */
+		if (blocksize >= PAGE_SIZE)
+			return 0;
+		return zero_range_folio(inode, from, end, orig_start, orig_end, where);
+	}
 
 	if (where == BTRFS_TRUNCATE_HEAD_BLOCK)
 		block_start = round_down(from, blocksize);
