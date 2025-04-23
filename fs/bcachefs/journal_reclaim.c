@@ -252,7 +252,10 @@ void bch2_journal_space_available(struct journal *j)
 
 	bch2_journal_set_watermark(j);
 out:
-	j->cur_entry_sectors	= !ret ? j->space[journal_space_discarded].next_entry : 0;
+	j->cur_entry_sectors	= !ret
+		? round_down(j->space[journal_space_discarded].next_entry,
+			     block_sectors(c))
+		: 0;
 	j->cur_entry_error	= ret;
 
 	if (!ret)
@@ -282,7 +285,7 @@ void bch2_journal_do_discards(struct journal *j)
 
 	mutex_lock(&j->discard_lock);
 
-	for_each_rw_member(c, ca) {
+	for_each_rw_member(c, ca, BCH_DEV_WRITE_REF_journal_do_discards) {
 		struct journal_device *ja = &ca->journal;
 
 		while (should_discard_bucket(j, ja)) {
@@ -614,7 +617,8 @@ static u64 journal_seq_to_flush(struct journal *j)
 
 	spin_lock(&j->lock);
 
-	for_each_rw_member(c, ca) {
+	rcu_read_lock();
+	for_each_rw_member_rcu(c, ca) {
 		struct journal_device *ja = &ca->journal;
 		unsigned nr_buckets, bucket_to_flush;
 
@@ -624,12 +628,11 @@ static u64 journal_seq_to_flush(struct journal *j)
 		/* Try to keep the journal at most half full: */
 		nr_buckets = ja->nr / 2;
 
-		nr_buckets = min(nr_buckets, ja->nr);
-
 		bucket_to_flush = (ja->cur_idx + nr_buckets) % ja->nr;
 		seq_to_flush = max(seq_to_flush,
 				   ja->bucket_seq[bucket_to_flush]);
 	}
+	rcu_read_unlock();
 
 	/* Also flush if the pin fifo is more than half full */
 	seq_to_flush = max_t(s64, seq_to_flush,

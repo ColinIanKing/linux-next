@@ -46,7 +46,7 @@
 void btrfs_inode_safe_disk_i_size_write(struct btrfs_inode *inode, u64 new_i_size)
 {
 	u64 start, end, i_size;
-	int ret;
+	bool found;
 
 	spin_lock(&inode->lock);
 	i_size = new_i_size ?: i_size_read(&inode->vfs_inode);
@@ -55,9 +55,9 @@ void btrfs_inode_safe_disk_i_size_write(struct btrfs_inode *inode, u64 new_i_siz
 		goto out_unlock;
 	}
 
-	ret = find_contiguous_extent_bit(inode->file_extent_tree, 0, &start,
-					 &end, EXTENT_DIRTY);
-	if (!ret && start == 0)
+	found = btrfs_find_contiguous_extent_bit(inode->file_extent_tree, 0, &start,
+						 &end, EXTENT_DIRTY);
+	if (found && start == 0)
 		i_size = min(i_size, end + 1);
 	else
 		i_size = 0;
@@ -91,8 +91,8 @@ int btrfs_inode_set_file_extent_range(struct btrfs_inode *inode, u64 start,
 
 	ASSERT(IS_ALIGNED(start + len, inode->root->fs_info->sectorsize));
 
-	return set_extent_bit(inode->file_extent_tree, start, start + len - 1,
-			      EXTENT_DIRTY, NULL);
+	return btrfs_set_extent_bit(inode->file_extent_tree, start, start + len - 1,
+				    EXTENT_DIRTY, NULL);
 }
 
 /*
@@ -121,8 +121,8 @@ int btrfs_inode_clear_file_extent_range(struct btrfs_inode *inode, u64 start,
 	ASSERT(IS_ALIGNED(start + len, inode->root->fs_info->sectorsize) ||
 	       len == (u64)-1);
 
-	return clear_extent_bit(inode->file_extent_tree, start,
-				start + len - 1, EXTENT_DIRTY, NULL);
+	return btrfs_clear_extent_bit(inode->file_extent_tree, start,
+				      start + len - 1, EXTENT_DIRTY, NULL);
 }
 
 static size_t bytes_to_csum_size(const struct btrfs_fs_info *fs_info, u32 bytes)
@@ -430,9 +430,9 @@ blk_status_t btrfs_lookup_bio_sums(struct btrfs_bio *bbio)
 			if (btrfs_root_id(inode->root) == BTRFS_DATA_RELOC_TREE_OBJECTID) {
 				u64 file_offset = bbio->file_offset + bio_offset;
 
-				set_extent_bit(&inode->io_tree, file_offset,
-					       file_offset + sectorsize - 1,
-					       EXTENT_NODATASUM, NULL);
+				btrfs_set_extent_bit(&inode->io_tree, file_offset,
+						     file_offset + sectorsize - 1,
+						     EXTENT_NODATASUM, NULL);
 			} else {
 				btrfs_warn_rl(fs_info,
 			"csum hole found for disk bytenr range [%llu, %llu)",
@@ -1048,7 +1048,7 @@ int btrfs_csum_file_blocks(struct btrfs_trans_handle *trans,
 	struct btrfs_fs_info *fs_info = root->fs_info;
 	struct btrfs_key file_key;
 	struct btrfs_key found_key;
-	struct btrfs_path *path;
+	BTRFS_PATH_AUTO_FREE(path);
 	struct btrfs_csum_item *item;
 	struct btrfs_csum_item *item_end;
 	struct extent_buffer *leaf = NULL;
@@ -1259,7 +1259,6 @@ found:
 		goto again;
 	}
 out:
-	btrfs_free_path(path);
 	return ret;
 }
 
@@ -1297,7 +1296,7 @@ void btrfs_extent_item_to_extent_map(struct btrfs_inode *inode,
 		em->disk_num_bytes = btrfs_file_extent_disk_num_bytes(leaf, fi);
 		em->offset = btrfs_file_extent_offset(leaf, fi);
 		if (compress_type != BTRFS_COMPRESS_NONE) {
-			extent_map_set_compression(em, compress_type);
+			btrfs_extent_map_set_compression(em, compress_type);
 		} else {
 			/*
 			 * Older kernels can create regular non-hole data
@@ -1317,7 +1316,7 @@ void btrfs_extent_item_to_extent_map(struct btrfs_inode *inode,
 		em->start = 0;
 		em->len = fs_info->sectorsize;
 		em->offset = 0;
-		extent_map_set_compression(em, compress_type);
+		btrfs_extent_map_set_compression(em, compress_type);
 	} else {
 		btrfs_err(fs_info,
 			  "unknown file extent item type %d, inode %llu, offset %llu, "

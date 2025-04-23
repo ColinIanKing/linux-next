@@ -139,6 +139,7 @@ struct btree {
 };
 
 #define BCH_BTREE_CACHE_NOT_FREED_REASONS()	\
+	x(cache_reserve)			\
 	x(lock_intent)				\
 	x(lock_write)				\
 	x(dirty)				\
@@ -477,6 +478,12 @@ struct btree_trans_paths {
 	struct btree_path	paths[];
 };
 
+struct trans_kmalloc_trace {
+	unsigned long		ip;
+	size_t			bytes;
+};
+typedef DARRAY(struct trans_kmalloc_trace) darray_trans_kmalloc_trace;
+
 struct btree_trans {
 	struct bch_fs		*c;
 
@@ -488,6 +495,9 @@ struct btree_trans {
 	void			*mem;
 	unsigned		mem_top;
 	unsigned		mem_bytes;
+#ifdef CONFIG_BCACHEFS_DEBUG
+	darray_trans_kmalloc_trace trans_kmalloc_trace;
+#endif
 
 	btree_path_idx_t	nr_sorted;
 	btree_path_idx_t	nr_paths;
@@ -647,13 +657,13 @@ static inline struct bset_tree *bset_tree_last(struct btree *b)
 static inline void *
 __btree_node_offset_to_ptr(const struct btree *b, u16 offset)
 {
-	return (void *) ((u64 *) b->data + 1 + offset);
+	return (void *) ((u64 *) b->data + offset);
 }
 
 static inline u16
 __btree_node_ptr_to_offset(const struct btree *b, const void *p)
 {
-	u16 ret = (u64 *) p - 1 - (u64 *) b->data;
+	u16 ret = (u64 *) p - (u64 *) b->data;
 
 	EBUG_ON(__btree_node_offset_to_ptr(b, ret) != p);
 	return ret;

@@ -1218,7 +1218,7 @@ static CLOSURE_CALLBACK(bch2_journal_read_device)
 out:
 	bch_verbose(c, "journal read done on device %s, ret %i", ca->name, ret);
 	kvfree(buf.data);
-	percpu_ref_put(&ca->io_ref[READ]);
+	enumerated_ref_put(&ca->io_ref[READ], BCH_DEV_READ_REF_journal_read);
 	closure_return(cl);
 	return;
 err:
@@ -1253,7 +1253,8 @@ int bch2_journal_read(struct bch_fs *c,
 
 		if ((ca->mi.state == BCH_MEMBER_STATE_rw ||
 		     ca->mi.state == BCH_MEMBER_STATE_ro) &&
-		    percpu_ref_tryget(&ca->io_ref[READ]))
+		    enumerated_ref_tryget(&ca->io_ref[READ],
+					  BCH_DEV_READ_REF_journal_read))
 			closure_call(&ca->journal.read,
 				     bch2_journal_read_device,
 				     system_unbound_wq,
@@ -1768,7 +1769,7 @@ static void journal_write_endio(struct bio *bio)
 	}
 
 	closure_put(&w->io);
-	percpu_ref_put(&ca->io_ref[WRITE]);
+	enumerated_ref_put(&ca->io_ref[WRITE], BCH_DEV_WRITE_REF_journal_write);
 }
 
 static CLOSURE_CALLBACK(journal_write_submit)
@@ -1779,7 +1780,8 @@ static CLOSURE_CALLBACK(journal_write_submit)
 	unsigned sectors = vstruct_sectors(w->data, c->block_bits);
 
 	extent_for_each_ptr(bkey_i_to_s_extent(&w->key), ptr) {
-		struct bch_dev *ca = bch2_dev_get_ioref(c, ptr->dev, WRITE);
+		struct bch_dev *ca = bch2_dev_get_ioref(c, ptr->dev, WRITE,
+					BCH_DEV_WRITE_REF_journal_write);
 		if (!ca) {
 			/* XXX: fix this */
 			bch_err(c, "missing device for journal write\n");
@@ -1842,8 +1844,9 @@ static CLOSURE_CALLBACK(journal_write_preflush)
 	}
 
 	if (w->separate_flush) {
-		for_each_rw_member(c, ca) {
-			percpu_ref_get(&ca->io_ref[WRITE]);
+		for_each_rw_member(c, ca, BCH_DEV_WRITE_REF_journal_write) {
+			enumerated_ref_get(&ca->io_ref[WRITE],
+					   BCH_DEV_WRITE_REF_journal_write);
 
 			struct journal_device *ja = &ca->journal;
 			struct bio *bio = &ja->bio[w->idx]->bio;
@@ -2053,11 +2056,8 @@ CLOSURE_CALLBACK(bch2_journal_write)
 	struct journal *j = container_of(w, struct journal, buf[w->idx]);
 	struct bch_fs *c = container_of(j, struct bch_fs, journal);
 	struct bch_replicas_padded replicas;
-	unsigned nr_rw_members = 0;
+	unsigned nr_rw_members = dev_mask_nr(&c->rw_devs[BCH_DATA_journal]);
 	int ret;
-
-	for_each_rw_member(c, ca)
-		nr_rw_members++;
 
 	BUG_ON(BCH_SB_CLEAN(c->disk_sb.sb));
 	BUG_ON(!w->write_started);
@@ -2105,7 +2105,7 @@ CLOSURE_CALLBACK(bch2_journal_write)
 					  le64_to_cpu(w->data->seq),
 					  vstruct_sectors(w->data, c->block_bits),
 					  bch2_err_str(ret));
-		bch2_print_string_as_lines(KERN_ERR, buf.buf);
+		bch2_print_str(c, KERN_ERR, buf.buf);
 		printbuf_exit(&buf);
 	}
 	if (ret)
