@@ -1247,8 +1247,36 @@ static int remove_extent_backref(struct btrfs_trans_handle *trans,
 	return ret;
 }
 
+static int btrfs_issue_clear_op(struct block_device *bdev, u64 start, u64 size,
+				enum btrfs_clear_op_type clear)
+{
+	unsigned int flags = BLKDEV_ZERO_KILLABLE;
+
+	switch (clear) {
+	case BTRFS_CLEAR_OP_SECURE_ERASE:
+		return blkdev_issue_secure_erase(bdev, start >> SECTOR_SHIFT,
+						 size >> SECTOR_SHIFT, GFP_NOFS);
+	case BTRFS_CLEAR_OP_DISCARD:
+		return blkdev_issue_discard(bdev, start >> SECTOR_SHIFT,
+					    size >> SECTOR_SHIFT, GFP_NOFS);
+	case BTRFS_CLEAR_OP_ZERO_NOUNMAP:
+		flags |= BLKDEV_ZERO_NOUNMAP;
+		return blkdev_issue_zeroout(bdev, start >> SECTOR_SHIFT,
+					    size >> SECTOR_SHIFT, GFP_NOFS, flags);
+	case BTRFS_CLEAR_OP_ZERO_NOFALLBACK:
+		flags |= BLKDEV_ZERO_NOFALLBACK;
+		return blkdev_issue_zeroout(bdev, start >> SECTOR_SHIFT,
+					    size >> SECTOR_SHIFT, GFP_NOFS, flags);
+	case BTRFS_CLEAR_OP_ZERO:
+		return blkdev_issue_zeroout(bdev, start >> SECTOR_SHIFT,
+					    size >> SECTOR_SHIFT, GFP_NOFS, flags);
+	default:
+		return -EOPNOTSUPP;
+	}
+}
+
 static int btrfs_issue_discard(struct block_device *bdev, u64 start, u64 len,
-			       u64 *discarded_bytes)
+			       u64 *discarded_bytes, enum btrfs_clear_op_type clear)
 {
 	int j, ret = 0;
 	u64 bytes_left, end;
@@ -1293,11 +1321,8 @@ static int btrfs_issue_discard(struct block_device *bdev, u64 start, u64 len,
 			bytes_left = end - start;
 			continue;
 		}
-
 		if (size) {
-			ret = blkdev_issue_discard(bdev, start >> SECTOR_SHIFT,
-						   size >> SECTOR_SHIFT,
-						   GFP_NOFS);
+			ret = btrfs_issue_clear_op(bdev, start, size, clear);
 			if (!ret)
 				*discarded_bytes += size;
 			else if (ret != -EOPNOTSUPP)
@@ -1315,9 +1340,7 @@ static int btrfs_issue_discard(struct block_device *bdev, u64 start, u64 len,
 	while (bytes_left) {
 		u64 bytes_to_discard = min(BTRFS_MAX_DISCARD_CHUNK_SIZE, bytes_left);
 
-		ret = blkdev_issue_discard(bdev, start >> SECTOR_SHIFT,
-					   bytes_to_discard >> SECTOR_SHIFT,
-					   GFP_NOFS);
+		ret = btrfs_issue_clear_op(bdev, start, bytes_left, clear);
 
 		if (ret) {
 			if (ret != -EOPNOTSUPP)
@@ -1338,7 +1361,8 @@ static int btrfs_issue_discard(struct block_device *bdev, u64 start, u64 len,
 	return ret;
 }
 
-static int do_discard_extent(struct btrfs_discard_stripe *stripe, u64 *bytes)
+static int do_discard_extent(struct btrfs_discard_stripe *stripe, u64 *bytes,
+			     enum btrfs_clear_op_type clear)
 {
 	struct btrfs_device *dev = stripe->dev;
 	struct btrfs_fs_info *fs_info = dev->fs_info;
@@ -1367,7 +1391,7 @@ static int do_discard_extent(struct btrfs_discard_stripe *stripe, u64 *bytes)
 					      &discarded);
 		discarded += src_disc;
 	} else if (bdev_max_discard_sectors(stripe->dev->bdev)) {
-		ret = btrfs_issue_discard(dev->bdev, phys, len, &discarded);
+		ret = btrfs_issue_discard(dev->bdev, phys, len, &discarded, clear);
 	} else {
 		ret = 0;
 		*bytes = 0;
@@ -1379,7 +1403,8 @@ out:
 }
 
 int btrfs_discard_extent(struct btrfs_fs_info *fs_info, u64 bytenr,
-			 u64 num_bytes, u64 *actual_bytes)
+			 u64 num_bytes, u64 *actual_bytes,
+			 enum btrfs_clear_op_type clear)
 {
 	int ret = 0;
 	u64 discarded_bytes = 0;
@@ -1418,7 +1443,7 @@ int btrfs_discard_extent(struct btrfs_fs_info *fs_info, u64 bytenr,
 					&stripe->dev->dev_state))
 				continue;
 
-			ret = do_discard_extent(stripe, &bytes);
+			ret = do_discard_extent(stripe, &bytes, clear);
 			if (ret) {
 				/*
 				 * Keep going if discard is not supported by the
@@ -2598,8 +2623,8 @@ static int pin_down_extent(struct btrfs_trans_handle *trans,
 	spin_unlock(&cache->lock);
 	spin_unlock(&cache->space_info->lock);
 
-	set_extent_bit(&trans->transaction->pinned_extents, bytenr,
-		       bytenr + num_bytes - 1, EXTENT_DIRTY, NULL);
+	btrfs_set_extent_bit(&trans->transaction->pinned_extents, bytenr,
+			     bytenr + num_bytes - 1, EXTENT_DIRTY, NULL);
 	return 0;
 }
 
@@ -2829,21 +2854,22 @@ int btrfs_finish_extent_commit(struct btrfs_trans_handle *trans)
 		struct extent_state *cached_state = NULL;
 
 		mutex_lock(&fs_info->unused_bg_unpin_mutex);
-		if (!find_first_extent_bit(unpin, 0, &start, &end,
-					   EXTENT_DIRTY, &cached_state)) {
+		if (!btrfs_find_first_extent_bit(unpin, 0, &start, &end,
+						 EXTENT_DIRTY, &cached_state)) {
 			mutex_unlock(&fs_info->unused_bg_unpin_mutex);
 			break;
 		}
 
 		if (btrfs_test_opt(fs_info, DISCARD_SYNC))
 			ret = btrfs_discard_extent(fs_info, start,
-						   end + 1 - start, NULL);
+						   end + 1 - start, NULL,
+						   BTRFS_CLEAR_OP_DISCARD);
 
-		clear_extent_dirty(unpin, start, end, &cached_state);
+		btrfs_clear_extent_dirty(unpin, start, end, &cached_state);
 		ret = unpin_extent_range(fs_info, start, end, true);
 		BUG_ON(ret);
 		mutex_unlock(&fs_info->unused_bg_unpin_mutex);
-		free_extent_state(cached_state);
+		btrfs_free_extent_state(cached_state);
 		cond_resched();
 	}
 
@@ -2866,7 +2892,8 @@ int btrfs_finish_extent_commit(struct btrfs_trans_handle *trans)
 			ret = btrfs_discard_extent(fs_info,
 						   block_group->start,
 						   block_group->length,
-						   &trimmed);
+						   &trimmed,
+						   BTRFS_CLEAR_OP_DISCARD);
 
 		/*
 		 * Not strictly necessary to lock, as the block_group should be
@@ -3488,12 +3515,6 @@ int btrfs_free_tree_block(struct btrfs_trans_handle *trans,
 	trace_btrfs_reserved_extent_free(fs_info, buf->start, buf->len);
 
 out:
-
-	/*
-	 * Deleting the buffer, clear the corrupt flag since it doesn't
-	 * matter anymore.
-	 */
-	clear_bit(EXTENT_BUFFER_CORRUPT, &buf->bflags);
 	return 0;
 }
 
@@ -4111,6 +4132,7 @@ static int can_allocate_chunk(struct btrfs_fs_info *fs_info,
 static int find_free_extent_update_loop(struct btrfs_fs_info *fs_info,
 					struct btrfs_key *ins,
 					struct find_free_extent_ctl *ffe_ctl,
+					struct btrfs_space_info *space_info,
 					bool full_search)
 {
 	struct btrfs_root *root = fs_info->chunk_root;
@@ -4165,7 +4187,7 @@ static int find_free_extent_update_loop(struct btrfs_fs_info *fs_info,
 				return ret;
 			}
 
-			ret = btrfs_chunk_alloc(trans, ffe_ctl->flags,
+			ret = btrfs_chunk_alloc(trans, space_info, ffe_ctl->flags,
 						CHUNK_ALLOC_FORCE_FOR_EXTENT);
 
 			/* Do not bail out on ENOSPC since we can do more. */
@@ -4382,11 +4404,22 @@ static noinline int find_free_extent(struct btrfs_root *root,
 	ins->objectid = 0;
 	ins->offset = 0;
 
-	trace_find_free_extent(root, ffe_ctl);
+	trace_btrfs_find_free_extent(root, ffe_ctl);
 
 	space_info = btrfs_find_space_info(fs_info, ffe_ctl->flags);
+	if (btrfs_is_zoned(fs_info) && space_info) {
+		/* Use dedicated sub-space_info for dedicated block group users. */
+		if (ffe_ctl->for_data_reloc) {
+			space_info = space_info->sub_group[0];
+			ASSERT(space_info->subgroup_id == BTRFS_SUB_GROUP_DATA_RELOC);
+		} else if (ffe_ctl->for_treelog) {
+			space_info = space_info->sub_group[0];
+			ASSERT(space_info->subgroup_id == BTRFS_SUB_GROUP_TREELOG);
+		}
+	}
 	if (!space_info) {
-		btrfs_err(fs_info, "No space info for %llu", ffe_ctl->flags);
+		btrfs_err(fs_info, "No space info for %llu, tree-log %d, relocation %d",
+			  ffe_ctl->flags, ffe_ctl->for_treelog, ffe_ctl->for_data_reloc);
 		return -ENOSPC;
 	}
 
@@ -4408,6 +4441,7 @@ static noinline int find_free_extent(struct btrfs_root *root,
 		 * picked out then we don't care that the block group is cached.
 		 */
 		if (block_group && block_group_bits(block_group, ffe_ctl->flags) &&
+		    block_group->space_info == space_info &&
 		    block_group->cached != BTRFS_CACHE_NO) {
 			down_read(&space_info->groups_sem);
 			if (list_empty(&block_group->list) ||
@@ -4433,7 +4467,7 @@ static noinline int find_free_extent(struct btrfs_root *root,
 		}
 	}
 search:
-	trace_find_free_extent_search_loop(root, ffe_ctl);
+	trace_btrfs_find_free_extent_search_loop(root, ffe_ctl);
 	ffe_ctl->have_caching_bg = false;
 	if (ffe_ctl->index == btrfs_bg_flags_to_raid_index(ffe_ctl->flags) ||
 	    ffe_ctl->index == 0)
@@ -4485,7 +4519,7 @@ search:
 		}
 
 have_block_group:
-		trace_find_free_extent_have_block_group(root, ffe_ctl, block_group);
+		trace_btrfs_find_free_extent_have_block_group(root, ffe_ctl, block_group);
 		ffe_ctl->cached = btrfs_block_group_done(block_group);
 		if (unlikely(!ffe_ctl->cached)) {
 			ffe_ctl->have_caching_bg = true;
@@ -4578,7 +4612,8 @@ loop:
 	}
 	up_read(&space_info->groups_sem);
 
-	ret = find_free_extent_update_loop(fs_info, ins, ffe_ctl, full_search);
+	ret = find_free_extent_update_loop(fs_info, ins, ffe_ctl, space_info,
+					   full_search);
 	if (ret > 0)
 		goto search;
 
@@ -5071,17 +5106,17 @@ btrfs_init_new_buffer(struct btrfs_trans_handle *trans, struct btrfs_root *root,
 		 * EXTENT bit to differentiate dirty pages.
 		 */
 		if (buf->log_index == 0)
-			set_extent_bit(&root->dirty_log_pages, buf->start,
-				       buf->start + buf->len - 1,
-				       EXTENT_DIRTY, NULL);
+			btrfs_set_extent_bit(&root->dirty_log_pages, buf->start,
+					     buf->start + buf->len - 1,
+					     EXTENT_DIRTY, NULL);
 		else
-			set_extent_bit(&root->dirty_log_pages, buf->start,
-				       buf->start + buf->len - 1,
-				       EXTENT_NEW, NULL);
+			btrfs_set_extent_bit(&root->dirty_log_pages, buf->start,
+					     buf->start + buf->len - 1,
+					     EXTENT_NEW, NULL);
 	} else {
 		buf->log_index = -1;
-		set_extent_bit(&trans->transaction->dirty_pages, buf->start,
-			       buf->start + buf->len - 1, EXTENT_DIRTY, NULL);
+		btrfs_set_extent_bit(&trans->transaction->dirty_pages, buf->start,
+				     buf->start + buf->len - 1, EXTENT_DIRTY, NULL);
 	}
 	/* this returns a buffer locked for blocking */
 	return buf;
@@ -6368,7 +6403,8 @@ void btrfs_error_unpin_extent_range(struct btrfs_fs_info *fs_info, u64 start, u6
  * it while performing the free space search since we have already
  * held back allocations.
  */
-static int btrfs_trim_free_extents(struct btrfs_device *device, u64 *trimmed)
+static int btrfs_trim_free_extents(struct btrfs_device *device, u64 *trimmed,
+				   enum btrfs_clear_op_type clear)
 {
 	u64 start = BTRFS_DEVICE_RANGE_RESERVED, len = 0, end = 0;
 	int ret;
@@ -6397,13 +6433,13 @@ static int btrfs_trim_free_extents(struct btrfs_device *device, u64 *trimmed)
 		if (ret)
 			break;
 
-		find_first_clear_extent_bit(&device->alloc_state, start,
-					    &start, &end,
-					    CHUNK_TRIMMED | CHUNK_ALLOCATED);
+		btrfs_find_first_clear_extent_bit(&device->alloc_state, start,
+						  &start, &end,
+						  CHUNK_TRIMMED | CHUNK_ALLOCATED);
 
 		/* Check if there are any CHUNK_* bits left */
 		if (start > device->total_bytes) {
-			WARN_ON(IS_ENABLED(CONFIG_BTRFS_DEBUG));
+			DEBUG_WARN();
 			btrfs_warn_in_rcu(fs_info,
 "ignoring attempt to trim beyond device size: offset %llu length %llu device %s device size %llu",
 					  start, end - start + 1,
@@ -6433,11 +6469,10 @@ static int btrfs_trim_free_extents(struct btrfs_device *device, u64 *trimmed)
 			break;
 		}
 
-		ret = btrfs_issue_discard(device->bdev, start, len,
-					  &bytes);
+		ret = btrfs_issue_discard(device->bdev, start, len, &bytes, clear);
 		if (!ret)
-			set_extent_bit(&device->alloc_state, start,
-				       start + bytes - 1, CHUNK_TRIMMED, NULL);
+			btrfs_set_extent_bit(&device->alloc_state, start,
+					     start + bytes - 1, CHUNK_TRIMMED, NULL);
 		mutex_unlock(&fs_info->chunk_mutex);
 
 		if (ret)
@@ -6516,7 +6551,8 @@ int btrfs_trim_fs(struct btrfs_fs_info *fs_info, struct fstrim_range *range)
 						     &group_trimmed,
 						     start,
 						     end,
-						     range->minlen);
+						     range->minlen,
+						     BTRFS_CLEAR_OP_DISCARD);
 
 			trimmed += group_trimmed;
 			if (ret) {
@@ -6537,7 +6573,8 @@ int btrfs_trim_fs(struct btrfs_fs_info *fs_info, struct fstrim_range *range)
 		if (test_bit(BTRFS_DEV_STATE_MISSING, &device->dev_state))
 			continue;
 
-		ret = btrfs_trim_free_extents(device, &group_trimmed);
+		ret = btrfs_trim_free_extents(device, &group_trimmed,
+					      BTRFS_CLEAR_OP_DISCARD);
 
 		trimmed += group_trimmed;
 		if (ret) {
@@ -6555,5 +6592,97 @@ int btrfs_trim_fs(struct btrfs_fs_info *fs_info, struct fstrim_range *range)
 	range->len = trimmed;
 	if (bg_ret)
 		return bg_ret;
+	return dev_ret;
+}
+
+int btrfs_clear_free_space(struct btrfs_fs_info *fs_info,
+			   struct btrfs_ioctl_clear_free_args *args)
+{
+	struct btrfs_fs_devices *fs_devices = fs_info->fs_devices;
+	struct btrfs_device *device;
+	struct btrfs_block_group *cache = NULL;
+	u64 group_cleared;
+	u64 range_end = U64_MAX;
+	u64 start;
+	u64 end;
+	u64 cleared = 0;
+	u64 bg_failed = 0;
+	u64 dev_failed = 0;
+	int bg_ret = 0;
+	int dev_ret = 0;
+	int ret = 0;
+
+	if (args->start == U64_MAX)
+		return -EINVAL;
+
+	/*
+	 * Check range overflow if args->length is set.  The default args->length
+	 * is U64_MAX.
+	 */
+	if (args->length != U64_MAX &&
+	    check_add_overflow(args->start, args->length, &range_end))
+		return -EINVAL;
+
+	cache = btrfs_lookup_first_block_group(fs_info, args->start);
+	for (; cache; cache = btrfs_next_block_group(cache)) {
+		if (cache->start >= range_end) {
+			btrfs_put_block_group(cache);
+			break;
+		}
+
+		start = max(args->start, cache->start);
+		end = min(range_end, cache->start + cache->length);
+
+		if (end - start >= args->minlen) {
+			if (!btrfs_block_group_done(cache)) {
+				ret = btrfs_cache_block_group(cache, true);
+				if (ret) {
+					bg_failed++;
+					bg_ret = ret;
+					continue;
+				}
+			}
+			ret = btrfs_trim_block_group(cache, &group_cleared,
+						     start, end, args->minlen,
+						     args->type);
+
+			cleared += group_cleared;
+			if (ret) {
+				bg_failed++;
+				bg_ret = ret;
+				continue;
+			}
+		}
+	}
+
+	if (bg_failed)
+		btrfs_warn(fs_info,
+			"failed to clear %llu block group(s), last error %d",
+			bg_failed, bg_ret);
+
+	mutex_lock(&fs_devices->device_list_mutex);
+	list_for_each_entry(device, &fs_devices->devices, dev_list) {
+		if (test_bit(BTRFS_DEV_STATE_MISSING, &device->dev_state))
+			continue;
+
+		ret = btrfs_trim_free_extents(device, &group_cleared, args->type);
+		if (ret) {
+			dev_failed++;
+			dev_ret = ret;
+			break;
+		}
+
+		cleared += group_cleared;
+	}
+	mutex_unlock(&fs_devices->device_list_mutex);
+
+	if (dev_failed)
+		btrfs_warn(fs_info,
+			"failed to trim %llu device(s), last error %d",
+			dev_failed, dev_ret);
+	args->length = cleared;
+	if (bg_ret)
+		return bg_ret;
+
 	return dev_ret;
 }
