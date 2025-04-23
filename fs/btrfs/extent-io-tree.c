@@ -758,8 +758,7 @@ search_again:
 
 out:
 	spin_unlock(&tree->lock);
-	if (prealloc)
-		btrfs_free_extent_state(prealloc);
+	btrfs_free_extent_state(prealloc);
 
 	return ret;
 
@@ -1282,8 +1281,7 @@ search_again:
 
 out:
 	spin_unlock(&tree->lock);
-	if (prealloc)
-		btrfs_free_extent_state(prealloc);
+	btrfs_free_extent_state(prealloc);
 
 	return ret;
 
@@ -1527,8 +1525,7 @@ search_again:
 
 out:
 	spin_unlock(&tree->lock);
-	if (prealloc)
-		btrfs_free_extent_state(prealloc);
+	btrfs_free_extent_state(prealloc);
 
 	return ret;
 }
