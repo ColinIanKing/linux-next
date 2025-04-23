@@ -1,19 +1,16 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 /*
- * x64 SIMD accelerated ChaCha and XChaCha stream ciphers,
- * including ChaCha20 (RFC7539)
+ * ChaCha and HChaCha functions (x86_64 optimized)
  *
  * Copyright (C) 2015 Martin Willi
  */
 
-#include <crypto/algapi.h>
-#include <crypto/internal/chacha.h>
-#include <crypto/internal/simd.h>
-#include <crypto/internal/skcipher.h>
+#include <asm/simd.h>
+#include <crypto/chacha.h>
+#include <linux/jump_label.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/sizes.h>
-#include <asm/simd.h>
 
 asmlinkage void chacha_block_xor_ssse3(u32 *state, u8 *dst, const u8 *src,
 				       unsigned int len, int nrounds);
@@ -48,8 +45,7 @@ static unsigned int chacha_advance(unsigned int len, unsigned int maxblocks)
 static void chacha_dosimd(u32 *state, u8 *dst, const u8 *src,
 			  unsigned int bytes, int nrounds)
 {
-	if (IS_ENABLED(CONFIG_AS_AVX512) &&
-	    static_branch_likely(&chacha_use_avx512vl)) {
+	if (static_branch_likely(&chacha_use_avx512vl)) {
 		while (bytes >= CHACHA_BLOCK_SIZE * 8) {
 			chacha_8block_xor_avx512vl(state, dst, src, bytes,
 						   nrounds);
@@ -123,7 +119,7 @@ static void chacha_dosimd(u32 *state, u8 *dst, const u8 *src,
 
 void hchacha_block_arch(const u32 *state, u32 *stream, int nrounds)
 {
-	if (!static_branch_likely(&chacha_use_simd) || !crypto_simd_usable()) {
+	if (!static_branch_likely(&chacha_use_simd)) {
 		hchacha_block_generic(state, stream, nrounds);
 	} else {
 		kernel_fpu_begin();
@@ -136,7 +132,7 @@ EXPORT_SYMBOL(hchacha_block_arch);
 void chacha_crypt_arch(u32 *state, u8 *dst, const u8 *src, unsigned int bytes,
 		       int nrounds)
 {
-	if (!static_branch_likely(&chacha_use_simd) || !crypto_simd_usable() ||
+	if (!static_branch_likely(&chacha_use_simd) ||
 	    bytes <= CHACHA_BLOCK_SIZE)
 		return chacha_crypt_generic(state, dst, src, bytes, nrounds);
 
@@ -154,121 +150,11 @@ void chacha_crypt_arch(u32 *state, u8 *dst, const u8 *src, unsigned int bytes,
 }
 EXPORT_SYMBOL(chacha_crypt_arch);
 
-static int chacha_simd_stream_xor(struct skcipher_request *req,
-				  const struct chacha_ctx *ctx, const u8 *iv)
+bool chacha_is_arch_optimized(void)
 {
-	u32 state[CHACHA_STATE_WORDS] __aligned(8);
-	struct skcipher_walk walk;
-	int err;
-
-	err = skcipher_walk_virt(&walk, req, false);
-
-	chacha_init(state, ctx->key, iv);
-
-	while (walk.nbytes > 0) {
-		unsigned int nbytes = walk.nbytes;
-
-		if (nbytes < walk.total)
-			nbytes = round_down(nbytes, walk.stride);
-
-		if (!static_branch_likely(&chacha_use_simd) ||
-		    !crypto_simd_usable()) {
-			chacha_crypt_generic(state, walk.dst.virt.addr,
-					     walk.src.virt.addr, nbytes,
-					     ctx->nrounds);
-		} else {
-			kernel_fpu_begin();
-			chacha_dosimd(state, walk.dst.virt.addr,
-				      walk.src.virt.addr, nbytes,
-				      ctx->nrounds);
-			kernel_fpu_end();
-		}
-		err = skcipher_walk_done(&walk, walk.nbytes - nbytes);
-	}
-
-	return err;
+	return static_key_enabled(&chacha_use_simd);
 }
-
-static int chacha_simd(struct skcipher_request *req)
-{
-	struct crypto_skcipher *tfm = crypto_skcipher_reqtfm(req);
-	struct chacha_ctx *ctx = crypto_skcipher_ctx(tfm);
-
-	return chacha_simd_stream_xor(req, ctx, req->iv);
-}
-
-static int xchacha_simd(struct skcipher_request *req)
-{
-	struct crypto_skcipher *tfm = crypto_skcipher_reqtfm(req);
-	struct chacha_ctx *ctx = crypto_skcipher_ctx(tfm);
-	u32 state[CHACHA_STATE_WORDS] __aligned(8);
-	struct chacha_ctx subctx;
-	u8 real_iv[16];
-
-	chacha_init(state, ctx->key, req->iv);
-
-	if (req->cryptlen > CHACHA_BLOCK_SIZE && crypto_simd_usable()) {
-		kernel_fpu_begin();
-		hchacha_block_ssse3(state, subctx.key, ctx->nrounds);
-		kernel_fpu_end();
-	} else {
-		hchacha_block_generic(state, subctx.key, ctx->nrounds);
-	}
-	subctx.nrounds = ctx->nrounds;
-
-	memcpy(&real_iv[0], req->iv + 24, 8);
-	memcpy(&real_iv[8], req->iv + 16, 8);
-	return chacha_simd_stream_xor(req, &subctx, real_iv);
-}
-
-static struct skcipher_alg algs[] = {
-	{
-		.base.cra_name		= "chacha20",
-		.base.cra_driver_name	= "chacha20-simd",
-		.base.cra_priority	= 300,
-		.base.cra_blocksize	= 1,
-		.base.cra_ctxsize	= sizeof(struct chacha_ctx),
-		.base.cra_module	= THIS_MODULE,
-
-		.min_keysize		= CHACHA_KEY_SIZE,
-		.max_keysize		= CHACHA_KEY_SIZE,
-		.ivsize			= CHACHA_IV_SIZE,
-		.chunksize		= CHACHA_BLOCK_SIZE,
-		.setkey			= chacha20_setkey,
-		.encrypt		= chacha_simd,
-		.decrypt		= chacha_simd,
-	}, {
-		.base.cra_name		= "xchacha20",
-		.base.cra_driver_name	= "xchacha20-simd",
-		.base.cra_priority	= 300,
-		.base.cra_blocksize	= 1,
-		.base.cra_ctxsize	= sizeof(struct chacha_ctx),
-		.base.cra_module	= THIS_MODULE,
-
-		.min_keysize		= CHACHA_KEY_SIZE,
-		.max_keysize		= CHACHA_KEY_SIZE,
-		.ivsize			= XCHACHA_IV_SIZE,
-		.chunksize		= CHACHA_BLOCK_SIZE,
-		.setkey			= chacha20_setkey,
-		.encrypt		= xchacha_simd,
-		.decrypt		= xchacha_simd,
-	}, {
-		.base.cra_name		= "xchacha12",
-		.base.cra_driver_name	= "xchacha12-simd",
-		.base.cra_priority	= 300,
-		.base.cra_blocksize	= 1,
-		.base.cra_ctxsize	= sizeof(struct chacha_ctx),
-		.base.cra_module	= THIS_MODULE,
-
-		.min_keysize		= CHACHA_KEY_SIZE,
-		.max_keysize		= CHACHA_KEY_SIZE,
-		.ivsize			= XCHACHA_IV_SIZE,
-		.chunksize		= CHACHA_BLOCK_SIZE,
-		.setkey			= chacha12_setkey,
-		.encrypt		= xchacha_simd,
-		.decrypt		= xchacha_simd,
-	},
-};
+EXPORT_SYMBOL(chacha_is_arch_optimized);
 
 static int __init chacha_simd_mod_init(void)
 {
@@ -282,30 +168,19 @@ static int __init chacha_simd_mod_init(void)
 	    cpu_has_xfeatures(XFEATURE_MASK_SSE | XFEATURE_MASK_YMM, NULL)) {
 		static_branch_enable(&chacha_use_avx2);
 
-		if (IS_ENABLED(CONFIG_AS_AVX512) &&
-		    boot_cpu_has(X86_FEATURE_AVX512VL) &&
+		if (boot_cpu_has(X86_FEATURE_AVX512VL) &&
 		    boot_cpu_has(X86_FEATURE_AVX512BW)) /* kmovq */
 			static_branch_enable(&chacha_use_avx512vl);
 	}
-	return IS_REACHABLE(CONFIG_CRYPTO_SKCIPHER) ?
-		crypto_register_skciphers(algs, ARRAY_SIZE(algs)) : 0;
+	return 0;
 }
+arch_initcall(chacha_simd_mod_init);
 
-static void __exit chacha_simd_mod_fini(void)
+static void __exit chacha_simd_mod_exit(void)
 {
-	if (IS_REACHABLE(CONFIG_CRYPTO_SKCIPHER) && boot_cpu_has(X86_FEATURE_SSSE3))
-		crypto_unregister_skciphers(algs, ARRAY_SIZE(algs));
 }
-
-module_init(chacha_simd_mod_init);
-module_exit(chacha_simd_mod_fini);
+module_exit(chacha_simd_mod_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Martin Willi <martin@strongswan.org>");
-MODULE_DESCRIPTION("ChaCha and XChaCha stream ciphers (x64 SIMD accelerated)");
-MODULE_ALIAS_CRYPTO("chacha20");
-MODULE_ALIAS_CRYPTO("chacha20-simd");
-MODULE_ALIAS_CRYPTO("xchacha20");
-MODULE_ALIAS_CRYPTO("xchacha20-simd");
-MODULE_ALIAS_CRYPTO("xchacha12");
-MODULE_ALIAS_CRYPTO("xchacha12-simd");
+MODULE_DESCRIPTION("ChaCha and HChaCha functions (x86_64 optimized)");

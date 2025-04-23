@@ -68,15 +68,16 @@ struct crypto_instance {
 		struct crypto_spawn *spawns;
 	};
 
-	struct work_struct free_work;
-
 	void *__ctx[] CRYPTO_MINALIGN_ATTR;
 };
 
 struct crypto_template {
 	struct list_head list;
 	struct hlist_head instances;
+	struct hlist_head dead;
 	struct module *module;
+
+	struct work_struct free_work;
 
 	int (*create)(struct crypto_template *tmpl, struct rtattr **tb);
 
@@ -266,14 +267,14 @@ static inline u32 crypto_tfm_alg_type(struct crypto_tfm *tfm)
 	return tfm->__crt_alg->cra_flags & CRYPTO_ALG_TYPE_MASK;
 }
 
-static inline bool crypto_request_chained(struct crypto_async_request *req)
-{
-	return !list_empty(&req->list);
-}
-
 static inline bool crypto_tfm_req_chain(struct crypto_tfm *tfm)
 {
 	return tfm->__crt_alg->cra_flags & CRYPTO_ALG_REQ_CHAIN;
+}
+
+static inline u32 crypto_request_flags(struct crypto_async_request *req)
+{
+	return req->flags & ~CRYPTO_TFM_REQ_ON_STACK;
 }
 
 #endif	/* _CRYPTO_ALGAPI_H */
