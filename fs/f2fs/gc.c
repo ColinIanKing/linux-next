@@ -2066,6 +2066,9 @@ int f2fs_gc_range(struct f2fs_sb_info *sbi,
 			.iroot = RADIX_TREE_INIT(gc_list.iroot, GFP_NOFS),
 		};
 
+		if (IS_CURSEC(sbi, GET_SEC_FROM_SEG(sbi, segno)))
+			continue;
+
 		do_garbage_collect(sbi, segno, &gc_list, FG_GC, true, false);
 		put_gc_inode(&gc_list);
 
@@ -2271,12 +2274,12 @@ out_drop_write:
 	if (err)
 		return err;
 
-	err = freeze_super(sbi->sb, FREEZE_HOLDER_USERSPACE);
+	err = freeze_super(sbi->sb, FREEZE_HOLDER_KERNEL, NULL);
 	if (err)
 		return err;
 
 	if (f2fs_readonly(sbi->sb)) {
-		err = thaw_super(sbi->sb, FREEZE_HOLDER_USERSPACE);
+		err = thaw_super(sbi->sb, FREEZE_HOLDER_KERNEL, NULL);
 		if (err)
 			return err;
 		return -EROFS;
@@ -2333,6 +2336,6 @@ recover_out:
 out_err:
 	f2fs_up_write(&sbi->cp_global_sem);
 	f2fs_up_write(&sbi->gc_lock);
-	thaw_super(sbi->sb, FREEZE_HOLDER_USERSPACE);
+	thaw_super(sbi->sb, FREEZE_HOLDER_KERNEL, NULL);
 	return err;
 }
