@@ -147,7 +147,6 @@ struct ad4030_state {
 	struct spi_device *spi;
 	struct regmap *regmap;
 	const struct ad4030_chip_info *chip;
-	const struct iio_scan_type *current_scan_type;
 	struct gpio_desc *cnv_gpio;
 	int vref_uv;
 	int vio_uv;
@@ -390,16 +389,17 @@ static int ad4030_get_chan_scale(struct iio_dev *indio_dev,
 	struct ad4030_state *st = iio_priv(indio_dev);
 	const struct iio_scan_type *scan_type;
 
-	if (chan->differential) {
-		scan_type = iio_get_current_scan_type(indio_dev,
-						      st->chip->channels);
-		*val = (st->vref_uv * 2) / MILLI;
-		*val2 = scan_type->realbits;
-		return IIO_VAL_FRACTIONAL_LOG2;
-	}
+	scan_type = iio_get_current_scan_type(indio_dev, st->chip->channels);
+	if (IS_ERR(scan_type))
+		return PTR_ERR(scan_type);
 
-	*val = st->vref_uv / MILLI;
-	*val2 = chan->scan_type.realbits;
+	if (chan->differential)
+		*val = (st->vref_uv * 2) / MILLI;
+	else
+		*val = st->vref_uv / MILLI;
+
+	*val2 = scan_type->realbits;
+
 	return IIO_VAL_FRACTIONAL_LOG2;
 }
 
@@ -561,11 +561,6 @@ static int ad4030_set_mode(struct iio_dev *indio_dev, unsigned long mask)
 		st->mode = AD4030_OUT_DATA_MD_DIFF;
 	}
 
-	st->current_scan_type = iio_get_current_scan_type(indio_dev,
-							  st->chip->channels);
-	if (IS_ERR(st->current_scan_type))
-		return PTR_ERR(st->current_scan_type);
-
 	return regmap_update_bits(st->regmap, AD4030_REG_MODES,
 				  AD4030_REG_MODES_MASK_OUT_DATA_MODE,
 				  st->mode);
@@ -613,14 +608,19 @@ static void ad4030_extract_interleaved(u8 *src, u32 *ch0, u32 *ch1)
 static int ad4030_conversion(struct iio_dev *indio_dev)
 {
 	struct ad4030_state *st = iio_priv(indio_dev);
-	unsigned char diff_realbytes =
-		BITS_TO_BYTES(st->current_scan_type->realbits);
-	unsigned char diff_storagebytes =
-		BITS_TO_BYTES(st->current_scan_type->storagebits);
+	const struct iio_scan_type *scan_type;
+	unsigned char diff_realbytes, diff_storagebytes;
 	unsigned int bytes_to_read;
 	unsigned long cnv_nb = BIT(st->avg_log2);
 	unsigned int i;
 	int ret;
+
+	scan_type = iio_get_current_scan_type(indio_dev, st->chip->channels);
+	if (IS_ERR(scan_type))
+		return PTR_ERR(scan_type);
+
+	diff_realbytes = BITS_TO_BYTES(scan_type->realbits);
+	diff_storagebytes = BITS_TO_BYTES(scan_type->storagebits);
 
 	/* Number of bytes for one differential channel */
 	bytes_to_read = diff_realbytes;
@@ -645,6 +645,12 @@ static int ad4030_conversion(struct iio_dev *indio_dev)
 		ad4030_extract_interleaved(st->rx_data.raw,
 					   &st->rx_data.dual.diff[0],
 					   &st->rx_data.dual.diff[1]);
+
+	/*
+	 * If no common mode voltage channel is enabled, we can use the raw
+	 * data as is. Otherwise, we need to rearrange the data a bit to match
+	 * the natural alignment of the IIO buffer.
+	 */
 
 	if (st->mode != AD4030_OUT_DATA_MD_16_DIFF_8_COM &&
 	    st->mode != AD4030_OUT_DATA_MD_24_DIFF_8_COM)
@@ -671,11 +677,6 @@ static int ad4030_single_conversion(struct iio_dev *indio_dev,
 	ret = ad4030_set_mode(indio_dev, BIT(chan->scan_index));
 	if (ret)
 		return ret;
-
-	st->current_scan_type = iio_get_current_scan_type(indio_dev,
-							  st->chip->channels);
-	if (IS_ERR(st->current_scan_type))
-		return PTR_ERR(st->current_scan_type);
 
 	ret = ad4030_conversion(indio_dev);
 	if (ret)
@@ -706,8 +707,8 @@ static irqreturn_t ad4030_trigger_handler(int irq, void *p)
 	if (ret)
 		goto out;
 
-	iio_push_to_buffers_with_timestamp(indio_dev, st->rx_data.raw,
-					   pf->timestamp);
+	iio_push_to_buffers_with_ts(indio_dev, &st->rx_data, sizeof(st->rx_data),
+				    pf->timestamp);
 
 out:
 	iio_trigger_notify_done(indio_dev->trig);
@@ -867,6 +868,12 @@ static int ad4030_get_current_scan_type(const struct iio_dev *indio_dev,
 	return st->avg_log2 ? AD4030_SCAN_TYPE_AVG : AD4030_SCAN_TYPE_NORMAL;
 }
 
+static int ad4030_update_scan_mode(struct iio_dev *indio_dev,
+				   const unsigned long *scan_mask)
+{
+	return ad4030_set_mode(indio_dev, *scan_mask);
+}
+
 static const struct iio_info ad4030_iio_info = {
 	.read_avail = ad4030_read_avail,
 	.read_raw = ad4030_read_raw,
@@ -874,12 +881,8 @@ static const struct iio_info ad4030_iio_info = {
 	.debugfs_reg_access = ad4030_reg_access,
 	.read_label = ad4030_read_label,
 	.get_current_scan_type = ad4030_get_current_scan_type,
+	.update_scan_mode  = ad4030_update_scan_mode,
 };
-
-static int ad4030_buffer_preenable(struct iio_dev *indio_dev)
-{
-	return ad4030_set_mode(indio_dev, *indio_dev->active_scan_mask);
-}
 
 static bool ad4030_validate_scan_mask(struct iio_dev *indio_dev,
 				      const unsigned long *scan_mask)
@@ -894,7 +897,6 @@ static bool ad4030_validate_scan_mask(struct iio_dev *indio_dev,
 }
 
 static const struct iio_buffer_setup_ops ad4030_buffer_setup_ops = {
-	.preenable = ad4030_buffer_preenable,
 	.validate_scan_mask = ad4030_validate_scan_mask,
 };
 

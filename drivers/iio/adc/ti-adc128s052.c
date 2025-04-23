@@ -9,6 +9,7 @@
  * https://www.ti.com/lit/ds/symlink/adc124s021.pdf
  */
 
+#include <linux/cleanup.h>
 #include <linux/err.h>
 #include <linux/iio/iio.h>
 #include <linux/mod_devicetable.h>
@@ -20,40 +21,45 @@
 struct adc128_configuration {
 	const struct iio_chan_spec	*channels;
 	u8				num_channels;
+	const char			*refname;
+	int				num_other_regulators;
+	const char * const		(*other_regulators)[];
 };
 
 struct adc128 {
 	struct spi_device *spi;
 
 	struct regulator *reg;
+	/*
+	 * Serialize the SPI 'write-channel + read data' accesses and protect
+	 * the shared buffer.
+	 */
 	struct mutex lock;
 
-	u8 buffer[2] __aligned(IIO_DMA_MINALIGN);
+	union {
+		__be16 buffer16;
+		u8 buffer[2];
+	} __aligned(IIO_DMA_MINALIGN);
 };
 
 static int adc128_adc_conversion(struct adc128 *adc, u8 channel)
 {
 	int ret;
 
-	mutex_lock(&adc->lock);
+	guard(mutex)(&adc->lock);
 
 	adc->buffer[0] = channel << 3;
 	adc->buffer[1] = 0;
 
-	ret = spi_write(adc->spi, &adc->buffer, 2);
-	if (ret < 0) {
-		mutex_unlock(&adc->lock);
-		return ret;
-	}
-
-	ret = spi_read(adc->spi, &adc->buffer, 2);
-
-	mutex_unlock(&adc->lock);
-
+	ret = spi_write(adc->spi, &adc->buffer, sizeof(adc->buffer));
 	if (ret < 0)
 		return ret;
 
-	return ((adc->buffer[0] << 8 | adc->buffer[1]) & 0xFFF);
+	ret = spi_read(adc->spi, &adc->buffer16, sizeof(adc->buffer16));
+	if (ret < 0)
+		return ret;
+
+	return be16_to_cpu(adc->buffer16) & 0xFFF;
 }
 
 static int adc128_read_raw(struct iio_dev *indio_dev,
@@ -121,10 +127,28 @@ static const struct iio_chan_spec adc124s021_channels[] = {
 	ADC128_VOLTAGE_CHANNEL(3),
 };
 
+static const char * const bd79104_regulators[] = { "iovdd" };
+
 static const struct adc128_configuration adc128_config[] = {
-	{ adc128s052_channels, ARRAY_SIZE(adc128s052_channels) },
-	{ adc122s021_channels, ARRAY_SIZE(adc122s021_channels) },
-	{ adc124s021_channels, ARRAY_SIZE(adc124s021_channels) },
+	{
+		.channels = adc128s052_channels,
+		.num_channels = ARRAY_SIZE(adc128s052_channels),
+		.refname = "vref",
+	}, {
+		.channels = adc122s021_channels,
+		.num_channels = ARRAY_SIZE(adc122s021_channels),
+		.refname = "vref",
+	}, {
+		.channels = adc124s021_channels,
+		.num_channels = ARRAY_SIZE(adc124s021_channels),
+		.refname = "vref",
+	}, {
+		.channels = adc128s052_channels,
+		.num_channels = ARRAY_SIZE(adc128s052_channels),
+		.refname = "vdd",
+		.other_regulators = &bd79104_regulators,
+		.num_other_regulators = 1,
+	},
 };
 
 static const struct iio_info adc128_info = {
@@ -159,7 +183,7 @@ static int adc128_probe(struct spi_device *spi)
 	indio_dev->channels = config->channels;
 	indio_dev->num_channels = config->num_channels;
 
-	adc->reg = devm_regulator_get(&spi->dev, "vref");
+	adc->reg = devm_regulator_get(&spi->dev, config->refname);
 	if (IS_ERR(adc->reg))
 		return PTR_ERR(adc->reg);
 
@@ -171,7 +195,18 @@ static int adc128_probe(struct spi_device *spi)
 	if (ret)
 		return ret;
 
-	mutex_init(&adc->lock);
+	if (config->num_other_regulators) {
+		ret = devm_regulator_bulk_get_enable(&spi->dev,
+						config->num_other_regulators,
+						*config->other_regulators);
+		if (ret)
+			return dev_err_probe(&spi->dev, ret,
+					     "Failed to enable regulators\n");
+	}
+
+	ret = devm_mutex_init(&spi->dev, &adc->lock);
+	if (ret)
+		return ret;
 
 	return devm_iio_device_register(&spi->dev, indio_dev);
 }
@@ -184,7 +219,8 @@ static const struct of_device_id adc128_of_match[] = {
 	{ .compatible = "ti,adc124s021", .data = &adc128_config[2] },
 	{ .compatible = "ti,adc124s051", .data = &adc128_config[2] },
 	{ .compatible = "ti,adc124s101", .data = &adc128_config[2] },
-	{ /* sentinel */ },
+	{ .compatible = "rohm,bd79104", .data = &adc128_config[3] },
+	{ }
 };
 MODULE_DEVICE_TABLE(of, adc128_of_match);
 
@@ -196,6 +232,7 @@ static const struct spi_device_id adc128_id[] = {
 	{ "adc124s021", (kernel_ulong_t)&adc128_config[2] },
 	{ "adc124s051", (kernel_ulong_t)&adc128_config[2] },
 	{ "adc124s101", (kernel_ulong_t)&adc128_config[2] },
+	{ "bd79104", (kernel_ulong_t)&adc128_config[3] },
 	{ }
 };
 MODULE_DEVICE_TABLE(spi, adc128_id);

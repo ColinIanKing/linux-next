@@ -505,8 +505,9 @@ static irqreturn_t sca3300_trigger_handler(int irq, void *p)
 		channels[i++] = val;
 	}
 
-	iio_push_to_buffers_with_timestamp(indio_dev, data->buffer,
-					   iio_get_time_ns(indio_dev));
+	iio_push_to_buffers_with_ts(indio_dev, data->buffer,
+				    sizeof(data->buffer),
+				    iio_get_time_ns(indio_dev));
 out:
 	iio_trigger_notify_done(indio_dev->trig);
 
@@ -674,14 +675,14 @@ static int sca3300_probe(struct spi_device *spi)
 static const struct of_device_id sca3300_dt_ids[] = {
 	{ .compatible = "murata,sca3300"},
 	{ .compatible = "murata,scl3300"},
-	{}
+	{ }
 };
 MODULE_DEVICE_TABLE(of, sca3300_dt_ids);
 
 static const struct spi_device_id sca3300_ids[] = {
 	{ "sca3300" },
 	{ "scl3300" },
-	{}
+	{ }
 };
 MODULE_DEVICE_TABLE(spi, sca3300_ids);
 
