@@ -2071,7 +2071,7 @@ static int __pidfd_prepare(struct pid *pid, unsigned int flags, struct file **re
 	if (pidfd < 0)
 		return pidfd;
 
-	pidfd_file = pidfs_alloc_file(pid, flags | O_RDWR);
+	pidfd_file = pidfs_alloc_file(pid, flags);
 	if (IS_ERR(pidfd_file))
 		return PTR_ERR(pidfd_file);
 
@@ -2108,10 +2108,25 @@ static int __pidfd_prepare(struct pid *pid, unsigned int flags, struct file **re
  */
 int pidfd_prepare(struct pid *pid, unsigned int flags, struct file **ret)
 {
-	bool thread = flags & PIDFD_THREAD;
-
-	if (!pid || !pid_has_task(pid, thread ? PIDTYPE_PID : PIDTYPE_TGID))
-		return -EINVAL;
+	/*
+	 * While holding the pidfd waitqueue lock removing the task
+	 * linkage for the thread-group leader pid (PIDTYPE_TGID) isn't
+	 * possible. Thus, if there's still task linkage for PIDTYPE_PID
+	 * not having thread-group leader linkage for the pid means it
+	 * wasn't a thread-group leader in the first place.
+	 */
+	scoped_guard(spinlock_irq, &pid->wait_pidfd.lock) {
+		/* Task has already been reaped. */
+		if (!pid_has_task(pid, PIDTYPE_PID))
+			return -ESRCH;
+		/*
+		 * If this struct pid isn't used as a thread-group
+		 * leader but the caller requested to create a
+		 * thread-group leader pidfd then report ENOENT.
+		 */
+		if (!(flags & PIDFD_THREAD) && !pid_has_task(pid, PIDTYPE_TGID))
+			return -ENOENT;
+	}
 
 	return __pidfd_prepare(pid, flags, ret);
 }
