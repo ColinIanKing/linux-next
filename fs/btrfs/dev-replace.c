@@ -637,7 +637,7 @@ static int btrfs_dev_replace_start(struct btrfs_fs_info *fs_info,
 		break;
 	case BTRFS_IOCTL_DEV_REPLACE_STATE_STARTED:
 	case BTRFS_IOCTL_DEV_REPLACE_STATE_SUSPENDED:
-		ASSERT(0);
+		DEBUG_WARN("unexpected STARTED ot SUSPENDED dev-replace state");
 		ret = BTRFS_IOCTL_DEV_REPLACE_RESULT_ALREADY_STARTED;
 		up_write(&dev_replace->rwsem);
 		goto leave;
@@ -794,17 +794,17 @@ static int btrfs_set_target_alloc_state(struct btrfs_device *srcdev,
 
 	lockdep_assert_held(&srcdev->fs_info->chunk_mutex);
 
-	while (find_first_extent_bit(&srcdev->alloc_state, start,
-				     &found_start, &found_end,
-				     CHUNK_ALLOCATED, &cached_state)) {
-		ret = set_extent_bit(&tgtdev->alloc_state, found_start,
-				     found_end, CHUNK_ALLOCATED, NULL);
+	while (btrfs_find_first_extent_bit(&srcdev->alloc_state, start,
+					   &found_start, &found_end,
+					   CHUNK_ALLOCATED, &cached_state)) {
+		ret = btrfs_set_extent_bit(&tgtdev->alloc_state, found_start,
+					   found_end, CHUNK_ALLOCATED, NULL);
 		if (ret)
 			break;
 		start = found_end + 1;
 	}
 
-	free_extent_state(cached_state);
+	btrfs_free_extent_state(cached_state);
 	return ret;
 }
 
