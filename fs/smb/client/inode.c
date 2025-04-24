@@ -6,6 +6,7 @@
  *
  */
 #include <linux/fs.h>
+#include <linux/namei.h>
 #include <linux/stat.h>
 #include <linux/slab.h>
 #include <linux/pagemap.h>
@@ -1786,6 +1787,13 @@ cifs_set_file_info(struct inode *inode, struct iattr *attrs, unsigned int xid,
  * and rename it to a random name that hopefully won't conflict with
  * anything else.
  */
+#define SILLYNAME_PREFIX ".smb"
+#define SILLYNAME_PREFIX_LEN ((unsigned int)sizeof(SILLYNAME_PREFIX) - 1)
+#define SILLYNAME_FILEID_LEN ((unsigned int)sizeof(u64) << 1)
+#define SILLYNAME_COUNTER_LEN ((unsigned int)sizeof(unsigned int) << 1)
+#define SILLYNAME_LEN (SILLYNAME_PREFIX_LEN + \
+		SILLYNAME_FILEID_LEN + \
+		SILLYNAME_COUNTER_LEN)
 int
 cifs_rename_pending_delete(const char *full_path, struct dentry *dentry,
 			   const unsigned int xid)
@@ -1801,11 +1809,39 @@ cifs_rename_pending_delete(const char *full_path, struct dentry *dentry,
 	struct cifs_tcon *tcon;
 	__u32 dosattr, origattr;
 	FILE_BASIC_INFO *info_buf = NULL;
+	unsigned char sillyname[SILLYNAME_LEN + 1];
+	int sillyname_len;
 
 	tlink = cifs_sb_tlink(cifs_sb);
 	if (IS_ERR(tlink))
 		return PTR_ERR(tlink);
 	tcon = tlink_tcon(tlink);
+
+	/* construct random name ".smb<inodenum><counter>" */
+	while (true) {
+		static unsigned int sillycounter; /* globally unique */
+		bool sillyname_available = false;
+		struct dentry *sdentry = NULL;
+
+		sillycounter++;
+		sillyname_len = scnprintf(sillyname, sizeof(sillyname),
+				 SILLYNAME_PREFIX "%0*llx%0*x",
+				 SILLYNAME_FILEID_LEN, (unsigned long long)cifsInode->uniqueid,
+				 SILLYNAME_COUNTER_LEN, sillycounter);
+		sdentry = lookup_noperm(&QSTR(sillyname), dentry->d_parent);
+		if (IS_ERR(sdentry)) {
+			rc = -EBUSY;
+			goto out;
+		}
+
+		if (d_inode(sdentry) == NULL) /* need negative lookup */
+			sillyname_available = true;
+
+		dput(sdentry);
+
+		if (sillyname_available)
+			break;
+	}
 
 	/*
 	 * We cannot rename the file if the server doesn't support
@@ -1858,7 +1894,7 @@ cifs_rename_pending_delete(const char *full_path, struct dentry *dentry,
 	}
 
 	/* rename the file */
-	rc = CIFSSMBRenameOpenFile(xid, tcon, fid.netfid, NULL,
+	rc = CIFSSMBRenameOpenFile(xid, tcon, fid.netfid, sillyname,
 				   cifs_sb->local_nls,
 				   cifs_remap(cifs_sb));
 	if (rc != 0) {
