@@ -4822,10 +4822,10 @@ again:
 			  orig_end);
 	block_start = round_down(clamp_start, blocksize);
 	block_end = round_up(clamp_end + 1, blocksize) - 1;
-	lock_extent(io_tree, block_start, block_end, &cached_state);
+	btrfs_lock_extent(io_tree, block_start, block_end, &cached_state);
 	ordered = btrfs_lookup_ordered_range(inode, block_start, block_end + 1 - block_end);
 	if (ordered) {
-		unlock_extent(io_tree, block_start, block_end, &cached_state);
+		btrfs_unlock_extent(io_tree, block_start, block_end, &cached_state);
 		folio_unlock(folio);
 		folio_put(folio);
 		btrfs_start_ordered_extent(ordered);
@@ -4834,7 +4834,7 @@ again:
 	}
 	folio_zero_range(folio, clamp_start - folio_pos(folio),
 			 clamp_end - clamp_start + 1);
-	unlock_extent(io_tree, block_start, block_end, &cached_state);
+	btrfs_unlock_extent(io_tree, block_start, block_end, &cached_state);
 
 out_unlock:
 	folio_unlock(folio);
