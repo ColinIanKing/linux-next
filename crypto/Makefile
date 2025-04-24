@@ -153,10 +153,10 @@ obj-$(CONFIG_CRYPTO_POLY1305) += poly1305.o
 CFLAGS_poly1305.o += -DARCH=$(ARCH)
 obj-$(CONFIG_CRYPTO_DEFLATE) += deflate.o
 obj-$(CONFIG_CRYPTO_MICHAEL_MIC) += michael_mic.o
-obj-$(CONFIG_CRYPTO_CRC32C) += crc32c_generic.o
-obj-$(CONFIG_CRYPTO_CRC32) += crc32_generic.o
-CFLAGS_crc32c_generic.o += -DARCH=$(ARCH)
-CFLAGS_crc32_generic.o += -DARCH=$(ARCH)
+obj-$(CONFIG_CRYPTO_CRC32C) += crc32c.o
+obj-$(CONFIG_CRYPTO_CRC32) += crc32.o
+CFLAGS_crc32c.o += -DARCH=$(ARCH)
+CFLAGS_crc32.o += -DARCH=$(ARCH)
 obj-$(CONFIG_CRYPTO_AUTHENC) += authenc.o authencesn.o
 obj-$(CONFIG_CRYPTO_KRB5ENC) += krb5enc.o
 obj-$(CONFIG_CRYPTO_LZO) += lzo.o lzo-rle.o
