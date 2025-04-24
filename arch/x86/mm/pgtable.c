@@ -310,7 +310,7 @@ static inline pgd_t *_pgd_alloc(struct mm_struct *mm)
 	 *
 	 * For simplicity, allocate a page for all users.
 	 */
-	return __pgd_alloc(mm, PGD_ALLOCATION_ORDER);
+	return __pgd_alloc(mm, pgd_allocation_order());
 }
 
 static inline void _pgd_free(struct mm_struct *mm, pgd_t *pgd)
