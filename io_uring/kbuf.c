@@ -92,7 +92,6 @@ void io_kbuf_drop_legacy(struct io_kiocb *req)
 {
 	if (WARN_ON_ONCE(!(req->flags & REQ_F_BUFFER_SELECTED)))
 		return;
-	req->buf_index = req->kbuf->bgid;
 	req->flags &= ~REQ_F_BUFFER_SELECTED;
 	kfree(req->kbuf);
 	req->kbuf = NULL;
@@ -110,7 +109,6 @@ bool io_kbuf_recycle_legacy(struct io_kiocb *req, unsigned issue_flags)
 	bl = io_buffer_get_list(ctx, buf->bgid);
 	list_add(&buf->list, &bl->buf_list);
 	req->flags &= ~REQ_F_BUFFER_SELECTED;
-	req->buf_index = buf->bgid;
 
 	io_ring_submit_unlock(ctx, issue_flags);
 	return true;
@@ -193,7 +191,7 @@ static void __user *io_ring_buffer_select(struct io_kiocb *req, size_t *len,
 }
 
 void __user *io_buffer_select(struct io_kiocb *req, size_t *len,
-			      unsigned int issue_flags)
+			      unsigned buf_group, unsigned int issue_flags)
 {
 	struct io_ring_ctx *ctx = req->ctx;
 	struct io_buffer_list *bl;
@@ -201,7 +199,7 @@ void __user *io_buffer_select(struct io_kiocb *req, size_t *len,
 
 	io_ring_submit_lock(req->ctx, issue_flags);
 
-	bl = io_buffer_get_list(ctx, req->buf_index);
+	bl = io_buffer_get_list(ctx, buf_group);
 	if (likely(bl)) {
 		if (bl->flags & IOBL_BUF_RING)
 			ret = io_ring_buffer_select(req, len, bl, issue_flags);
@@ -302,7 +300,7 @@ int io_buffers_select(struct io_kiocb *req, struct buf_sel_arg *arg,
 	int ret = -ENOENT;
 
 	io_ring_submit_lock(ctx, issue_flags);
-	bl = io_buffer_get_list(ctx, req->buf_index);
+	bl = io_buffer_get_list(ctx, arg->buf_group);
 	if (unlikely(!bl))
 		goto out_unlock;
 
@@ -335,7 +333,7 @@ int io_buffers_peek(struct io_kiocb *req, struct buf_sel_arg *arg)
 
 	lockdep_assert_held(&ctx->uring_lock);
 
-	bl = io_buffer_get_list(ctx, req->buf_index);
+	bl = io_buffer_get_list(ctx, arg->buf_group);
 	if (unlikely(!bl))
 		return -ENOENT;
 
@@ -355,10 +353,9 @@ static inline bool __io_put_kbuf_ring(struct io_kiocb *req, int len, int nr)
 	struct io_buffer_list *bl = req->buf_list;
 	bool ret = true;
 
-	if (bl) {
+	if (bl)
 		ret = io_kbuf_commit(req, bl, len, nr);
-		req->buf_index = bl->bgid;
-	}
+
 	req->flags &= ~REQ_F_BUFFER_RING;
 	return ret;
 }
