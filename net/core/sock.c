@@ -148,6 +148,8 @@
 
 #include <linux/ethtool.h>
 
+#include <uapi/linux/pidfd.h>
+
 #include "dev.h"
 
 static DEFINE_MUTEX(proto_list_mutex);
@@ -1891,18 +1893,10 @@ int sk_getsockopt(struct sock *sk, int level, int optname,
 		if (!peer_pid)
 			return -ENODATA;
 
-		pidfd = pidfd_prepare(peer_pid, 0, &pidfd_file);
+		pidfd = pidfd_prepare(peer_pid, PIDFD_STALE, &pidfd_file);
 		put_pid(peer_pid);
-		if (pidfd < 0) {
-			/*
-			 * dbus-broker relies on -EINVAL being returned
-			 * to indicate ESRCH. Paper over it until this
-			 * is fixed in userspace.
-			 */
-			if (pidfd == -ESRCH)
-				pidfd = -EINVAL;
+		if (pidfd < 0)
 			return pidfd;
-		}
 
 		if (copy_to_sockptr(optval, &pidfd, len) ||
 		    copy_to_sockptr(optlen, &len, sizeof(int))) {
