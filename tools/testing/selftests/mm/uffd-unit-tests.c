@@ -1301,9 +1301,8 @@ static thread_state thread_state_get(pid_t tid)
 	snprintf(tmp, sizeof(tmp), "/proc/%d/status", tid);
 	fp = fopen(tmp, "r");
 
-	if (!fp) {
+	if (!fp)
 		return THR_STATE_UNKNOWN;
-	}
 
 	while (fgets(tmp, sizeof(tmp), fp)) {
 		p = strstr(tmp, header);
