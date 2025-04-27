@@ -45,6 +45,49 @@ static void bch2_extent_crc_pack(union bch_extent_crc *,
 				 struct bch_extent_crc_unpacked,
 				 enum bch_extent_entry_type);
 
+void bch2_io_failures_to_text(struct printbuf *out,
+			      struct bch_fs *c,
+			      struct bch_io_failures *failed)
+{
+	static const char * const error_types[] = {
+		"io", "checksum", "ec reconstruct", NULL
+	};
+
+	for (struct bch_dev_io_failures *f = failed->devs;
+	     f < failed->devs + failed->nr;
+	     f++) {
+		unsigned errflags =
+			((!!f->failed_io)	<< 0) |
+			((!!f->failed_csum_nr)	<< 1) |
+			((!!f->failed_ec)	<< 2);
+
+		if (!errflags)
+			continue;
+
+		bch2_printbuf_make_room(out, 1024);
+		rcu_read_lock();
+		out->atomic++;
+		struct bch_dev *ca = bch2_dev_rcu_noerror(c, f->dev);
+		if (ca)
+			prt_str(out, ca->name);
+		else
+			prt_printf(out, "(invalid device %u)", f->dev);
+		--out->atomic;
+		rcu_read_unlock();
+
+		prt_char(out, ' ');
+
+		if (is_power_of_2(errflags)) {
+			prt_bitflags(out, error_types, errflags);
+			prt_str(out, " error");
+		} else {
+			prt_str(out, "errors: ");
+			prt_bitflags(out, error_types, errflags);
+		}
+		prt_newline(out);
+	}
+}
+
 struct bch_dev_io_failures *bch2_dev_io_failures(struct bch_io_failures *f,
 						 unsigned dev)
 {
@@ -77,6 +120,22 @@ void bch2_mark_io_failure(struct bch_io_failures *failed,
 		f->failed_io = true;
 	else
 		f->failed_csum_nr++;
+}
+
+void bch2_mark_btree_validate_failure(struct bch_io_failures *failed,
+				      unsigned dev)
+{
+	struct bch_dev_io_failures *f = bch2_dev_io_failures(failed, dev);
+
+	if (!f) {
+		BUG_ON(failed->nr >= ARRAY_SIZE(failed->devs));
+
+		f = &failed->devs[failed->nr++];
+		memset(f, 0, sizeof(*f));
+		f->dev = dev;
+	}
+
+	f->failed_btree_validate = true;
 }
 
 static inline u64 dev_latency(struct bch_dev *ca)
@@ -136,12 +195,8 @@ int bch2_bkey_pick_read_device(struct bch_fs *c, struct bkey_s_c k,
 	if (k.k->type == KEY_TYPE_error)
 		return -BCH_ERR_key_type_error;
 
-	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
-
-	if (bch2_bkey_extent_ptrs_flags(ptrs) & BIT_ULL(BCH_EXTENT_FLAG_poisoned))
-		return -BCH_ERR_extent_poisoned;
-
 	rcu_read_lock();
+	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
 	const union bch_extent_entry *entry;
 	struct extent_ptr_decoded p;
 	u64 pick_latency;
@@ -162,7 +217,15 @@ int bch2_bkey_pick_read_device(struct bch_fs *c, struct bkey_s_c k,
 		if (dev >= 0 && p.ptr.dev != dev)
 			continue;
 
-		struct bch_dev *ca = bch2_dev_rcu(c, p.ptr.dev);
+		struct bch_dev *ca = bch2_dev_rcu_noerror(c, p.ptr.dev);
+
+		if (unlikely(!ca && p.ptr.dev != BCH_SB_MEMBER_INVALID)) {
+			rcu_read_unlock();
+			int ret = bch2_dev_missing_bkey(c, k, p.ptr.dev);
+			if (ret)
+				return ret;
+			rcu_read_lock();
+		}
 
 		if (p.ptr.cached && (!ca || dev_ptr_stale_rcu(ca, &p.ptr)))
 			continue;
@@ -175,6 +238,7 @@ int bch2_bkey_pick_read_device(struct bch_fs *c, struct bkey_s_c k,
 
 			if (ca && ca->mi.state != BCH_MEMBER_STATE_failed) {
 				have_io_errors	|= f->failed_io;
+				have_io_errors	|= f->failed_btree_validate;
 				have_io_errors	|= f->failed_ec;
 			}
 			have_csum_errors	|= !!f->failed_csum_nr;
@@ -182,6 +246,7 @@ int bch2_bkey_pick_read_device(struct bch_fs *c, struct bkey_s_c k,
 			if (p.has_ec && (f->failed_io || f->failed_csum_nr))
 				p.do_ec_reconstruct = true;
 			else if (f->failed_io ||
+				 f->failed_btree_validate ||
 				 f->failed_csum_nr > c->opts.checksum_err_retry_nr)
 				continue;
 		}
