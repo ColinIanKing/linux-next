@@ -119,7 +119,12 @@ static struct btrfs_delayed_node *btrfs_get_delayed_node(
 	return NULL;
 }
 
-/* Will return either the node or PTR_ERR(-ENOMEM) */
+/*
+ * Look up an existing delayed node associated with @btrfs_inode or create a new
+ * one and insert it to the delayed nodes of the root.
+ *
+ * Return the delayed node, or error pointer on failure.
+ */
 static struct btrfs_delayed_node *btrfs_get_or_create_delayed_node(
 		struct btrfs_inode *btrfs_inode)
 {
@@ -336,6 +341,20 @@ static struct btrfs_delayed_item *btrfs_alloc_delayed_item(u16 data_len,
 	return item;
 }
 
+static int btrfs_delayed_item_key_cmp(const void *k, const struct rb_node *node)
+{
+	const u64 *index = k;
+	const struct btrfs_delayed_item *delayed_item =
+		rb_entry(node, struct btrfs_delayed_item, rb_node);
+
+	if (delayed_item->index < *index)
+		return 1;
+	else if (delayed_item->index > *index)
+		return -1;
+
+	return 0;
+}
+
 /*
  * Look up the delayed item by key.
  *
@@ -349,21 +368,10 @@ static struct btrfs_delayed_item *__btrfs_lookup_delayed_item(
 				struct rb_root *root,
 				u64 index)
 {
-	struct rb_node *node = root->rb_node;
-	struct btrfs_delayed_item *delayed_item = NULL;
+	struct rb_node *node;
 
-	while (node) {
-		delayed_item = rb_entry(node, struct btrfs_delayed_item,
-					rb_node);
-		if (delayed_item->index < index)
-			node = node->rb_right;
-		else if (delayed_item->index > index)
-			node = node->rb_left;
-		else
-			return delayed_item;
-	}
-
-	return NULL;
+	node = rb_find(&index, root, btrfs_delayed_item_key_cmp);
+	return rb_entry_safe(node, struct btrfs_delayed_item, rb_node);
 }
 
 static int btrfs_delayed_item_cmp(const struct rb_node *new,
@@ -371,14 +379,8 @@ static int btrfs_delayed_item_cmp(const struct rb_node *new,
 {
 	const struct btrfs_delayed_item *new_item =
 		rb_entry(new, struct btrfs_delayed_item, rb_node);
-	const struct btrfs_delayed_item *exist_item =
-		rb_entry(exist, struct btrfs_delayed_item, rb_node);
 
-	if (new_item->index < exist_item->index)
-		return -1;
-	if (new_item->index > exist_item->index)
-		return 1;
-	return 0;
+	return btrfs_delayed_item_key_cmp(&new_item->index, exist);
 }
 
 static int __btrfs_add_delayed_item(struct btrfs_delayed_node *delayed_node,
@@ -454,40 +456,25 @@ static void btrfs_release_delayed_item(struct btrfs_delayed_item *item)
 static struct btrfs_delayed_item *__btrfs_first_delayed_insertion_item(
 					struct btrfs_delayed_node *delayed_node)
 {
-	struct rb_node *p;
-	struct btrfs_delayed_item *item = NULL;
+	struct rb_node *p = rb_first_cached(&delayed_node->ins_root);
 
-	p = rb_first_cached(&delayed_node->ins_root);
-	if (p)
-		item = rb_entry(p, struct btrfs_delayed_item, rb_node);
-
-	return item;
+	return rb_entry_safe(p, struct btrfs_delayed_item, rb_node);
 }
 
 static struct btrfs_delayed_item *__btrfs_first_delayed_deletion_item(
 					struct btrfs_delayed_node *delayed_node)
 {
-	struct rb_node *p;
-	struct btrfs_delayed_item *item = NULL;
+	struct rb_node *p = rb_first_cached(&delayed_node->del_root);
 
-	p = rb_first_cached(&delayed_node->del_root);
-	if (p)
-		item = rb_entry(p, struct btrfs_delayed_item, rb_node);
-
-	return item;
+	return rb_entry_safe(p, struct btrfs_delayed_item, rb_node);
 }
 
 static struct btrfs_delayed_item *__btrfs_next_delayed_item(
 						struct btrfs_delayed_item *item)
 {
-	struct rb_node *p;
-	struct btrfs_delayed_item *next = NULL;
+	struct rb_node *p = rb_next(&item->rb_node);
 
-	p = rb_next(&item->rb_node);
-	if (p)
-		next = rb_entry(p, struct btrfs_delayed_item, rb_node);
-
-	return next;
+	return rb_entry_safe(p, struct btrfs_delayed_item, rb_node);
 }
 
 static int btrfs_delayed_item_reserve_metadata(struct btrfs_trans_handle *trans,
