@@ -132,7 +132,7 @@ struct buffer_head *gfs2_getbuf(struct gfs2_glock *gl, u64 blkno, int create)
 	unsigned int bufnum;
 
 	if (mapping == NULL)
-		mapping = &sdp->sd_aspace;
+		mapping = gfs2_aspace(sdp);
 
 	shift = PAGE_SHIFT - sdp->sd_sb.sb_bsize_shift;
 	index = blkno >> shift;             /* convert block to page */
@@ -228,7 +228,7 @@ static void gfs2_submit_bhs(blk_opf_t opf, struct buffer_head *bhs[], int num)
 		struct bio *bio;
 
 		bio = bio_alloc(bh->b_bdev, num, opf, GFP_NOIO);
-		bio->bi_iter.bi_sector = bh->b_blocknr * (bh->b_size >> 9);
+		bio->bi_iter.bi_sector = bh->b_blocknr * (bh->b_size >> SECTOR_SHIFT);
 		while (num > 0) {
 			bh = *bhs;
 			if (!bio_add_folio(bio, bh->b_folio, bh->b_size, bh_offset(bh))) {

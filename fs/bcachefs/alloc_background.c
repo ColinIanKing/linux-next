@@ -17,6 +17,7 @@
 #include "debug.h"
 #include "disk_accounting.h"
 #include "ec.h"
+#include "enumerated_ref.h"
 #include "error.h"
 #include "lru.h"
 #include "recovery.h"
@@ -1381,7 +1382,7 @@ static void check_discard_freespace_key_work(struct work_struct *work)
 		container_of(work, struct check_discard_freespace_key_async, work);
 
 	bch2_trans_do(w->c, bch2_recheck_discard_freespace_key(trans, w->pos));
-	bch2_write_ref_put(w->c, BCH_WRITE_REF_check_discard_freespace_key);
+	enumerated_ref_put(&w->c->writes, BCH_WRITE_REF_check_discard_freespace_key);
 	kfree(w);
 }
 
@@ -1458,7 +1459,7 @@ delete:
 		if (!w)
 			goto out;
 
-		if (!bch2_write_ref_tryget(c, BCH_WRITE_REF_check_discard_freespace_key)) {
+		if (!enumerated_ref_tryget(&c->writes, BCH_WRITE_REF_check_discard_freespace_key)) {
 			kfree(w);
 			goto out;
 		}
@@ -1952,26 +1953,26 @@ static void bch2_do_discards_work(struct work_struct *work)
 	trace_discard_buckets(c, s.seen, s.open, s.need_journal_commit, s.discarded,
 			      bch2_err_str(ret));
 
-	percpu_ref_put(&ca->io_ref[WRITE]);
-	bch2_write_ref_put(c, BCH_WRITE_REF_discard);
+	enumerated_ref_put(&ca->io_ref[WRITE], BCH_DEV_WRITE_REF_dev_do_discards);
+	enumerated_ref_put(&c->writes, BCH_WRITE_REF_discard);
 }
 
 void bch2_dev_do_discards(struct bch_dev *ca)
 {
 	struct bch_fs *c = ca->fs;
 
-	if (!bch2_write_ref_tryget(c, BCH_WRITE_REF_discard))
+	if (!enumerated_ref_tryget(&c->writes, BCH_WRITE_REF_discard))
 		return;
 
-	if (!bch2_dev_get_ioref(c, ca->dev_idx, WRITE))
+	if (!bch2_dev_get_ioref(c, ca->dev_idx, WRITE, BCH_DEV_WRITE_REF_dev_do_discards))
 		goto put_write_ref;
 
 	if (queue_work(c->write_ref_wq, &ca->discard_work))
 		return;
 
-	percpu_ref_put(&ca->io_ref[WRITE]);
+	enumerated_ref_put(&ca->io_ref[WRITE], BCH_DEV_WRITE_REF_dev_do_discards);
 put_write_ref:
-	bch2_write_ref_put(c, BCH_WRITE_REF_discard);
+	enumerated_ref_put(&c->writes, BCH_WRITE_REF_discard);
 }
 
 void bch2_do_discards(struct bch_fs *c)
@@ -2047,8 +2048,8 @@ static void bch2_do_discards_fast_work(struct work_struct *work)
 	trace_discard_buckets_fast(c, s.seen, s.open, s.need_journal_commit, s.discarded, bch2_err_str(ret));
 
 	bch2_trans_put(trans);
-	percpu_ref_put(&ca->io_ref[WRITE]);
-	bch2_write_ref_put(c, BCH_WRITE_REF_discard_fast);
+	enumerated_ref_put(&ca->io_ref[WRITE], BCH_DEV_WRITE_REF_discard_one_bucket_fast);
+	enumerated_ref_put(&c->writes, BCH_WRITE_REF_discard_fast);
 }
 
 static void bch2_discard_one_bucket_fast(struct bch_dev *ca, u64 bucket)
@@ -2058,18 +2059,18 @@ static void bch2_discard_one_bucket_fast(struct bch_dev *ca, u64 bucket)
 	if (discard_in_flight_add(ca, bucket, false))
 		return;
 
-	if (!bch2_write_ref_tryget(c, BCH_WRITE_REF_discard_fast))
+	if (!enumerated_ref_tryget(&c->writes, BCH_WRITE_REF_discard_fast))
 		return;
 
-	if (!bch2_dev_get_ioref(c, ca->dev_idx, WRITE))
+	if (!bch2_dev_get_ioref(c, ca->dev_idx, WRITE, BCH_DEV_WRITE_REF_discard_one_bucket_fast))
 		goto put_ref;
 
 	if (queue_work(c->write_ref_wq, &ca->discard_fast_work))
 		return;
 
-	percpu_ref_put(&ca->io_ref[WRITE]);
+	enumerated_ref_put(&ca->io_ref[WRITE], BCH_DEV_WRITE_REF_discard_one_bucket_fast);
 put_ref:
-	bch2_write_ref_put(c, BCH_WRITE_REF_discard_fast);
+	enumerated_ref_put(&c->writes, BCH_WRITE_REF_discard_fast);
 }
 
 static int invalidate_one_bp(struct btree_trans *trans,
@@ -2261,27 +2262,27 @@ restart_err:
 	bch2_trans_iter_exit(trans, &iter);
 err:
 	bch2_trans_put(trans);
-	percpu_ref_put(&ca->io_ref[WRITE]);
 	bch2_bkey_buf_exit(&last_flushed, c);
-	bch2_write_ref_put(c, BCH_WRITE_REF_invalidate);
+	enumerated_ref_put(&ca->io_ref[WRITE], BCH_DEV_WRITE_REF_do_invalidates);
+	enumerated_ref_put(&c->writes, BCH_WRITE_REF_invalidate);
 }
 
 void bch2_dev_do_invalidates(struct bch_dev *ca)
 {
 	struct bch_fs *c = ca->fs;
 
-	if (!bch2_write_ref_tryget(c, BCH_WRITE_REF_invalidate))
+	if (!enumerated_ref_tryget(&c->writes, BCH_WRITE_REF_invalidate))
 		return;
 
-	if (!bch2_dev_get_ioref(c, ca->dev_idx, WRITE))
+	if (!bch2_dev_get_ioref(c, ca->dev_idx, WRITE, BCH_DEV_WRITE_REF_do_invalidates))
 		goto put_ref;
 
 	if (queue_work(c->write_ref_wq, &ca->invalidate_work))
 		return;
 
-	percpu_ref_put(&ca->io_ref[WRITE]);
+	enumerated_ref_put(&ca->io_ref[WRITE], BCH_DEV_WRITE_REF_do_invalidates);
 put_ref:
-	bch2_write_ref_put(c, BCH_WRITE_REF_invalidate);
+	enumerated_ref_put(&c->writes, BCH_WRITE_REF_invalidate);
 }
 
 void bch2_do_invalidates(struct bch_fs *c)
@@ -2503,15 +2504,15 @@ void bch2_recalc_capacity(struct bch_fs *c)
 
 	lockdep_assert_held(&c->state_lock);
 
-	for_each_online_member(c, ca) {
-		struct backing_dev_info *bdi = ca->disk_sb.bdev->bd_disk->bdi;
+	rcu_read_lock();
+	for_each_member_device_rcu(c, ca, NULL) {
+		struct block_device *bdev = READ_ONCE(ca->disk_sb.bdev);
+		if (bdev)
+			ra_pages += bdev->bd_disk->bdi->ra_pages;
 
-		ra_pages += bdi->ra_pages;
-	}
+		if (ca->mi.state != BCH_MEMBER_STATE_rw)
+			continue;
 
-	bch2_set_ra_pages(c, ra_pages);
-
-	__for_each_online_member(c, ca, BIT(BCH_MEMBER_STATE_rw), READ) {
 		u64 dev_reserve = 0;
 
 		/*
@@ -2548,6 +2549,9 @@ void bch2_recalc_capacity(struct bch_fs *c)
 		bucket_size_max = max_t(unsigned, bucket_size_max,
 					ca->mi.bucket_size);
 	}
+	rcu_read_unlock();
+
+	bch2_set_ra_pages(c, ra_pages);
 
 	gc_reserve = c->opts.gc_reserve_bytes
 		? c->opts.gc_reserve_bytes >> 9
@@ -2570,8 +2574,10 @@ u64 bch2_min_rw_member_capacity(struct bch_fs *c)
 {
 	u64 ret = U64_MAX;
 
-	for_each_rw_member(c, ca)
+	rcu_read_lock();
+	for_each_rw_member_rcu(c, ca)
 		ret = min(ret, ca->mi.nbuckets * ca->mi.bucket_size);
+	rcu_read_unlock();
 	return ret;
 }
 
@@ -2593,15 +2599,26 @@ static bool bch2_dev_has_open_write_point(struct bch_fs *c, struct bch_dev *ca)
 	return ret;
 }
 
+void bch2_dev_allocator_set_rw(struct bch_fs *c, struct bch_dev *ca, bool rw)
+{
+	/* BCH_DATA_free == all rw devs */
+
+	for (unsigned i = 0; i < ARRAY_SIZE(c->rw_devs); i++)
+		if (rw &&
+		    (i == BCH_DATA_free ||
+		     (ca->mi.data_allowed & BIT(i))))
+			set_bit(ca->dev_idx, c->rw_devs[i].d);
+		else
+			clear_bit(ca->dev_idx, c->rw_devs[i].d);
+}
+
 /* device goes ro: */
 void bch2_dev_allocator_remove(struct bch_fs *c, struct bch_dev *ca)
 {
 	lockdep_assert_held(&c->state_lock);
 
 	/* First, remove device from allocation groups: */
-
-	for (unsigned i = 0; i < ARRAY_SIZE(c->rw_devs); i++)
-		clear_bit(ca->dev_idx, c->rw_devs[i].d);
+	bch2_dev_allocator_set_rw(c, ca, false);
 
 	c->rw_devs_change_count++;
 
@@ -2635,10 +2652,7 @@ void bch2_dev_allocator_add(struct bch_fs *c, struct bch_dev *ca)
 {
 	lockdep_assert_held(&c->state_lock);
 
-	for (unsigned i = 0; i < ARRAY_SIZE(c->rw_devs); i++)
-		if (ca->mi.data_allowed & (1 << i))
-			set_bit(ca->dev_idx, c->rw_devs[i].d);
-
+	bch2_dev_allocator_set_rw(c, ca, true);
 	c->rw_devs_change_count++;
 }
 
