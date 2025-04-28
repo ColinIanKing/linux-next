@@ -392,29 +392,24 @@ static int bucket_ref_update_err(struct btree_trans *trans, struct printbuf *buf
 				 struct bkey_s_c k, bool insert, enum bch_sb_error_id id)
 {
 	struct bch_fs *c = trans->c;
-	bool repeat = false, print = true, suppress = false;
 
 	prt_printf(buf, "\nwhile marking ");
 	bch2_bkey_val_to_text(buf, c, k);
 	prt_newline(buf);
 
-	__bch2_count_fsck_err(c, id, buf->buf, &repeat, &print, &suppress);
+	bool print = __bch2_count_fsck_err(c, id, buf);
 
-	int ret = bch2_run_explicit_recovery_pass(c, BCH_RECOVERY_PASS_check_allocations);
+	int ret = bch2_run_explicit_recovery_pass_persistent(c, buf,
+					BCH_RECOVERY_PASS_check_allocations);
 
 	if (insert) {
-		print = true;
-		suppress = false;
-
 		bch2_trans_updates_to_text(buf, trans);
 		__bch2_inconsistent_error(c, buf);
 		ret = -BCH_ERR_bucket_ref_update;
 	}
 
-	if (suppress)
-		prt_printf(buf, "Ratelimiting new instances of previous error\n");
-	if (print)
-		bch2_print_string_as_lines(KERN_ERR, buf->buf);
+	if (print || insert)
+		bch2_print_str(c, KERN_ERR, buf->buf);
 	return ret;
 }
 
@@ -604,6 +599,13 @@ static int bch2_trigger_pointer(struct btree_trans *trans,
 	}
 
 	struct bpos bucket = PTR_BUCKET_POS(ca, &p.ptr);
+	if (!bucket_valid(ca, bucket.offset)) {
+		if (insert) {
+			bch2_dev_bucket_missing(ca, bucket.offset);
+			ret = -BCH_ERR_trigger_pointer;
+		}
+		goto err;
+	}
 
 	if (flags & BTREE_TRIGGER_transactional) {
 		struct bkey_i_alloc_v4 *a = bch2_trans_start_alloc_update(trans, bucket, 0);
@@ -704,7 +706,7 @@ err:
 				   (u64) p.ec.idx);
 			bch2_bkey_val_to_text(&buf, c, k);
 			__bch2_inconsistent_error(c, &buf);
-			bch2_print_string_as_lines(KERN_ERR, buf.buf);
+			bch2_print_str(c, KERN_ERR, buf.buf);
 			printbuf_exit(&buf);
 			return -BCH_ERR_trigger_stripe_pointer;
 		}
@@ -959,14 +961,23 @@ static int __bch2_trans_mark_metadata_bucket(struct btree_trans *trans,
 		return PTR_ERR(a);
 
 	if (a->v.data_type && type && a->v.data_type != type) {
-		bch2_run_explicit_recovery_pass(c, BCH_RECOVERY_PASS_check_allocations);
-		log_fsck_err(trans, bucket_metadata_type_mismatch,
-			"bucket %llu:%llu gen %u different types of data in same bucket: %s, %s\n"
-			"while marking %s",
-			iter.pos.inode, iter.pos.offset, a->v.gen,
-			bch2_data_type_str(a->v.data_type),
-			bch2_data_type_str(type),
-			bch2_data_type_str(type));
+		struct printbuf buf = PRINTBUF;
+		bch2_log_msg_start(c, &buf);
+		prt_printf(&buf, "bucket %llu:%llu gen %u different types of data in same bucket: %s, %s\n"
+			   "while marking %s\n",
+			   iter.pos.inode, iter.pos.offset, a->v.gen,
+			   bch2_data_type_str(a->v.data_type),
+			   bch2_data_type_str(type),
+			   bch2_data_type_str(type));
+
+		bool print = bch2_count_fsck_err(c, bucket_metadata_type_mismatch, &buf);
+
+		bch2_run_explicit_recovery_pass_persistent(c, &buf,
+					BCH_RECOVERY_PASS_check_allocations);
+
+		if (print)
+			bch2_print_str(c, KERN_ERR, buf.buf);
+		printbuf_exit(&buf);
 		ret = -BCH_ERR_metadata_bucket_inconsistency;
 		goto err;
 	}
@@ -978,7 +989,6 @@ static int __bch2_trans_mark_metadata_bucket(struct btree_trans *trans,
 		ret = bch2_trans_update(trans, &iter, &a->k_i, 0);
 	}
 err:
-fsck_err:
 	bch2_trans_iter_exit(trans, &iter);
 	return ret;
 }
@@ -1136,10 +1146,10 @@ int bch2_trans_mark_dev_sb(struct bch_fs *c, struct bch_dev *ca,
 int bch2_trans_mark_dev_sbs_flags(struct bch_fs *c,
 			enum btree_iter_update_trigger_flags flags)
 {
-	for_each_online_member(c, ca) {
+	for_each_online_member(c, ca, BCH_DEV_READ_REF_trans_mark_dev_sbs) {
 		int ret = bch2_trans_mark_dev_sb(c, ca, flags);
 		if (ret) {
-			percpu_ref_put(&ca->io_ref[READ]);
+			enumerated_ref_put(&ca->io_ref[READ], BCH_DEV_READ_REF_trans_mark_dev_sbs);
 			return ret;
 		}
 	}
@@ -1307,13 +1317,11 @@ int bch2_dev_buckets_resize(struct bch_fs *c, struct bch_dev *ca, u64 nbuckets)
 	old_bucket_gens = rcu_dereference_protected(ca->bucket_gens, 1);
 
 	if (resize) {
-		bucket_gens->nbuckets = min(bucket_gens->nbuckets,
-					    old_bucket_gens->nbuckets);
-		bucket_gens->nbuckets_minus_first =
-			bucket_gens->nbuckets - bucket_gens->first_bucket;
+		u64 copy = min(bucket_gens->nbuckets,
+			       old_bucket_gens->nbuckets);
 		memcpy(bucket_gens->b,
 		       old_bucket_gens->b,
-		       bucket_gens->nbuckets);
+		       sizeof(bucket_gens->b[0]) * copy);
 	}
 
 	rcu_assign_pointer(ca->bucket_gens, bucket_gens);

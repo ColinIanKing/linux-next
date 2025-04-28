@@ -7,6 +7,7 @@
 #include "btree_update.h"
 #include "buckets.h"
 #include "clock.h"
+#include "enumerated_ref.h"
 #include "error.h"
 #include "extents.h"
 #include "extent_update.h"
@@ -48,7 +49,8 @@ static void nocow_flush_endio(struct bio *_bio)
 	struct nocow_flush *bio = container_of(_bio, struct nocow_flush, bio);
 
 	closure_put(bio->cl);
-	percpu_ref_put(&bio->ca->io_ref[WRITE]);
+	enumerated_ref_put(&bio->ca->io_ref[WRITE],
+			   BCH_DEV_WRITE_REF_nocow_flush);
 	bio_put(&bio->bio);
 }
 
@@ -71,7 +73,8 @@ void bch2_inode_flush_nocow_writes_async(struct bch_fs *c,
 	for_each_set_bit(dev, devs.d, BCH_SB_MEMBERS_MAX) {
 		rcu_read_lock();
 		ca = rcu_dereference(c->devs[dev]);
-		if (ca && !percpu_ref_tryget(&ca->io_ref[WRITE]))
+		if (ca && !enumerated_ref_tryget(&ca->io_ref[WRITE],
+					BCH_DEV_WRITE_REF_nocow_flush))
 			ca = NULL;
 		rcu_read_unlock();
 
@@ -205,7 +208,7 @@ static int bch2_flush_inode(struct bch_fs *c,
 	if (c->opts.journal_flush_disabled)
 		return 0;
 
-	if (!bch2_write_ref_tryget(c, BCH_WRITE_REF_fsync))
+	if (!enumerated_ref_tryget(&c->writes, BCH_WRITE_REF_fsync))
 		return -EROFS;
 
 	u64 seq;
@@ -213,7 +216,7 @@ static int bch2_flush_inode(struct bch_fs *c,
 			bch2_get_inode_journal_seq_trans(trans, inode_inum(inode), &seq)) ?:
 		  bch2_journal_flush_seq(&c->journal, seq, TASK_INTERRUPTIBLE) ?:
 		  bch2_inode_flush_nocow_writes(c, inode);
-	bch2_write_ref_put(c, BCH_WRITE_REF_fsync);
+	enumerated_ref_put(&c->writes, BCH_WRITE_REF_fsync);
 	return ret;
 }
 
@@ -241,6 +244,7 @@ out:
 	if (!ret)
 		ret = err;
 
+	bch_err_fn(c, ret);
 	return ret;
 }
 
@@ -795,7 +799,7 @@ long bch2_fallocate_dispatch(struct file *file, int mode,
 	struct bch_fs *c = inode->v.i_sb->s_fs_info;
 	long ret;
 
-	if (!bch2_write_ref_tryget(c, BCH_WRITE_REF_fallocate))
+	if (!enumerated_ref_tryget(&c->writes, BCH_WRITE_REF_fallocate))
 		return -EROFS;
 
 	inode_lock(&inode->v);
@@ -819,7 +823,7 @@ long bch2_fallocate_dispatch(struct file *file, int mode,
 err:
 	bch2_pagecache_block_put(inode);
 	inode_unlock(&inode->v);
-	bch2_write_ref_put(c, BCH_WRITE_REF_fallocate);
+	enumerated_ref_put(&c->writes, BCH_WRITE_REF_fallocate);
 
 	return bch2_err_class(ret);
 }
