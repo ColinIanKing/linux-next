@@ -548,7 +548,7 @@ int expand_downwards(struct vm_area_struct *vma, unsigned long address);
 
 int __vm_munmap(unsigned long start, size_t len, bool unlock);
 
-/* vma_exec.h */
+/* vma_exec.c */
 #ifdef CONFIG_MMU
 int relocate_vma_down(struct vm_area_struct *vma, unsigned long shift);
 #endif
