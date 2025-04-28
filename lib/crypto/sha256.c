@@ -118,18 +118,19 @@ static void sha256_transform(u32 *state, const u8 *input, u32 *W)
 	state[4] += e; state[5] += f; state[6] += g; state[7] += h;
 }
 
-static void sha256_transform_blocks(struct sha256_state *sctx,
-				    const u8 *input, int blocks)
+void sha256_transform_blocks(struct crypto_sha256_state *sst,
+			     const u8 *input, int blocks)
 {
 	u32 W[64];
 
 	do {
-		sha256_transform(sctx->state, input, W);
+		sha256_transform(sst->state, input, W);
 		input += SHA256_BLOCK_SIZE;
 	} while (--blocks);
 
 	memzero_explicit(W, sizeof(W));
 }
+EXPORT_SYMBOL_GPL(sha256_transform_blocks);
 
 void sha256_update(struct sha256_state *sctx, const u8 *data, unsigned int len)
 {
