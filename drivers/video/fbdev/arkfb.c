@@ -431,7 +431,7 @@ static struct dac_ops ics5342_ops = {
 
 static struct dac_info * ics5342_init(dac_read_regs_t drr, dac_write_regs_t dwr, void *data)
 {
-	struct dac_info *info = kzalloc(sizeof(struct ics5342_info), GFP_KERNEL);
+	struct dac_info *info = (struct dac_info *)kzalloc(sizeof(struct ics5342_info), GFP_KERNEL);
 
 	if (! info)
 		return NULL;
