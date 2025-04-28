@@ -57,6 +57,7 @@ config MDIO_SUN4I
 config MDIO_XGENE
 	tristate "APM X-Gene SoC MDIO bus controller"
 	depends on ARCH_XGENE || COMPILE_TEST
+	depends on PHYLIB
 	help
 	  This module provides a driver for the MDIO busses found in the
 	  APM X-Gene SoC's.
@@ -184,6 +185,13 @@ config MDIO_IPQ8064
 	help
 	  This driver supports the MDIO interface found in the network
 	  interface units of the IPQ8064 SoC
+
+config MDIO_REALTEK_RTL9300
+	tristate "Realtek RTL9300 MDIO interface support"
+	depends on MACH_REALTEK_RTL || COMPILE_TEST
+	help
+	  This driver supports the MDIO interface found in the Realtek
+	  RTL9300 family of Ethernet switches with integrated SoC.
 
 config MDIO_REGMAP
 	tristate
