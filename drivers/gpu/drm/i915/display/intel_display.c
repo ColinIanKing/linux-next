@@ -55,6 +55,7 @@
 #include "i9xx_plane.h"
 #include "i9xx_plane_regs.h"
 #include "i9xx_wm.h"
+#include "intel_alpm.h"
 #include "intel_atomic.h"
 #include "intel_atomic_plane.h"
 #include "intel_audio.h"
@@ -1043,14 +1044,13 @@ static void intel_post_plane_update(struct intel_atomic_state *state,
 				    struct intel_crtc *crtc)
 {
 	struct intel_display *display = to_intel_display(state);
-	struct drm_i915_private *dev_priv = to_i915(state->base.dev);
 	const struct intel_crtc_state *old_crtc_state =
 		intel_atomic_get_old_crtc_state(state, crtc);
 	const struct intel_crtc_state *new_crtc_state =
 		intel_atomic_get_new_crtc_state(state, crtc);
 	enum pipe pipe = crtc->pipe;
 
-	intel_frontbuffer_flip(dev_priv, new_crtc_state->fb_bits);
+	intel_frontbuffer_flip(display, new_crtc_state->fb_bits);
 
 	if (new_crtc_state->update_wm_post && new_crtc_state->hw.active)
 		intel_update_watermarks(display);
@@ -1078,6 +1078,8 @@ static void intel_post_plane_update(struct intel_atomic_state *state,
 
 	if (audio_enabling(old_crtc_state, new_crtc_state))
 		intel_encoders_audio_enable(state, crtc);
+
+	intel_alpm_post_plane_update(state, crtc);
 
 	intel_psr_post_plane_update(state, crtc);
 }
@@ -1174,6 +1176,7 @@ static void intel_pre_plane_update(struct intel_atomic_state *state,
 		intel_atomic_get_new_crtc_state(state, crtc);
 	enum pipe pipe = crtc->pipe;
 
+	intel_alpm_pre_plane_update(state, crtc);
 	intel_psr_pre_plane_update(state, crtc);
 
 	if (intel_crtc_vrr_disabling(state, crtc)) {
@@ -1281,7 +1284,7 @@ static void intel_pre_plane_update(struct intel_atomic_state *state,
 static void intel_crtc_disable_planes(struct intel_atomic_state *state,
 				      struct intel_crtc *crtc)
 {
-	struct drm_i915_private *dev_priv = to_i915(crtc->base.dev);
+	struct intel_display *display = to_intel_display(state);
 	const struct intel_crtc_state *new_crtc_state =
 		intel_atomic_get_new_crtc_state(state, crtc);
 	unsigned int update_mask = new_crtc_state->update_planes;
@@ -1303,7 +1306,7 @@ static void intel_crtc_disable_planes(struct intel_atomic_state *state,
 			fb_bits |= plane->frontbuffer_bit;
 	}
 
-	intel_frontbuffer_flip(dev_priv, fb_bits);
+	intel_frontbuffer_flip(display, fb_bits);
 }
 
 static void intel_encoders_update_prepare(struct intel_atomic_state *state)
@@ -1510,7 +1513,6 @@ static void ilk_crtc_enable(struct intel_atomic_state *state,
 	struct intel_display *display = to_intel_display(crtc);
 	const struct intel_crtc_state *new_crtc_state =
 		intel_atomic_get_new_crtc_state(state, crtc);
-	struct drm_i915_private *dev_priv = to_i915(crtc->base.dev);
 	enum pipe pipe = crtc->pipe;
 
 	if (drm_WARN_ON(display->drm, crtc->active))
@@ -1562,7 +1564,7 @@ static void ilk_crtc_enable(struct intel_atomic_state *state,
 
 	intel_encoders_enable(state, crtc);
 
-	if (HAS_PCH_CPT(dev_priv))
+	if (HAS_PCH_CPT(display))
 		intel_wait_for_pipe_scanline_moving(crtc);
 
 	/*
@@ -2534,15 +2536,13 @@ intel_link_compute_m_n(u16 bits_per_pixel_x16, int nlanes,
 
 void intel_panel_sanitize_ssc(struct intel_display *display)
 {
-	struct drm_i915_private *dev_priv = to_i915(display->drm);
-
 	/*
 	 * There may be no VBT; and if the BIOS enabled SSC we can
 	 * just keep using it to avoid unnecessary flicker.  Whereas if the
 	 * BIOS isn't using it, don't assume it will work even if the VBT
 	 * indicates as much.
 	 */
-	if (HAS_PCH_IBX(dev_priv) || HAS_PCH_CPT(dev_priv)) {
+	if (HAS_PCH_IBX(display) || HAS_PCH_CPT(display)) {
 		bool bios_lvds_use_ssc = intel_de_read(display,
 						       PCH_DREF_CONTROL) &
 			DREF_SSC1_ENABLE;
@@ -6547,7 +6547,6 @@ static void intel_pipe_fastset(const struct intel_crtc_state *old_crtc_state,
 {
 	struct intel_display *display = to_intel_display(new_crtc_state);
 	struct intel_crtc *crtc = to_intel_crtc(new_crtc_state->uapi.crtc);
-	struct drm_i915_private *dev_priv = to_i915(crtc->base.dev);
 
 	/*
 	 * Update pipe size and adjust fitter if needed: the reason for this is
@@ -6563,7 +6562,7 @@ static void intel_pipe_fastset(const struct intel_crtc_state *old_crtc_state,
 	if (DISPLAY_VER(display) >= 9) {
 		if (new_crtc_state->pch_pfit.enabled)
 			skl_pfit_enable(new_crtc_state);
-	} else if (HAS_PCH_SPLIT(dev_priv)) {
+	} else if (HAS_PCH_SPLIT(display)) {
 		if (new_crtc_state->pch_pfit.enabled)
 			ilk_pfit_enable(new_crtc_state);
 		else if (old_crtc_state->pch_pfit.enabled)
@@ -6663,6 +6662,8 @@ static void intel_enable_crtc(struct intel_atomic_state *state,
 		/* VRR will be enable later, if required */
 		intel_crtc_update_active_timings(pipe_crtc_state, false);
 	}
+
+	intel_psr_notify_pipe_change(state, crtc, true);
 
 	display->funcs.display->crtc_enable(state, crtc);
 
@@ -6782,6 +6783,8 @@ static void intel_old_crtc_state_disables(struct intel_atomic_state *state,
 	for_each_intel_crtc_in_pipe_mask(display->drm, pipe_crtc,
 					 intel_crtc_joined_pipe_mask(old_crtc_state))
 		intel_crtc_disable_pipe_crc(pipe_crtc);
+
+	intel_psr_notify_pipe_change(state, crtc, false);
 
 	display->funcs.display->crtc_disable(state, crtc);
 
@@ -7639,15 +7642,13 @@ static bool ilk_has_edp_a(struct intel_display *display)
 
 static bool intel_ddi_crt_present(struct intel_display *display)
 {
-	struct drm_i915_private *dev_priv = to_i915(display->drm);
-
 	if (DISPLAY_VER(display) >= 9)
 		return false;
 
 	if (display->platform.haswell_ult || display->platform.broadwell_ult)
 		return false;
 
-	if (HAS_PCH_LPT_H(dev_priv) &&
+	if (HAS_PCH_LPT_H(display) &&
 	    intel_de_read(display, SFUSE_STRAP) & SFUSE_STRAP_CRT_DISABLED)
 		return false;
 
@@ -7669,7 +7670,6 @@ bool assert_port_valid(struct intel_display *display, enum port port)
 
 void intel_setup_outputs(struct intel_display *display)
 {
-	struct drm_i915_private *dev_priv = to_i915(display->drm);
 	struct intel_encoder *encoder;
 	bool dpd_is_edp = false;
 
@@ -7686,7 +7686,7 @@ void intel_setup_outputs(struct intel_display *display)
 
 		if (display->platform.geminilake || display->platform.broxton)
 			vlv_dsi_init(display);
-	} else if (HAS_PCH_SPLIT(dev_priv)) {
+	} else if (HAS_PCH_SPLIT(display)) {
 		int found;
 
 		/*
@@ -8054,13 +8054,11 @@ static const struct intel_display_funcs i9xx_display_funcs = {
  */
 void intel_init_display_hooks(struct intel_display *display)
 {
-	struct drm_i915_private *dev_priv = to_i915(display->drm);
-
 	if (DISPLAY_VER(display) >= 9) {
 		display->funcs.display = &skl_display_funcs;
 	} else if (HAS_DDI(display)) {
 		display->funcs.display = &ddi_display_funcs;
-	} else if (HAS_PCH_SPLIT(dev_priv)) {
+	} else if (HAS_PCH_SPLIT(display)) {
 		display->funcs.display = &pch_split_display_funcs;
 	} else if (display->platform.cherryview ||
 		   display->platform.valleyview) {

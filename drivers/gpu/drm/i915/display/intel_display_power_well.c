@@ -25,6 +25,7 @@
 #include "intel_hotplug.h"
 #include "intel_pcode.h"
 #include "intel_pps.h"
+#include "intel_psr.h"
 #include "intel_tc.h"
 #include "intel_vga.h"
 #include "skl_watermark.h"
@@ -760,6 +761,9 @@ void gen9_set_dc_state(struct intel_display *display, u32 state)
 			     state & ~power_domains->allowed_dc_mask))
 		state &= power_domains->allowed_dc_mask;
 
+	if (!power_domains->initializing)
+		intel_psr_notify_dc5_dc6(display);
+
 	val = intel_de_read(display, DC_STATE_EN);
 	mask = gen9_dc_mask(display);
 	drm_dbg_kms(display->drm, "Setting DC state from %02x to %02x\n",
@@ -1252,7 +1256,7 @@ static void vlv_display_power_well_init(struct intel_display *display)
 			intel_crt_reset(&encoder->base);
 	}
 
-	intel_vga_redisable_power_on(display);
+	intel_vga_disable(display);
 
 	intel_pps_unlock_regs_wa(display);
 }
