@@ -548,7 +548,6 @@ int expand_downwards(struct vm_area_struct *vma, unsigned long address);
 
 int __vm_munmap(unsigned long start, size_t len, bool unlock);
 
-
 int insert_vm_struct(struct mm_struct *mm, struct vm_area_struct *vma);
 
 /* vma_init.h, shared between CONFIG_MMU and nommu. */
