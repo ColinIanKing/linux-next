@@ -96,7 +96,6 @@ static_assert(ARRAY_SIZE(adf_fw_cy_config) == ARRAY_SIZE(adf_fw_dcc_config));
 static struct adf_hw_device_class adf_4xxx_class = {
 	.name = ADF_4XXX_DEVICE_NAME,
 	.type = DEV_4XXX,
-	.instances = 0,
 };
 
 static u32 get_ae_mask(struct adf_hw_device_data *self)
@@ -422,13 +421,13 @@ void adf_init_hw_data_4xxx(struct adf_hw_device_data *hw_data, u32 dev_id)
 	hw_data->admin_ae_mask = ADF_4XXX_ADMIN_AE_MASK;
 	hw_data->num_rps = ADF_GEN4_MAX_RPS;
 	switch (dev_id) {
-	case ADF_402XX_PCI_DEVICE_ID:
+	case PCI_DEVICE_ID_INTEL_QAT_402XX:
 		hw_data->fw_name = ADF_402XX_FW;
 		hw_data->fw_mmp_name = ADF_402XX_MMP;
 		hw_data->uof_get_name = uof_get_name_402xx;
 		hw_data->get_ena_thd_mask = get_ena_thd_mask;
 		break;
-	case ADF_401XX_PCI_DEVICE_ID:
+	case PCI_DEVICE_ID_INTEL_QAT_401XX:
 		hw_data->fw_name = ADF_4XXX_FW;
 		hw_data->fw_mmp_name = ADF_4XXX_MMP;
 		hw_data->uof_get_name = uof_get_name_4xxx;
