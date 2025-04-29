@@ -5392,6 +5392,11 @@ intel_dp_short_pulse(struct intel_dp *intel_dp)
 
 	intel_psr_short_pulse(intel_dp);
 
+	if (intel_alpm_get_error(intel_dp)) {
+		intel_alpm_disable(intel_dp);
+		intel_dp->alpm_parameters.sink_alpm_error = true;
+	}
+
 	if (intel_dp_test_short_pulse(intel_dp))
 		reprobe_needed = true;
 
@@ -6344,7 +6349,6 @@ static bool intel_edp_init_connector(struct intel_dp *intel_dp,
 				     struct intel_connector *connector)
 {
 	struct intel_display *display = to_intel_display(intel_dp);
-	struct drm_i915_private *dev_priv = to_i915(display->drm);
 	struct drm_display_mode *fixed_mode;
 	struct intel_encoder *encoder = &dp_to_dig_port(intel_dp)->base;
 	bool has_dpcd;
@@ -6361,7 +6365,7 @@ static bool intel_edp_init_connector(struct intel_dp *intel_dp,
 	 */
 	if (intel_get_lvds_encoder(display)) {
 		drm_WARN_ON(display->drm,
-			    !(HAS_PCH_IBX(dev_priv) || HAS_PCH_CPT(dev_priv)));
+			    !(HAS_PCH_IBX(display) || HAS_PCH_CPT(display)));
 		drm_info(display->drm,
 			 "LVDS was detected, not registering eDP\n");
 
@@ -6392,7 +6396,7 @@ static bool intel_edp_init_connector(struct intel_dp *intel_dp,
 	 */
 	intel_hpd_enable_detection(encoder);
 
-	intel_alpm_init_dpcd(intel_dp);
+	intel_alpm_init(intel_dp);
 
 	/* Cache DPCD and EDID for edp. */
 	has_dpcd = intel_edp_init_dpcd(intel_dp, connector);
