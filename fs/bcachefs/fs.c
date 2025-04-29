@@ -66,6 +66,8 @@ static inline void bch2_inode_flags_to_vfs(struct bch_fs *c, struct bch_inode_in
 
 	if (bch2_inode_casefold(c, &inode->ei_inode))
 		inode->v.i_flags |= S_CASEFOLD;
+	else
+		inode->v.i_flags &= ~S_CASEFOLD;
 }
 
 void bch2_inode_update_after_write(struct btree_trans *trans,
@@ -350,9 +352,8 @@ repeat:
 			if (!trans) {
 				__wait_on_freeing_inode(c, inode, inum);
 			} else {
-				bch2_trans_unlock(trans);
-				__wait_on_freeing_inode(c, inode, inum);
-				int ret = bch2_trans_relock(trans);
+				int ret = drop_locks_do(trans,
+						(__wait_on_freeing_inode(c, inode, inum), 0));
 				if (ret)
 					return ERR_PTR(ret);
 			}
@@ -848,10 +849,8 @@ int __bch2_unlink(struct inode *vdir, struct dentry *dentry,
 		set_nlink(&inode->v, 0);
 	}
 
-	if (IS_CASEFOLDED(vdir)) {
+	if (IS_CASEFOLDED(vdir))
 		d_invalidate(dentry);
-		d_prune_aliases(&inode->v);
-	}
 err:
 	bch2_trans_put(trans);
 	bch2_unlock_inodes(INODE_UPDATE_LOCK, dir, inode);
@@ -1464,8 +1463,8 @@ static int bch2_next_fiemap_extent(struct btree_trans *trans,
 		unsigned sectors = cur->kbuf.k->k.size;
 		s64 offset_into_extent = 0;
 		enum btree_id data_btree = BTREE_ID_extents;
-		int ret = bch2_read_indirect_extent(trans, &data_btree, &offset_into_extent,
-						    &cur->kbuf);
+		ret = bch2_read_indirect_extent(trans, &data_btree, &offset_into_extent,
+						&cur->kbuf);
 		if (ret)
 			goto err;
 
@@ -2350,12 +2349,14 @@ static int bch2_show_devname(struct seq_file *seq, struct dentry *root)
 	struct bch_fs *c = root->d_sb->s_fs_info;
 	bool first = true;
 
-	for_each_online_member(c, ca) {
+	rcu_read_lock();
+	for_each_online_member_rcu(c, ca) {
 		if (!first)
 			seq_putc(seq, ':');
 		first = false;
 		seq_puts(seq, ca->disk_sb.sb_name);
 	}
+	rcu_read_unlock();
 
 	return 0;
 }
@@ -2462,7 +2463,7 @@ static int bch2_fs_get_tree(struct fs_context *fc)
 	struct inode *vinode;
 	struct bch2_opts_parse *opts_parse = fc->fs_private;
 	struct bch_opts opts = opts_parse->opts;
-	darray_str devs;
+	darray_const_str devs;
 	darray_fs devs_to_fs = {};
 	int ret;
 
@@ -2486,7 +2487,7 @@ static int bch2_fs_get_tree(struct fs_context *fc)
 	if (!IS_ERR(sb))
 		goto got_sb;
 
-	c = bch2_fs_open(devs.data, devs.nr, opts);
+	c = bch2_fs_open(&devs, &opts);
 	ret = PTR_ERR_OR_ZERO(c);
 	if (ret)
 		goto err;
@@ -2537,7 +2538,12 @@ got_sb:
 	sb->s_time_min		= div_s64(S64_MIN, c->sb.time_units_per_sec) + 1;
 	sb->s_time_max		= div_s64(S64_MAX, c->sb.time_units_per_sec);
 	super_set_uuid(sb, c->sb.user_uuid.b, sizeof(c->sb.user_uuid));
-	super_set_sysfs_name_uuid(sb);
+
+	if (c->sb.multi_device)
+		super_set_sysfs_name_uuid(sb);
+	else
+		strscpy(sb->s_sysfs_name, c->name, sizeof(sb->s_sysfs_name));
+
 	sb->s_shrink->seeks	= 0;
 	c->vfs_sb		= sb;
 	strscpy(sb->s_id, c->name, sizeof(sb->s_id));
@@ -2548,15 +2554,16 @@ got_sb:
 
 	sb->s_bdi->ra_pages		= VM_READAHEAD_PAGES;
 
-	for_each_online_member(c, ca) {
+	rcu_read_lock();
+	for_each_online_member_rcu(c, ca) {
 		struct block_device *bdev = ca->disk_sb.bdev;
 
 		/* XXX: create an anonymous device for multi device filesystems */
 		sb->s_bdev	= bdev;
 		sb->s_dev	= bdev->bd_dev;
-		percpu_ref_put(&ca->io_ref[READ]);
 		break;
 	}
+	rcu_read_unlock();
 
 	c->dev = sb->s_dev;
 
@@ -2570,6 +2577,11 @@ got_sb:
 	ret = bch2_fs_start(c);
 	if (ret)
 		goto err_put_super;
+
+#ifdef CONFIG_UNICODE
+	sb->s_encoding = c->cf_encoding;
+#endif
+	generic_set_sb_d_ops(sb);
 
 	vinode = bch2_vfs_inode_get(c, BCACHEFS_ROOT_SUBVOL_INUM);
 	ret = PTR_ERR_OR_ZERO(vinode);
