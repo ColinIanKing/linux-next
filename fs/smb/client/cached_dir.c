@@ -212,6 +212,7 @@ replay_again:
 	 */
 	spin_lock(&cfid->fid_lock);
 	if (cfid->has_lease && cfid->time) {
+		cfid->last_access_time = jiffies;
 		spin_unlock(&cfid->fid_lock);
 		mutex_unlock(&cfid->cfid_mutex);
 		*ret_cfid = cfid;
@@ -365,6 +366,7 @@ replay_again:
 	cfid->tcon = tcon;
 	cfid->is_open = true;
 	cfid->time = jiffies;
+	cfid->last_access_time = jiffies;
 	spin_unlock(&cfid->fid_lock);
 
 oshr_free:
@@ -739,8 +741,8 @@ static void cfids_laundromat_worker(struct work_struct *work)
 	spin_lock(&cfids->cfid_list_lock);
 	list_for_each_entry_safe(cfid, q, &cfids->entries, entry) {
 		spin_lock(&cfid->fid_lock);
-		if (cfid->time &&
-		    time_after(jiffies, cfid->time + HZ * dir_cache_timeout)) {
+		if (cfid->last_access_time &&
+		    time_after(jiffies, cfid->last_access_time + HZ * dir_cache_timeout)) {
 			cfid->on_list = false;
 			list_move(&cfid->entry, &entry);
 			cfids->num_entries--;
