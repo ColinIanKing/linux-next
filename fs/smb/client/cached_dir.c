@@ -198,9 +198,11 @@ replay_again:
 	}
 
 	/*
+	 * check again that the cfid is valid (with mutex held this time).
 	 * Return cached fid if it is valid (has a lease and has a time).
 	 * Otherwise, it is either a new entry or laundromat worker removed it
-	 * from @cfids->entries.  Caller will put last reference if the latter.
+	 * from @cfids->entries.  If the latter, we drop the refcount and return
+	 * an error to the caller.
 	 */
 	spin_lock(&cfid->fid_lock);
 	if (cfid->has_lease && cfid->time) {
@@ -208,6 +210,12 @@ replay_again:
 		*ret_cfid = cfid;
 		kfree(utf16_path);
 		return 0;
+	} else if (!cfid->has_lease) {
+		spin_unlock(&cfid->fid_lock);
+		/* drop the ref that we have */
+		kref_put(&cfid->refcount, smb2_close_cached_fid);
+		kfree(utf16_path);
+		return -ENOENT;
 	}
 	spin_unlock(&cfid->fid_lock);
 
