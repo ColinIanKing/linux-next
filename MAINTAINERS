@@ -3883,6 +3883,9 @@ T:	git git://git.kernel.org/pub/scm/linux/kernel/git/driver-core/driver-core.git
 F:	Documentation/driver-api/auxiliary_bus.rst
 F:	drivers/base/auxiliary.c
 F:	include/linux/auxiliary_bus.h
+F:	rust/helpers/auxiliary.c
+F:	rust/kernel/auxiliary.rs
+F:	samples/rust/rust_driver_auxiliary.rs
 
 AUXILIARY DISPLAY DRIVERS
 M:	Andy Shevchenko <andy@kernel.org>
@@ -7808,6 +7811,7 @@ F:	Documentation/devicetree/bindings/display/
 F:	Documentation/devicetree/bindings/gpu/
 F:	Documentation/gpu/
 F:	drivers/gpu/
+F:	rust/kernel/drm/
 F:	include/drm/
 F:	include/linux/vga*
 F:	include/uapi/drm/
@@ -7824,6 +7828,7 @@ F:	Documentation/devicetree/bindings/gpu/
 F:	Documentation/gpu/
 F:	drivers/gpu/drm/
 F:	drivers/gpu/vga/
+F:	rust/kernel/drm/
 F:	include/drm/drm
 F:	include/linux/vga*
 F:	include/uapi/drm/
