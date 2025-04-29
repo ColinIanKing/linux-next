@@ -125,12 +125,13 @@ xe-y += xe_bb.o \
 	xe_wopcm.o
 
 xe-$(CONFIG_HMM_MIRROR) += xe_hmm.o
-xe-$(CONFIG_DRM_GPUSVM) += xe_svm.o
+xe-$(CONFIG_DRM_XE_GPUSVM) += xe_svm.o
 
 # graphics hardware monitoring (HWMON) support
 xe-$(CONFIG_HWMON) += xe_hwmon.o
 
 xe-$(CONFIG_PERF_EVENTS) += xe_pmu.o
+xe-$(CONFIG_CONFIGFS_FS) += xe_configfs.o
 
 # graphics virtualization (SR-IOV) support
 xe-y += \
@@ -185,6 +186,7 @@ xe-$(CONFIG_DRM_XE_DISPLAY) += \
 	display/intel_fbdev_fb.o \
 	display/xe_display.o \
 	display/xe_display_misc.o \
+	display/xe_display_rpm.o \
 	display/xe_display_rps.o \
 	display/xe_display_wa.o \
 	display/xe_dsb_buffer.o \
