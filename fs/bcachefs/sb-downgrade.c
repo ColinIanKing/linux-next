@@ -20,6 +20,10 @@
  * x(version, recovery_passes, errors...)
  */
 #define UPGRADE_TABLE()						\
+	x(snapshot_2,						\
+	  RECOVERY_PASS_ALL_FSCK,				\
+	  BCH_FSCK_ERR_subvol_root_wrong_bi_subvol,		\
+	  BCH_FSCK_ERR_subvol_not_master_and_not_snapshot)	\
 	x(backpointers,						\
 	  RECOVERY_PASS_ALL_FSCK)				\
 	x(inode_v3,						\
@@ -368,6 +372,9 @@ int bch2_sb_downgrade_update(struct bch_fs *c)
 	     src < downgrade_table + ARRAY_SIZE(downgrade_table);
 	     src++) {
 		if (BCH_VERSION_MAJOR(src->version) != BCH_VERSION_MAJOR(le16_to_cpu(c->disk_sb.sb->version)))
+			continue;
+
+		if (src->version < c->sb.version_incompat)
 			continue;
 
 		struct bch_sb_field_downgrade_entry *dst;

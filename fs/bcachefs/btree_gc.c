@@ -22,6 +22,7 @@
 #include "debug.h"
 #include "disk_accounting.h"
 #include "ec.h"
+#include "enumerated_ref.h"
 #include "error.h"
 #include "extents.h"
 #include "journal.h"
@@ -46,6 +47,27 @@
 #define DROP_THIS_NODE		10
 #define DROP_PREV_NODE		11
 #define DID_FILL_FROM_SCAN	12
+
+/*
+ * Returns true if it's a btree we can easily reconstruct, or otherwise won't
+ * cause data loss if it's missing:
+ */
+static bool btree_id_important(enum btree_id btree)
+{
+	if (btree_id_is_alloc(btree))
+		return false;
+
+	switch (btree) {
+	case BTREE_ID_quotas:
+	case BTREE_ID_snapshot_trees:
+	case BTREE_ID_logged_ops:
+	case BTREE_ID_rebalance_work:
+	case BTREE_ID_subvolume_children:
+		return false;
+	default:
+		return true;
+	}
+}
 
 static const char * const bch2_gc_phase_strs[] = {
 #define x(n)	#n,
@@ -349,18 +371,11 @@ again:
 		prt_char(&buf, ' ');
 		bch2_bkey_val_to_text(&buf, c, bkey_i_to_s_c(cur_k.k));
 
-		if (mustfix_fsck_err_on(bch2_err_matches(ret, EIO),
-				trans, btree_node_read_error,
-				"Topology repair: unreadable btree node at\n%s",
-				buf.buf)) {
+		if (bch2_err_matches(ret, EIO)) {
 			bch2_btree_node_evict(trans, cur_k.k);
 			cur = NULL;
 			ret = bch2_journal_key_delete(c, b->c.btree_id,
 						      b->c.level, cur_k.k->k.p);
-			if (ret)
-				break;
-
-			ret = bch2_btree_lost_data(c, b->c.btree_id);
 			if (ret)
 				break;
 			continue;
@@ -524,9 +539,6 @@ int bch2_check_topology(struct bch_fs *c)
 		bch2_btree_id_to_text(&buf, i);
 
 		if (r->error) {
-			ret = bch2_btree_lost_data(c, i);
-			if (ret)
-				break;
 reconstruct_root:
 			bch_info(c, "btree root %s unreadable, must recover from scan", buf.buf);
 
@@ -534,8 +546,10 @@ reconstruct_root:
 			r->error = 0;
 
 			if (!bch2_btree_has_scanned_nodes(c, i)) {
-				mustfix_fsck_err(trans, btree_root_unreadable_and_scan_found_nothing,
-						 "no nodes found for btree %s, continue?", buf.buf);
+				__fsck_err(trans,
+					   FSCK_CAN_FIX|(!btree_id_important(i) ? FSCK_AUTOFIX : 0),
+					   btree_root_unreadable_and_scan_found_nothing,
+					   "no nodes found for btree %s, continue?", buf.buf);
 				bch2_btree_root_alloc_fake_trans(trans, i, 0);
 			} else {
 				bch2_btree_root_alloc_fake_trans(trans, i, 1);
@@ -1233,26 +1247,21 @@ static void bch2_gc_gens_work(struct work_struct *work)
 {
 	struct bch_fs *c = container_of(work, struct bch_fs, gc_gens_work);
 	bch2_gc_gens(c);
-	bch2_write_ref_put(c, BCH_WRITE_REF_gc_gens);
+	enumerated_ref_put(&c->writes, BCH_WRITE_REF_gc_gens);
 }
 
 void bch2_gc_gens_async(struct bch_fs *c)
 {
-	if (bch2_write_ref_tryget(c, BCH_WRITE_REF_gc_gens) &&
+	if (enumerated_ref_tryget(&c->writes, BCH_WRITE_REF_gc_gens) &&
 	    !queue_work(c->write_ref_wq, &c->gc_gens_work))
-		bch2_write_ref_put(c, BCH_WRITE_REF_gc_gens);
+		enumerated_ref_put(&c->writes, BCH_WRITE_REF_gc_gens);
 }
 
-void bch2_fs_btree_gc_exit(struct bch_fs *c)
-{
-}
-
-int bch2_fs_btree_gc_init(struct bch_fs *c)
+void bch2_fs_btree_gc_init_early(struct bch_fs *c)
 {
 	seqcount_init(&c->gc_pos_lock);
 	INIT_WORK(&c->gc_gens_work, bch2_gc_gens_work);
 
 	init_rwsem(&c->gc_lock);
 	mutex_init(&c->gc_gens_lock);
-	return 0;
 }

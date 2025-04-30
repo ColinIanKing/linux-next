@@ -5,19 +5,41 @@
 #include "disk_groups.h"
 #include "error.h"
 #include "opts.h"
+#include "recovery_passes.h"
 #include "replicas.h"
 #include "sb-members.h"
 #include "super-io.h"
 
-void bch2_dev_missing(struct bch_fs *c, unsigned dev)
+int bch2_dev_missing_bkey(struct bch_fs *c, struct bkey_s_c k, unsigned dev)
+{
+	struct printbuf buf = PRINTBUF;
+	bch2_log_msg_start(c, &buf);
+
+	prt_printf(&buf, "pointer to nonexistent device %u in key\n", dev);
+	bch2_bkey_val_to_text(&buf, c, k);
+
+	bool print = bch2_count_fsck_err(c, ptr_to_invalid_device, &buf);
+
+	int ret = bch2_run_explicit_recovery_pass_persistent(c, &buf,
+						 BCH_RECOVERY_PASS_check_allocations);
+
+	if (print)
+		bch2_print_str(c, KERN_ERR, buf.buf);
+	printbuf_exit(&buf);
+	return ret;
+}
+
+void bch2_dev_missing_atomic(struct bch_fs *c, unsigned dev)
 {
 	if (dev != BCH_SB_MEMBER_INVALID)
 		bch2_fs_inconsistent(c, "pointer to nonexistent device %u", dev);
 }
 
-void bch2_dev_bucket_missing(struct bch_fs *c, struct bpos bucket)
+void bch2_dev_bucket_missing(struct bch_dev *ca, u64 bucket)
 {
-	bch2_fs_inconsistent(c, "pointer to nonexistent bucket %llu:%llu", bucket.inode, bucket.offset);
+	bch2_fs_inconsistent(ca->fs,
+		"pointer to nonexistent bucket %llu on device %s (valid range %u-%llu)",
+		bucket, ca->name, ca->mi.first_bucket, ca->mi.nbuckets);
 }
 
 #define x(t, n, ...) [n] = #t,
@@ -168,6 +190,12 @@ static int validate_member(struct printbuf *err,
 		return -BCH_ERR_invalid_sb_members;
 	}
 
+	if (BCH_MEMBER_FREESPACE_INITIALIZED(&m) &&
+	    sb->features[0] & BIT_ULL(BCH_FEATURE_no_alloc_info)) {
+		prt_printf(err, "device %u: freespace initialized but fs has no alloc info", i);
+		return -BCH_ERR_invalid_sb_members;
+	}
+
 	return 0;
 }
 
@@ -266,6 +294,7 @@ static void member_to_text(struct printbuf *out,
 
 	prt_printf(out, "Discard:\t%llu\n", BCH_MEMBER_DISCARD(&m));
 	prt_printf(out, "Freespace initialized:\t%llu\n", BCH_MEMBER_FREESPACE_INITIALIZED(&m));
+	prt_printf(out, "Resize on mount:\t%llu\n", BCH_MEMBER_RESIZE_ON_MOUNT(&m));
 
 	printbuf_indent_sub(out, 2);
 }
