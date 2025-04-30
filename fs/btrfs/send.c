@@ -383,11 +383,11 @@ static void inconsistent_snapshot_error(struct send_ctx *sctx,
 		result_string = "updated";
 		break;
 	case BTRFS_COMPARE_TREE_SAME:
-		ASSERT(0);
+		DEBUG_WARN("no change between trees");
 		result_string = "unchanged";
 		break;
 	default:
-		ASSERT(0);
+		DEBUG_WARN("unexpected comparison result %d", result);
 		result_string = "unexpected";
 	}
 
@@ -3098,7 +3098,7 @@ static void __free_recorded_refs(struct list_head *head)
 	struct recorded_ref *cur;
 
 	while (!list_empty(head)) {
-		cur = list_entry(head->next, struct recorded_ref, list);
+		cur = list_first_entry(head, struct recorded_ref, list);
 		recorded_ref_free(cur);
 	}
 }
@@ -4560,8 +4560,7 @@ static int process_recorded_refs(struct send_ctx *sctx, int *pending_move)
 		/*
 		 * We have a moved dir. Add the old parent to check_dirs
 		 */
-		cur = list_entry(sctx->deleted_refs.next, struct recorded_ref,
-				list);
+		cur = list_first_entry(&sctx->deleted_refs, struct recorded_ref, list);
 		ret = dup_ref(cur, &check_dirs);
 		if (ret < 0)
 			goto out;
@@ -5263,10 +5262,9 @@ static int put_file_data(struct send_ctx *sctx, u64 offset, u32 len)
 {
 	struct btrfs_root *root = sctx->send_root;
 	struct btrfs_fs_info *fs_info = root->fs_info;
-	struct folio *folio;
-	pgoff_t index = offset >> PAGE_SHIFT;
-	pgoff_t last_index;
-	unsigned pg_offset = offset_in_page(offset);
+	u64 cur = offset;
+	const u64 end = offset + len;
+	const pgoff_t last_index = (end - 1) >> PAGE_SHIFT;
 	struct address_space *mapping = sctx->cur_inode->i_mapping;
 	int ret;
 
@@ -5274,13 +5272,12 @@ static int put_file_data(struct send_ctx *sctx, u64 offset, u32 len)
 	if (ret)
 		return ret;
 
-	last_index = (offset + len - 1) >> PAGE_SHIFT;
+	while (cur < end) {
+		pgoff_t index = cur >> PAGE_SHIFT;
+		unsigned int cur_len;
+		unsigned int pg_offset;
+		struct folio *folio;
 
-	while (index <= last_index) {
-		unsigned cur_len = min_t(unsigned, len,
-					 PAGE_SIZE - pg_offset);
-
-again:
 		folio = filemap_lock_folio(mapping, index);
 		if (IS_ERR(folio)) {
 			page_cache_sync_readahead(mapping,
@@ -5293,8 +5290,8 @@ again:
 				break;
 			}
 		}
-
-		WARN_ON(folio_order(folio));
+		pg_offset = offset_in_folio(folio, cur);
+		cur_len = min_t(unsigned int, end - cur, folio_size(folio) - pg_offset);
 
 		if (folio_test_readahead(folio))
 			page_cache_async_readahead(mapping, &sctx->ra, NULL, folio,
@@ -5316,7 +5313,7 @@ again:
 			if (folio->mapping != mapping) {
 				folio_unlock(folio);
 				folio_put(folio);
-				goto again;
+				continue;
 			}
 		}
 
@@ -5324,9 +5321,7 @@ again:
 				  pg_offset, cur_len);
 		folio_unlock(folio);
 		folio_put(folio);
-		index++;
-		pg_offset = 0;
-		len -= cur_len;
+		cur += cur_len;
 		sctx->send_size += cur_len;
 	}
 
