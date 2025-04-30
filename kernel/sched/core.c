@@ -3353,9 +3353,7 @@ void set_task_cpu(struct task_struct *p, unsigned int new_cpu)
 static void __migrate_swap_task(struct task_struct *p, int cpu)
 {
 	__schedstat_inc(p->stats.numa_task_swapped);
-
-	if (p->mm)
-		count_memcg_events_mm(p->mm, NUMA_TASK_SWAP, 1);
+	count_memcg_events_mm(p->mm, NUMA_TASK_SWAP, 1);
 
 	if (task_on_rq_queued(p)) {
 		struct rq *src_rq, *dst_rq;
@@ -7959,8 +7957,7 @@ int migrate_task_to(struct task_struct *p, int target_cpu)
 		return -EINVAL;
 
 	__schedstat_inc(p->stats.numa_task_migrated);
-	if (p->mm)
-		count_memcg_events_mm(p->mm, NUMA_TASK_MIGRATE, 1);
+	count_memcg_events_mm(p->mm, NUMA_TASK_MIGRATE, 1);
 	trace_sched_move_numa(p, curr_cpu, target_cpu);
 	return stop_one_cpu(curr_cpu, migration_cpu_stop, &arg);
 }
