@@ -1177,10 +1177,12 @@ static void i801_probe_optional_targets(struct i801_priv *priv)
 		dmi_walk(dmi_check_onboard_devices, &priv->adapter);
 
 	/* Instantiate SPD EEPROMs unless the SMBus is multiplexed */
-#ifdef CONFIG_I2C_I801_MUX
-	if (!priv->mux_pdev)
-#endif
-		i2c_register_spd_write_enable(&priv->adapter);
+	if (!IS_ENABLED(CONFIG_I2C_I801_MUX) || !priv->mux_pdev) {
+		if (priv->original_hstcfg & SMBHSTCFG_SPD_WD)
+			i2c_register_spd_write_disable(&priv->adapter);
+		else
+			i2c_register_spd_write_enable(&priv->adapter);
+	}
 }
 #else
 static void __init input_apanel_init(void) {}
@@ -1283,7 +1285,10 @@ static int i801_notifier_call(struct notifier_block *nb, unsigned long action,
 		return NOTIFY_DONE;
 
 	/* Call i2c_register_spd for muxed child segments */
-	i2c_register_spd_write_enable(to_i2c_adapter(dev));
+	if (priv->original_hstcfg & SMBHSTCFG_SPD_WD)
+		i2c_register_spd_write_disable(to_i2c_adapter(dev));
+	else
+		i2c_register_spd_write_enable(to_i2c_adapter(dev));
 
 	return NOTIFY_OK;
 }
