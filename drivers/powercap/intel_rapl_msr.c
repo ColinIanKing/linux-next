@@ -103,7 +103,7 @@ static int rapl_cpu_down_prep(unsigned int cpu)
 
 static int rapl_msr_read_raw(int cpu, struct reg_action *ra)
 {
-	if (rdmsrl_safe_on_cpu(cpu, ra->reg.msr, &ra->value)) {
+	if (rdmsrq_safe_on_cpu(cpu, ra->reg.msr, &ra->value)) {
 		pr_debug("failed to read msr 0x%x on cpu %d\n", ra->reg.msr, cpu);
 		return -EIO;
 	}
@@ -116,14 +116,14 @@ static void rapl_msr_update_func(void *info)
 	struct reg_action *ra = info;
 	u64 val;
 
-	ra->err = rdmsrl_safe(ra->reg.msr, &val);
+	ra->err = rdmsrq_safe(ra->reg.msr, &val);
 	if (ra->err)
 		return;
 
 	val &= ~ra->mask;
 	val |= ra->value;
 
-	ra->err = wrmsrl_safe(ra->reg.msr, val);
+	ra->err = wrmsrq_safe(ra->reg.msr, val);
 }
 
 static int rapl_msr_write_raw(int cpu, struct reg_action *ra)
