@@ -43,10 +43,6 @@ struct poly1305_desc_ctx {
 	u8 buf[POLY1305_BLOCK_SIZE];
 	/* bytes used in partial buffer */
 	unsigned int buflen;
-	/* how many keys have been set in r[] */
-	unsigned short rset;
-	/* whether s[] has been set */
-	bool sset;
 	/* finalize key */
 	u32 s[4];
 	/* accumulator */
@@ -95,5 +91,14 @@ static inline void poly1305_final(struct poly1305_desc_ctx *desc, u8 *digest)
 	else
 		poly1305_final_generic(desc, digest);
 }
+
+#if IS_ENABLED(CONFIG_CRYPTO_ARCH_HAVE_LIB_POLY1305)
+bool poly1305_is_arch_optimized(void);
+#else
+static inline bool poly1305_is_arch_optimized(void)
+{
+	return false;
+}
+#endif
 
 #endif
