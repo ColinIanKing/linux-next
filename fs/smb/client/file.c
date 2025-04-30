@@ -3146,19 +3146,12 @@ oplock_break_ack:
 	oplock_break_cancelled = cfile->oplock_break_cancelled;
 
 	_cifsFileInfo_put(cfile, false /* do not wait for ourself */, false);
-	/*
-	 * MS-SMB2 3.2.5.19.1 and 3.2.5.19.2 (and MS-CIFS 3.2.5.42) do not require
-	 * an acknowledgment to be sent when the file has already been closed.
-	 */
-	spin_lock(&cinode->open_file_lock);
-	/* check list empty since can race with kill_sb calling tree disconnect */
-	if (!oplock_break_cancelled && !list_empty(&cinode->openFileList)) {
-		spin_unlock(&cinode->open_file_lock);
+	/* MS-SMB2 3.2.5.19.1 and 3.2.5.19.2 (and MS-CIFS 3.2.5.42) */
+	if (!oplock_break_cancelled) {
 		rc = server->ops->oplock_response(tcon, persistent_fid,
 						  volatile_fid, net_fid, cinode);
 		cifs_dbg(FYI, "Oplock release rc = %d\n", rc);
-	} else
-		spin_unlock(&cinode->open_file_lock);
+	}
 
 	cifs_put_tlink(tlink);
 out:
