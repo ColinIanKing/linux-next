@@ -439,14 +439,8 @@ static void scmi_create_protocol_devices(struct device_node *np,
 					 struct scmi_info *info,
 					 int prot_id, const char *name)
 {
-	struct scmi_device *sdev;
-
 	mutex_lock(&info->devreq_mtx);
-	sdev = scmi_device_create(np, info->dev, prot_id, name);
-	if (name && !sdev)
-		dev_err(info->dev,
-			"failed to create device for protocol 0x%X (%s)\n",
-			prot_id, name);
+	scmi_device_create(np, info->dev, prot_id, name);
 	mutex_unlock(&info->devreq_mtx);
 }
 
@@ -1190,7 +1184,8 @@ static void scmi_handle_response(struct scmi_chan_info *cinfo,
 		 * RX path since it will be already queued at the end of the TX
 		 * poll loop.
 		 */
-		if (!xfer->hdr.poll_completion)
+		if (!xfer->hdr.poll_completion ||
+		    xfer->hdr.type == MSG_TYPE_DELAYED_RESP)
 			scmi_raw_message_report(info->raw, xfer,
 						SCMI_RAW_REPLY_QUEUE,
 						cinfo->id);
@@ -2828,9 +2823,8 @@ static int scmi_bus_notifier(struct notifier_block *nb,
 	struct scmi_info *info = bus_nb_to_scmi_info(nb);
 	struct scmi_device *sdev = to_scmi_dev(data);
 
-	/* Skip transport devices and devices of different SCMI instances */
-	if (!strncmp(sdev->name, "__scmi_transport_device", 23) ||
-	    sdev->dev.parent != info->dev)
+	/* Skip devices of different SCMI instances */
+	if (sdev->dev.parent != info->dev)
 		return NOTIFY_DONE;
 
 	switch (action) {
