@@ -21,12 +21,13 @@
 #include "intel_display_limits.h"
 #include "intel_display_params.h"
 #include "intel_display_power.h"
+#include "intel_dmc_wl.h"
 #include "intel_dpll_mgr.h"
 #include "intel_fbc.h"
 #include "intel_global_state.h"
 #include "intel_gmbus.h"
 #include "intel_opregion.h"
-#include "intel_dmc_wl.h"
+#include "intel_pch.h"
 #include "intel_wm_types.h"
 
 struct task_struct;
@@ -289,6 +290,9 @@ struct intel_display {
 	/* Platform (and subplatform, if any) identification */
 	struct intel_display_platforms platform;
 
+	/* Intel PCH: where the south display engine lives */
+	enum intel_pch pch_type;
+
 	/* Display functions */
 	struct {
 		/* Top level crtc-ish functions */
@@ -466,9 +470,9 @@ struct intel_display {
 		/* For i915gm/i945gm vblank irq workaround */
 		u8 vblank_enabled;
 
-		int vblank_wa_num_pipes;
+		int vblank_enable_count;
 
-		struct work_struct vblank_dc_work;
+		struct work_struct vblank_notify_work;
 
 		u32 de_irq_mask[I915_MAX_PIPES];
 		u32 pipestat_irq_mask[I915_MAX_PIPES];
@@ -575,6 +579,8 @@ struct intel_display {
 	struct intel_vbt_data vbt;
 	struct intel_dmc_wl wl;
 	struct intel_wm wm;
+
+	struct work_struct psr_dc5_dc6_wa_work;
 };
 
 #endif /* __INTEL_DISPLAY_CORE_H__ */
