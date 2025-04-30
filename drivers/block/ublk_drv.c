@@ -50,6 +50,7 @@
 
 /* private ioctl command mirror */
 #define UBLK_CMD_DEL_DEV_ASYNC	_IOC_NR(UBLK_U_CMD_DEL_DEV_ASYNC)
+#define UBLK_CMD_UPDATE_SIZE	_IOC_NR(UBLK_U_CMD_UPDATE_SIZE)
 
 #define UBLK_IO_REGISTER_IO_BUF		_IOC_NR(UBLK_U_IO_REGISTER_IO_BUF)
 #define UBLK_IO_UNREGISTER_IO_BUF	_IOC_NR(UBLK_U_IO_UNREGISTER_IO_BUF)
@@ -64,7 +65,8 @@
 		| UBLK_F_CMD_IOCTL_ENCODE \
 		| UBLK_F_USER_COPY \
 		| UBLK_F_ZONED \
-		| UBLK_F_USER_RECOVERY_FAIL_IO)
+		| UBLK_F_USER_RECOVERY_FAIL_IO \
+		| UBLK_F_UPDATE_SIZE)
 
 #define UBLK_F_ALL_RECOVERY_FLAGS (UBLK_F_USER_RECOVERY \
 		| UBLK_F_USER_RECOVERY_REISSUE \
@@ -2039,9 +2041,6 @@ static int __ublk_ch_uring_cmd(struct io_uring_cmd *cmd,
 		goto out;
 
 	ubq = ublk_get_queue(ub, ub_cmd->q_id);
-	if (!ubq || ub_cmd->q_id != ubq->q_id)
-		goto out;
-
 	if (ubq->ubq_daemon && ubq->ubq_daemon != current)
 		goto out;
 
@@ -3082,6 +3081,16 @@ static int ublk_ctrl_get_features(const struct ublksrv_ctrl_cmd *header)
 	return 0;
 }
 
+static void ublk_ctrl_set_size(struct ublk_device *ub, const struct ublksrv_ctrl_cmd *header)
+{
+	struct ublk_param_basic *p = &ub->params.basic;
+	u64 new_size = header->data[0];
+
+	mutex_lock(&ub->mutex);
+	p->dev_sectors = new_size;
+	set_capacity_and_notify(ub->ub_disk, p->dev_sectors);
+	mutex_unlock(&ub->mutex);
+}
 /*
  * All control commands are sent via /dev/ublk-control, so we have to check
  * the destination device's permission
@@ -3167,6 +3176,7 @@ static int ublk_ctrl_uring_cmd_permission(struct ublk_device *ub,
 	case UBLK_CMD_SET_PARAMS:
 	case UBLK_CMD_START_USER_RECOVERY:
 	case UBLK_CMD_END_USER_RECOVERY:
+	case UBLK_CMD_UPDATE_SIZE:
 		mask = MAY_READ | MAY_WRITE;
 		break;
 	default:
@@ -3257,6 +3267,10 @@ static int ublk_ctrl_uring_cmd(struct io_uring_cmd *cmd,
 		break;
 	case UBLK_CMD_END_USER_RECOVERY:
 		ret = ublk_ctrl_end_recovery(ub, header);
+		break;
+	case UBLK_CMD_UPDATE_SIZE:
+		ublk_ctrl_set_size(ub, header);
+		ret = 0;
 		break;
 	default:
 		ret = -EOPNOTSUPP;
