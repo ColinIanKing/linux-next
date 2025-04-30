@@ -212,12 +212,19 @@ void bch2_dirent_to_text(struct printbuf *out, struct bch_fs *c, struct bkey_s_c
 	struct bkey_s_c_dirent d = bkey_s_c_to_dirent(k);
 	struct qstr d_name = bch2_dirent_get_name(d);
 
-	prt_printf(out, "%.*s -> ", d_name.len, d_name.name);
+	prt_printf(out, "%.*s", d_name.len, d_name.name);
+
+	if (d.v->d_casefold) {
+		struct qstr d_name = bch2_dirent_get_lookup_name(d);
+		prt_printf(out, " (casefold %.*s)", d_name.len, d_name.name);
+	}
+
+	prt_str(out, " ->");
 
 	if (d.v->d_type != DT_SUBVOL)
-		prt_printf(out, "%llu", le64_to_cpu(d.v->d_inum));
+		prt_printf(out, " %llu", le64_to_cpu(d.v->d_inum));
 	else
-		prt_printf(out, "%u -> %u",
+		prt_printf(out, " %u -> %u",
 			   le32_to_cpu(d.v->d_parent_subvol),
 			   le32_to_cpu(d.v->d_child_subvol));
 
@@ -685,7 +692,7 @@ static int bch2_dir_emit(struct dir_context *ctx, struct bkey_s_c_dirent d, subv
 		      vfs_d_type(d.v->d_type));
 	if (ret)
 		ctx->pos = d.k->p.offset + 1;
-	return ret;
+	return !ret;
 }
 
 int bch2_readdir(struct bch_fs *c, subvol_inum inum, struct dir_context *ctx)
@@ -710,7 +717,7 @@ int bch2_readdir(struct bch_fs *c, subvol_inum inum, struct dir_context *ctx)
 			if (ret2 > 0)
 				continue;
 
-			ret2 ?: drop_locks_do(trans, bch2_dir_emit(ctx, dirent, target));
+			ret2 ?: (bch2_trans_unlock(trans), bch2_dir_emit(ctx, dirent, target));
 		})));
 
 	bch2_bkey_buf_exit(&sk, c);
