@@ -19,6 +19,7 @@
 
 #define SHA512_DIGEST_SIZE      64
 #define SHA512_BLOCK_SIZE       128
+#define SHA512_STATE_SIZE       80
 
 #define SHA224_H0	0xc1059ed8UL
 #define SHA224_H1	0x367cd507UL
@@ -64,6 +65,11 @@ extern const u8 sha384_zero_message_hash[SHA384_DIGEST_SIZE];
 
 extern const u8 sha512_zero_message_hash[SHA512_DIGEST_SIZE];
 
+struct crypto_sha256_state {
+	u32 state[SHA256_DIGEST_SIZE / 4];
+	u64 count;
+};
+
 struct sha256_state {
 	u32 state[SHA256_DIGEST_SIZE / 4];
 	u64 count;
@@ -75,20 +81,6 @@ struct sha512_state {
 	u64 count[2];
 	u8 buf[SHA512_BLOCK_SIZE];
 };
-
-struct shash_desc;
-
-extern int crypto_sha256_update(struct shash_desc *desc, const u8 *data,
-			      unsigned int len);
-
-extern int crypto_sha256_finup(struct shash_desc *desc, const u8 *data,
-			       unsigned int len, u8 *hash);
-
-extern int crypto_sha512_update(struct shash_desc *desc, const u8 *data,
-			      unsigned int len);
-
-extern int crypto_sha512_finup(struct shash_desc *desc, const u8 *data,
-			       unsigned int len, u8 *hash);
 
 /*
  * Stand-alone implementation of the SHA256 algorithm. It is designed to
