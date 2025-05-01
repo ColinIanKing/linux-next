@@ -107,6 +107,18 @@ config BATTERY_ACT8945A
 	  Say Y here to enable support for power supply provided by
 	  Active-semi ActivePath ACT8945A charger.
 
+config BATTERY_CHAGALL
+	tristate "Pegatron Chagall battery driver"
+	depends on I2C
+	depends on LEDS_CLASS
+	help
+	  Say Y to include support for Cypress CG7153AM IC based battery
+	  fuel gauge with custom firmware found in Pegatron Chagall based
+	  tablet line.
+
+	  This driver can also be built as a module. If so, the module will be
+	  called chagall-battery.
+
 config BATTERY_CPCAP
 	tristate "Motorola CPCAP PMIC battery driver"
 	depends on MFD_CPCAP && IIO
@@ -160,6 +172,16 @@ config BATTERY_DS2782
 	help
 	  Say Y here to enable support for the DS2782/DS2786 standalone battery
 	  gas-gauge.
+
+config BATTERY_HUAWEI_GAOKUN
+	tristate "Huawei Matebook E Go power supply"
+	depends on EC_HUAWEI_GAOKUN
+	help
+	  This driver enables battery and adapter support on the Huawei Matebook
+	  E Go, which is a sc8280xp-based 2-in-1 tablet.
+
+	  To compile the driver as a module, choose M here: the module will be
+	  called huawei-gaokun-battery.
 
 config BATTERY_LEGO_EV3
 	tristate "LEGO MINDSTORMS EV3 battery"
