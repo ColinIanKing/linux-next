@@ -3,6 +3,7 @@
 config DRM_APPLETBDRM
 	tristate "DRM support for Apple Touch Bars"
 	depends on DRM && USB && MMU
+	depends on X86 || COMPILE_TEST
 	select DRM_GEM_SHMEM_HELPER
 	select DRM_KMS_HELPER
 	help
@@ -211,6 +212,18 @@ config TINYDRM_ST7586
 	  * LEGO MINDSTORMS EV3
 
 	  If M is selected the module will be called st7586.
+
+config DRM_ST7571_I2C
+	tristate "DRM support for Sitronix ST7571 display panels (I2C)"
+	depends on DRM && I2C && MMU
+	select DRM_CLIENT_SELECTION
+	select DRM_GEM_SHMEM_HELPER
+	select DRM_KMS_HELPER
+	select REGMAP_I2C
+	help
+	  DRM driver for Sitronix ST7571 panels controlled over I2C.
+
+	  if M is selected the module will be called st7571-i2c.
 
 config TINYDRM_ST7735R
 	tristate "DRM support for Sitronix ST7715R/ST7735R display panels"
