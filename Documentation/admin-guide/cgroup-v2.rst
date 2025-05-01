@@ -1739,6 +1739,18 @@ The following nested keys are defined.
 
 	The entries can refer to the memory.stat.
 
+  memory.ksm_stat
+        A read-only nested-keyed file.
+
+        The file can be used to observe the ksm merging status of the
+        processes within an memory cgroup. There are four items
+        including "ksm_rmap_items", "ksm_zero_pages", "ksm_merging_pages"
+        and "ksm_profit".
+
+        See
+        :ref:`Documentation/admin-guide/cgroup-v1/memory.rst ksm_stat <memcg_ksm_stat>`
+        for details.
+
   memory.swap.current
 	A read-only single value file which exists on non-root
 	cgroups.
