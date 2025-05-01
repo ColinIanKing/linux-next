@@ -46,6 +46,7 @@ properties:
       - description: K3 AM625 SoC
         items:
           - enum:
+              - beagle,am62-pocketbeagle2
               - beagle,am625-beagleplay
               - ti,am625-sk
               - ti,am62-lp-sk
@@ -137,6 +138,13 @@ properties:
           - enum:
               - ti,am68-sk
               - ti,j721s2-evm
+          - const: ti,j721s2
+
+      - description: K3 J721s2 SoC Phytec SoM based boards
+        items:
+          - enum:
+              - phytec,am68-phyboard-izar
+          - const: phytec,am68-phycore-som
           - const: ti,j721s2
 
       - description: K3 J722S SoC and Boards
