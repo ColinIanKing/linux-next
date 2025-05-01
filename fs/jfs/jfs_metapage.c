@@ -629,7 +629,7 @@ static bool metapage_release_folio(struct folio *folio, gfp_t gfp_mask)
 	return ret;
 }
 
-/**
+/*
  * metapage_migrate_folio - Migration function for JFS metapages
  */
 static int metapage_migrate_folio(struct address_space *mapping, struct folio *dst,
