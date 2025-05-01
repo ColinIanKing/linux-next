@@ -152,8 +152,10 @@ static inline void dec_io(struct folio *folio, blk_status_t status,
 		handler(folio, anchor->status);
 }
 
-static int __metapage_migrate_folio(struct address_space *mapping, struct folio *dst,
-				    struct folio *src, enum migrate_mode mode)
+#ifdef CONFIG_MIGRATION
+static int __metapage_migrate_folio(struct address_space *mapping,
+				    struct folio *dst, struct folio *src,
+				    enum migrate_mode mode)
 {
 	struct meta_anchor *src_anchor = src->private;
 	struct metapage *mps[MPS_PER_PAGE] = {0};
@@ -199,8 +201,10 @@ static int __metapage_migrate_folio(struct address_space *mapping, struct folio 
 
 	return MIGRATEPAGE_SUCCESS;
 }
+#endif	/* CONFIG_MIGRATION */
 
 #else
+
 static inline struct metapage *folio_to_mp(struct folio *folio, int offset)
 {
 	return folio->private;
@@ -224,8 +228,10 @@ static inline void remove_metapage(struct folio *folio, struct metapage *mp)
 #define inc_io(folio) do {} while(0)
 #define dec_io(folio, status, handler) handler(folio, status)
 
-static int __metapage_migrate_folio(struct address_space *mapping, struct folio *dst,
-				    struct folio *src, enum migrate_mode mode)
+#ifdef CONFIG_MIGRATION
+static int __metapage_migrate_folio(struct address_space *mapping,
+				    struct folio *dst, struct folio *src,
+				    enum migrate_mode mode)
 {
 	struct metapage *mp;
 	int page_offset;
@@ -249,6 +255,7 @@ static int __metapage_migrate_folio(struct address_space *mapping, struct folio 
 
 	return MIGRATEPAGE_SUCCESS;
 }
+#endif	/* CONFIG_MIGRATION */
 
 #endif
 
@@ -629,11 +636,13 @@ static bool metapage_release_folio(struct folio *folio, gfp_t gfp_mask)
 	return ret;
 }
 
+#ifdef CONFIG_MIGRATION
 /*
  * metapage_migrate_folio - Migration function for JFS metapages
  */
-static int metapage_migrate_folio(struct address_space *mapping, struct folio *dst,
-				  struct folio *src, enum migrate_mode mode)
+static int metapage_migrate_folio(struct address_space *mapping,
+				  struct folio *dst, struct folio *src,
+				  enum migrate_mode mode)
 {
 	int expected_count;
 
@@ -646,6 +655,9 @@ static int metapage_migrate_folio(struct address_space *mapping, struct folio *d
 		return -EAGAIN;
 	return __metapage_migrate_folio(mapping, dst, src, mode);
 }
+#else
+#define metapage_migrate_folio NULL
+#endif	/* CONFIG_MIGRATION */
 
 static void metapage_invalidate_folio(struct folio *folio, size_t offset,
 				    size_t length)
