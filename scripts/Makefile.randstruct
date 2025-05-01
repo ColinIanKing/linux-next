@@ -12,6 +12,7 @@ randstruct-cflags-y	\
 	+= -frandomize-layout-seed-file=$(objtree)/scripts/basic/randstruct.seed
 endif
 
-export RANDSTRUCT_CFLAGS := $(randstruct-cflags-y)
+export RANDSTRUCT_CFLAGS := $(randstruct-cflags-y) \
+			    -include $(objtree)/scripts/basic/randstruct_hash.h
 
 KBUILD_CFLAGS	+= $(RANDSTRUCT_CFLAGS)
