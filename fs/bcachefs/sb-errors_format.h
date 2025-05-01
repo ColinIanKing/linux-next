@@ -46,7 +46,7 @@ enum bch_fsck_flags {
 	x(btree_node_unsupported_version,			 34,	0)		\
 	x(btree_node_bset_older_than_sb_min,			 35,	0)		\
 	x(btree_node_bset_newer_than_sb,			 36,	0)		\
-	x(btree_node_data_missing,				 37,	0)		\
+	x(btree_node_data_missing,				 37,	FSCK_AUTOFIX)	\
 	x(btree_node_bset_after_end,				 38,	0)		\
 	x(btree_node_replicas_sectors_written_mismatch,		 39,	0)		\
 	x(btree_node_replicas_data_mismatch,			 40,	0)		\
@@ -205,9 +205,9 @@ enum bch_fsck_flags {
 	x(snapshot_bad_depth,					184,	0)		\
 	x(snapshot_bad_skiplist,				185,	0)		\
 	x(subvol_pos_bad,					186,	0)		\
-	x(subvol_not_master_and_not_snapshot,			187,	0)		\
+	x(subvol_not_master_and_not_snapshot,			187,	FSCK_AUTOFIX)	\
 	x(subvol_to_missing_root,				188,	0)		\
-	x(subvol_root_wrong_bi_subvol,				189,	0)		\
+	x(subvol_root_wrong_bi_subvol,				189,	FSCK_AUTOFIX)	\
 	x(bkey_in_missing_snapshot,				190,	0)		\
 	x(inode_pos_inode_nonzero,				191,	0)		\
 	x(inode_pos_blockdev_range,				192,	0)		\
@@ -298,6 +298,7 @@ enum bch_fsck_flags {
 	x(btree_ptr_v2_written_0,				268,	0)		\
 	x(subvol_snapshot_bad,					269,	0)		\
 	x(subvol_inode_bad,					270,	0)		\
+	x(subvol_missing,					308,	FSCK_AUTOFIX)	\
 	x(alloc_key_stripe_sectors_wrong,			271,	FSCK_AUTOFIX)	\
 	x(accounting_mismatch,					272,	FSCK_AUTOFIX)	\
 	x(accounting_replicas_not_marked,			273,	0)		\
@@ -317,7 +318,9 @@ enum bch_fsck_flags {
 	x(directory_size_mismatch,				303,	FSCK_AUTOFIX)	\
 	x(dirent_cf_name_too_big,				304,	0)		\
 	x(dirent_stray_data_after_cf_name,			305,	0)		\
-	x(MAX,							308,	0)
+	x(rebalance_work_incorrectly_set,			309,	FSCK_AUTOFIX)	\
+	x(rebalance_work_incorrectly_unset,			310,	FSCK_AUTOFIX)	\
+	x(MAX,							311,	0)
 
 enum bch_sb_error_id {
 #define x(t, n, ...) BCH_FSCK_ERR_##t = n,
