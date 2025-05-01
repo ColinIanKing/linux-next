@@ -4491,7 +4491,7 @@ static int evaluate_memcg_ksm_stat(struct task_struct *task, void *arg)
 	return 0;
 }
 
-static int memcg_ksm_stat_show(struct seq_file *m, void *v)
+int memcg_ksm_stat_show(struct seq_file *m, void *v)
 {
 	struct memcg_ksm_stat ksm_stat;
 	struct mem_cgroup *memcg = mem_cgroup_from_seq(m);
