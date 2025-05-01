@@ -9,6 +9,7 @@
 
 #include <linux/fs.h>
 #include <linux/khugepaged.h>
+#include <linux/memblock.h>
 #include <linux/mm.h>
 #include <linux/mm_inline.h>
 #include <linux/pagemap.h>
@@ -435,6 +436,9 @@ void unmap_page_range(struct mmu_gather *tlb,
 			     struct vm_area_struct *vma,
 			     unsigned long addr, unsigned long end,
 			     struct zap_details *details);
+void zap_page_range_single_batched(struct mmu_gather *tlb,
+		struct vm_area_struct *vma, unsigned long addr,
+		unsigned long size, struct zap_details *details);
 int folio_unmap_invalidate(struct address_space *mapping, struct folio *folio,
 			   gfp_t gfp);
 
@@ -540,7 +544,7 @@ extern int defrag_mode;
 
 void setup_per_zone_wmarks(void);
 void calculate_min_free_kbytes(void);
-int __meminit init_per_zone_wmark_min(void);
+int __init_memblock init_per_zone_wmark_min(void);
 void page_alloc_sysctl_init(void);
 
 /*
@@ -915,7 +919,7 @@ static inline void init_cma_pageblock(struct page *page)
 
 
 int find_suitable_fallback(struct free_area *area, unsigned int order,
-			int migratetype, bool claim_only, bool *claim_block);
+			   int migratetype, bool claimable);
 
 static inline bool free_area_empty(struct free_area *area, int migratetype)
 {
@@ -1120,6 +1124,8 @@ DECLARE_STATIC_KEY_TRUE(deferred_pages);
 
 bool __init deferred_grow_zone(struct zone *zone, unsigned int order);
 #endif /* CONFIG_DEFERRED_STRUCT_PAGE_INIT */
+
+void init_deferred_page(unsigned long pfn, int nid);
 
 enum mminit_level {
 	MMINIT_WARNING,
@@ -1527,9 +1533,9 @@ static inline bool pte_needs_soft_dirty_wp(struct vm_area_struct *vma, pte_t pte
 	return vma_soft_dirty_enabled(vma) && !pte_soft_dirty(pte);
 }
 
-void __meminit __init_single_page(struct page *page, unsigned long pfn,
+void __init_memblock __init_single_page(struct page *page, unsigned long pfn,
 				unsigned long zone, int nid);
-void __meminit __init_page_from_nid(unsigned long pfn, int nid);
+void __init_memblock __init_page_from_nid(unsigned long pfn, int nid);
 
 /* shrinker related functions */
 unsigned long shrink_slab(gfp_t gfp_mask, int nid, struct mem_cgroup *memcg,
