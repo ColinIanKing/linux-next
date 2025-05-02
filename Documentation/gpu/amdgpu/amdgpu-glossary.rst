@@ -12,14 +12,29 @@ we have a dedicated glossary for Display Core at
       The number of CUs that are active on the system.  The number of active
       CUs may be less than SE * SH * CU depending on the board configuration.
 
+    BACO
+      Bus Alive, Chip Off
+
+    BOCO
+      Bus Off, Chip Off
+
     CE
       Constant Engine
+
+    CIK
+      Sea Islands
 
     CP
       Command Processor
 
     CPLIB
       Content Protection Library
+
+    CS
+      Command Submission
+
+    CSB
+      Clear State Indirect Buffer
 
     CU
       Compute Unit
@@ -32,6 +47,9 @@ we have a dedicated glossary for Display Core at
 
     EOP
       End Of Pipe/Pipeline
+
+    FLR
+      Function Level Reset
 
     GART
       Graphics Address Remapping Table.  This is the name we use for the GPUVM
@@ -80,6 +98,9 @@ we have a dedicated glossary for Display Core at
     KCQ
       Kernel Compute Queue
 
+    KFD
+      Kernel Fusion Driver
+
     KGQ
       Kernel Graphics Queue
 
@@ -88,6 +109,9 @@ we have a dedicated glossary for Display Core at
 
     MC
       Memory Controller
+
+    MCBP
+      Mid Command Buffer Preemption
 
     ME
       MicroEngine (Graphics)
@@ -113,6 +137,9 @@ we have a dedicated glossary for Display Core at
     PSP
         Platform Security Processor
 
+    RB
+      Render Backends. Some people called it ROPs.
+
     RLC
       RunList Controller. This name is a remnant of past ages and doesn't have
       much meaning today. It's a group of general-purpose helper engines for
@@ -125,8 +152,14 @@ we have a dedicated glossary for Display Core at
     SE
       Shader Engine
 
+    SGPR
+      Scalar General-Purpose Registers
+
     SH
       SHader array
+
+    SI
+      Southern Islands
 
     SMU/SMC
       System Management Unit / System Management Controller
@@ -146,6 +179,9 @@ we have a dedicated glossary for Display Core at
     TA
       Trusted Application
 
+    TC
+      Texture Cache
+
     TOC
       Table of Contents
 
@@ -157,6 +193,12 @@ we have a dedicated glossary for Display Core at
 
     VCN
       Video Codec Next
+
+    VGPR
+      Vector General-Purpose Registers
+
+    VMID
+      Virtual Memory ID
 
     VPE
       Video Processing Engine
