@@ -2790,15 +2790,15 @@ static blk_status_t blk_mq_request_issue_directly(struct request *rq, bool last)
 	return __blk_mq_issue_directly(hctx, rq, last);
 }
 
-static void blk_mq_plug_issue_direct(struct blk_plug *plug)
+static void blk_mq_issue_direct(struct rq_list *rqs)
 {
 	struct blk_mq_hw_ctx *hctx = NULL;
 	struct request *rq;
 	int queued = 0;
 	blk_status_t ret = BLK_STS_OK;
 
-	while ((rq = rq_list_pop(&plug->mq_list))) {
-		bool last = rq_list_empty(&plug->mq_list);
+	while ((rq = rq_list_pop(rqs))) {
+		bool last = rq_list_empty(rqs);
 
 		if (hctx != rq->mq_hctx) {
 			if (hctx) {
@@ -2829,15 +2829,64 @@ out:
 		blk_mq_commit_rqs(hctx, queued, false);
 }
 
-static void __blk_mq_flush_plug_list(struct request_queue *q,
-				     struct blk_plug *plug)
+static void __blk_mq_flush_list(struct request_queue *q, struct rq_list *rqs)
 {
 	if (blk_queue_quiesced(q))
 		return;
-	q->mq_ops->queue_rqs(&plug->mq_list);
+	q->mq_ops->queue_rqs(rqs);
 }
 
-static void blk_mq_dispatch_plug_list(struct blk_plug *plug, bool from_sched)
+static unsigned blk_mq_extract_queue_requests(struct rq_list *rqs,
+					      struct rq_list *queue_rqs)
+{
+	struct request *rq = rq_list_pop(rqs);
+	struct request_queue *this_q = rq->q;
+	struct request **prev = &rqs->head;
+	struct rq_list matched_rqs = {};
+	struct request *last = NULL;
+	unsigned depth = 1;
+
+	rq_list_add_tail(&matched_rqs, rq);
+	while ((rq = *prev)) {
+		if (rq->q == this_q) {
+			/* move rq from rqs to matched_rqs */
+			*prev = rq->rq_next;
+			rq_list_add_tail(&matched_rqs, rq);
+			depth++;
+		} else {
+			/* leave rq in rqs */
+			prev = &rq->rq_next;
+			last = rq;
+		}
+	}
+
+	rqs->tail = last;
+	*queue_rqs = matched_rqs;
+	return depth;
+}
+
+static void blk_mq_dispatch_queue_requests(struct rq_list *rqs, unsigned depth)
+{
+	struct request_queue *q = rq_list_peek(rqs)->q;
+
+	trace_block_unplug(q, depth, true);
+
+	/*
+	 * Peek first request and see if we have a ->queue_rqs() hook.
+	 * If we do, we can dispatch the whole list in one go.
+	 * We already know at this point that all requests belong to the
+	 * same queue, caller must ensure that's the case.
+	 */
+	if (q->mq_ops->queue_rqs) {
+		blk_mq_run_dispatch_ops(q, __blk_mq_flush_list(q, rqs));
+		if (rq_list_empty(rqs))
+			return;
+	}
+
+	blk_mq_run_dispatch_ops(q, blk_mq_issue_direct(rqs));
+}
+
+static void blk_mq_dispatch_list(struct rq_list *rqs, bool from_sched)
 {
 	struct blk_mq_hw_ctx *this_hctx = NULL;
 	struct blk_mq_ctx *this_ctx = NULL;
@@ -2847,7 +2896,7 @@ static void blk_mq_dispatch_plug_list(struct blk_plug *plug, bool from_sched)
 	LIST_HEAD(list);
 
 	do {
-		struct request *rq = rq_list_pop(&plug->mq_list);
+		struct request *rq = rq_list_pop(rqs);
 
 		if (!this_hctx) {
 			this_hctx = rq->mq_hctx;
@@ -2860,9 +2909,9 @@ static void blk_mq_dispatch_plug_list(struct blk_plug *plug, bool from_sched)
 		}
 		list_add_tail(&rq->queuelist, &list);
 		depth++;
-	} while (!rq_list_empty(&plug->mq_list));
+	} while (!rq_list_empty(rqs));
 
-	plug->mq_list = requeue_list;
+	*rqs = requeue_list;
 	trace_block_unplug(this_hctx->queue, depth, !from_sched);
 
 	percpu_ref_get(&this_hctx->queue->q_usage_counter);
@@ -2882,9 +2931,21 @@ static void blk_mq_dispatch_plug_list(struct blk_plug *plug, bool from_sched)
 	percpu_ref_put(&this_hctx->queue->q_usage_counter);
 }
 
+static void blk_mq_dispatch_multiple_queue_requests(struct rq_list *rqs)
+{
+	do {
+		struct rq_list queue_rqs;
+		unsigned depth;
+
+		depth = blk_mq_extract_queue_requests(rqs, &queue_rqs);
+		blk_mq_dispatch_queue_requests(&queue_rqs, depth);
+		while (!rq_list_empty(&queue_rqs))
+			blk_mq_dispatch_list(&queue_rqs, false);
+	} while (!rq_list_empty(rqs));
+}
+
 void blk_mq_flush_plug_list(struct blk_plug *plug, bool from_schedule)
 {
-	struct request *rq;
 	unsigned int depth;
 
 	/*
@@ -2899,34 +2960,19 @@ void blk_mq_flush_plug_list(struct blk_plug *plug, bool from_schedule)
 	depth = plug->rq_count;
 	plug->rq_count = 0;
 
-	if (!plug->multiple_queues && !plug->has_elevator && !from_schedule) {
-		struct request_queue *q;
-
-		rq = rq_list_peek(&plug->mq_list);
-		q = rq->q;
-		trace_block_unplug(q, depth, true);
-
-		/*
-		 * Peek first request and see if we have a ->queue_rqs() hook.
-		 * If we do, we can dispatch the whole plug list in one go. We
-		 * already know at this point that all requests belong to the
-		 * same queue, caller must ensure that's the case.
-		 */
-		if (q->mq_ops->queue_rqs) {
-			blk_mq_run_dispatch_ops(q,
-				__blk_mq_flush_plug_list(q, plug));
-			if (rq_list_empty(&plug->mq_list))
-				return;
+	if (!plug->has_elevator && !from_schedule) {
+		if (plug->multiple_queues) {
+			blk_mq_dispatch_multiple_queue_requests(&plug->mq_list);
+			return;
 		}
 
-		blk_mq_run_dispatch_ops(q,
-				blk_mq_plug_issue_direct(plug));
+		blk_mq_dispatch_queue_requests(&plug->mq_list, depth);
 		if (rq_list_empty(&plug->mq_list))
 			return;
 	}
 
 	do {
-		blk_mq_dispatch_plug_list(plug, from_schedule);
+		blk_mq_dispatch_list(&plug->mq_list, from_schedule);
 	} while (!rq_list_empty(&plug->mq_list));
 }
 
