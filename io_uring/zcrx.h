@@ -3,9 +3,23 @@
 #define IOU_ZC_RX_H
 
 #include <linux/io_uring_types.h>
+#include <linux/dma-buf.h>
 #include <linux/socket.h>
 #include <net/page_pool/types.h>
 #include <net/net_trackers.h>
+
+struct io_zcrx_mem {
+	unsigned long			size;
+	bool				is_dmabuf;
+
+	struct page			**pages;
+	unsigned long			nr_folios;
+
+	struct dma_buf_attachment	*attach;
+	struct dma_buf			*dmabuf;
+	struct sg_table			*sgt;
+	unsigned long			dmabuf_offset;
+};
 
 struct io_zcrx_area {
 	struct net_iov_area	nia;
@@ -14,13 +28,13 @@ struct io_zcrx_area {
 
 	bool			is_mapped;
 	u16			area_id;
-	struct page		**pages;
-	unsigned long		nr_folios;
 
 	/* freelist */
 	spinlock_t		freelist_lock ____cacheline_aligned_in_smp;
 	u32			free_count;
 	u32			*freelist;
+
+	struct io_zcrx_mem	mem;
 };
 
 struct io_zcrx_ifq {
