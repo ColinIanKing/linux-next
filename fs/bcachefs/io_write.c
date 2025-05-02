@@ -15,6 +15,7 @@
 #include "compress.h"
 #include "debug.h"
 #include "ec.h"
+#include "enumerated_ref.h"
 #include "error.h"
 #include "extent_update.h"
 #include "inode.h"
@@ -441,6 +442,10 @@ void bch2_submit_wbio_replicas(struct bch_write_bio *wbio, struct bch_fs *c,
 {
 	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(bkey_i_to_s_c(k));
 	struct bch_write_bio *n;
+	unsigned ref_rw  = type == BCH_DATA_btree ? READ : WRITE;
+	unsigned ref_idx = type == BCH_DATA_btree
+		? BCH_DEV_READ_REF_btree_node_write
+		: BCH_DEV_WRITE_REF_io_write;
 
 	BUG_ON(c->opts.nochanges);
 
@@ -452,7 +457,7 @@ void bch2_submit_wbio_replicas(struct bch_write_bio *wbio, struct bch_fs *c,
 		 */
 		struct bch_dev *ca = nocow
 			? bch2_dev_have_ref(c, ptr->dev)
-			: bch2_dev_get_ioref(c, ptr->dev, type == BCH_DATA_btree ? READ : WRITE);
+			: bch2_dev_get_ioref(c, ptr->dev, ref_rw, ref_idx);
 
 		if (to_entry(ptr + 1) < ptrs.end) {
 			n = to_wbio(bio_alloc_clone(NULL, &wbio->bio, GFP_NOFS, &c->replica_set));
@@ -512,7 +517,7 @@ static void bch2_write_done(struct closure *cl)
 	bch2_disk_reservation_put(c, &op->res);
 
 	if (!(op->flags & BCH_WRITE_move))
-		bch2_write_ref_put(c, BCH_WRITE_REF_write);
+		enumerated_ref_put(&c->writes, BCH_WRITE_REF_write);
 	bch2_keylist_free(&op->insert_keys, op->inline_keys);
 
 	EBUG_ON(cl->parent);
@@ -727,7 +732,8 @@ static void bch2_write_endio(struct bio *bio)
 	}
 
 	if (wbio->have_ioref)
-		percpu_ref_put(&ca->io_ref[WRITE]);
+		enumerated_ref_put(&ca->io_ref[WRITE],
+				   BCH_DEV_WRITE_REF_io_write);
 
 	if (wbio->bounce)
 		bch2_bio_free_pages_pool(c, bio);
@@ -1324,7 +1330,8 @@ retry:
 		/* Get iorefs before dropping btree locks: */
 		struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
 		bkey_for_each_ptr(ptrs, ptr) {
-			struct bch_dev *ca = bch2_dev_get_ioref(c, ptr->dev, WRITE);
+			struct bch_dev *ca = bch2_dev_get_ioref(c, ptr->dev, WRITE,
+							BCH_DEV_WRITE_REF_io_write);
 			if (unlikely(!ca))
 				goto err_get_ioref;
 
@@ -1426,7 +1433,8 @@ err:
 	return;
 err_get_ioref:
 	darray_for_each(buckets, i)
-		percpu_ref_put(&bch2_dev_have_ref(c, i->b.inode)->io_ref[WRITE]);
+		enumerated_ref_put(&bch2_dev_have_ref(c, i->b.inode)->io_ref[WRITE],
+				   BCH_DEV_WRITE_REF_io_write);
 
 	/* Fall back to COW path: */
 	goto out;
@@ -1660,7 +1668,7 @@ CLOSURE_CALLBACK(bch2_write)
 	}
 
 	if (!(op->flags & BCH_WRITE_move) &&
-	    !bch2_write_ref_tryget(c, BCH_WRITE_REF_write)) {
+	    !enumerated_ref_tryget(&c->writes, BCH_WRITE_REF_write)) {
 		op->error = -BCH_ERR_erofs_no_writes;
 		goto err;
 	}
@@ -1723,7 +1731,6 @@ void bch2_write_op_to_text(struct printbuf *out, struct bch_write_op *op)
 
 void bch2_fs_io_write_exit(struct bch_fs *c)
 {
-	mempool_exit(&c->bio_bounce_pages);
 	bioset_exit(&c->replica_set);
 	bioset_exit(&c->bio_write);
 }
@@ -1733,13 +1740,6 @@ int bch2_fs_io_write_init(struct bch_fs *c)
 	if (bioset_init(&c->bio_write,   1, offsetof(struct bch_write_bio, bio), BIOSET_NEED_BVECS) ||
 	    bioset_init(&c->replica_set, 4, offsetof(struct bch_write_bio, bio), 0))
 		return -BCH_ERR_ENOMEM_bio_write_init;
-
-	if (mempool_init_page_pool(&c->bio_bounce_pages,
-				   max_t(unsigned,
-					 c->opts.btree_node_size,
-					 c->opts.encoded_extent_max) /
-				   PAGE_SIZE, 0))
-		return -BCH_ERR_ENOMEM_bio_bounce_pages_init;
 
 	return 0;
 }

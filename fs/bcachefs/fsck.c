@@ -2408,8 +2408,6 @@ int bch2_check_root(struct bch_fs *c)
 	return ret;
 }
 
-typedef DARRAY(u32) darray_u32;
-
 static bool darray_u32_has(darray_u32 *d, u32 v)
 {
 	darray_for_each(*d, i)
@@ -3024,7 +3022,7 @@ long bch2_ioctl_fsck_offline(struct bch_ioctl_fsck_offline __user *user_arg)
 {
 	struct bch_ioctl_fsck_offline arg;
 	struct fsck_thread *thr = NULL;
-	darray_str(devs) = {};
+	darray_const_str devs = {};
 	long ret = 0;
 
 	if (copy_from_user(&arg, user_arg, sizeof(arg)))
@@ -3082,7 +3080,7 @@ long bch2_ioctl_fsck_offline(struct bch_ioctl_fsck_offline __user *user_arg)
 
 	bch2_thread_with_stdio_init(&thr->thr, &bch2_offline_fsck_ops);
 
-	thr->c = bch2_fs_open(devs.data, arg.nr_devs, thr->opts);
+	thr->c = bch2_fs_open(&devs, &thr->opts);
 
 	if (!IS_ERR(thr->c) &&
 	    thr->c->opts.errors == BCH_ON_ERROR_panic)
