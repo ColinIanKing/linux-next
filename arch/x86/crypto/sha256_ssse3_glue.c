@@ -29,25 +29,19 @@
 
 #define pr_fmt(fmt)	KBUILD_MODNAME ": " fmt
 
+#include <asm/cpu_device_id.h>
+#include <asm/fpu/api.h>
 #include <crypto/internal/hash.h>
-#include <crypto/internal/simd.h>
-#include <linux/init.h>
-#include <linux/module.h>
-#include <linux/mm.h>
-#include <linux/types.h>
 #include <crypto/sha2.h>
 #include <crypto/sha256_base.h>
-#include <linux/string.h>
-#include <asm/cpu_device_id.h>
-#include <asm/simd.h>
+#include <linux/kernel.h>
+#include <linux/module.h>
 
-asmlinkage void sha256_transform_ssse3(struct sha256_state *state,
+asmlinkage void sha256_transform_ssse3(struct crypto_sha256_state *state,
 				       const u8 *data, int blocks);
 
 static const struct x86_cpu_id module_cpu_ids[] = {
-#ifdef CONFIG_AS_SHA256_NI
 	X86_MATCH_FEATURE(X86_FEATURE_SHA_NI, NULL),
-#endif
 	X86_MATCH_FEATURE(X86_FEATURE_AVX2, NULL),
 	X86_MATCH_FEATURE(X86_FEATURE_AVX, NULL),
 	X86_MATCH_FEATURE(X86_FEATURE_SSSE3, NULL),
@@ -56,37 +50,29 @@ static const struct x86_cpu_id module_cpu_ids[] = {
 MODULE_DEVICE_TABLE(x86cpu, module_cpu_ids);
 
 static int _sha256_update(struct shash_desc *desc, const u8 *data,
-			  unsigned int len, sha256_block_fn *sha256_xform)
+			  unsigned int len,
+			  sha256_block_fn *sha256_xform)
 {
-	struct sha256_state *sctx = shash_desc_ctx(desc);
-
-	if (!crypto_simd_usable() ||
-	    (sctx->count % SHA256_BLOCK_SIZE) + len < SHA256_BLOCK_SIZE)
-		return crypto_sha256_update(desc, data, len);
+	int remain;
 
 	/*
-	 * Make sure struct sha256_state begins directly with the SHA256
+	 * Make sure struct crypto_sha256_state begins directly with the SHA256
 	 * 256-bit internal state, as this is what the asm functions expect.
 	 */
-	BUILD_BUG_ON(offsetof(struct sha256_state, state) != 0);
+	BUILD_BUG_ON(offsetof(struct crypto_sha256_state, state) != 0);
 
 	kernel_fpu_begin();
-	sha256_base_do_update(desc, data, len, sha256_xform);
+	remain = sha256_base_do_update_blocks(desc, data, len, sha256_xform);
 	kernel_fpu_end();
 
-	return 0;
+	return remain;
 }
 
 static int sha256_finup(struct shash_desc *desc, const u8 *data,
 	      unsigned int len, u8 *out, sha256_block_fn *sha256_xform)
 {
-	if (!crypto_simd_usable())
-		return crypto_sha256_finup(desc, data, len, out);
-
 	kernel_fpu_begin();
-	if (len)
-		sha256_base_do_update(desc, data, len, sha256_xform);
-	sha256_base_do_finalize(desc, sha256_xform);
+	sha256_base_do_finup(desc, data, len, sha256_xform);
 	kernel_fpu_end();
 
 	return sha256_base_finish(desc, out);
@@ -104,12 +90,6 @@ static int sha256_ssse3_finup(struct shash_desc *desc, const u8 *data,
 	return sha256_finup(desc, data, len, out, sha256_transform_ssse3);
 }
 
-/* Add padding and return the message digest. */
-static int sha256_ssse3_final(struct shash_desc *desc, u8 *out)
-{
-	return sha256_ssse3_finup(desc, NULL, 0, out);
-}
-
 static int sha256_ssse3_digest(struct shash_desc *desc, const u8 *data,
 	      unsigned int len, u8 *out)
 {
@@ -121,14 +101,15 @@ static struct shash_alg sha256_ssse3_algs[] = { {
 	.digestsize	=	SHA256_DIGEST_SIZE,
 	.init		=	sha256_base_init,
 	.update		=	sha256_ssse3_update,
-	.final		=	sha256_ssse3_final,
 	.finup		=	sha256_ssse3_finup,
 	.digest		=	sha256_ssse3_digest,
-	.descsize	=	sizeof(struct sha256_state),
+	.descsize	=	sizeof(struct crypto_sha256_state),
 	.base		=	{
 		.cra_name	=	"sha256",
 		.cra_driver_name =	"sha256-ssse3",
 		.cra_priority	=	150,
+		.cra_flags	=	CRYPTO_AHASH_ALG_BLOCK_ONLY |
+					CRYPTO_AHASH_ALG_FINUP_MAX,
 		.cra_blocksize	=	SHA256_BLOCK_SIZE,
 		.cra_module	=	THIS_MODULE,
 	}
@@ -136,13 +117,14 @@ static struct shash_alg sha256_ssse3_algs[] = { {
 	.digestsize	=	SHA224_DIGEST_SIZE,
 	.init		=	sha224_base_init,
 	.update		=	sha256_ssse3_update,
-	.final		=	sha256_ssse3_final,
 	.finup		=	sha256_ssse3_finup,
-	.descsize	=	sizeof(struct sha256_state),
+	.descsize	=	sizeof(struct crypto_sha256_state),
 	.base		=	{
 		.cra_name	=	"sha224",
 		.cra_driver_name =	"sha224-ssse3",
 		.cra_priority	=	150,
+		.cra_flags	=	CRYPTO_AHASH_ALG_BLOCK_ONLY |
+					CRYPTO_AHASH_ALG_FINUP_MAX,
 		.cra_blocksize	=	SHA224_BLOCK_SIZE,
 		.cra_module	=	THIS_MODULE,
 	}
@@ -163,7 +145,7 @@ static void unregister_sha256_ssse3(void)
 				ARRAY_SIZE(sha256_ssse3_algs));
 }
 
-asmlinkage void sha256_transform_avx(struct sha256_state *state,
+asmlinkage void sha256_transform_avx(struct crypto_sha256_state *state,
 				     const u8 *data, int blocks);
 
 static int sha256_avx_update(struct shash_desc *desc, const u8 *data,
@@ -178,11 +160,6 @@ static int sha256_avx_finup(struct shash_desc *desc, const u8 *data,
 	return sha256_finup(desc, data, len, out, sha256_transform_avx);
 }
 
-static int sha256_avx_final(struct shash_desc *desc, u8 *out)
-{
-	return sha256_avx_finup(desc, NULL, 0, out);
-}
-
 static int sha256_avx_digest(struct shash_desc *desc, const u8 *data,
 		      unsigned int len, u8 *out)
 {
@@ -194,14 +171,15 @@ static struct shash_alg sha256_avx_algs[] = { {
 	.digestsize	=	SHA256_DIGEST_SIZE,
 	.init		=	sha256_base_init,
 	.update		=	sha256_avx_update,
-	.final		=	sha256_avx_final,
 	.finup		=	sha256_avx_finup,
 	.digest		=	sha256_avx_digest,
-	.descsize	=	sizeof(struct sha256_state),
+	.descsize	=	sizeof(struct crypto_sha256_state),
 	.base		=	{
 		.cra_name	=	"sha256",
 		.cra_driver_name =	"sha256-avx",
 		.cra_priority	=	160,
+		.cra_flags	=	CRYPTO_AHASH_ALG_BLOCK_ONLY |
+					CRYPTO_AHASH_ALG_FINUP_MAX,
 		.cra_blocksize	=	SHA256_BLOCK_SIZE,
 		.cra_module	=	THIS_MODULE,
 	}
@@ -209,13 +187,14 @@ static struct shash_alg sha256_avx_algs[] = { {
 	.digestsize	=	SHA224_DIGEST_SIZE,
 	.init		=	sha224_base_init,
 	.update		=	sha256_avx_update,
-	.final		=	sha256_avx_final,
 	.finup		=	sha256_avx_finup,
-	.descsize	=	sizeof(struct sha256_state),
+	.descsize	=	sizeof(struct crypto_sha256_state),
 	.base		=	{
 		.cra_name	=	"sha224",
 		.cra_driver_name =	"sha224-avx",
 		.cra_priority	=	160,
+		.cra_flags	=	CRYPTO_AHASH_ALG_BLOCK_ONLY |
+					CRYPTO_AHASH_ALG_FINUP_MAX,
 		.cra_blocksize	=	SHA224_BLOCK_SIZE,
 		.cra_module	=	THIS_MODULE,
 	}
@@ -247,7 +226,7 @@ static void unregister_sha256_avx(void)
 				ARRAY_SIZE(sha256_avx_algs));
 }
 
-asmlinkage void sha256_transform_rorx(struct sha256_state *state,
+asmlinkage void sha256_transform_rorx(struct crypto_sha256_state *state,
 				      const u8 *data, int blocks);
 
 static int sha256_avx2_update(struct shash_desc *desc, const u8 *data,
@@ -262,11 +241,6 @@ static int sha256_avx2_finup(struct shash_desc *desc, const u8 *data,
 	return sha256_finup(desc, data, len, out, sha256_transform_rorx);
 }
 
-static int sha256_avx2_final(struct shash_desc *desc, u8 *out)
-{
-	return sha256_avx2_finup(desc, NULL, 0, out);
-}
-
 static int sha256_avx2_digest(struct shash_desc *desc, const u8 *data,
 		      unsigned int len, u8 *out)
 {
@@ -278,14 +252,15 @@ static struct shash_alg sha256_avx2_algs[] = { {
 	.digestsize	=	SHA256_DIGEST_SIZE,
 	.init		=	sha256_base_init,
 	.update		=	sha256_avx2_update,
-	.final		=	sha256_avx2_final,
 	.finup		=	sha256_avx2_finup,
 	.digest		=	sha256_avx2_digest,
-	.descsize	=	sizeof(struct sha256_state),
+	.descsize	=	sizeof(struct crypto_sha256_state),
 	.base		=	{
 		.cra_name	=	"sha256",
 		.cra_driver_name =	"sha256-avx2",
 		.cra_priority	=	170,
+		.cra_flags	=	CRYPTO_AHASH_ALG_BLOCK_ONLY |
+					CRYPTO_AHASH_ALG_FINUP_MAX,
 		.cra_blocksize	=	SHA256_BLOCK_SIZE,
 		.cra_module	=	THIS_MODULE,
 	}
@@ -293,13 +268,14 @@ static struct shash_alg sha256_avx2_algs[] = { {
 	.digestsize	=	SHA224_DIGEST_SIZE,
 	.init		=	sha224_base_init,
 	.update		=	sha256_avx2_update,
-	.final		=	sha256_avx2_final,
 	.finup		=	sha256_avx2_finup,
-	.descsize	=	sizeof(struct sha256_state),
+	.descsize	=	sizeof(struct crypto_sha256_state),
 	.base		=	{
 		.cra_name	=	"sha224",
 		.cra_driver_name =	"sha224-avx2",
 		.cra_priority	=	170,
+		.cra_flags	=	CRYPTO_AHASH_ALG_BLOCK_ONLY |
+					CRYPTO_AHASH_ALG_FINUP_MAX,
 		.cra_blocksize	=	SHA224_BLOCK_SIZE,
 		.cra_module	=	THIS_MODULE,
 	}
@@ -329,8 +305,7 @@ static void unregister_sha256_avx2(void)
 				ARRAY_SIZE(sha256_avx2_algs));
 }
 
-#ifdef CONFIG_AS_SHA256_NI
-asmlinkage void sha256_ni_transform(struct sha256_state *digest,
+asmlinkage void sha256_ni_transform(struct crypto_sha256_state *digest,
 				    const u8 *data, int rounds);
 
 static int sha256_ni_update(struct shash_desc *desc, const u8 *data,
@@ -345,11 +320,6 @@ static int sha256_ni_finup(struct shash_desc *desc, const u8 *data,
 	return sha256_finup(desc, data, len, out, sha256_ni_transform);
 }
 
-static int sha256_ni_final(struct shash_desc *desc, u8 *out)
-{
-	return sha256_ni_finup(desc, NULL, 0, out);
-}
-
 static int sha256_ni_digest(struct shash_desc *desc, const u8 *data,
 		      unsigned int len, u8 *out)
 {
@@ -361,14 +331,15 @@ static struct shash_alg sha256_ni_algs[] = { {
 	.digestsize	=	SHA256_DIGEST_SIZE,
 	.init		=	sha256_base_init,
 	.update		=	sha256_ni_update,
-	.final		=	sha256_ni_final,
 	.finup		=	sha256_ni_finup,
 	.digest		=	sha256_ni_digest,
-	.descsize	=	sizeof(struct sha256_state),
+	.descsize	=	sizeof(struct crypto_sha256_state),
 	.base		=	{
 		.cra_name	=	"sha256",
 		.cra_driver_name =	"sha256-ni",
 		.cra_priority	=	250,
+		.cra_flags	=	CRYPTO_AHASH_ALG_BLOCK_ONLY |
+					CRYPTO_AHASH_ALG_FINUP_MAX,
 		.cra_blocksize	=	SHA256_BLOCK_SIZE,
 		.cra_module	=	THIS_MODULE,
 	}
@@ -376,13 +347,14 @@ static struct shash_alg sha256_ni_algs[] = { {
 	.digestsize	=	SHA224_DIGEST_SIZE,
 	.init		=	sha224_base_init,
 	.update		=	sha256_ni_update,
-	.final		=	sha256_ni_final,
 	.finup		=	sha256_ni_finup,
-	.descsize	=	sizeof(struct sha256_state),
+	.descsize	=	sizeof(struct crypto_sha256_state),
 	.base		=	{
 		.cra_name	=	"sha224",
 		.cra_driver_name =	"sha224-ni",
 		.cra_priority	=	250,
+		.cra_flags	=	CRYPTO_AHASH_ALG_BLOCK_ONLY |
+					CRYPTO_AHASH_ALG_FINUP_MAX,
 		.cra_blocksize	=	SHA224_BLOCK_SIZE,
 		.cra_module	=	THIS_MODULE,
 	}
@@ -402,11 +374,6 @@ static void unregister_sha256_ni(void)
 		crypto_unregister_shashes(sha256_ni_algs,
 				ARRAY_SIZE(sha256_ni_algs));
 }
-
-#else
-static inline int register_sha256_ni(void) { return 0; }
-static inline void unregister_sha256_ni(void) { }
-#endif
 
 static int __init sha256_ssse3_mod_init(void)
 {
@@ -461,7 +428,5 @@ MODULE_ALIAS_CRYPTO("sha224");
 MODULE_ALIAS_CRYPTO("sha224-ssse3");
 MODULE_ALIAS_CRYPTO("sha224-avx");
 MODULE_ALIAS_CRYPTO("sha224-avx2");
-#ifdef CONFIG_AS_SHA256_NI
 MODULE_ALIAS_CRYPTO("sha256-ni");
 MODULE_ALIAS_CRYPTO("sha224-ni");
-#endif
