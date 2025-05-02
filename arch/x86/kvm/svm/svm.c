@@ -566,7 +566,7 @@ static void __svm_write_tsc_multiplier(u64 multiplier)
 	if (multiplier == __this_cpu_read(current_tsc_ratio))
 		return;
 
-	wrmsrl(MSR_AMD64_TSC_RATIO, multiplier);
+	wrmsrq(MSR_AMD64_TSC_RATIO, multiplier);
 	__this_cpu_write(current_tsc_ratio, multiplier);
 }
 
@@ -579,15 +579,15 @@ static inline void kvm_cpu_svm_disable(void)
 {
 	uint64_t efer;
 
-	wrmsrl(MSR_VM_HSAVE_PA, 0);
-	rdmsrl(MSR_EFER, efer);
+	wrmsrq(MSR_VM_HSAVE_PA, 0);
+	rdmsrq(MSR_EFER, efer);
 	if (efer & EFER_SVME) {
 		/*
 		 * Force GIF=1 prior to disabling SVM, e.g. to ensure INIT and
 		 * NMI aren't blocked.
 		 */
 		stgi();
-		wrmsrl(MSR_EFER, efer & ~EFER_SVME);
+		wrmsrq(MSR_EFER, efer & ~EFER_SVME);
 	}
 }
 
@@ -619,7 +619,7 @@ static int svm_enable_virtualization_cpu(void)
 	uint64_t efer;
 	int me = raw_smp_processor_id();
 
-	rdmsrl(MSR_EFER, efer);
+	rdmsrq(MSR_EFER, efer);
 	if (efer & EFER_SVME)
 		return -EBUSY;
 
@@ -629,9 +629,9 @@ static int svm_enable_virtualization_cpu(void)
 	sd->next_asid = sd->max_asid + 1;
 	sd->min_asid = max_sev_asid + 1;
 
-	wrmsrl(MSR_EFER, efer | EFER_SVME);
+	wrmsrq(MSR_EFER, efer | EFER_SVME);
 
-	wrmsrl(MSR_VM_HSAVE_PA, sd->save_area_pa);
+	wrmsrq(MSR_VM_HSAVE_PA, sd->save_area_pa);
 
 	if (static_cpu_has(X86_FEATURE_TSCRATEMSR)) {
 		/*
@@ -5232,7 +5232,7 @@ static __init void svm_adjust_mmio_mask(void)
 		return;
 
 	/* If memory encryption is not enabled, use existing mask */
-	rdmsrl(MSR_AMD64_SYSCFG, msr);
+	rdmsrq(MSR_AMD64_SYSCFG, msr);
 	if (!(msr & MSR_AMD64_SYSCFG_MEM_ENCRYPT))
 		return;
 
