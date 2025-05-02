@@ -72,6 +72,7 @@ config ARM_SCMI_DEBUG_COUNTERS
 config ARM_SCMI_QUIRKS
 	bool "Enable SCMI Quirks framework"
 	depends on JUMP_LABEL || COMPILE_TEST
+	depends on BROKEN
 	default y
 	help
 	  Enables support for SCMI Quirks framework to workaround SCMI platform
