@@ -4,6 +4,9 @@
  * Copyright (C) 2017-2021 Willy Tarreau <w@1wt.eu>
  */
 
+/* make sure to include all global symbols */
+#include "nolibc.h"
+
 #ifndef _NOLIBC_STDIO_H
 #define _NOLIBC_STDIO_H
 
@@ -208,28 +211,40 @@ char *fgets(char *s, int size, FILE *stream)
 }
 
 
-/* minimal vfprintf(). It supports the following formats:
+/* minimal printf(). It supports the following formats:
  *  - %[l*]{d,u,c,x,p}
  *  - %s
  *  - unknown modifiers are ignored.
  */
-static __attribute__((unused, format(printf, 2, 0)))
-int vfprintf(FILE *stream, const char *fmt, va_list args)
+typedef int (*__nolibc_printf_cb)(intptr_t state, const char *buf, size_t size);
+
+static __attribute__((unused, format(printf, 4, 0)))
+int __nolibc_printf(__nolibc_printf_cb cb, intptr_t state, size_t n, const char *fmt, va_list args)
 {
 	char escape, lpref, c;
 	unsigned long long v;
-	unsigned int written;
-	size_t len, ofs;
+	unsigned int written, width;
+	size_t len, ofs, w;
 	char tmpbuf[21];
 	const char *outstr;
 
 	written = ofs = escape = lpref = 0;
 	while (1) {
 		c = fmt[ofs++];
+		width = 0;
 
 		if (escape) {
 			/* we're in an escape sequence, ofs == 1 */
 			escape = 0;
+
+			/* width */
+			while (c >= '0' && c <= '9') {
+				width *= 10;
+				width += c - '0';
+
+				c = fmt[ofs++];
+			}
+
 			if (c == 'c' || c == 'd' || c == 'u' || c == 'x' || c == 'p') {
 				char *out = tmpbuf;
 
@@ -286,6 +301,8 @@ int vfprintf(FILE *stream, const char *fmt, va_list args)
 				if (c == 'l') {
 					/* long format prefix, maintain the escape */
 					lpref++;
+				} else if (c == 'j') {
+					lpref = 2;
 				}
 				escape = 1;
 				goto do_escape;
@@ -302,8 +319,17 @@ int vfprintf(FILE *stream, const char *fmt, va_list args)
 			outstr = fmt;
 			len = ofs - 1;
 		flush_str:
-			if (_fwrite(outstr, len, stream) != 0)
-				break;
+			if (n) {
+				w = len < n ? len : n;
+				n -= w;
+				while (width-- > w) {
+					if (cb(state, " ", 1) != 0)
+						break;
+					written += 1;
+				}
+				if (cb(state, outstr, w) != 0)
+					break;
+			}
 
 			written += len;
 		do_escape:
@@ -317,6 +343,17 @@ int vfprintf(FILE *stream, const char *fmt, va_list args)
 		/* literal char, just queue it */
 	}
 	return written;
+}
+
+static int __nolibc_fprintf_cb(intptr_t state, const char *buf, size_t size)
+{
+	return _fwrite(buf, size, (FILE *)state);
+}
+
+static __attribute__((unused, format(printf, 2, 0)))
+int vfprintf(FILE *stream, const char *fmt, va_list args)
+{
+	return __nolibc_printf(__nolibc_fprintf_cb, (intptr_t)stream, SIZE_MAX, fmt, args);
 }
 
 static __attribute__((unused, format(printf, 1, 0)))
@@ -346,6 +383,85 @@ int printf(const char *fmt, ...)
 	va_start(args, fmt);
 	ret = vfprintf(stdout, fmt, args);
 	va_end(args);
+	return ret;
+}
+
+static __attribute__((unused, format(printf, 2, 0)))
+int vdprintf(int fd, const char *fmt, va_list args)
+{
+	FILE *stream;
+
+	stream = fdopen(fd, NULL);
+	if (!stream)
+		return -1;
+	/* Technically 'stream' is leaked, but as it's only a wrapper around 'fd' that is fine */
+	return vfprintf(stream, fmt, args);
+}
+
+static __attribute__((unused, format(printf, 2, 3)))
+int dprintf(int fd, const char *fmt, ...)
+{
+	va_list args;
+	int ret;
+
+	va_start(args, fmt);
+	ret = vdprintf(fd, fmt, args);
+	va_end(args);
+
+	return ret;
+}
+
+static int __nolibc_sprintf_cb(intptr_t _state, const char *buf, size_t size)
+{
+	char **state = (char **)_state;
+
+	memcpy(*state, buf, size);
+	*state += size;
+	return 0;
+}
+
+static __attribute__((unused, format(printf, 3, 0)))
+int vsnprintf(char *buf, size_t size, const char *fmt, va_list args)
+{
+	char *state = buf;
+	int ret;
+
+	ret = __nolibc_printf(__nolibc_sprintf_cb, (intptr_t)&state, size, fmt, args);
+	if (ret < 0)
+		return ret;
+	buf[(size_t)ret < size ? (size_t)ret : size - 1] = '\0';
+	return ret;
+}
+
+static __attribute__((unused, format(printf, 3, 4)))
+int snprintf(char *buf, size_t size, const char *fmt, ...)
+{
+	va_list args;
+	int ret;
+
+	va_start(args, fmt);
+	ret = vsnprintf(buf, size, fmt, args);
+	va_end(args);
+
+	return ret;
+}
+
+static __attribute__((unused, format(printf, 2, 0)))
+int vsprintf(char *buf, const char *fmt, va_list args)
+{
+	return vsnprintf(buf, SIZE_MAX, fmt, args);
+}
+
+static __attribute__((unused, format(printf, 2, 3)))
+int sprintf(char *buf, const char *fmt, ...)
+{
+	va_list args;
+	int ret;
+
+	va_start(args, fmt);
+	ret = vsprintf(buf, fmt, args);
+	va_end(args);
+
 	return ret;
 }
 
@@ -484,8 +600,5 @@ const char *strerror(int errno)
 
 	return buf;
 }
-
-/* make sure to include all global symbols */
-#include "nolibc.h"
 
 #endif /* _NOLIBC_STDIO_H */
