@@ -790,6 +790,7 @@ static int ref_visible2(struct bch_fs *c,
 
 struct inode_walker_entry {
 	struct bch_inode_unpacked inode;
+	bool			whiteout;
 	u64			count;
 	u64			i_size;
 };
@@ -818,12 +819,20 @@ static struct inode_walker inode_walker_init(void)
 static int add_inode(struct bch_fs *c, struct inode_walker *w,
 		     struct bkey_s_c inode)
 {
-	struct bch_inode_unpacked u;
-
-	return bch2_inode_unpack(inode, &u) ?:
-		darray_push(&w->inodes, ((struct inode_walker_entry) {
-		.inode		= u,
+	int ret = darray_push(&w->inodes, ((struct inode_walker_entry) {
+		.whiteout	= !bkey_is_inode(inode.k),
 	}));
+	if (ret)
+		return ret;
+
+	struct inode_walker_entry *n = &darray_last(w->inodes);
+	if (!n->whiteout) {
+		return bch2_inode_unpack(inode, &n->inode);
+	} else {
+		n->inode.bi_inum	= inode.k->p.inode;
+		n->inode.bi_snapshot	= inode.k->p.snapshot;
+		return 0;
+	}
 }
 
 static int get_inodes_all_snapshots(struct btree_trans *trans,
@@ -843,13 +852,12 @@ static int get_inodes_all_snapshots(struct btree_trans *trans,
 	w->recalculate_sums = false;
 	w->inodes.nr = 0;
 
-	for_each_btree_key_norestart(trans, iter, BTREE_ID_inodes, POS(0, inum),
-				     BTREE_ITER_all_snapshots, k, ret) {
-		if (k.k->p.offset != inum)
+	for_each_btree_key_max_norestart(trans, iter,
+			BTREE_ID_inodes, POS(0, inum), SPOS(0, inum, U32_MAX),
+			BTREE_ITER_all_snapshots, k, ret) {
+		ret = add_inode(c, w, k);
+		if (ret)
 			break;
-
-		if (bkey_is_inode(k.k))
-			add_inode(c, w, k);
 	}
 	bch2_trans_iter_exit(trans, &iter);
 
@@ -859,6 +867,41 @@ static int get_inodes_all_snapshots(struct btree_trans *trans,
 	w->first_this_inode = true;
 	w->have_inodes = true;
 	return 0;
+}
+
+static int get_visible_inodes(struct btree_trans *trans,
+			      struct inode_walker *w,
+			      struct snapshots_seen *s,
+			      u64 inum)
+{
+	struct bch_fs *c = trans->c;
+	struct btree_iter iter;
+	struct bkey_s_c k;
+	int ret;
+
+	w->inodes.nr = 0;
+	w->deletes.nr = 0;
+
+	for_each_btree_key_reverse_norestart(trans, iter, BTREE_ID_inodes, SPOS(0, inum, s->pos.snapshot),
+			   BTREE_ITER_all_snapshots, k, ret) {
+		if (k.k->p.offset != inum)
+			break;
+
+		if (!ref_visible(c, s, s->pos.snapshot, k.k->p.snapshot))
+			continue;
+
+		if (snapshot_list_has_ancestor(c, &w->deletes, k.k->p.snapshot))
+			continue;
+
+		ret = bkey_is_inode(k.k)
+			? add_inode(c, w, k)
+			: snapshot_list_add(c, &w->deletes, k.k->p.snapshot);
+		if (ret)
+			break;
+	}
+	bch2_trans_iter_exit(trans, &iter);
+
+	return ret;
 }
 
 static struct inode_walker_entry *
@@ -918,41 +961,6 @@ static struct inode_walker_entry *walk_inode(struct btree_trans *trans,
 	w->last_pos = k.k->p;
 
 	return lookup_inode_for_snapshot(trans->c, w, k);
-}
-
-static int get_visible_inodes(struct btree_trans *trans,
-			      struct inode_walker *w,
-			      struct snapshots_seen *s,
-			      u64 inum)
-{
-	struct bch_fs *c = trans->c;
-	struct btree_iter iter;
-	struct bkey_s_c k;
-	int ret;
-
-	w->inodes.nr = 0;
-	w->deletes.nr = 0;
-
-	for_each_btree_key_reverse_norestart(trans, iter, BTREE_ID_inodes, SPOS(0, inum, s->pos.snapshot),
-			   BTREE_ITER_all_snapshots, k, ret) {
-		if (k.k->p.offset != inum)
-			break;
-
-		if (!ref_visible(c, s, s->pos.snapshot, k.k->p.snapshot))
-			continue;
-
-		if (snapshot_list_has_ancestor(c, &w->deletes, k.k->p.snapshot))
-			continue;
-
-		ret = bkey_is_inode(k.k)
-			? add_inode(c, w, k)
-			: snapshot_list_add(c, &w->deletes, k.k->p.snapshot);
-		if (ret)
-			break;
-	}
-	bch2_trans_iter_exit(trans, &iter);
-
-	return ret;
 }
 
 /*
