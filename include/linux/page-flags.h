@@ -982,7 +982,7 @@ static inline bool page_mapcount_is_type(unsigned int mapcount)
 
 static inline bool page_has_type(const struct page *page)
 {
-	return page_mapcount_is_type(data_race(page->page_type));
+	return page_type_has_type(data_race(page->page_type));
 }
 
 #define FOLIO_TYPE_OPS(lname, fname)					\
@@ -1230,10 +1230,6 @@ static inline int folio_has_private(const struct folio *folio)
 	return !!(folio->flags & PAGE_FLAGS_PRIVATE);
 }
 
-static inline bool folio_test_large_maybe_mapped_shared(const struct folio *folio)
-{
-	return test_bit(FOLIO_MM_IDS_SHARED_BITNUM, &folio->_mm_ids);
-}
 #undef PF_ANY
 #undef PF_HEAD
 #undef PF_NO_TAIL
