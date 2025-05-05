@@ -5969,16 +5969,19 @@ void __unmap_hugepage_range(struct mmu_gather *tlb, struct vm_area_struct *vma,
 		if (adjust_reservation) {
 			int rc = vma_needs_reservation(h, vma, address);
 
-			if (rc < 0)
-				/* Pressumably allocate_file_region_entries failed
-				 * to allocate a file_region struct. Clear
-				 * hugetlb_restore_reserve so that global reserve
-				 * count will not be incremented by free_huge_folio.
-				 * Act as if we consumed the reservation.
+			if (rc < 0) {
+				/*
+				 * Presumably allocate_file_region_entries()
+				 * failed to allocate a file_region struct.
+				 * Clear hugetlb_restore_reserve so that the
+				 * global reserve count will not be incremented
+				 * by free_huge_folio().  Act as if we consumed
+				 * the reservation.
 				 */
 				folio_clear_hugetlb_restore_reserve(folio);
-			else if (rc)
+			} else if (rc) {
 				vma_add_reservation(h, vma, address);
+			}
 		}
 
 		tlb_remove_page_size(tlb, folio_page(folio, 0),
