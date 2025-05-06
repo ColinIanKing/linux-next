@@ -30,6 +30,9 @@ struct bch_fs_rebalance {
 	struct bbpos			scan_start;
 	struct bbpos			scan_end;
 	struct bch_move_stats		scan_stats;
+
+	bool				on_battery;
+	struct notifier_block		power_notifier;
 };
 
 #endif /* _BCACHEFS_REBALANCE_TYPES_H */
