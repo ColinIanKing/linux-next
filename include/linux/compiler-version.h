@@ -12,3 +12,13 @@
  * and add dependency on include/config/CC_VERSION_TEXT, which is touched
  * by Kconfig when the version string from the compiler changes.
  */
+
+#ifdef GCC_PLUGINS
+#include <generated/gcc-plugins.h>
+#endif
+#ifdef RANDSTRUCT
+#include <generated/randstruct_hash.h>
+#endif
+#ifdef INTEGER_WRAP
+#include <generated/integer-wrap.h>
+#endif
