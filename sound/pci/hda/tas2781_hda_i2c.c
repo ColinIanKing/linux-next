@@ -2,7 +2,7 @@
 //
 // TAS2781 HDA I2C driver
 //
-// Copyright 2023 - 2024 Texas Instruments, Inc.
+// Copyright 2023 - 2025 Texas Instruments, Inc.
 //
 // Author: Shenghao Ding <shenghao-ding@ti.com>
 // Current maintainer: Baojun Xu <baojun.xu@ti.com>
@@ -22,6 +22,7 @@
 #include <sound/hda_codec.h>
 #include <sound/soc.h>
 #include <sound/tas2781.h>
+#include <sound/tas2781-comlib-i2c.h>
 #include <sound/tlv.h>
 #include <sound/tas2781-tlv.h>
 
@@ -30,43 +31,9 @@
 #include "hda_component.h"
 #include "hda_jack.h"
 #include "hda_generic.h"
+#include "tas2781_hda.h"
 
 #define TASDEVICE_SPEAKER_CALIBRATION_SIZE	20
-
-/* No standard control callbacks for SNDRV_CTL_ELEM_IFACE_CARD
- * Define two controls, one is Volume control callbacks, the other is
- * flag setting control callbacks.
- */
-
-/* Volume control callbacks for tas2781 */
-#define ACARD_SINGLE_RANGE_EXT_TLV(xname, xreg, xshift, xmin, xmax, xinvert, \
-	xhandler_get, xhandler_put, tlv_array) \
-{	.iface = SNDRV_CTL_ELEM_IFACE_CARD, .name = (xname),\
-	.access = SNDRV_CTL_ELEM_ACCESS_TLV_READ |\
-		 SNDRV_CTL_ELEM_ACCESS_READWRITE,\
-	.tlv.p = (tlv_array), \
-	.info = snd_soc_info_volsw, \
-	.get = xhandler_get, .put = xhandler_put, \
-	.private_value = (unsigned long)&(struct soc_mixer_control) \
-		{.reg = xreg, .rreg = xreg, .shift = xshift, \
-		 .rshift = xshift, .min = xmin, .max = xmax, \
-		 .invert = xinvert} }
-
-/* Flag control callbacks for tas2781 */
-#define ACARD_SINGLE_BOOL_EXT(xname, xdata, xhandler_get, xhandler_put) \
-{	.iface = SNDRV_CTL_ELEM_IFACE_CARD, .name = xname, \
-	.info = snd_ctl_boolean_mono_info, \
-	.get = xhandler_get, .put = xhandler_put, \
-	.private_value = xdata }
-
-enum calib_data {
-	R0_VAL = 0,
-	INV_R0,
-	R0LOW,
-	POWER,
-	TLIM,
-	CALIB_MAX
-};
 
 #define TAS2563_MAX_CHANNELS	4
 
@@ -75,16 +42,14 @@ enum calib_data {
 #define TAS2563_CAL_INVR0	TASDEVICE_REG(0, 0x0f, 0x40)
 #define TAS2563_CAL_R0_LOW	TASDEVICE_REG(0, 0x0f, 0x48)
 #define TAS2563_CAL_TLIM	TASDEVICE_REG(0, 0x10, 0x14)
-#define TAS2563_CAL_N		5
 #define TAS2563_CAL_DATA_SIZE	4
 #define TAS2563_CAL_CH_SIZE	20
 #define TAS2563_CAL_ARRAY_SIZE	80
 
-static unsigned int cal_regs[TAS2563_CAL_N] = {
+static unsigned int cal_regs[TASDEV_CALIB_N] = {
 	TAS2563_CAL_POWER, TAS2563_CAL_R0, TAS2563_CAL_INVR0,
 	TAS2563_CAL_R0_LOW, TAS2563_CAL_TLIM,
 };
-
 
 struct tas2781_hda {
 	struct device *dev;
@@ -500,7 +465,7 @@ static void tas2563_apply_calib(struct tasdevice_priv *tas_priv)
 	int ret;
 
 	for (int i = 0; i < tas_priv->ndev; i++) {
-		for (int j = 0; j < TAS2563_CAL_N; ++j) {
+		for (int j = 0; j < TASDEV_CALIB_N; ++j) {
 			data = cpu_to_be32(
 				*(uint32_t *)&tas_priv->cali_data.data[offset]);
 			ret = tasdevice_dev_bulk_write(tas_priv, i, cal_regs[j],
@@ -518,7 +483,7 @@ static int tas2563_save_calibration(struct tasdevice_priv *tas_priv)
 	static efi_guid_t efi_guid = EFI_GUID(0x1f52d2a1, 0xbb3a, 0x457d, 0xbc,
 		0x09, 0x43, 0xa3, 0xf4, 0x31, 0x0a, 0x92);
 
-	static efi_char16_t *efi_vars[TAS2563_MAX_CHANNELS][TAS2563_CAL_N] = {
+	static efi_char16_t *efi_vars[TAS2563_MAX_CHANNELS][TASDEV_CALIB_N] = {
 		{ L"Power_1", L"R0_1", L"InvR0_1", L"R0_Low_1", L"TLim_1" },
 		{ L"Power_2", L"R0_2", L"InvR0_2", L"R0_Low_2", L"TLim_2" },
 		{ L"Power_3", L"R0_3", L"InvR0_3", L"R0_Low_3", L"TLim_3" },
@@ -536,7 +501,7 @@ static int tas2563_save_calibration(struct tasdevice_priv *tas_priv)
 		return -ENOMEM;
 
 	for (int i = 0; i < tas_priv->ndev; ++i) {
-		for (int j = 0; j < TAS2563_CAL_N; ++j) {
+		for (int j = 0; j < TASDEV_CALIB_N; ++j) {
 			status = efi.get_variable(efi_vars[i][j],
 				&efi_guid, &attr, &max_size,
 				&tas_priv->cali_data.data[offset]);
@@ -560,7 +525,7 @@ static void tas2781_apply_calib(struct tasdevice_priv *tas_priv)
 {
 	struct calidata *cali_data = &tas_priv->cali_data;
 	struct cali_reg *r = &cali_data->cali_reg_array;
-	unsigned int cali_reg[CALIB_MAX] = {
+	unsigned int cali_reg[TASDEV_CALIB_N] = {
 		TASDEVICE_REG(0, 0x17, 0x74),
 		TASDEVICE_REG(0, 0x18, 0x0c),
 		TASDEVICE_REG(0, 0x18, 0x14),
@@ -580,7 +545,7 @@ static void tas2781_apply_calib(struct tasdevice_priv *tas_priv)
 	}
 
 	for (i = 0; i < tas_priv->ndev; i++) {
-		for (j = 0; j < CALIB_MAX; j++) {
+		for (j = 0; j < TASDEV_CALIB_N; j++) {
 			data = cpu_to_be32(
 				*(uint32_t *)&tas_priv->cali_data.data[oft]);
 			rc = tasdevice_dev_bulk_write(tas_priv, i,
@@ -603,7 +568,7 @@ static int tas2781_save_calibration(struct tasdevice_priv *tas_priv)
 {
 	efi_guid_t efi_guid = EFI_GUID(0x02f9af02, 0x7734, 0x4233, 0xb4, 0x3d,
 		0x93, 0xfe, 0x5a, 0xa3, 0x5d, 0xb3);
-	static efi_char16_t efi_name[] = L"CALI_DATA";
+	static efi_char16_t efi_name[] = TASDEVICE_CALIBRATION_DATA_NAME;
 	unsigned int attr, crc;
 	unsigned int *tmp_val;
 	efi_status_t status;
