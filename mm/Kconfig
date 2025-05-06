@@ -1016,10 +1016,10 @@ config PAGE_BLOCK_ORDER
 	  ARCH_FORCE_MAX_ORDER.
 
 	  This option allows overriding the default setting when the page
-	  block order requires to be smaller than ARCH_FORCE_MAX_ORDER.
+	  block order is required to be smaller than ARCH_FORCE_MAX_ORDER.
 
 	  Reducing pageblock order can negatively impact THP generation
-	  successful rate. If your workloads uses THP heavily, please use this
+	  success rate. If your workloads uses THP heavily, please use this
 	  option with caution.
 
 	  Don't change if unsure.
