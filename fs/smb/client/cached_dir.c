@@ -213,16 +213,23 @@ replay_again:
 		goto out;
 	}
 
-	if (!npath[0]) {
-		dentry = dget(cifs_sb->root);
-	} else {
-		dentry = path_to_dentry(cifs_sb, npath);
-		if (IS_ERR(dentry)) {
-			rc = -ENOENT;
-			goto out;
+	/*
+	 * BB: cfid->dentry should be NULL here; if not, we're likely racing with
+	 * a lease break. This is a temporary workaround to avoid overwriting
+	 * a valid dentry. Needs proper fix.
+	 */
+	if (!cfid->dentry) {
+		if (!npath[0]) {
+			dentry = dget(cifs_sb->root);
+		} else {
+			dentry = path_to_dentry(cifs_sb, npath);
+			if (IS_ERR(dentry)) {
+				rc = -ENOENT;
+				goto out;
+			}
 		}
+		cfid->dentry = dentry;
 	}
-	cfid->dentry = dentry;
 	cfid->tcon = tcon;
 
 	/*
