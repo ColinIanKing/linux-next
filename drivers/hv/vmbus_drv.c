@@ -1815,7 +1815,7 @@ static int hv_mmap_ring_buffer_wrapper(struct file *filp, struct kobject *kobj,
 	return channel->mmap_ring_buffer(channel, vma);
 }
 
-static struct bin_attribute chan_attr_ring_buffer = {
+static const struct bin_attribute chan_attr_ring_buffer = {
 	.attr = {
 		.name = "ring",
 		.mode = 0600,
@@ -1841,7 +1841,7 @@ static struct attribute *vmbus_chan_attrs[] = {
 	NULL
 };
 
-static struct bin_attribute *vmbus_chan_bin_attrs[] = {
+static const struct bin_attribute *vmbus_chan_bin_attrs[] = {
 	&chan_attr_ring_buffer,
 	NULL
 };
