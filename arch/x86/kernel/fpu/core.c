@@ -213,7 +213,7 @@ void fpu_reset_from_exception_fixup(void)
 #if IS_ENABLED(CONFIG_KVM)
 static void __fpstate_reset(struct fpstate *fpstate, u64 xfd);
 
-static void fpu_init_guest_permissions(struct fpu_guest *gfpu)
+static void fpu_lock_guest_permissions(void)
 {
 	struct fpu_state_perm *fpuperm;
 	u64 perm;
@@ -229,8 +229,6 @@ static void fpu_init_guest_permissions(struct fpu_guest *gfpu)
 	WRITE_ONCE(fpuperm->__state_perm, perm | FPU_GUEST_PERM_LOCKED);
 
 	spin_unlock_irq(&current->sighand->siglock);
-
-	gfpu->perm = perm & ~FPU_GUEST_PERM_LOCKED;
 }
 
 bool fpu_alloc_guest_fpstate(struct fpu_guest *gfpu)
@@ -251,7 +249,6 @@ bool fpu_alloc_guest_fpstate(struct fpu_guest *gfpu)
 
 	gfpu->fpstate		= fpstate;
 	gfpu->xfeatures		= fpu_kernel_cfg.default_features;
-	gfpu->perm		= fpu_kernel_cfg.default_features;
 
 	/*
 	 * KVM sets the FP+SSE bits in the XSAVE header when copying FPU state
@@ -266,7 +263,7 @@ bool fpu_alloc_guest_fpstate(struct fpu_guest *gfpu)
 	if (WARN_ON_ONCE(fpu_user_cfg.default_size > gfpu->uabi_size))
 		gfpu->uabi_size = fpu_user_cfg.default_size;
 
-	fpu_init_guest_permissions(gfpu);
+	fpu_lock_guest_permissions();
 
 	return true;
 }
@@ -682,6 +679,20 @@ int fpu_clone(struct task_struct *dst, unsigned long clone_flags, bool minimal,
 }
 
 /*
+ * While struct fpu is no longer part of struct thread_struct, it is still
+ * allocated after struct task_struct in the "task_struct" kmem cache. But
+ * since FPU is expected to be part of struct thread_struct, we have to
+ * adjust for it here.
+ */
+void fpu_thread_struct_whitelist(unsigned long *offset, unsigned long *size)
+{
+	/* The allocation follows struct task_struct. */
+	*offset = sizeof(struct task_struct) - offsetof(struct task_struct, thread);
+	*offset += offsetof(struct fpu, __fpstate.regs);
+	*size = fpu_kernel_cfg.default_size;
+}
+
+/*
  * Drops current FPU state: deactivates the fpregs and
  * the fpstate. NOTE: it still leaves previous contents
  * in the fpregs in the eager-FPU case.
@@ -694,8 +705,7 @@ void fpu__drop(struct task_struct *tsk)
 {
 	struct fpu *fpu;
 
-	/* PF_KTHREAD tasks do not use the FPU context area: */
-	if (tsk->flags & (PF_KTHREAD | PF_USER_WORKER))
+	if (test_tsk_thread_flag(tsk, TIF_NEED_FPU_LOAD))
 		return;
 
 	fpu = x86_task_fpu(tsk);
@@ -734,7 +744,7 @@ static inline void restore_fpregs_from_init_fpstate(u64 features_mask)
 /*
  * Reset current->fpu memory state to the init values.
  */
-static void fpu_reset_fpregs(void)
+static void fpu_reset_fpstate_regs(void)
 {
 	struct fpu *fpu = x86_task_fpu(current);
 
@@ -769,7 +779,7 @@ void fpu__clear_user_states(struct fpu *fpu)
 
 	fpregs_lock();
 	if (!cpu_feature_enabled(X86_FEATURE_FPU)) {
-		fpu_reset_fpregs();
+		fpu_reset_fpstate_regs();
 		fpregs_unlock();
 		return;
 	}
@@ -799,7 +809,7 @@ void fpu__clear_user_states(struct fpu *fpu)
 void fpu_flush_thread(void)
 {
 	fpstate_reset(x86_task_fpu(current));
-	fpu_reset_fpregs();
+	fpu_reset_fpstate_regs();
 }
 /*
  * Load FPU context before returning to userspace.
