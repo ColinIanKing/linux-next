@@ -177,6 +177,12 @@ struct evsel {
 	/* For tool events */
 	/* Beginning time subtracted when the counter is read. */
 	union {
+		/* Defaults for retirement latency events. */
+		struct _retirement_latency {
+			double mean;
+			double min;
+			double max;
+		} retirement_latency;
 		/* duration_time is a single global time. */
 		__u64 start_time;
 		/*
@@ -556,5 +562,7 @@ bool arch_evsel__must_be_in_group(const struct evsel *evsel);
 u64 evsel__bitfield_swap_branch_flags(u64 value);
 void evsel__set_config_if_unset(struct perf_pmu *pmu, struct evsel *evsel,
 				const char *config_name, u64 val);
+
+bool evsel__is_offcpu_event(struct evsel *evsel);
 
 #endif /* __PERF_EVSEL_H */
