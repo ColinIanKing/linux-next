@@ -578,6 +578,7 @@ static void __bch2_fs_free(struct bch_fs *c)
 	bch2_fs_snapshots_exit(c);
 	bch2_fs_sb_errors_exit(c);
 	bch2_fs_replicas_exit(c);
+	bch2_fs_rebalance_exit(c);
 	bch2_fs_quota_exit(c);
 	bch2_fs_nocow_locking_exit(c);
 	bch2_fs_journal_exit(&c->journal);
@@ -862,7 +863,6 @@ static struct bch_fs *bch2_fs_alloc(struct bch_sb *sb, struct bch_opts *opts,
 	bch2_fs_move_init(c);
 	bch2_fs_nocow_locking_init_early(c);
 	bch2_fs_quota_init(c);
-	bch2_fs_rebalance_init(c);
 	bch2_fs_sb_errors_init_early(c);
 	bch2_fs_snapshots_init_early(c);
 	bch2_fs_subvolumes_init_early(c);
@@ -984,6 +984,7 @@ static struct bch_fs *bch2_fs_alloc(struct bch_sb *sb, struct bch_opts *opts,
 	    bch2_fs_fsio_init(c) ?:
 	    bch2_fs_fs_io_direct_init(c) ?:
 	    bch2_fs_io_read_init(c) ?:
+	    bch2_fs_rebalance_init(c) ?:
 	    bch2_fs_sb_errors_init(c) ?:
 	    bch2_fs_vfs_init(c);
 	if (ret)
