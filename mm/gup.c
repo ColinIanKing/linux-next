@@ -833,6 +833,20 @@ static inline bool can_follow_write_pte(pte_t pte, struct page *page,
 	return !userfaultfd_pte_wp(vma, pte);
 }
 
+static struct page *gup_normal_page(struct vm_area_struct *vma,
+		unsigned long address, pte_t pte)
+{
+	unsigned long pfn;
+
+	if (vma->vm_flags & (VM_MIXEDMAP | VM_PFNMAP)) {
+		pfn = pte_pfn(pte);
+		if (!pfn_valid(pfn) || is_zero_pfn(pfn) || pfn > highest_memmap_pfn)
+			return NULL;
+		return pfn_to_page(pfn);
+	}
+	return vm_normal_page(vma, address, pte);
+}
+
 static struct page *follow_page_pte(struct vm_area_struct *vma,
 		unsigned long address, pmd_t *pmd, unsigned int flags,
 		struct dev_pagemap **pgmap)
@@ -858,7 +872,9 @@ static struct page *follow_page_pte(struct vm_area_struct *vma,
 	if (pte_protnone(pte) && !gup_can_follow_protnone(vma, flags))
 		goto no_page;
 
-	page = vm_normal_page(vma, address, pte);
+	page = gup_normal_page(vma, address, pte);
+	if (page && (vma->vm_flags & (VM_MIXEDMAP | VM_PFNMAP)))
+		(void)follow_pfn_pte(vma, address, ptep, flags);
 
 	/*
 	 * We only care about anon pages in can_follow_write_pte() and don't
@@ -1130,7 +1146,7 @@ static int get_gate_page(struct mm_struct *mm, unsigned long address,
 	*vma = get_gate_vma(mm);
 	if (!page)
 		goto out;
-	*page = vm_normal_page(*vma, address, entry);
+	*page = gup_normal_page(*vma, address, entry);
 	if (!*page) {
 		if ((gup_flags & FOLL_DUMP) || !is_zero_pfn(pte_pfn(entry)))
 			goto unmap;
@@ -1271,8 +1287,6 @@ static int check_vma_flags(struct vm_area_struct *vma, unsigned long gup_flags)
 	int foreign = (gup_flags & FOLL_REMOTE);
 	bool vma_anon = vma_is_anonymous(vma);
 
-	if (vm_flags & (VM_IO | VM_PFNMAP))
-		return -EFAULT;
 
 	if ((gup_flags & FOLL_ANON) && !vma_anon)
 		return -EFAULT;
