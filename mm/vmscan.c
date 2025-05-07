@@ -5592,7 +5592,7 @@ static ssize_t lru_gen_seq_write(struct file *file, const char __user *src,
 		unsigned int memcg_id;
 		unsigned int nid;
 		unsigned long seq;
-		unsigned int swappiness = -1;
+		unsigned int swappiness;
 		unsigned long opt = -1;
 
 		cur = skip_spaces(cur);
@@ -5606,8 +5606,10 @@ static ssize_t lru_gen_seq_write(struct file *file, const char __user *src,
 			break;
 		}
 
-		/* set by userspace for anonymous memory only */
-		if (!strncmp("max", swap_string, sizeof("max"))) {
+		if (n == 4)
+			swappiness = -1;
+		else if (!strcmp("max", swap_string)) {
+			/* set by userspace for anonymous memory only */
 			swappiness = SWAPPINESS_ANON_ONLY;
 		} else {
 			err = kstrtouint(swap_string, 0, &swappiness);
