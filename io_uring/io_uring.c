@@ -359,6 +359,7 @@ static __cold struct io_ring_ctx *io_ring_ctx_alloc(struct io_uring_params *p)
 	INIT_LIST_HEAD(&ctx->tctx_list);
 	ctx->submit_state.free_list.next = NULL;
 	INIT_HLIST_HEAD(&ctx->waitid_list);
+	xa_init_flags(&ctx->zcrx_ctxs, XA_FLAGS_ALLOC);
 #ifdef CONFIG_FUTEX
 	INIT_HLIST_HEAD(&ctx->futex_list);
 #endif
@@ -583,7 +584,7 @@ void __io_commit_cqring_flush(struct io_ring_ctx *ctx)
 	if (ctx->drain_active)
 		io_queue_deferred(ctx);
 	if (ctx->has_evfd)
-		io_eventfd_flush_signal(ctx);
+		io_eventfd_signal(ctx, true);
 }
 
 static inline void __io_cq_lock(struct io_ring_ctx *ctx)
@@ -813,11 +814,6 @@ static bool io_fill_cqe_aux(struct io_ring_ctx *ctx, u64 user_data, s32 res,
 
 	ctx->cq_extra++;
 
-	/*
-	 * If we can't get a cq entry, userspace overflowed the
-	 * submission (by quite a lot). Increment the overflow count in
-	 * the ring.
-	 */
 	if (likely(io_get_cqe(ctx, &cqe))) {
 		WRITE_ONCE(cqe->user_data, user_data);
 		WRITE_ONCE(cqe->res, res);
@@ -937,22 +933,6 @@ void io_req_defer_failed(struct io_kiocb *req, s32 res)
 }
 
 /*
- * Don't initialise the fields below on every allocation, but do that in
- * advance and keep them valid across allocations.
- */
-static void io_preinit_req(struct io_kiocb *req, struct io_ring_ctx *ctx)
-{
-	req->ctx = ctx;
-	req->buf_node = NULL;
-	req->file_node = NULL;
-	req->link = NULL;
-	req->async_data = NULL;
-	/* not necessary, but safer to zero */
-	memset(&req->cqe, 0, sizeof(req->cqe));
-	memset(&req->big_cqe, 0, sizeof(req->big_cqe));
-}
-
-/*
  * A request might get retired back into the request caches even before opcode
  * handlers and io_issue_sqe() are done with it, e.g. inline completion path.
  * Because of that, io_alloc_req() should be called only under ->uring_lock
@@ -961,7 +941,7 @@ static void io_preinit_req(struct io_kiocb *req, struct io_ring_ctx *ctx)
 __cold bool __io_alloc_req_refill(struct io_ring_ctx *ctx)
 	__must_hold(&ctx->uring_lock)
 {
-	gfp_t gfp = GFP_KERNEL | __GFP_NOWARN;
+	gfp_t gfp = GFP_KERNEL | __GFP_NOWARN | __GFP_ZERO;
 	void *reqs[IO_REQ_ALLOC_BATCH];
 	int ret;
 
@@ -982,7 +962,6 @@ __cold bool __io_alloc_req_refill(struct io_ring_ctx *ctx)
 	while (ret--) {
 		struct io_kiocb *req = reqs[ret];
 
-		io_preinit_req(req, ctx);
 		io_req_add_to_cache(req, ctx);
 	}
 	return true;
@@ -1204,7 +1183,7 @@ static void io_req_local_work_add(struct io_kiocb *req, unsigned flags)
 		if (ctx->flags & IORING_SETUP_TASKRUN_FLAG)
 			atomic_or(IORING_SQ_TASKRUN, &ctx->rings->sq_flags);
 		if (ctx->has_evfd)
-			io_eventfd_signal(ctx);
+			io_eventfd_signal(ctx, false);
 	}
 
 	nr_wait = atomic_read(&ctx->cq_wait_nr);
@@ -1394,6 +1373,16 @@ void io_queue_next(struct io_kiocb *req)
 
 	if (nxt)
 		io_req_task_queue(nxt);
+}
+
+static inline void io_req_put_rsrc_nodes(struct io_kiocb *req)
+{
+	if (req->file_node) {
+		io_put_rsrc_node(req->ctx, req->file_node);
+		req->file_node = NULL;
+	}
+	if (req->flags & REQ_F_BUF_NODE)
+		io_put_rsrc_node(req->ctx, req->buf_node);
 }
 
 static void io_free_batch_list(struct io_ring_ctx *ctx,
@@ -1818,7 +1807,7 @@ void io_wq_submit_work(struct io_wq_work *work)
 	bool needs_poll = false;
 	int ret = 0, err = -ECANCELED;
 
-	/* one will be dropped by ->io_wq_free_work() after returning to io-wq */
+	/* one will be dropped by io_wq_free_work() after returning to io-wq */
 	if (!(req->flags & REQ_F_REFCOUNT))
 		__io_req_set_refcount(req, 2);
 	else
@@ -1918,7 +1907,8 @@ inline struct file *io_file_get_fixed(struct io_kiocb *req, int fd,
 	io_ring_submit_lock(ctx, issue_flags);
 	node = io_rsrc_node_lookup(&ctx->file_table.data, fd);
 	if (node) {
-		io_req_assign_rsrc_node(&req->file_node, node);
+		node->refs++;
+		req->file_node = node;
 		req->flags |= io_slot_flags(node);
 		file = io_slot_file(node);
 	}
@@ -2058,7 +2048,7 @@ static int io_init_req(struct io_ring_ctx *ctx, struct io_kiocb *req,
 	int personality;
 	u8 opcode;
 
-	/* req is partially pre-initialised, see io_preinit_req() */
+	req->ctx = ctx;
 	req->opcode = opcode = READ_ONCE(sqe->opcode);
 	/* same numerical values with corresponding REQ_F_*, safe to copy */
 	sqe_flags = READ_ONCE(sqe->flags);
@@ -2894,7 +2884,7 @@ static __cold void io_ring_exit_work(struct work_struct *work)
 			io_cqring_overflow_kill(ctx);
 			mutex_unlock(&ctx->uring_lock);
 		}
-		if (ctx->ifq) {
+		if (!xa_empty(&ctx->zcrx_ctxs)) {
 			mutex_lock(&ctx->uring_lock);
 			io_shutdown_zcrx_ifqs(ctx);
 			mutex_unlock(&ctx->uring_lock);
@@ -3925,6 +3915,8 @@ static int __init io_uring_init(void)
 	BUILD_BUG_SQE_ELEM(44, __s32,  splice_fd_in);
 	BUILD_BUG_SQE_ELEM(44, __u32,  file_index);
 	BUILD_BUG_SQE_ELEM(44, __u16,  addr_len);
+	BUILD_BUG_SQE_ELEM(44, __u8,   write_stream);
+	BUILD_BUG_SQE_ELEM(45, __u8,   __pad4[0]);
 	BUILD_BUG_SQE_ELEM(46, __u16,  __pad3[0]);
 	BUILD_BUG_SQE_ELEM(48, __u64,  addr3);
 	BUILD_BUG_SQE_ELEM_SIZE(48, 0, cmd);
