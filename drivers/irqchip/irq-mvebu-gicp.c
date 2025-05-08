@@ -232,7 +232,7 @@ static int mvebu_gicp_probe(struct platform_device *pdev)
 
 	inner_domain = irq_domain_create_hierarchy(parent_domain, 0,
 						   gicp->spi_cnt,
-						   of_node_to_fwnode(node),
+						   of_fwnode_handle(node),
 						   &gicp_domain_ops, gicp);
 	if (!inner_domain)
 		return -ENOMEM;

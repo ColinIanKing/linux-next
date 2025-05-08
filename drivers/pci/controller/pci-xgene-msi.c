@@ -242,12 +242,11 @@ static const struct irq_domain_ops msi_domain_ops = {
 
 static int xgene_allocate_domains(struct xgene_msi *msi)
 {
-	msi->inner_domain = irq_domain_add_linear(NULL, NR_MSI_VEC,
-						  &msi_domain_ops, msi);
+	msi->inner_domain = irq_domain_create_linear(NULL, NR_MSI_VEC, &msi_domain_ops, msi);
 	if (!msi->inner_domain)
 		return -ENOMEM;
 
-	msi->msi_domain = pci_msi_create_irq_domain(of_node_to_fwnode(msi->node),
+	msi->msi_domain = pci_msi_create_irq_domain(of_fwnode_handle(msi->node),
 						    &xgene_msi_domain_info,
 						    msi->inner_domain);
 
