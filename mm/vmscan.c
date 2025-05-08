@@ -5606,9 +5606,9 @@ static ssize_t lru_gen_seq_write(struct file *file, const char __user *src,
 			break;
 		}
 
-		if (n == 4)
+		if (n == 4) {
 			swappiness = -1;
-		else if (!strcmp("max", swap_string)) {
+		} else if (!strcmp("max", swap_string)) {
 			/* set by userspace for anonymous memory only */
 			swappiness = SWAPPINESS_ANON_ONLY;
 		} else {
