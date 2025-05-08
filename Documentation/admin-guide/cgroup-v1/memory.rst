@@ -97,6 +97,8 @@ Brief summary of control files.
                                      used.
  memory.numa_stat		     show the number of memory usage per numa
 				     node
+ memory.ksm_stat                     show the statistic information about various ksm
+                                     counters
  memory.kmem.limit_in_bytes          Deprecated knob to set and read the kernel
                                      memory hard limit. Kernel hard limit is not
                                      supported since 5.16. Writing any value to
@@ -673,6 +675,40 @@ The output format of memory.numa_stat is::
   hierarchical_<counter>=<counter pages> N0=<node 0 pages> N1=<node 1 pages> ...
 
 The "total" count is sum of file + anon + unevictable.
+
+.. _memcg_ksm_stat:
+
+5.7 ksm_stat
+------------
+
+When CONFIG_KSM is enabled, the ksm_stat file can be used to observe the ksm
+merging status of the processes within an memory cgroup.
+
+The output format of memory.ksm_stat is::
+
+  ksm_rmap_items <number>
+  ksm_zero_pages <number>
+  ksm_merging_pages <number>
+  ksm_profit <number>
+
+The "ksm_rmap_items" count specifies the number of ksm_rmap_item structures in
+use. The structureksm_rmap_item stores the reverse mapping information for
+virtual addresses.  KSM will generate a ksm_rmap_item for each ksm-scanned page
+of the process.
+
+The "ksm_zero_pages" count specifies represent how many empty pages are merged
+with kernel zero pages by KSM, which is useful when /sys/kernel/mm/ksm/use_zero_pages
+is enabled.
+
+The "ksm_merging_pages" count specifies how many pages of this process are involved
+in KSM merging (not including ksm_zero_pages).
+
+The "ksm_process_profit" count specifies the profit that KSM brings (Saved bytes).
+KSM can save memory by merging identical pages, but also can consume additional
+memory, because it needs to generate a number of rmap_items to save each scanned
+page's brief rmap information. Some of these pages may be merged, but some may not
+be abled to be merged after being checked several times, which are unprofitable
+memory consumed.
 
 6. Hierarchy support
 ====================

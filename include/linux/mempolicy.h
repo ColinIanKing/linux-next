@@ -11,6 +11,7 @@
 #include <linux/slab.h>
 #include <linux/rbtree.h>
 #include <linux/spinlock.h>
+#include <linux/node.h>
 #include <linux/nodemask.h>
 #include <linux/pagemap.h>
 #include <uapi/linux/mempolicy.h>
@@ -54,6 +55,15 @@ struct mempolicy {
 		nodemask_t cpuset_mems_allowed;	/* relative to these nodes */
 		nodemask_t user_nodemask;	/* nodemask passed by user */
 	} w;
+};
+
+/*
+ * A null weighted_interleave_state is interpted as having .mode = "auto",
+ * and .iw_table is interpreted as an array of 1s with length nr_node_ids.
+ */
+struct weighted_interleave_state {
+	bool mode_auto;
+	u8 iw_table[];
 };
 
 /*
@@ -177,6 +187,9 @@ static inline bool mpol_is_preferred_many(struct mempolicy *pol)
 }
 
 extern bool apply_policy_zone(struct mempolicy *policy, enum zone_type zone);
+
+extern int mempolicy_set_node_perf(unsigned int node,
+				   struct access_coordinate *coords);
 
 #else
 
