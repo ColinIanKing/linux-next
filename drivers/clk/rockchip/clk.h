@@ -218,6 +218,9 @@ struct clk;
 #define RK3528_CLKSEL_CON(x)		((x) * 0x4 + 0x300)
 #define RK3528_CLKGATE_CON(x)		((x) * 0x4 + 0x800)
 #define RK3528_SOFTRST_CON(x)		((x) * 0x4 + 0xa00)
+#define RK3528_SDMMC_CON(x)		((x) * 0x4 + 0x24)
+#define RK3528_SDIO0_CON(x)		((x) * 0x4 + 0x4)
+#define RK3528_SDIO1_CON(x)		((x) * 0x4 + 0xc)
 #define RK3528_PMU_CLKSEL_CON(x)	((x) * 0x4 + 0x300 + RK3528_PMU_CRU_BASE)
 #define RK3528_PMU_CLKGATE_CON(x)	((x) * 0x4 + 0x800 + RK3528_PMU_CRU_BASE)
 #define RK3528_PCIE_CLKSEL_CON(x)	((x) * 0x4 + 0x300 + RK3528_PCIE_CRU_BASE)
@@ -446,6 +449,8 @@ enum rockchip_grf_type {
 	grf_type_pmu0,
 	grf_type_pmu1,
 	grf_type_ioc,
+	grf_type_vo,
+	grf_type_vpu,
 };
 
 /* ceil(sqrt(enums in rockchip_grf_type - 1)) */
@@ -619,7 +624,9 @@ struct clk *rockchip_clk_register_cpuclk(const char *name,
 
 struct clk *rockchip_clk_register_mmc(const char *name,
 				const char *const *parent_names, u8 num_parents,
-				void __iomem *reg, int shift);
+				void __iomem *reg,
+				struct regmap *grf, int grf_reg,
+				int shift);
 
 /*
  * DDRCLK flags, including method of setting the rate
@@ -664,6 +671,7 @@ enum rockchip_clk_branch_type {
 	branch_grf_gate,
 	branch_linked_gate,
 	branch_mmc,
+	branch_grf_mmc,
 	branch_inverter,
 	branch_factor,
 	branch_ddrclk,
@@ -1028,6 +1036,18 @@ struct rockchip_clk_branch {
 		.num_parents	= 1,				\
 		.muxdiv_offset	= offset,			\
 		.div_shift	= shift,			\
+	}
+
+#define MMC_GRF(_id, cname, pname, offset, shift, grftype)	\
+	{							\
+		.id		= _id,				\
+		.branch_type	= branch_grf_mmc,		\
+		.name		= cname,			\
+		.parent_names	= (const char *[]){ pname },	\
+		.num_parents	= 1,				\
+		.muxdiv_offset	= offset,			\
+		.div_shift	= shift,			\
+		.grf_type	= grftype,			\
 	}
 
 #define INVERTER(_id, cname, pname, io, is, if)			\
