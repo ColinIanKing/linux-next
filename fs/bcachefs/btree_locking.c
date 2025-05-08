@@ -236,7 +236,7 @@ static noinline int break_cycle(struct lock_graph *g, struct printbuf *cycle,
 			prt_newline(&buf);
 		}
 
-		bch2_print_string_as_lines_nonblocking(KERN_ERR, buf.buf);
+		bch2_print_str_nonblocking(g->g->trans->c, KERN_ERR, buf.buf);
 		printbuf_exit(&buf);
 		BUG();
 	}
@@ -797,13 +797,6 @@ int bch2_trans_relock(struct btree_trans *trans)
 int bch2_trans_relock_notrace(struct btree_trans *trans)
 {
 	return __bch2_trans_relock(trans, false);
-}
-
-void bch2_trans_unlock_noassert(struct btree_trans *trans)
-{
-	__bch2_trans_unlock(trans);
-
-	trans_set_unlocked(trans);
 }
 
 void bch2_trans_unlock(struct btree_trans *trans)

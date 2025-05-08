@@ -11,6 +11,7 @@
 #include "btree_write_buffer.h"
 #include "buckets.h"
 #include "disk_accounting.h"
+#include "enumerated_ref.h"
 #include "errcode.h"
 #include "error.h"
 #include "journal.h"
@@ -20,6 +21,7 @@
 #include "snapshot.h"
 
 #include <linux/prefetch.h>
+#include <linux/string_helpers.h>
 
 static const char * const trans_commit_flags_strs[] = {
 #define x(n, ...) #n,
@@ -366,7 +368,8 @@ static noinline void journal_transaction_name(struct btree_trans *trans)
 	struct jset_entry_log *l =
 		container_of(entry, struct jset_entry_log, entry);
 
-	strncpy(l->d, trans->fn, JSET_ENTRY_LOG_U64s * sizeof(u64));
+	memcpy_and_pad(l->d, JSET_ENTRY_LOG_U64s * sizeof(u64),
+		       trans->fn, strlen(trans->fn), 0);
 }
 
 static inline int btree_key_can_insert(struct btree_trans *trans,
@@ -992,7 +995,7 @@ int __bch2_trans_commit(struct btree_trans *trans, unsigned flags)
 		goto out_reset;
 
 	if (!(flags & BCH_TRANS_COMMIT_no_check_rw) &&
-	    unlikely(!bch2_write_ref_tryget(c, BCH_WRITE_REF_trans))) {
+	    unlikely(!enumerated_ref_tryget(&c->writes, BCH_WRITE_REF_trans))) {
 		if (unlikely(!test_bit(BCH_FS_may_go_rw, &c->flags)))
 			ret = do_bch2_trans_commit_to_journal_replay(trans);
 		else
@@ -1058,7 +1061,7 @@ retry:
 	trace_and_count(c, transaction_commit, trans, _RET_IP_);
 out:
 	if (likely(!(flags & BCH_TRANS_COMMIT_no_check_rw)))
-		bch2_write_ref_put(c, BCH_WRITE_REF_trans);
+		enumerated_ref_put(&c->writes, BCH_WRITE_REF_trans);
 out_reset:
 	if (!ret)
 		bch2_trans_downgrade(trans);
