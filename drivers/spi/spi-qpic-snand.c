@@ -116,7 +116,6 @@ struct qpic_spi_nand {
 	struct nand_ecc_engine ecc_eng;
 	u8 *data_buf;
 	u8 *oob_buf;
-	u32 wlen;
 	__le32 addr1;
 	__le32 addr2;
 	__le32 cmd;
@@ -261,7 +260,7 @@ static int qcom_spi_ecc_init_ctx_pipelined(struct nand_device *nand)
 	ecc_cfg = kzalloc(sizeof(*ecc_cfg), GFP_KERNEL);
 	if (!ecc_cfg)
 		return -ENOMEM;
-	snandc->qspi->oob_buf = kzalloc(mtd->writesize + mtd->oobsize,
+	snandc->qspi->oob_buf = kmalloc(mtd->writesize + mtd->oobsize,
 					GFP_KERNEL);
 	if (!snandc->qspi->oob_buf) {
 		kfree(ecc_cfg);
