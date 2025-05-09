@@ -634,8 +634,8 @@ config CRYPTO_ARC4
 
 config CRYPTO_CHACHA20
 	tristate "ChaCha"
+	select CRYPTO_LIB_CHACHA
 	select CRYPTO_LIB_CHACHA_GENERIC
-	select CRYPTO_LIB_CHACHA_INTERNAL
 	select CRYPTO_SKCIPHER
 	help
 	  The ChaCha20, XChaCha20, and XChaCha12 stream cipher algorithms
@@ -784,8 +784,8 @@ config CRYPTO_AEGIS128_SIMD
 config CRYPTO_CHACHA20POLY1305
 	tristate "ChaCha20-Poly1305"
 	select CRYPTO_CHACHA20
-	select CRYPTO_POLY1305
 	select CRYPTO_AEAD
+	select CRYPTO_LIB_POLY1305
 	select CRYPTO_MANAGER
 	help
 	  ChaCha20 stream cipher and Poly1305 authenticator combined
@@ -953,18 +953,6 @@ config CRYPTO_POLYVAL
 	  This is used in HCTR2.  It is not a general-purpose
 	  cryptographic hash function.
 
-config CRYPTO_POLY1305
-	tristate "Poly1305"
-	select CRYPTO_HASH
-	select CRYPTO_LIB_POLY1305_GENERIC
-	select CRYPTO_LIB_POLY1305_INTERNAL
-	help
-	  Poly1305 authenticator algorithm (RFC7539)
-
-	  Poly1305 is an authenticator algorithm designed by Daniel J. Bernstein.
-	  It is used for the ChaCha20-Poly1305 AEAD, specified in RFC7539 for use
-	  in IETF protocols. This is the portable C implementation of Poly1305.
-
 config CRYPTO_RMD160
 	tristate "RIPEMD-160"
 	select CRYPTO_HASH
@@ -994,6 +982,7 @@ config CRYPTO_SHA256
 	tristate "SHA-224 and SHA-256"
 	select CRYPTO_HASH
 	select CRYPTO_LIB_SHA256
+	select CRYPTO_LIB_SHA256_GENERIC
 	help
 	  SHA-224 and SHA-256 secure hash algorithms (FIPS 180, ISO/IEC 10118-3)
 
@@ -1012,13 +1001,10 @@ config CRYPTO_SHA3
 	help
 	  SHA-3 secure hash algorithms (FIPS 202, ISO/IEC 10118-3)
 
-config CRYPTO_SM3
-	tristate
-
 config CRYPTO_SM3_GENERIC
 	tristate "SM3 (ShangMi 3)"
 	select CRYPTO_HASH
-	select CRYPTO_SM3
+	select CRYPTO_LIB_SM3
 	help
 	  SM3 (ShangMi 3) secure hash function (OSCCA GM/T 0004-2012, ISO/IEC 10118-3)
 
