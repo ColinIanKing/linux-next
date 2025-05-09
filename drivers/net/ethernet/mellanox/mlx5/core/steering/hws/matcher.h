@@ -23,6 +23,9 @@
  */
 #define MLX5HWS_MATCHER_ACTION_RTC_UPDATE_MULT 1
 
+/* Maximum number of action templates that can be attached to a matcher. */
+#define MLX5HWS_MATCHER_MAX_AT 128
+
 enum mlx5hws_matcher_offset {
 	MLX5HWS_MATCHER_OFFSET_TAG_DW1 = 12,
 	MLX5HWS_MATCHER_OFFSET_TAG_DW0 = 13,
@@ -42,28 +45,15 @@ struct mlx5hws_match_template {
 };
 
 struct mlx5hws_matcher_match_ste {
-	struct mlx5hws_pool_chunk ste;
 	u32 rtc_0_id;
 	u32 rtc_1_id;
 	struct mlx5hws_pool *pool;
 };
 
-struct mlx5hws_matcher_action_ste {
-	struct mlx5hws_pool_chunk ste;
-	struct mlx5hws_pool_chunk stc;
-	u32 rtc_0_id;
-	u32 rtc_1_id;
-	struct mlx5hws_pool *pool;
-	u8 max_stes;
-};
-
-struct mlx5hws_matcher_resize_data {
-	struct mlx5hws_pool_chunk stc;
-	u32 rtc_0_id;
-	u32 rtc_1_id;
-	struct mlx5hws_pool *pool;
-	u8 max_stes;
-	struct list_head list_node;
+enum {
+	MLX5HWS_MATCHER_IPV_UNSET = 0,
+	MLX5HWS_MATCHER_IPV_4 = 1,
+	MLX5HWS_MATCHER_IPV_6 = 2,
 };
 
 struct mlx5hws_matcher {
@@ -72,16 +62,22 @@ struct mlx5hws_matcher {
 	struct mlx5hws_match_template *mt;
 	struct mlx5hws_action_template *at;
 	u8 num_of_at;
+	u8 size_of_at_array;
 	u8 num_of_mt;
+	u8 num_of_action_stes;
 	/* enum mlx5hws_matcher_flags */
 	u8 flags;
+	u8 matches_outer_ethertype:1;
+	u8 matches_outer_ip_version:1;
+	u8 matches_inner_ethertype:1;
+	u8 matches_inner_ip_version:1;
+	u8 outer_ip_version:2;
+	u8 inner_ip_version:2;
 	u32 end_ft_id;
 	struct mlx5hws_matcher *col_matcher;
 	struct mlx5hws_matcher *resize_dst;
 	struct mlx5hws_matcher_match_ste match_ste;
-	struct mlx5hws_matcher_action_ste action_ste;
 	struct list_head list_node;
-	struct list_head resize_data;
 };
 
 static inline bool
