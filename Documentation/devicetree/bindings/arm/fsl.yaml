@@ -1120,6 +1120,12 @@ properties:
           - const: avnet,sm2s-imx8mp              # SM2S-IMX8PLUS SoM
           - const: fsl,imx8mp
 
+      - description: Boundary Devices Nitrogen8M Plus ENC Carrier Board
+        items:
+          - const: boundary,imx8mp-nitrogen-enc-carrier-board
+          - const: boundary,imx8mp-nitrogen-som
+          - const: fsl,imx8mp
+
       - description: Boundary Device Nitrogen8MP Universal SMARC Carrier Board
         items:
           - const: boundary,imx8mp-nitrogen-smarc-universal-board
@@ -1174,6 +1180,12 @@ properties:
           - enum:
               - polyhex,imx8mp-debix-som-a-bmb-08   # Polyhex Debix SOM A on SOM A I/O board
           - const: polyhex,imx8mp-debix-som-a       # Polyhex Debix SOM A
+          - const: fsl,imx8mp
+
+      - description: Toradex Boards with SMARC iMX8M Plus Modules
+        items:
+          - const: toradex,smarc-imx8mp-dev # Toradex SMARC iMX8M Plus on Toradex SMARC Development Board
+          - const: toradex,smarc-imx8mp     # Toradex SMARC iMX8M Plus Module
           - const: fsl,imx8mp
 
       - description: Toradex Boards with Verdin iMX8M Plus Modules
@@ -1374,12 +1386,16 @@ properties:
           All SOM and CPU variants use the same device tree hence only one
           compatible is needed. Bootloader disables all features not present
           in the assembled SOC.
+          MBa91xxCA mainboard can be used as starterkit for the SOM
+          soldered on an adapter board or for the connector variant
+          to evaluate RGB display support.
           MBa93xxCA mainboard can be used as starterkit for the SOM
           soldered on an adapter board or for the connector variant
           MBa93xxLA mainboard is a single board computer using the solderable
           SOM variant
         items:
           - enum:
+              - tq,imx93-tqma9352-mba91xxca # TQ-Systems GmbH i.MX93 TQMa93xxCA/LA SOM on MBa91xxCA
               - tq,imx93-tqma9352-mba93xxca # TQ-Systems GmbH i.MX93 TQMa93xxCA/LA SOM on MBa93xxCA
               - tq,imx93-tqma9352-mba93xxla # TQ-Systems GmbH i.MX93 TQMa93xxLA SOM on MBa93xxLA SBC
           - const: tq,imx93-tqma9352        # TQ-Systems GmbH i.MX93 TQMa93xxCA/LA SOM
