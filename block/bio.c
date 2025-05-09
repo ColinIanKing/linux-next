@@ -251,6 +251,7 @@ void bio_init(struct bio *bio, struct block_device *bdev, struct bio_vec *table,
 	bio->bi_flags = 0;
 	bio->bi_ioprio = 0;
 	bio->bi_write_hint = 0;
+	bio->bi_write_stream = 0;
 	bio->bi_status = 0;
 	bio->bi_iter.bi_sector = 0;
 	bio->bi_iter.bi_size = 0;
@@ -827,6 +828,7 @@ static int __bio_clone(struct bio *bio, struct bio *bio_src, gfp_t gfp)
 	bio_set_flag(bio, BIO_CLONED);
 	bio->bi_ioprio = bio_src->bi_ioprio;
 	bio->bi_write_hint = bio_src->bi_write_hint;
+	bio->bi_write_stream = bio_src->bi_write_stream;
 	bio->bi_iter = bio_src->bi_iter;
 
 	if (bio->bi_bdev) {
@@ -990,6 +992,22 @@ void __bio_add_page(struct bio *bio, struct page *page,
 EXPORT_SYMBOL_GPL(__bio_add_page);
 
 /**
+ * bio_add_virt_nofail - add data in the direct kernel mapping to a bio
+ * @bio: destination bio
+ * @vaddr: data to add
+ * @len: length of the data to add, may cross pages
+ *
+ * Add the data at @vaddr to @bio.  The caller must have ensure a segment
+ * is available for the added data.  No merging into an existing segment
+ * will be performed.
+ */
+void bio_add_virt_nofail(struct bio *bio, void *vaddr, unsigned len)
+{
+	__bio_add_page(bio, virt_to_page(vaddr), len, offset_in_page(vaddr));
+}
+EXPORT_SYMBOL_GPL(bio_add_virt_nofail);
+
+/**
  *	bio_add_page	-	attempt to add page(s) to bio
  *	@bio: destination bio
  *	@page: start page to add
@@ -1057,6 +1075,61 @@ bool bio_add_folio(struct bio *bio, struct folio *folio, size_t len,
 	return bio_add_page(bio, folio_page(folio, nr), len, off % PAGE_SIZE) > 0;
 }
 EXPORT_SYMBOL(bio_add_folio);
+
+/**
+ * bio_add_vmalloc_chunk - add a vmalloc chunk to a bio
+ * @bio: destination bio
+ * @vaddr: vmalloc address to add
+ * @len: total length in bytes of the data to add
+ *
+ * Add data starting at @vaddr to @bio and return how many bytes were added.
+ * This may be less than the amount originally asked.  Returns 0 if no data
+ * could be added to @bio.
+ *
+ * This helper calls flush_kernel_vmap_range() for the range added.  For reads
+ * the caller still needs to manually call invalidate_kernel_vmap_range() in
+ * the completion handler.
+ */
+unsigned int bio_add_vmalloc_chunk(struct bio *bio, void *vaddr, unsigned len)
+{
+	unsigned int offset = offset_in_page(vaddr);
+
+	len = min(len, PAGE_SIZE - offset);
+	if (bio_add_page(bio, vmalloc_to_page(vaddr), len, offset) < len)
+		return 0;
+	if (op_is_write(bio_op(bio)))
+		flush_kernel_vmap_range(vaddr, len);
+	return len;
+}
+EXPORT_SYMBOL_GPL(bio_add_vmalloc_chunk);
+
+/**
+ * bio_add_vmalloc - add a vmalloc region to a bio
+ * @bio: destination bio
+ * @vaddr: vmalloc address to add
+ * @len: total length in bytes of the data to add
+ *
+ * Add data starting at @vaddr to @bio.  Return %true on success or %false if
+ * @bio does not have enough space for the payload.
+ *
+ * This helper calls flush_kernel_vmap_range() for the range added.  For reads
+ * the caller still needs to manually call invalidate_kernel_vmap_range() in
+ * the completion handler.
+ */
+bool bio_add_vmalloc(struct bio *bio, void *vaddr, unsigned int len)
+{
+	do {
+		unsigned int added = bio_add_vmalloc_chunk(bio, vaddr, len);
+
+		if (!added)
+			return false;
+		vaddr += added;
+		len -= added;
+	} while (len);
+
+	return true;
+}
+EXPORT_SYMBOL_GPL(bio_add_vmalloc);
 
 void __bio_release_pages(struct bio *bio, bool mark_dirty)
 {
@@ -1300,6 +1373,36 @@ int submit_bio_wait(struct bio *bio)
 	return blk_status_to_errno(bio->bi_status);
 }
 EXPORT_SYMBOL(submit_bio_wait);
+
+/**
+ * bdev_rw_virt - synchronously read into / write from kernel mapping
+ * @bdev:	block device to access
+ * @sector:	sector to access
+ * @data:	data to read/write
+ * @len:	length in byte to read/write
+ * @op:		operation (e.g. REQ_OP_READ/REQ_OP_WRITE)
+ *
+ * Performs synchronous I/O to @bdev for @data/@len.  @data must be in
+ * the kernel direct mapping and not a vmalloc address.
+ */
+int bdev_rw_virt(struct block_device *bdev, sector_t sector, void *data,
+		size_t len, enum req_op op)
+{
+	struct bio_vec bv;
+	struct bio bio;
+	int error;
+
+	if (WARN_ON_ONCE(is_vmalloc_addr(data)))
+		return -EIO;
+
+	bio_init(&bio, bdev, &bv, 1, op);
+	bio.bi_iter.bi_sector = sector;
+	bio_add_virt_nofail(&bio, data, len);
+	error = submit_bio_wait(&bio);
+	bio_uninit(&bio);
+	return error;
+}
+EXPORT_SYMBOL_GPL(bdev_rw_virt);
 
 static void bio_wait_end_io(struct bio *bio)
 {
