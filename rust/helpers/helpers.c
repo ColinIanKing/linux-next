@@ -7,6 +7,7 @@
  * Sorted alphabetically.
  */
 
+#include "auxiliary.c"
 #include "blk.c"
 #include "bug.c"
 #include "build_assert.c"
@@ -17,6 +18,7 @@
 #include "cred.c"
 #include "device.c"
 #include "dma.c"
+#include "drm.c"
 #include "err.c"
 #include "fs.c"
 #include "io.c"
