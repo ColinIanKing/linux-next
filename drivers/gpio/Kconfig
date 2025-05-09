@@ -213,6 +213,18 @@ config GPIO_BCM_XGS_IPROC
 	help
 	  Say yes here to enable GPIO support for Broadcom XGS iProc SoCs.
 
+config GPIO_BLZP1600
+	tristate "Blaize BLZP1600 GPIO support"
+	default y if ARCH_BLAIZE
+	depends on ARCH_BLAIZE || COMPILE_TEST
+	depends on OF_GPIO
+	select GPIO_GENERIC
+	select GPIOLIB_IRQCHIP
+	help
+	  Say Y or M here to add support for the Blaize BLZP1600 GPIO device.
+	  The controller is based on the Verisilicon Microelectronics GPIO APB v0.2
+	  IP block.
+
 config GPIO_BRCMSTB
 	tristate "BRCMSTB GPIO support"
 	default y if (ARCH_BRCMSTB || BMIPS_GENERIC)
@@ -368,8 +380,7 @@ config GPIO_HLWD
 
 config GPIO_ICH
 	tristate "Intel ICH GPIO"
-	depends on X86
-	depends on LPC_ICH
+	depends on (X86 && LPC_ICH) || (COMPILE_TEST && HAS_IOPORT)
 	help
 	  Say yes here to support the GPIO functionality of a number of Intel
 	  ICH-based chipsets.  Currently supported devices: ICH6, ICH7, ICH8
@@ -540,7 +551,7 @@ config GPIO_OMAP
 
 config GPIO_PL061
 	tristate "PrimeCell PL061 GPIO support"
-	depends on ARM_AMBA
+	depends on ARM_AMBA || COMPILE_TEST
 	select IRQ_DOMAIN
 	select GPIOLIB_IRQCHIP
 	help
@@ -604,7 +615,7 @@ config GPIO_ROCKCHIP
 
 config GPIO_RTD
 	tristate "Realtek DHC GPIO support"
-	depends on ARCH_REALTEK
+	depends on ARCH_REALTEK || COMPILE_TEST
 	default y
 	select GPIOLIB_IRQCHIP
 	help
@@ -655,6 +666,15 @@ config GPIO_SNPS_CREG
 	  This is a single-register MMIO GPIO driver for complex cases
 	  where only several fields in register belong to GPIO lines and
 	  each GPIO line owns a field with different length and on/off value.
+
+config GPIO_SPACEMIT_K1
+	tristate "SPACEMIT K1 GPIO support"
+	depends on ARCH_SPACEMIT || COMPILE_TEST
+	depends on OF_GPIO
+	select GPIO_GENERIC
+	select GPIOLIB_IRQCHIP
+	help
+	  Say yes here to support the SpacemiT's K1 GPIO device.
 
 config GPIO_SPEAR_SPICS
 	bool "ST SPEAr13xx SPI Chip Select as GPIO support"
@@ -753,7 +773,7 @@ config GPIO_UNIPHIER
 	  Say yes here to support UniPhier GPIOs.
 
 config GPIO_VF610
-	bool "VF610 GPIO support"
+	tristate "VF610 GPIO support"
 	default y if SOC_VF610
 	depends on ARCH_MXC || COMPILE_TEST
 	select GPIOLIB_IRQCHIP
@@ -830,14 +850,14 @@ config GPIO_ZEVIO
 
 config GPIO_ZYNQ
 	tristate "Xilinx Zynq GPIO support"
-	depends on ARCH_ZYNQ || ARCH_ZYNQMP
+	depends on ARCH_ZYNQ || ARCH_ZYNQMP || COMPILE_TEST
 	select GPIOLIB_IRQCHIP
 	help
 	  Say yes here to support Xilinx Zynq GPIO controller.
 
 config GPIO_ZYNQMP_MODEPIN
 	tristate "ZynqMP ps-mode pin GPIO configuration driver"
-	depends on ZYNQMP_FIRMWARE
+	depends on ZYNQMP_FIRMWARE || COMPILE_TEST
 	default ZYNQMP_FIRMWARE
 	help
 	  Say yes here to support the ZynqMP ps-mode pin GPIO configuration
@@ -866,7 +886,7 @@ config GPIO_AMD_FCH
 
 config GPIO_MSC313
 	bool "MStar MSC313 GPIO support"
-	depends on ARCH_MSTARV7
+	depends on ARCH_MSTARV7 || COMPILE_TEST
 	default ARCH_MSTARV7
 	select GPIOLIB_IRQCHIP
 	select IRQ_DOMAIN_HIERARCHY
@@ -1365,7 +1385,7 @@ config GPIO_DLN2
 
 config HTC_EGPIO
 	bool "HTC EGPIO support"
-	depends on ARM
+	depends on ARM || COMPILE_TEST
 	help
 	  This driver supports the CPLD egpio chip present on
 	  several HTC phones.  It provides basic support for input
@@ -1525,7 +1545,7 @@ config GPIO_TIMBERDALE
 
 config GPIO_TN48M_CPLD
 	tristate "Delta Networks TN48M switch CPLD GPIO driver"
-	depends on MFD_TN48M_CPLD
+	depends on MFD_TN48M_CPLD || COMPILE_TEST
 	select GPIO_REGMAP
 	help
 	  This enables support for the GPIOs found on the Delta
@@ -1869,6 +1889,8 @@ menu "Virtual GPIO drivers"
 
 config GPIO_AGGREGATOR
 	tristate "GPIO Aggregator"
+	select CONFIGFS_FS
+	select DEV_SYNC_PROBE
 	help
 	  Say yes here to enable the GPIO Aggregator, which provides a way to
 	  aggregate existing GPIO lines into a new virtual GPIO chip.
