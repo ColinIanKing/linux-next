@@ -37,6 +37,7 @@
 #include <asm/perf_event.h>
 #include <asm/processor.h>
 #include <asm/cmdline.h>
+#include <asm/msr.h>
 #include <asm/setup.h>
 
 #include "internal.h"
@@ -696,6 +697,8 @@ static int load_late_locked(void)
 		return load_late_stop_cpus(true);
 	case UCODE_NFOUND:
 		return -ENOENT;
+	case UCODE_OK:
+		return 0;
 	default:
 		return -EBADFD;
 	}
