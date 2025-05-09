@@ -104,7 +104,6 @@
 #include <linux/uaccess.h>
 #include <linux/kdb.h>
 #include <linux/ctype.h>
-#include <linux/bsearch.h>
 #include <linux/gcd.h>
 
 #define MAX_NR_CON_DRIVER 16
@@ -442,6 +441,15 @@ static void vc_uniscr_scroll(struct vc_data *vc, unsigned int top,
 		juggle_array(&uni_lines[top], size, nr);
 		vc_uniscr_clear_lines(vc, bottom - nr, nr);
 	}
+}
+
+static u32 vc_uniscr_getc(struct vc_data *vc, int relative_pos)
+{
+	int pos = vc->state.x + vc->vc_need_wrap + relative_pos;
+
+	if (vc->vc_uni_lines && in_range(pos, 0, vc->vc_cols))
+		return vc->vc_uni_lines[vc->state.y][pos];
+	return 0;
 }
 
 static void vc_uniscr_copy_area(u32 **dst_lines,
@@ -2712,43 +2720,6 @@ static void do_con_trol(struct tty_struct *tty, struct vc_data *vc, u8 c)
 	}
 }
 
-/* is_double_width() is based on the wcwidth() implementation by
- * Markus Kuhn -- 2007-05-26 (Unicode 5.0)
- * Latest version: https://www.cl.cam.ac.uk/~mgk25/ucs/wcwidth.c
- */
-struct interval {
-	uint32_t first;
-	uint32_t last;
-};
-
-static int ucs_cmp(const void *key, const void *elt)
-{
-	uint32_t ucs = *(uint32_t *)key;
-	struct interval e = *(struct interval *) elt;
-
-	if (ucs > e.last)
-		return 1;
-	else if (ucs < e.first)
-		return -1;
-	return 0;
-}
-
-static int is_double_width(uint32_t ucs)
-{
-	static const struct interval double_width[] = {
-		{ 0x1100, 0x115F }, { 0x2329, 0x232A }, { 0x2E80, 0x303E },
-		{ 0x3040, 0xA4CF }, { 0xAC00, 0xD7A3 }, { 0xF900, 0xFAFF },
-		{ 0xFE10, 0xFE19 }, { 0xFE30, 0xFE6F }, { 0xFF00, 0xFF60 },
-		{ 0xFFE0, 0xFFE6 }, { 0x20000, 0x2FFFD }, { 0x30000, 0x3FFFD }
-	};
-	if (ucs < double_width[0].first ||
-	    ucs > double_width[ARRAY_SIZE(double_width) - 1].last)
-		return 0;
-
-	return bsearch(&ucs, double_width, ARRAY_SIZE(double_width),
-			sizeof(struct interval), ucs_cmp) != NULL;
-}
-
 struct vc_draw_region {
 	unsigned long from, to;
 	int x;
@@ -2817,7 +2788,7 @@ static int vc_translate_unicode(struct vc_data *vc, int c, bool *rescan)
 	if ((c & 0xc0) == 0x80) {
 		/* Unexpected continuation byte? */
 		if (!vc->vc_utf_count)
-			return 0xfffd;
+			goto bad_sequence;
 
 		vc->vc_utf_char = (vc->vc_utf_char << 6) | (c & 0x3f);
 		vc->vc_npar++;
@@ -2829,17 +2800,17 @@ static int vc_translate_unicode(struct vc_data *vc, int c, bool *rescan)
 		/* Reject overlong sequences */
 		if (c <= utf8_length_changes[vc->vc_npar - 1] ||
 				c > utf8_length_changes[vc->vc_npar])
-			return 0xfffd;
+			goto bad_sequence;
 
 		return vc_sanitize_unicode(c);
 	}
 
 	/* Single ASCII byte or first byte of a sequence received */
 	if (vc->vc_utf_count) {
-		/* Continuation byte expected */
+		/* A continuation byte was expected */
 		*rescan = true;
 		vc->vc_utf_count = 0;
-		return 0xfffd;
+		goto bad_sequence;
 	}
 
 	/* Nothing to do if an ASCII byte was received */
@@ -2858,11 +2829,14 @@ static int vc_translate_unicode(struct vc_data *vc, int c, bool *rescan)
 		vc->vc_utf_count = 3;
 		vc->vc_utf_char = (c & 0x07);
 	} else {
-		return 0xfffd;
+		goto bad_sequence;
 	}
 
 need_more_bytes:
 	return -1;
+
+bad_sequence:
+	return 0xfffd;
 }
 
 static int vc_translate(struct vc_data *vc, int *c, bool *rescan)
@@ -2940,6 +2914,69 @@ static bool vc_is_control(struct vc_data *vc, int tc, int c)
 	return false;
 }
 
+static void vc_con_rewind(struct vc_data *vc)
+{
+	if (vc->state.x && !vc->vc_need_wrap) {
+		vc->vc_pos -= 2;
+		vc->state.x--;
+	}
+	vc->vc_need_wrap = 0;
+}
+
+#define UCS_ZWS		0x200b	/* Zero Width Space */
+#define UCS_VS16	0xfe0f	/* Variation Selector 16 */
+
+static int vc_process_ucs(struct vc_data *vc, int *c, int *tc)
+{
+	u32 prev_c, curr_c = *c;
+
+	if (ucs_is_double_width(curr_c))
+		return 2;
+
+	if (!ucs_is_zero_width(curr_c))
+		return 1;
+
+	/* From here curr_c is known to be zero-width. */
+
+	if (ucs_is_double_width(vc_uniscr_getc(vc, -2))) {
+		/*
+		 * Let's merge this zero-width code point with the preceding
+		 * double-width code point by replacing the existing
+		 * zero-width space padding. To do so we rewind one column
+		 * and pretend this has a width of 1.
+		 * We give the legacy display the same initial space padding.
+		 */
+		vc_con_rewind(vc);
+		*tc = ' ';
+		return 1;
+	}
+
+	/* From here the preceding character, if any, must be single-width. */
+	prev_c = vc_uniscr_getc(vc, -1);
+
+	if (curr_c == UCS_VS16 && prev_c != 0) {
+		/*
+		 * VS16 (U+FE0F) is special. It typically turns the preceding
+		 * single-width character into a double-width one. Let it
+		 * have a width of 1 effectively making the combination with
+		 * the preceding character double-width.
+		 */
+		*tc = ' ';
+		return 1;
+	}
+
+	/* try recomposition */
+	prev_c = ucs_recompose(prev_c, curr_c);
+	if (prev_c != 0) {
+		vc_con_rewind(vc);
+		*tc = *c = prev_c;
+		return 1;
+	}
+
+	/* Otherwise zero-width code points are ignored. */
+	return 0;
+}
+
 static int vc_con_write_normal(struct vc_data *vc, int tc, int c,
 		struct vc_draw_region *draw)
 {
@@ -2950,14 +2987,15 @@ static int vc_con_write_normal(struct vc_data *vc, int tc, int c,
 	bool inverse = false;
 
 	if (vc->vc_utf && !vc->vc_disp_ctrl) {
-		if (is_double_width(c))
-			width = 2;
+		width = vc_process_ucs(vc, &c, &tc);
+		if (!width)
+			goto out;
 	}
 
 	/* Now try to find out how to display it */
 	tc = conv_uni_to_pc(vc, tc);
 	if (tc & ~charmask) {
-		if (tc == -1 || tc == -2)
+		if (tc == -1)
 			return -1; /* nothing to display */
 
 		/* Glyph not found */
@@ -3028,8 +3066,14 @@ static int vc_con_write_normal(struct vc_data *vc, int tc, int c,
 		tc = conv_uni_to_pc(vc, ' ');
 		if (tc < 0)
 			tc = ' ';
-		next_c = ' ';
+		/*
+		 * Store a zero-width space in the Unicode screen given that
+		 * the previous code point is semantically double width.
+		 */
+		next_c = UCS_ZWS;
 	}
+
+out:
 	notify_write(vc, c);
 
 	if (inverse)
