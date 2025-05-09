@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause */
 /*
- * Copyright (C) 2012-2014, 2018-2024 Intel Corporation
+ * Copyright (C) 2012-2014, 2018-2025 Intel Corporation
  * Copyright (C) 2016-2017 Intel Deutschland GmbH
  */
 #ifndef __iwl_fw_api_tx_h__
@@ -286,7 +286,7 @@ struct iwl_tx_cmd_gen2 {
  * @offload_assist: TX offload configuration
  * @dram_info: FW internal DRAM storage
  * @rate_n_flags: rate for *all* Tx attempts, if TX_CMD_FLG_STA_RATE_MSK is
- *	cleared. Combination of RATE_MCS_*
+ *	cleared. Combination of RATE_MCS_*; format depends on version
  * @reserved: reserved
  * @hdr: 802.11 header
  */
@@ -298,7 +298,10 @@ struct iwl_tx_cmd_gen3 {
 	__le32 rate_n_flags;
 	u8 reserved[8];
 	struct ieee80211_hdr hdr[];
-} __packed; /* TX_CMD_API_S_VER_8, TX_CMD_API_S_VER_10 */
+} __packed; /* TX_CMD_API_S_VER_8,
+	     * TX_CMD_API_S_VER_10,
+	     * TX_CMD_API_S_VER_11
+	     */
 
 /*
  * TX response related data
@@ -549,7 +552,7 @@ struct iwl_tx_resp_v3 {
  * @failure_rts: num of failures due to unsuccessful RTS
  * @failure_frame: num failures due to no ACK (unused for agg)
  * @initial_rate: for non-agg: rate of the successful Tx. For agg: rate of the
- *	Tx of all the batch. RATE_MCS_*
+ *	Tx of all the batch. RATE_MCS_*; format depends on command version
  * @wireless_media_time: for non-agg: RTS + CTS + frame tx attempts time + ACK.
  *	for agg: RTS + CTS + aggregation tx time + block-ack time.
  *	in usec.
@@ -600,8 +603,10 @@ struct iwl_tx_resp {
 	__le16 reserved2;
 	struct agg_tx_status status;
 } __packed; /* TX_RSP_API_S_VER_6,
-	       TX_RSP_API_S_VER_7,
-	       TX_RSP_API_S_VER_8 */
+	     * TX_RSP_API_S_VER_7,
+	     * TX_RSP_API_S_VER_8,
+	     * TX_RSP_API_S_VER_9
+	     */
 
 /**
  * struct iwl_mvm_ba_notif - notifies about reception of BA
@@ -701,7 +706,8 @@ enum iwl_mvm_ba_resp_flags {
  * @rts_retry_cnt: RTS retry count
  * @reserved: reserved (for alignment)
  * @wireless_time: Wireless-media time
- * @tx_rate: the rate the aggregation was sent at
+ * @tx_rate: the rate the aggregation was sent at. Format depends on command
+ *	version.
  * @tfd_cnt: number of TFD-Q elements
  * @ra_tid_cnt: number of RATID-Q elements
  * @tfd: array of TFD queue status updates. See &iwl_compressed_ba_tfd
@@ -730,7 +736,8 @@ struct iwl_compressed_ba_notif {
 		DECLARE_FLEX_ARRAY(struct iwl_compressed_ba_tfd, tfd);
 	};
 } __packed; /* COMPRESSED_BA_RES_API_S_VER_4,
-	       COMPRESSED_BA_RES_API_S_VER_5 */
+	       COMPRESSED_BA_RES_API_S_VER_6,
+	       COMPRESSED_BA_RES_API_S_VER_7 */
 
 /**
  * struct iwl_mac_beacon_cmd_v6 - beacon template command

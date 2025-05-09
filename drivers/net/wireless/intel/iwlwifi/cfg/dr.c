@@ -9,10 +9,10 @@
 #include "fw/api/txq.h"
 
 /* Highest firmware API version supported */
-#define IWL_DR_UCODE_API_MAX	98
+#define IWL_DR_UCODE_API_MAX	99
 
 /* Lowest firmware API version supported */
-#define IWL_DR_UCODE_API_MIN	96
+#define IWL_DR_UCODE_API_MIN	97
 
 /* NVM versions */
 #define IWL_DR_NVM_VERSION		0x0a1d
@@ -61,12 +61,9 @@ static const struct iwl_base_params iwl_dr_base_params = {
 	.smem_offset = IWL_DR_SMEM_OFFSET,				\
 	.smem_len = IWL_DR_SMEM_LEN,					\
 	.apmg_not_supported = true,					\
-	.trans.mq_rx_supported = true,					\
 	.vht_mu_mimo_supported = true,					\
 	.mac_addr_from_csr = 0x30,					\
 	.nvm_ver = IWL_DR_NVM_VERSION,				\
-	.trans.rf_id = true,						\
-	.trans.gen2 = true,						\
 	.nvm_type = IWL_NVM_EXT,					\
 	.dbgc_supported = true,						\
 	.min_umac_error_event_table = 0xD0000,				\
@@ -82,9 +79,6 @@ static const struct iwl_base_params iwl_dr_base_params = {
 			.mask = LDBG_M2S_BUF_WRAP_CNT_VAL_MSK,		\
 		},							\
 	},								\
-	.trans.umac_prph_offset = 0x300000,				\
-	.trans.device_family = IWL_DEVICE_FAMILY_DR,			\
-	.trans.base_params = &iwl_dr_base_params,			\
 	.min_txq_size = 128,						\
 	.gp2_reg_addr = 0xd02c68,					\
 	.min_ba_txq_size = IWL_DEFAULT_QUEUE_SIZE_EHT,			\
@@ -114,7 +108,12 @@ static const struct iwl_base_params iwl_dr_base_params = {
 	.uhb_supported = true,						\
 	.features = IWL_TX_CSUM_NETIF_FLAGS | NETIF_F_RXCSUM,		\
 	.num_rbds = IWL_NUM_RBDS_DR_EHT,				\
-	.ht_params = &iwl_bz_ht_params
+	.ht_params = {							\
+		.stbc = true,						\
+		.ldpc = true,						\
+		.ht40_bands = BIT(NL80211_BAND_2GHZ) |			\
+			      BIT(NL80211_BAND_5GHZ),			\
+	}
 
 /*
  * This size was picked according to 8 MSDUs inside 512 A-MSDUs in an
@@ -138,7 +137,6 @@ const struct iwl_cfg_trans_params iwl_dr_trans_cfg = {
 const char iwl_dr_name[] = "Intel(R) TBD Dr device";
 
 const struct iwl_cfg iwl_cfg_dr = {
-	.fw_name_mac = "dr",
 	IWL_DEVICE_DR,
 };
 
@@ -154,11 +152,6 @@ const struct iwl_cfg_trans_params iwl_br_trans_cfg = {
 };
 
 const char iwl_br_name[] = "Intel(R) TBD Br device";
-
-const struct iwl_cfg iwl_cfg_br = {
-	.fw_name_mac = "br",
-	IWL_DEVICE_DR,
-};
 
 MODULE_FIRMWARE(IWL_DR_A_PE_A_FW_MODULE_FIRMWARE(IWL_DR_UCODE_API_MAX));
 MODULE_FIRMWARE(IWL_BR_A_PET_A_FW_MODULE_FIRMWARE(IWL_DR_UCODE_API_MAX));

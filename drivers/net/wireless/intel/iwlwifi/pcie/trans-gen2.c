@@ -81,7 +81,7 @@ static void iwl_pcie_gen2_apm_stop(struct iwl_trans *trans, bool op_mode_leave)
 	/* Stop device's DMA activity */
 	iwl_pcie_apm_stop_master(trans);
 
-	iwl_trans_sw_reset(trans, false);
+	iwl_trans_pcie_sw_reset(trans, false);
 
 	/*
 	 * Clear "initialization complete" bit to move adapter from
@@ -157,7 +157,7 @@ static void _iwl_trans_pcie_gen2_stop_device(struct iwl_trans *trans)
 		return;
 
 	if (trans->state >= IWL_TRANS_FW_STARTED &&
-	    trans_pcie->fw_reset_handshake) {
+	    trans->conf.fw_reset_handshake) {
 		/*
 		 * Reset handshake can dump firmware on timeout, but that
 		 * should assume that the firmware is already dead.
@@ -200,7 +200,7 @@ static void _iwl_trans_pcie_gen2_stop_device(struct iwl_trans *trans)
 	iwl_pcie_gen2_apm_stop(trans, false);
 
 	/* re-take ownership to prevent other users from stealing the device */
-	iwl_trans_sw_reset(trans, true);
+	iwl_trans_pcie_sw_reset(trans, true);
 
 	/*
 	 * Upon stop, the IVAR table gets erased, so msi-x won't
@@ -270,7 +270,7 @@ static int iwl_pcie_gen2_nic_init(struct iwl_trans *trans)
 		return -ENOMEM;
 
 	/* Allocate or reset and init all Tx and Command queues */
-	if (iwl_txq_gen2_init(trans, trans_pcie->txqs.cmd.q_id, queue_size))
+	if (iwl_txq_gen2_init(trans, trans->conf.cmd_queue, queue_size))
 		return -ENOMEM;
 
 	/* enable shadow regs in HW */
@@ -291,7 +291,7 @@ static void iwl_pcie_get_rf_name(struct iwl_trans *trans)
 	if (buf[0])
 		return;
 
-	switch (CSR_HW_RFID_TYPE(trans->hw_rf_id)) {
+	switch (CSR_HW_RFID_TYPE(trans->info.hw_rf_id)) {
 	case CSR_HW_RFID_TYPE(CSR_HW_RF_ID_TYPE_JF):
 		pos = scnprintf(buf, buflen, "JF");
 		break;
@@ -315,7 +315,7 @@ static void iwl_pcie_get_rf_name(struct iwl_trans *trans)
 		break;
 	case CSR_HW_RFID_TYPE(CSR_HW_RF_ID_TYPE_WP):
 		if (SILICON_Z_STEP ==
-		    CSR_HW_RFID_STEP(trans->hw_rf_id))
+		    CSR_HW_RFID_STEP(trans->info.hw_rf_id))
 			pos = scnprintf(buf, buflen, "WHTC");
 		else
 			pos = scnprintf(buf, buflen, "WH");
@@ -324,7 +324,7 @@ static void iwl_pcie_get_rf_name(struct iwl_trans *trans)
 		return;
 	}
 
-	switch (CSR_HW_RFID_TYPE(trans->hw_rf_id)) {
+	switch (CSR_HW_RFID_TYPE(trans->info.hw_rf_id)) {
 	case CSR_HW_RFID_TYPE(CSR_HW_RF_ID_TYPE_HR):
 	case CSR_HW_RFID_TYPE(CSR_HW_RF_ID_TYPE_HR1):
 	case CSR_HW_RFID_TYPE(CSR_HW_RF_ID_TYPE_HRCDB):
@@ -347,7 +347,7 @@ static void iwl_pcie_get_rf_name(struct iwl_trans *trans)
 	}
 
 	pos += scnprintf(buf + pos, buflen - pos, ", rfid=0x%x",
-			 trans->hw_rf_id);
+			 trans->info.hw_rf_id);
 
 	IWL_INFO(trans, "Detected RF %s\n", buf);
 
@@ -484,16 +484,22 @@ static void iwl_pcie_spin_for_iml(struct iwl_trans *trans)
 }
 
 int iwl_trans_pcie_gen2_start_fw(struct iwl_trans *trans,
-				 const struct fw_img *fw, bool run_in_rfkill)
+				 const struct iwl_fw *fw,
+				 const struct fw_img *img,
+				 bool run_in_rfkill)
 {
 	struct iwl_trans_pcie *trans_pcie = IWL_TRANS_GET_PCIE_TRANS(trans);
 	bool hw_rfkill, keep_ram_busy;
+	bool top_reset_done = false;
 	int ret;
 
+	mutex_lock(&trans_pcie->mutex);
+again:
 	/* This may fail if AMT took ownership of the device */
 	if (iwl_pcie_prepare_card_hw(trans)) {
 		IWL_WARN(trans, "Exit HW not ready\n");
-		return -EIO;
+		ret = -EIO;
+		goto out;
 	}
 
 	iwl_enable_rfkill_int(trans);
@@ -509,8 +515,6 @@ int iwl_trans_pcie_gen2_start_fw(struct iwl_trans *trans,
 
 	/* Make sure it finished running */
 	iwl_pcie_synchronize_irqs(trans);
-
-	mutex_lock(&trans_pcie->mutex);
 
 	/* If platform's RF_KILL switch is NOT set to KILL */
 	hw_rfkill = iwl_pcie_check_hw_rf_kill(trans);
@@ -541,12 +545,27 @@ int iwl_trans_pcie_gen2_start_fw(struct iwl_trans *trans,
 		goto out;
 	}
 
-	if (trans->trans_cfg->device_family >= IWL_DEVICE_FAMILY_AX210)
-		ret = iwl_pcie_ctxt_info_gen3_init(trans, fw);
-	else
-		ret = iwl_pcie_ctxt_info_init(trans, fw);
-	if (ret)
-		goto out;
+	if (WARN_ON(trans->do_top_reset &&
+		    trans->trans_cfg->device_family < IWL_DEVICE_FAMILY_SC))
+		return -EINVAL;
+
+	/* we need to wait later - set state */
+	if (trans->do_top_reset)
+		trans_pcie->fw_reset_state = FW_RESET_TOP_REQUESTED;
+
+	if (trans->trans_cfg->device_family >= IWL_DEVICE_FAMILY_AX210) {
+		if (!top_reset_done) {
+			ret = iwl_pcie_ctxt_info_gen3_alloc(trans, fw, img);
+			if (ret)
+				goto out;
+		}
+
+		iwl_pcie_ctxt_info_gen3_kick(trans);
+	} else {
+		ret = iwl_pcie_ctxt_info_init(trans, img);
+		if (ret)
+			goto out;
+	}
 
 	keep_ram_busy = !iwl_pcie_set_ltr(trans);
 
@@ -564,6 +583,38 @@ int iwl_trans_pcie_gen2_start_fw(struct iwl_trans *trans,
 
 	if (keep_ram_busy)
 		iwl_pcie_spin_for_iml(trans);
+
+	if (trans->do_top_reset) {
+		trans->do_top_reset = 0;
+
+#define FW_TOP_RESET_TIMEOUT	(HZ / 4)
+		ret = wait_event_timeout(trans_pcie->fw_reset_waitq,
+					 trans_pcie->fw_reset_state != FW_RESET_TOP_REQUESTED,
+					 FW_TOP_RESET_TIMEOUT);
+
+		if (trans_pcie->fw_reset_state != FW_RESET_OK) {
+			if (trans_pcie->fw_reset_state != FW_RESET_TOP_REQUESTED)
+				IWL_ERR(trans,
+					"TOP reset interrupted by error (state %d)!\n",
+					trans_pcie->fw_reset_state);
+			else
+				IWL_ERR(trans, "TOP reset timed out!\n");
+			iwl_op_mode_nic_error(trans->op_mode,
+					      IWL_ERR_TYPE_TOP_RESET_FAILED);
+			iwl_trans_schedule_reset(trans,
+						 IWL_ERR_TYPE_TOP_RESET_FAILED);
+			ret = -EIO;
+			goto out;
+		}
+
+		msleep(10);
+		IWL_INFO(trans, "TOP reset successful, reinit now\n");
+		/* now load the firmware again properly */
+		trans_pcie->prph_scratch->ctrl_cfg.control.control_flags &=
+			~cpu_to_le32(IWL_PRPH_SCRATCH_TOP_RESET);
+		top_reset_done = true;
+		goto again;
+	}
 
 	/* re-check RF-Kill state since we may have missed the interrupt */
 	hw_rfkill = iwl_pcie_check_hw_rf_kill(trans);

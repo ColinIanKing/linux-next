@@ -176,25 +176,75 @@ static inline char iwl_drv_get_step(int step)
 
 static bool iwl_drv_is_wifi7_supported(struct iwl_trans *trans)
 {
-	return CSR_HW_RFID_TYPE(trans->hw_rf_id) >= IWL_CFG_RF_TYPE_FM;
+	return CSR_HW_RFID_TYPE(trans->info.hw_rf_id) >= IWL_CFG_RF_TYPE_FM;
 }
 
 const char *iwl_drv_get_fwname_pre(struct iwl_trans *trans, char *buf)
 {
 	char mac_step, rf_step;
-	const char *rf, *cdb;
+	const char *mac, *rf, *cdb;
 
 	if (trans->cfg->fw_name_pre)
 		return trans->cfg->fw_name_pre;
 
-	if (WARN_ON(!trans->cfg->fw_name_mac))
-		return "unconfigured";
+	mac_step = iwl_drv_get_step(trans->info.hw_rev_step);
 
-	mac_step = iwl_drv_get_step(trans->hw_rev_step);
+	switch (CSR_HW_REV_TYPE(trans->info.hw_rev)) {
+	case IWL_CFG_MAC_TYPE_PU:
+		mac = "pu";
+		break;
+	case IWL_CFG_MAC_TYPE_TH:
+		mac = "th";
+		break;
+	case IWL_CFG_MAC_TYPE_QU:
+		mac = "Qu";
+		break;
+	case IWL_CFG_MAC_TYPE_QUZ:
+		mac = "QuZ";
+		/* all QuZ use A0 firmware */
+		mac_step = 'a';
+		break;
+	case IWL_CFG_MAC_TYPE_SO:
+	case IWL_CFG_MAC_TYPE_SOF:
+		mac = "so";
+		break;
+	case IWL_CFG_MAC_TYPE_MA:
+		mac = "ma";
+		break;
+	case IWL_CFG_MAC_TYPE_BZ:
+	case IWL_CFG_MAC_TYPE_BZ_W:
+		mac = "bz";
+		break;
+	case IWL_CFG_MAC_TYPE_GL:
+		mac = "gl";
+		break;
+	case IWL_CFG_MAC_TYPE_SC:
+		mac = "sc";
+		break;
+	case IWL_CFG_MAC_TYPE_SC2:
+		mac = "sc2";
+		break;
+	case IWL_CFG_MAC_TYPE_SC2F:
+		mac = "sc2f";
+		break;
+	case IWL_CFG_MAC_TYPE_BR:
+		mac = "br";
+		break;
+	case IWL_CFG_MAC_TYPE_DR:
+		mac = "dr";
+		break;
+	default:
+		return "unknown-mac";
+	}
 
-	rf_step = iwl_drv_get_step(CSR_HW_RFID_STEP(trans->hw_rf_id));
+	rf_step = iwl_drv_get_step(CSR_HW_RFID_STEP(trans->info.hw_rf_id));
 
-	switch (CSR_HW_RFID_TYPE(trans->hw_rf_id)) {
+	switch (CSR_HW_RFID_TYPE(trans->info.hw_rf_id)) {
+	case IWL_CFG_RF_TYPE_JF1:
+	case IWL_CFG_RF_TYPE_JF2:
+		rf = "jf";
+		rf_step = 'b';
+		break;
 	case IWL_CFG_RF_TYPE_HR1:
 	case IWL_CFG_RF_TYPE_HR2:
 		rf = "hr";
@@ -207,24 +257,20 @@ const char *iwl_drv_get_fwname_pre(struct iwl_trans *trans, char *buf)
 		rf = "fm";
 		break;
 	case IWL_CFG_RF_TYPE_WH:
-		if (SILICON_Z_STEP ==
-		    CSR_HW_RFID_STEP(trans->hw_rf_id)) {
-			rf = "whtc";
-			rf_step = 'a';
-		} else {
-			rf = "wh";
-		}
+		rf = "wh";
+		break;
+	case IWL_CFG_RF_TYPE_PE:
+		rf = "pe";
 		break;
 	default:
 		return "unknown-rf";
 	}
 
-	cdb = CSR_HW_RFID_IS_CDB(trans->hw_rf_id) ? "4" : "";
+	cdb = CSR_HW_RFID_IS_CDB(trans->info.hw_rf_id) ? "4" : "";
 
 	scnprintf(buf, FW_NAME_PRE_BUFSIZE,
 		  "iwlwifi-%s-%c0-%s%s-%c0",
-		  trans->cfg->fw_name_mac, mac_step,
-		  rf, cdb, rf_step);
+		  mac, mac_step, rf, cdb, rf_step);
 
 	return buf;
 }
@@ -240,11 +286,11 @@ static int iwl_request_firmware(struct iwl_drv *drv, bool first)
 	const char *fw_name_pre;
 
 	if (drv->trans->trans_cfg->device_family == IWL_DEVICE_FAMILY_9000 &&
-	    (drv->trans->hw_rev_step != SILICON_B_STEP &&
-	     drv->trans->hw_rev_step != SILICON_C_STEP)) {
+	    (drv->trans->info.hw_rev_step != SILICON_B_STEP &&
+	     drv->trans->info.hw_rev_step != SILICON_C_STEP)) {
 		IWL_ERR(drv,
 			"Only HW steps B and C are currently supported (0x%0x)\n",
-			drv->trans->hw_rev);
+			drv->trans->info.hw_rev);
 		return -EINVAL;
 	}
 

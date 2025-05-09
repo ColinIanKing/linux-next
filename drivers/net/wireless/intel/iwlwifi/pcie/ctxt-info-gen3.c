@@ -97,8 +97,9 @@ out:
 		*control_flags |= IWL_PRPH_SCRATCH_EARLY_DEBUG_EN | dbg_flags;
 }
 
-int iwl_pcie_ctxt_info_gen3_init(struct iwl_trans *trans,
-				 const struct fw_img *fw)
+int iwl_pcie_ctxt_info_gen3_alloc(struct iwl_trans *trans,
+				  const struct iwl_fw *fw,
+				  const struct fw_img *img)
 {
 	struct iwl_trans_pcie *trans_pcie = IWL_TRANS_GET_PCIE_TRANS(trans);
 	struct iwl_context_info_gen3 *ctxt_info_gen3;
@@ -111,7 +112,7 @@ int iwl_pcie_ctxt_info_gen3_init(struct iwl_trans *trans,
 	int cmdq_size = max_t(u32, IWL_CMD_QUEUE_SIZE,
 			      trans->cfg->min_txq_size);
 
-	switch (trans_pcie->rx_buf_size) {
+	switch (trans->conf.rx_buf_size) {
 	case IWL_AMSDU_DEF:
 		return -EINVAL;
 	case IWL_AMSDU_2K:
@@ -131,13 +132,13 @@ int iwl_pcie_ctxt_info_gen3_init(struct iwl_trans *trans,
 		break;
 	}
 
-	if (trans->dsbr_urm_fw_dependent)
+	if (trans->conf.dsbr_urm_fw_dependent)
 		control_flags_ext |= IWL_PRPH_SCRATCH_EXT_URM_FW;
 
-	if (trans->dsbr_urm_permanent)
+	if (trans->conf.dsbr_urm_permanent)
 		control_flags_ext |= IWL_PRPH_SCRATCH_EXT_URM_PERM;
 
-	if (trans->ext_32khz_clock_valid)
+	if (trans->conf.ext_32khz_clock_valid)
 		control_flags_ext |= IWL_PRPH_SCRATCH_EXT_32KHZ_CLK_VALID;
 
 	/* Allocate prph scratch */
@@ -151,7 +152,7 @@ int iwl_pcie_ctxt_info_gen3_init(struct iwl_trans *trans,
 
 	prph_sc_ctrl->version.version = 0;
 	prph_sc_ctrl->version.mac_id =
-		cpu_to_le16((u16)trans->hw_rev);
+		cpu_to_le16((u16)trans->info.hw_rev);
 	prph_sc_ctrl->version.size = cpu_to_le16(sizeof(*prph_scratch) / 4);
 
 	control_flags |= IWL_PRPH_SCRATCH_MTR_MODE;
@@ -160,12 +161,17 @@ int iwl_pcie_ctxt_info_gen3_init(struct iwl_trans *trans,
 	if (trans->trans_cfg->imr_enabled)
 		control_flags |= IWL_PRPH_SCRATCH_IMR_DEBUG_EN;
 
-	if (CSR_HW_REV_TYPE(trans->hw_rev) == IWL_CFG_MAC_TYPE_GL &&
+	if (CSR_HW_REV_TYPE(trans->info.hw_rev) == IWL_CFG_MAC_TYPE_GL &&
 	    iwl_is_force_scu_active_approved()) {
 		control_flags |= IWL_PRPH_SCRATCH_SCU_FORCE_ACTIVE;
 		IWL_DEBUG_FW(trans,
 			     "Context Info: Set SCU_FORCE_ACTIVE (0x%x) in control_flags\n",
 			     IWL_PRPH_SCRATCH_SCU_FORCE_ACTIVE);
+	}
+
+	if (trans->do_top_reset) {
+		WARN_ON(trans->trans_cfg->device_family < IWL_DEVICE_FAMILY_SC);
+		control_flags |= IWL_PRPH_SCRATCH_TOP_RESET;
 	}
 
 	/* initialize RX default queue */
@@ -178,14 +184,15 @@ int iwl_pcie_ctxt_info_gen3_init(struct iwl_trans *trans,
 	prph_sc_ctrl->control.control_flags_ext = cpu_to_le32(control_flags_ext);
 
 	/* initialize the Step equalizer data */
-	prph_sc_ctrl->step_cfg.mbx_addr_0 = cpu_to_le32(trans->mbx_addr_0_step);
-	prph_sc_ctrl->step_cfg.mbx_addr_1 = cpu_to_le32(trans->mbx_addr_1_step);
+	prph_sc_ctrl->step_cfg.mbx_addr_0 =
+		cpu_to_le32(trans->conf.mbx_addr_0_step);
+	prph_sc_ctrl->step_cfg.mbx_addr_1 =
+		cpu_to_le32(trans->conf.mbx_addr_1_step);
 
 	/* allocate ucode sections in dram and set addresses */
-	ret = iwl_pcie_init_fw_sec(trans, fw, &prph_scratch->dram.common);
+	ret = iwl_pcie_init_fw_sec(trans, img, &prph_scratch->dram.common);
 	if (ret)
 		goto err_free_prph_scratch;
-
 
 	/* Allocate prph information
 	 * currently we don't assign to the prph info anything, but it would get
@@ -243,7 +250,7 @@ int iwl_pcie_ctxt_info_gen3_init(struct iwl_trans *trans,
 	ctxt_info_gen3->cr_tail_idx_arr_base_addr =
 		cpu_to_le64(trans_pcie->prph_info_dma_addr + 3 * PAGE_SIZE / 4);
 	ctxt_info_gen3->mtr_base_addr =
-		cpu_to_le64(trans_pcie->txqs.txq[trans_pcie->txqs.cmd.q_id]->dma_addr);
+		cpu_to_le64(trans_pcie->txqs.txq[trans->conf.cmd_queue]->dma_addr);
 	ctxt_info_gen3->mcr_base_addr =
 		cpu_to_le64(trans_pcie->rxq->used_bd_dma);
 	ctxt_info_gen3->mtr_size =
@@ -256,7 +263,8 @@ int iwl_pcie_ctxt_info_gen3_init(struct iwl_trans *trans,
 	trans_pcie->prph_scratch = prph_scratch;
 
 	/* Allocate IML */
-	trans_pcie->iml = dma_alloc_coherent(trans->dev, trans->iml_len,
+	trans_pcie->iml_len = fw->iml_len;
+	trans_pcie->iml = dma_alloc_coherent(trans->dev, fw->iml_len,
 					     &trans_pcie->iml_dma_addr,
 					     GFP_KERNEL);
 	if (!trans_pcie->iml) {
@@ -264,19 +272,7 @@ int iwl_pcie_ctxt_info_gen3_init(struct iwl_trans *trans,
 		goto err_free_ctxt_info;
 	}
 
-	memcpy(trans_pcie->iml, trans->iml, trans->iml_len);
-
-	iwl_enable_fw_load_int_ctx_info(trans);
-
-	/* kick FW self load */
-	iwl_write64(trans, CSR_CTXT_INFO_ADDR,
-		    trans_pcie->ctxt_info_dma_addr);
-	iwl_write64(trans, CSR_IML_DATA_ADDR,
-		    trans_pcie->iml_dma_addr);
-	iwl_write32(trans, CSR_IML_SIZE_ADDR, trans->iml_len);
-
-	iwl_set_bit(trans, CSR_CTXT_INFO_BOOT_CTRL,
-		    CSR_AUTO_FUNC_BOOT_ENA);
+	memcpy(trans_pcie->iml, fw->iml, fw->iml_len);
 
 	return 0;
 
@@ -298,14 +294,31 @@ err_free_prph_scratch:
 
 }
 
+void iwl_pcie_ctxt_info_gen3_kick(struct iwl_trans *trans)
+{
+	struct iwl_trans_pcie *trans_pcie = IWL_TRANS_GET_PCIE_TRANS(trans);
+
+	iwl_enable_fw_load_int_ctx_info(trans, trans->do_top_reset);
+
+	/* kick FW self load */
+	iwl_write64(trans, CSR_CTXT_INFO_ADDR, trans_pcie->ctxt_info_dma_addr);
+	iwl_write64(trans, CSR_IML_DATA_ADDR, trans_pcie->iml_dma_addr);
+	iwl_write32(trans, CSR_IML_SIZE_ADDR, trans_pcie->iml_len);
+
+	iwl_set_bit(trans, CSR_CTXT_INFO_BOOT_CTRL,
+		    CSR_AUTO_FUNC_BOOT_ENA);
+}
+
 void iwl_pcie_ctxt_info_gen3_free(struct iwl_trans *trans, bool alive)
 {
 	struct iwl_trans_pcie *trans_pcie = IWL_TRANS_GET_PCIE_TRANS(trans);
 
 	if (trans_pcie->iml) {
-		dma_free_coherent(trans->dev, trans->iml_len, trans_pcie->iml,
+		dma_free_coherent(trans->dev, trans_pcie->iml_len,
+				  trans_pcie->iml,
 				  trans_pcie->iml_dma_addr);
 		trans_pcie->iml_dma_addr = 0;
+		trans_pcie->iml_len = 0;
 		trans_pcie->iml = NULL;
 	}
 
@@ -337,9 +350,9 @@ void iwl_pcie_ctxt_info_gen3_free(struct iwl_trans *trans, bool alive)
 	trans_pcie->prph_info = NULL;
 }
 
-static int iwl_pcie_load_payloads_continuously(struct iwl_trans *trans,
-					       const struct iwl_pnvm_image *pnvm_data,
-					       struct iwl_dram_data *dram)
+static int iwl_pcie_load_payloads_contig(struct iwl_trans *trans,
+					 const struct iwl_pnvm_image *pnvm_data,
+					 struct iwl_dram_data *dram)
 {
 	u32 len, len0, len1;
 
@@ -460,10 +473,8 @@ int iwl_trans_pcie_ctx_info_gen3_load_pnvm(struct iwl_trans *trans,
 			trans->pnvm_loaded = true;
 	} else {
 		/* save only in one DRAM section */
-		ret = iwl_pcie_load_payloads_continuously
-						(trans,
-						 pnvm_payloads,
-						 &dram_regions->drams[0]);
+		ret = iwl_pcie_load_payloads_contig(trans, pnvm_payloads,
+						    &dram_regions->drams[0]);
 		if (!ret) {
 			dram_regions->n_regions = 1;
 			trans->pnvm_loaded = true;
@@ -498,7 +509,7 @@ static void iwl_pcie_set_pnvm_segments(struct iwl_trans *trans)
 		cpu_to_le32(iwl_dram_regions_size(dram_regions));
 }
 
-static void iwl_pcie_set_continuous_pnvm(struct iwl_trans *trans)
+static void iwl_pcie_set_contig_pnvm(struct iwl_trans *trans)
 {
 	struct iwl_trans_pcie *trans_pcie = IWL_TRANS_GET_PCIE_TRANS(trans);
 	struct iwl_prph_scratch_ctrl_cfg *prph_sc_ctrl =
@@ -519,7 +530,7 @@ void iwl_trans_pcie_ctx_info_gen3_set_pnvm(struct iwl_trans *trans,
 	if (fw_has_capa(capa, IWL_UCODE_TLV_CAPA_FRAGMENTED_PNVM_IMG))
 		iwl_pcie_set_pnvm_segments(trans);
 	else
-		iwl_pcie_set_continuous_pnvm(trans);
+		iwl_pcie_set_contig_pnvm(trans);
 }
 
 int iwl_trans_pcie_ctx_info_gen3_load_reduce_power(struct iwl_trans *trans,
@@ -556,10 +567,8 @@ int iwl_trans_pcie_ctx_info_gen3_load_reduce_power(struct iwl_trans *trans,
 			trans->reduce_power_loaded = true;
 	} else {
 		/* save only in one DRAM section */
-		ret = iwl_pcie_load_payloads_continuously
-						(trans,
-						 payloads,
-						 &dram_regions->drams[0]);
+		ret = iwl_pcie_load_payloads_contig(trans, payloads,
+						    &dram_regions->drams[0]);
 		if (!ret) {
 			dram_regions->n_regions = 1;
 			trans->reduce_power_loaded = true;
@@ -582,7 +591,7 @@ static void iwl_pcie_set_reduce_power_segments(struct iwl_trans *trans)
 		cpu_to_le32(iwl_dram_regions_size(dram_regions));
 }
 
-static void iwl_pcie_set_continuous_reduce_power(struct iwl_trans *trans)
+static void iwl_pcie_set_contig_reduce_power(struct iwl_trans *trans)
 {
 	struct iwl_trans_pcie *trans_pcie = IWL_TRANS_GET_PCIE_TRANS(trans);
 	struct iwl_prph_scratch_ctrl_cfg *prph_sc_ctrl =
@@ -604,6 +613,6 @@ iwl_trans_pcie_ctx_info_gen3_set_reduce_power(struct iwl_trans *trans,
 	if (fw_has_capa(capa, IWL_UCODE_TLV_CAPA_FRAGMENTED_PNVM_IMG))
 		iwl_pcie_set_reduce_power_segments(trans);
 	else
-		iwl_pcie_set_continuous_reduce_power(trans);
+		iwl_pcie_set_contig_reduce_power(trans);
 }
 

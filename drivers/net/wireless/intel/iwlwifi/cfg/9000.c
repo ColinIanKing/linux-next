@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause
 /*
  * Copyright (C) 2015-2017 Intel Deutschland GmbH
- * Copyright (C) 2018-2021, 2023 Intel Corporation
+ * Copyright (C) 2018-2021, 2023, 2025 Intel Corporation
  */
 #include <linux/module.h>
 #include <linux/stringify.h>
@@ -43,12 +43,6 @@ static const struct iwl_base_params iwl9000_base_params = {
 	.max_event_log_size = 512,
 	.shadow_reg_enable = true,
 	.pcie_l1_allowed = true,
-};
-
-static const struct iwl_ht_params iwl9000_ht_params = {
-	.stbc = true,
-	.ldpc = true,
-	.ht40_bands = BIT(NL80211_BAND_2GHZ) | BIT(NL80211_BAND_5GHZ),
 };
 
 static const struct iwl_tt_params iwl9000_tt_params = {
@@ -95,7 +89,12 @@ static const struct iwl_tt_params iwl9000_tt_params = {
 	.min_umac_error_event_table = 0x800000,				\
 	.d3_debug_data_base_addr = 0x401000,				\
 	.d3_debug_data_length = 92 * 1024,				\
-	.ht_params = &iwl9000_ht_params,				\
+	.ht_params = {							\
+		.stbc = true,						\
+		.ldpc = true,						\
+		.ht40_bands = BIT(NL80211_BAND_2GHZ) |			\
+			      BIT(NL80211_BAND_5GHZ),			\
+	},								\
 	.nvm_ver = IWL9000_NVM_VERSION,					\
 	.mon_smem_regs = {						\
 		.write_ptr = {						\
@@ -183,9 +182,21 @@ const struct iwl_cfg iwl9260_2ac_cfg = {
 	IWL_DEVICE_9000,
 };
 
+const struct iwl_cfg iwl9260_2ac_cfg_80mhz = {
+	.fw_name_pre = IWL9260_FW_PRE,
+	IWL_DEVICE_9000,
+	.bw_limit = 80,
+};
+
 const struct iwl_cfg iwl9560_2ac_cfg_soc = {
 	.fw_name_pre = IWL9000_FW_PRE,
 	IWL_DEVICE_9000,
+};
+
+const struct iwl_cfg iwl9560_2ac_cfg_soc_80mhz = {
+	.fw_name_pre = IWL9000_FW_PRE,
+	IWL_DEVICE_9000,
+	.bw_limit = 80,
 };
 
 MODULE_FIRMWARE(IWL9000_MODULE_FIRMWARE(IWL9000_UCODE_API_MAX));

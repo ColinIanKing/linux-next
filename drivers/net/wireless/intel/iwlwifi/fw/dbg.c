@@ -904,13 +904,14 @@ iwl_fw_error_dump_file(struct iwl_fw_runtime *fwrt,
 		dump_data->len = cpu_to_le32(sizeof(*dump_info));
 		dump_info = (void *)dump_data->data;
 		dump_info->hw_type =
-			cpu_to_le32(CSR_HW_REV_TYPE(fwrt->trans->hw_rev));
+			cpu_to_le32(CSR_HW_REV_TYPE(fwrt->trans->info.hw_rev));
 		dump_info->hw_step =
-			cpu_to_le32(fwrt->trans->hw_rev_step);
+			cpu_to_le32(fwrt->trans->info.hw_rev_step);
 		memcpy(dump_info->fw_human_readable, fwrt->fw->human_readable,
 		       sizeof(dump_info->fw_human_readable));
-		strscpy_pad(dump_info->dev_human_readable, fwrt->trans->name,
-			sizeof(dump_info->dev_human_readable));
+		strscpy_pad(dump_info->dev_human_readable,
+			    fwrt->trans->info.name,
+			    sizeof(dump_info->dev_human_readable));
 		strscpy_pad(dump_info->bus_human_readable, fwrt->dev->bus->name,
 			sizeof(dump_info->bus_human_readable));
 		dump_info->num_of_lmacs = fwrt->smem_cfg.num_lmacs;
@@ -2375,7 +2376,7 @@ static u32 iwl_dump_ini_info(struct iwl_fw_runtime *fwrt,
 	struct iwl_fw_ini_dump_cfg_name *cfg_name;
 	u32 size = sizeof(*tlv) + sizeof(*dump);
 	u32 num_of_cfg_names = 0;
-	u32 hw_type;
+	u32 hw_type, is_cdb, is_jacket;
 
 	list_for_each_entry(node, &fwrt->trans->dbg.debug_info_tlv_list, list) {
 		size += sizeof(*cfg_name);
@@ -2403,33 +2404,24 @@ static u32 iwl_dump_ini_info(struct iwl_fw_runtime *fwrt,
 	dump->ver_type = cpu_to_le32(fwrt->dump.fw_ver.type);
 	dump->ver_subtype = cpu_to_le32(fwrt->dump.fw_ver.subtype);
 
-	dump->hw_step = cpu_to_le32(fwrt->trans->hw_rev_step);
+	dump->hw_step = cpu_to_le32(fwrt->trans->info.hw_rev_step);
 
-	/*
-	 * Several HWs all have type == 0x42, so we'll override this value
-	 * according to the detected HW
-	 */
-	hw_type = CSR_HW_REV_TYPE(fwrt->trans->hw_rev);
-	if (hw_type == IWL_AX210_HW_TYPE) {
-		u32 prph_val = iwl_read_umac_prph(fwrt->trans, WFPM_OTP_CFG1_ADDR);
-		u32 is_jacket = !!(prph_val & WFPM_OTP_CFG1_IS_JACKET_BIT);
-		u32 is_cdb = !!(prph_val & WFPM_OTP_CFG1_IS_CDB_BIT);
-		u32 masked_bits = is_jacket | (is_cdb << 1);
+	hw_type = CSR_HW_REV_TYPE(fwrt->trans->info.hw_rev);
 
-		/*
-		 * The HW type depends on certain bits in this case, so add
-		 * these bits to the HW type. We won't have collisions since we
-		 * add these bits after the highest possible bit in the mask.
-		 */
-		hw_type |= masked_bits << IWL_AX210_HW_TYPE_ADDITION_SHIFT;
-	}
+	is_cdb = CSR_HW_RFID_IS_CDB(fwrt->trans->info.hw_rf_id);
+	is_jacket = !!(iwl_read_umac_prph(fwrt->trans, WFPM_OTP_CFG1_ADDR) &
+				WFPM_OTP_CFG1_IS_JACKET_BIT);
+
+	/* Use bits 12 and 13 to indicate jacket/CDB, respectively */
+	hw_type |= (is_jacket | (is_cdb << 1)) << IWL_JACKET_CDB_SHIFT;
+
 	dump->hw_type = cpu_to_le32(hw_type);
 
 	dump->rf_id_flavor =
-		cpu_to_le32(CSR_HW_RFID_FLAVOR(fwrt->trans->hw_rf_id));
-	dump->rf_id_dash = cpu_to_le32(CSR_HW_RFID_DASH(fwrt->trans->hw_rf_id));
-	dump->rf_id_step = cpu_to_le32(CSR_HW_RFID_STEP(fwrt->trans->hw_rf_id));
-	dump->rf_id_type = cpu_to_le32(CSR_HW_RFID_TYPE(fwrt->trans->hw_rf_id));
+		cpu_to_le32(CSR_HW_RFID_FLAVOR(fwrt->trans->info.hw_rf_id));
+	dump->rf_id_dash = cpu_to_le32(CSR_HW_RFID_DASH(fwrt->trans->info.hw_rf_id));
+	dump->rf_id_step = cpu_to_le32(CSR_HW_RFID_STEP(fwrt->trans->info.hw_rf_id));
+	dump->rf_id_type = cpu_to_le32(CSR_HW_RFID_TYPE(fwrt->trans->info.hw_rf_id));
 
 	dump->lmac_major = cpu_to_le32(fwrt->dump.fw_ver.lmac_major);
 	dump->lmac_minor = cpu_to_le32(fwrt->dump.fw_ver.lmac_minor);

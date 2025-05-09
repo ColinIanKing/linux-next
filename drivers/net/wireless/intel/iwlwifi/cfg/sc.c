@@ -10,10 +10,10 @@
 #include "fw/api/txq.h"
 
 /* Highest firmware API version supported */
-#define IWL_SC_UCODE_API_MAX	98
+#define IWL_SC_UCODE_API_MAX	99
 
 /* Lowest firmware API version supported */
-#define IWL_SC_UCODE_API_MIN	93
+#define IWL_SC_UCODE_API_MIN	97
 
 /* NVM versions */
 #define IWL_SC_NVM_VERSION		0x0a1d
@@ -55,25 +55,22 @@ static const struct iwl_base_params iwl_sc_base_params = {
 	.pcie_l1_allowed = true,
 };
 
-#define IWL_DEVICE_BZ_COMMON						\
-	.ucode_api_max = IWL_SC_UCODE_API_MAX,			\
-	.ucode_api_min = IWL_SC_UCODE_API_MIN,			\
+#define IWL_DEVICE_SC							\
+	.ucode_api_max = IWL_SC_UCODE_API_MAX,				\
+	.ucode_api_min = IWL_SC_UCODE_API_MIN,				\
 	.led_mode = IWL_LED_RF_STATE,					\
 	.nvm_hw_section_num = 10,					\
 	.non_shared_ant = ANT_B,					\
 	.dccm_offset = IWL_SC_DCCM_OFFSET,				\
 	.dccm_len = IWL_SC_DCCM_LEN,					\
 	.dccm2_offset = IWL_SC_DCCM2_OFFSET,				\
-	.dccm2_len = IWL_SC_DCCM2_LEN,				\
+	.dccm2_len = IWL_SC_DCCM2_LEN,					\
 	.smem_offset = IWL_SC_SMEM_OFFSET,				\
 	.smem_len = IWL_SC_SMEM_LEN,					\
 	.apmg_not_supported = true,					\
-	.trans.mq_rx_supported = true,					\
 	.vht_mu_mimo_supported = true,					\
 	.mac_addr_from_csr = 0x30,					\
-	.nvm_ver = IWL_SC_NVM_VERSION,				\
-	.trans.rf_id = true,						\
-	.trans.gen2 = true,						\
+	.nvm_ver = IWL_SC_NVM_VERSION,					\
 	.nvm_type = IWL_NVM_EXT,					\
 	.dbgc_supported = true,						\
 	.min_umac_error_event_table = 0xD0000,				\
@@ -89,9 +86,6 @@ static const struct iwl_base_params iwl_sc_base_params = {
 			.mask = LDBG_M2S_BUF_WRAP_CNT_VAL_MSK,		\
 		},							\
 	},								\
-	.trans.umac_prph_offset = 0x300000,				\
-	.trans.device_family = IWL_DEVICE_FAMILY_SC,			\
-	.trans.base_params = &iwl_sc_base_params,			\
 	.min_txq_size = 128,						\
 	.gp2_reg_addr = 0xd02c68,					\
 	.min_ba_txq_size = IWL_DEFAULT_QUEUE_SIZE_EHT,			\
@@ -114,14 +108,16 @@ static const struct iwl_base_params iwl_sc_base_params = {
 			.addr = DBGI_SRAM_FIFO_POINTERS,		\
 			.mask = DBGI_SRAM_FIFO_POINTERS_WR_PTR_MSK,	\
 		},							\
-	}
-
-#define IWL_DEVICE_SC							\
-	IWL_DEVICE_BZ_COMMON,						\
+	},								\
 	.uhb_supported = true,						\
 	.features = IWL_TX_CSUM_NETIF_FLAGS | NETIF_F_RXCSUM,		\
 	.num_rbds = IWL_NUM_RBDS_SC_EHT,				\
-	.ht_params = &iwl_bz_ht_params
+	.ht_params = {							\
+		.stbc = true,						\
+		.ldpc = true,						\
+		.ht40_bands = BIT(NL80211_BAND_2GHZ) |			\
+			      BIT(NL80211_BAND_5GHZ),			\
+	}
 
 /*
  * This size was picked according to 8 MSDUs inside 512 A-MSDUs in an
@@ -142,19 +138,16 @@ const struct iwl_cfg_trans_params iwl_sc_trans_cfg = {
 	.ltr_delay = IWL_CFG_TRANS_LTR_DELAY_2500US,
 };
 
+const char iwl_sp_name[] = "Intel(R) Wi-Fi 7 BE213 160MHz";
+const char iwl_pe_name[] = "Intel(R) Wi-Fi 8 BN201";
+
 const struct iwl_cfg iwl_cfg_sc = {
-	.fw_name_mac = "sc",
 	IWL_DEVICE_SC,
 };
 
-const struct iwl_cfg iwl_cfg_sc2 = {
-	.fw_name_mac = "sc2",
+const struct iwl_cfg iwl_cfg_sc_160mhz = {
 	IWL_DEVICE_SC,
-};
-
-const struct iwl_cfg iwl_cfg_sc2f = {
-	.fw_name_mac = "sc2f",
-	IWL_DEVICE_SC,
+	.bw_limit = 160,
 };
 
 IWL_FW_AND_PNVM(IWL_SC_A_FM_B_FW_PRE, IWL_SC_UCODE_API_MAX);
