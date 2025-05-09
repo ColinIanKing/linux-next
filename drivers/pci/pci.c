@@ -4257,7 +4257,7 @@ unsigned long __weak pci_address_to_pio(phys_addr_t address)
 #ifndef pci_remap_iospace
 int pci_remap_iospace(const struct resource *res, phys_addr_t phys_addr)
 {
-#if defined(PCI_IOBASE) && defined(CONFIG_MMU)
+#if defined(PCI_IOBASE)
 	unsigned long vaddr = (unsigned long)PCI_IOBASE + res->start;
 
 	if (!(res->flags & IORESOURCE_IO))
@@ -4290,7 +4290,7 @@ EXPORT_SYMBOL(pci_remap_iospace);
  */
 void pci_unmap_iospace(struct resource *res)
 {
-#if defined(PCI_IOBASE) && defined(CONFIG_MMU)
+#if defined(PCI_IOBASE)
 	unsigned long vaddr = (unsigned long)PCI_IOBASE + res->start;
 
 	vunmap_range(vaddr, vaddr + resource_size(res));
@@ -4757,7 +4757,7 @@ int pcie_retrain_link(struct pci_dev *pdev, bool use_lt)
 	 * to track link speed or width changes made by hardware itself
 	 * in attempt to correct unreliable link operation.
 	 */
-	pcie_reset_lbms_count(pdev);
+	pcie_reset_lbms(pdev);
 	return rc;
 }
 
@@ -4954,7 +4954,7 @@ int pci_bridge_wait_for_secondary_bus(struct pci_dev *dev, char *reset_type)
 		delay);
 	if (!pcie_wait_for_link_delay(dev, true, delay)) {
 		/* Did not train, no need to wait any further */
-		pci_info(dev, "Data Link Layer Link Active not set in 1000 msec\n");
+		pci_info(dev, "Data Link Layer Link Active not set in %d msec\n", delay);
 		return -ENOTTY;
 	}
 
@@ -6801,11 +6801,6 @@ int __weak pci_ext_cfg_avail(void)
 {
 	return 1;
 }
-
-void __weak pci_fixup_cardbus(struct pci_bus *bus)
-{
-}
-EXPORT_SYMBOL(pci_fixup_cardbus);
 
 static int __init pci_setup(char *str)
 {
