@@ -3083,11 +3083,10 @@ void cifs_oplock_break(struct work_struct *work)
 	struct cifsInodeInfo *cinode = CIFS_I(inode);
 	struct cifs_tcon *tcon;
 	struct TCP_Server_Info *server;
+	bool purge_cache = false;
 	struct tcon_link *tlink;
+	struct cifs_fid *fid;
 	int rc = 0;
-	bool purge_cache = false, oplock_break_cancelled;
-	__u64 persistent_fid, volatile_fid;
-	__u16 net_fid;
 
 	wait_on_bit(&cinode->flags, CIFS_INODE_PENDING_WRITERS,
 			TASK_UNINTERRUPTIBLE);
@@ -3134,32 +3133,21 @@ oplock_break_ack:
 	 * file handles but cached, then schedule deferred close immediately.
 	 * So, new open will not use cached handle.
 	 */
-
 	if (!CIFS_CACHE_HANDLE(cinode) && !list_empty(&cinode->deferred_closes))
 		cifs_close_deferred_file(cinode);
 
-	persistent_fid = cfile->fid.persistent_fid;
-	volatile_fid = cfile->fid.volatile_fid;
-	net_fid = cfile->fid.netfid;
-	oplock_break_cancelled = cfile->oplock_break_cancelled;
-
-	_cifsFileInfo_put(cfile, false /* do not wait for ourself */, false);
-	/*
-	 * MS-SMB2 3.2.5.19.1 and 3.2.5.19.2 (and MS-CIFS 3.2.5.42) do not require
-	 * an acknowledgment to be sent when the file has already been closed.
-	 */
-	spin_lock(&cinode->open_file_lock);
-	/* check list empty since can race with kill_sb calling tree disconnect */
-	if (!oplock_break_cancelled && !list_empty(&cinode->openFileList)) {
-		spin_unlock(&cinode->open_file_lock);
-		rc = server->ops->oplock_response(tcon, persistent_fid,
-						  volatile_fid, net_fid, cinode);
+	fid = &cfile->fid;
+	/* MS-SMB2 3.2.5.19.1 and 3.2.5.19.2 (and MS-CIFS 3.2.5.42) */
+	if (!cfile->oplock_break_cancelled) {
+		rc = server->ops->oplock_response(tcon, fid->persistent_fid,
+						  fid->volatile_fid,
+						  fid->netfid, cinode);
 		cifs_dbg(FYI, "Oplock release rc = %d\n", rc);
-	} else
-		spin_unlock(&cinode->open_file_lock);
+	}
 
 	cifs_put_tlink(tlink);
 out:
+	_cifsFileInfo_put(cfile, false /* do not wait for ourself */, false);
 	cifs_done_oplock_break(cinode);
 }
 

@@ -148,6 +148,8 @@
 
 #include <linux/ethtool.h>
 
+#include <uapi/linux/pidfd.h>
+
 #include "dev.h"
 
 static DEFINE_MUTEX(proto_list_mutex);
@@ -1891,7 +1893,7 @@ int sk_getsockopt(struct sock *sk, int level, int optname,
 		if (!peer_pid)
 			return -ENODATA;
 
-		pidfd = pidfd_prepare(peer_pid, 0, &pidfd_file);
+		pidfd = pidfd_prepare(peer_pid, PIDFD_STALE, &pidfd_file);
 		put_pid(peer_pid);
 		if (pidfd < 0)
 			return pidfd;

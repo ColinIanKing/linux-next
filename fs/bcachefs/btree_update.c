@@ -14,6 +14,8 @@
 #include "snapshot.h"
 #include "trace.h"
 
+#include <linux/string_helpers.h>
+
 static inline int btree_insert_entry_cmp(const struct btree_insert_entry *l,
 					 const struct btree_insert_entry *r)
 {
@@ -509,8 +511,9 @@ static noinline int bch2_trans_update_get_key_cache(struct btree_trans *trans,
 	return 0;
 }
 
-int __must_check bch2_trans_update(struct btree_trans *trans, struct btree_iter *iter,
-				   struct bkey_i *k, enum btree_iter_update_trigger_flags flags)
+int __must_check bch2_trans_update_ip(struct btree_trans *trans, struct btree_iter *iter,
+				      struct bkey_i *k, enum btree_iter_update_trigger_flags flags,
+				      unsigned long ip)
 {
 	kmsan_check_memory(k, bkey_bytes(&k->k));
 
@@ -546,7 +549,7 @@ int __must_check bch2_trans_update(struct btree_trans *trans, struct btree_iter 
 		path_idx = iter->key_cache_path;
 	}
 
-	return bch2_trans_update_by_path(trans, path_idx, k, flags, _RET_IP_);
+	return bch2_trans_update_by_path(trans, path_idx, k, flags, ip);
 }
 
 int bch2_btree_insert_clone_trans(struct btree_trans *trans,
@@ -829,7 +832,6 @@ int bch2_btree_bit_mod_buffered(struct btree_trans *trans, enum btree_id btree,
 int bch2_trans_log_msg(struct btree_trans *trans, struct printbuf *buf)
 {
 	unsigned u64s = DIV_ROUND_UP(buf->pos, sizeof(u64));
-	prt_chars(buf, '\0', u64s * sizeof(u64) - buf->pos);
 
 	int ret = buf->allocation_failure ? -BCH_ERR_ENOMEM_trans_log_msg : 0;
 	if (ret)
@@ -842,7 +844,7 @@ int bch2_trans_log_msg(struct btree_trans *trans, struct printbuf *buf)
 
 	struct jset_entry_log *l = container_of(e, struct jset_entry_log, entry);
 	journal_entry_init(e, BCH_JSET_ENTRY_log, 0, 1, u64s);
-	memcpy(l->d, buf->buf, buf->pos);
+	memcpy_and_pad(l->d, u64s * sizeof(u64), buf->buf, buf->pos, 0);
 	return 0;
 }
 
@@ -868,7 +870,6 @@ __bch2_fs_log_msg(struct bch_fs *c, unsigned commit_flags, const char *fmt,
 	prt_vprintf(&buf, fmt, args);
 
 	unsigned u64s = DIV_ROUND_UP(buf.pos, sizeof(u64));
-	prt_chars(&buf, '\0', u64s * sizeof(u64) - buf.pos);
 
 	int ret = buf.allocation_failure ? -BCH_ERR_ENOMEM_trans_log_msg : 0;
 	if (ret)
@@ -881,7 +882,7 @@ __bch2_fs_log_msg(struct bch_fs *c, unsigned commit_flags, const char *fmt,
 
 		struct jset_entry_log *l = (void *) &darray_top(c->journal.early_journal_entries);
 		journal_entry_init(&l->entry, BCH_JSET_ENTRY_log, 0, 1, u64s);
-		memcpy(l->d, buf.buf, buf.pos);
+		memcpy_and_pad(l->d, u64s * sizeof(u64), buf.buf, buf.pos, 0);
 		c->journal.early_journal_entries.nr += jset_u64s(u64s);
 	} else {
 		ret = bch2_trans_commit_do(c, NULL, NULL, commit_flags,

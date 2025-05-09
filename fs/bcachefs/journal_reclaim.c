@@ -214,18 +214,20 @@ void bch2_journal_space_available(struct journal *j)
 	j->can_discard = can_discard;
 
 	if (nr_online < metadata_replicas_required(c)) {
-		struct printbuf buf = PRINTBUF;
-		buf.atomic++;
-		prt_printf(&buf, "insufficient writeable journal devices available: have %u, need %u\n"
-			   "rw journal devs:", nr_online, metadata_replicas_required(c));
+		if (!(c->sb.features & BIT_ULL(BCH_FEATURE_small_image))) {
+			struct printbuf buf = PRINTBUF;
+			buf.atomic++;
+			prt_printf(&buf, "insufficient writeable journal devices available: have %u, need %u\n"
+				   "rw journal devs:", nr_online, metadata_replicas_required(c));
 
-		rcu_read_lock();
-		for_each_member_device_rcu(c, ca, &c->rw_devs[BCH_DATA_journal])
-			prt_printf(&buf, " %s", ca->name);
-		rcu_read_unlock();
+			rcu_read_lock();
+			for_each_member_device_rcu(c, ca, &c->rw_devs[BCH_DATA_journal])
+				prt_printf(&buf, " %s", ca->name);
+			rcu_read_unlock();
 
-		bch_err(c, "%s", buf.buf);
-		printbuf_exit(&buf);
+			bch_err(c, "%s", buf.buf);
+			printbuf_exit(&buf);
+		}
 		ret = -BCH_ERR_insufficient_journal_devices;
 		goto out;
 	}
@@ -286,7 +288,7 @@ void bch2_journal_do_discards(struct journal *j)
 
 	mutex_lock(&j->discard_lock);
 
-	for_each_rw_member(c, ca) {
+	for_each_rw_member(c, ca, BCH_DEV_WRITE_REF_journal_do_discards) {
 		struct journal_device *ja = &ca->journal;
 
 		while (should_discard_bucket(j, ja)) {
@@ -618,7 +620,8 @@ static u64 journal_seq_to_flush(struct journal *j)
 
 	spin_lock(&j->lock);
 
-	for_each_rw_member(c, ca) {
+	rcu_read_lock();
+	for_each_rw_member_rcu(c, ca) {
 		struct journal_device *ja = &ca->journal;
 		unsigned nr_buckets, bucket_to_flush;
 
@@ -628,12 +631,11 @@ static u64 journal_seq_to_flush(struct journal *j)
 		/* Try to keep the journal at most half full: */
 		nr_buckets = ja->nr / 2;
 
-		nr_buckets = min(nr_buckets, ja->nr);
-
 		bucket_to_flush = (ja->cur_idx + nr_buckets) % ja->nr;
 		seq_to_flush = max(seq_to_flush,
 				   ja->bucket_seq[bucket_to_flush]);
 	}
+	rcu_read_unlock();
 
 	/* Also flush if the pin fifo is more than half full */
 	seq_to_flush = max_t(s64, seq_to_flush,
@@ -954,7 +956,7 @@ int bch2_journal_flush_device_pins(struct journal *j, int dev_idx)
 	seq = 0;
 	spin_lock(&j->lock);
 	while (!ret) {
-		struct bch_replicas_padded replicas;
+		union bch_replicas_padded replicas;
 
 		seq = max(seq, journal_last_seq(j));
 		if (seq >= j->pin.back)
