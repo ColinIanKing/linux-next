@@ -16,7 +16,6 @@
 #ifndef _NOLIBC_STDIO_H
 /* standard libcs need more includes */
 #include <sys/auxv.h>
-#include <sys/io.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/mount.h>
@@ -40,6 +39,7 @@
 #include <stdint.h>
 #include <unistd.h>
 #include <limits.h>
+#include <ctype.h>
 #endif
 #endif
 
@@ -1281,6 +1281,10 @@ int run_stdlib(int min, int max)
 		CASE_TEST(strerror_EINVAL);         EXPECT_STREQ(is_nolibc, strerror(EINVAL), "errno=22"); break;
 		CASE_TEST(strerror_int_max);        EXPECT_STREQ(is_nolibc, strerror(INT_MAX), "errno=2147483647"); break;
 		CASE_TEST(strerror_int_min);        EXPECT_STREQ(is_nolibc, strerror(INT_MIN), "errno=-2147483648"); break;
+		CASE_TEST(tolower);                 EXPECT_EQ(1, tolower('A'), 'a'); break;
+		CASE_TEST(tolower_noop);            EXPECT_EQ(1, tolower('a'), 'a'); break;
+		CASE_TEST(toupper);                 EXPECT_EQ(1, toupper('a'), 'A'); break;
+		CASE_TEST(toupper_noop);            EXPECT_EQ(1, toupper('A'), 'A'); break;
 
 		case __LINE__:
 			return ret; /* must be last */
@@ -1295,27 +1299,15 @@ int run_stdlib(int min, int max)
 
 static int expect_vfprintf(int llen, int c, const char *expected, const char *fmt, ...)
 {
-	int ret, pipefd[2];
-	ssize_t w, r;
 	char buf[100];
-	FILE *memfile;
 	va_list args;
+	ssize_t w;
+	int ret;
 
-	ret = pipe(pipefd);
-	if (ret == -1) {
-		llen += printf(" pipe() != %s", strerror(errno));
-		result(llen, FAIL);
-		return 1;
-	}
-
-	memfile = fdopen(pipefd[1], "w");
-	if (!memfile) {
-		result(llen, FAIL);
-		return 1;
-	}
 
 	va_start(args, fmt);
-	w = vfprintf(memfile, fmt, args);
+	/* Only allow writing 21 bytes, to test truncation */
+	w = vsnprintf(buf, 21, fmt, args);
 	va_end(args);
 
 	if (w != c) {
@@ -1324,17 +1316,6 @@ static int expect_vfprintf(int llen, int c, const char *expected, const char *fm
 		return 1;
 	}
 
-	fclose(memfile);
-
-	r = read(pipefd[0], buf, sizeof(buf) - 1);
-
-	if (r != w) {
-		llen += printf(" written(%d) != read(%d)", (int)w, (int)r);
-		result(llen, FAIL);
-		return 1;
-	}
-
-	buf[r] = '\0';
 	llen += printf(" \"%s\" = \"%s\"", expected, buf);
 	ret = strncmp(expected, buf, c);
 
@@ -1409,7 +1390,7 @@ static int test_scanf(void)
 	return 0;
 }
 
-static int run_vfprintf(int min, int max)
+static int run_printf(int min, int max)
 {
 	int test;
 	int ret = 0;
@@ -1430,6 +1411,12 @@ static int run_vfprintf(int min, int max)
 		CASE_TEST(char);         EXPECT_VFPRINTF(1, "c", "%c", 'c'); break;
 		CASE_TEST(hex);          EXPECT_VFPRINTF(1, "f", "%x", 0xf); break;
 		CASE_TEST(pointer);      EXPECT_VFPRINTF(3, "0x1", "%p", (void *) 0x1); break;
+		CASE_TEST(uintmax_t);    EXPECT_VFPRINTF(20, "18446744073709551615", "%ju", 0xffffffffffffffffULL); break;
+		CASE_TEST(intmax_t);     EXPECT_VFPRINTF(20, "-9223372036854775807", "%jd", 0x8000000000000001LL); break;
+		CASE_TEST(truncation);   EXPECT_VFPRINTF(25, "01234567890123456789", "%s", "0123456789012345678901234"); break;
+		CASE_TEST(string_width); EXPECT_VFPRINTF(10, "         1", "%10s", "1"); break;
+		CASE_TEST(number_width); EXPECT_VFPRINTF(10, "         1", "%10d", 1); break;
+		CASE_TEST(width_trunc);  EXPECT_VFPRINTF(25, "                    ", "%25d", 1); break;
 		CASE_TEST(scanf);        EXPECT_ZR(1, test_scanf()); break;
 		case __LINE__:
 			return ret; /* must be last */
@@ -1439,6 +1426,7 @@ static int run_vfprintf(int min, int max)
 	return ret;
 }
 
+__attribute__((no_sanitize("undefined")))
 static int smash_stack(void)
 {
 	char buf[100];
@@ -1455,8 +1443,7 @@ static int run_protection(int min __attribute__((unused)),
 			  int max __attribute__((unused)))
 {
 	pid_t pid;
-	int llen = 0, ret;
-	siginfo_t siginfo = {};
+	int llen = 0, status;
 	struct rlimit rlimit = { 0, 0 };
 
 	llen += printf("0 -fstackprotector ");
@@ -1494,11 +1481,10 @@ static int run_protection(int min __attribute__((unused)),
 		return 1;
 
 	default:
-		ret = waitid(P_PID, pid, &siginfo, WEXITED);
+		pid = waitpid(pid, &status, 0);
 
-		if (ret != 0 || siginfo.si_signo != SIGCHLD ||
-		    siginfo.si_code != CLD_KILLED || siginfo.si_status != SIGABRT) {
-			llen += printf("waitid()");
+		if (pid == -1 || !WIFSIGNALED(status) || WTERMSIG(status) != SIGABRT) {
+			llen += printf("waitpid()");
 			result(llen, FAIL);
 			return 1;
 		}
@@ -1570,7 +1556,7 @@ static const struct test test_names[] = {
 	{ .name = "startup",    .func = run_startup    },
 	{ .name = "syscall",    .func = run_syscall    },
 	{ .name = "stdlib",     .func = run_stdlib     },
-	{ .name = "vfprintf",   .func = run_vfprintf   },
+	{ .name = "printf",     .func = run_printf     },
 	{ .name = "protection", .func = run_protection },
 	{ 0 }
 };

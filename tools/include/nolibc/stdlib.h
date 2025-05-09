@@ -4,6 +4,9 @@
  * Copyright (C) 2017-2021 Willy Tarreau <w@1wt.eu>
  */
 
+/* make sure to include all global symbols */
+#include "nolibc.h"
+
 #ifndef _NOLIBC_STDLIB_H
 #define _NOLIBC_STDLIB_H
 
@@ -100,32 +103,6 @@ char *getenv(const char *name)
 		}
 	}
 	return NULL;
-}
-
-static __attribute__((unused))
-unsigned long getauxval(unsigned long type)
-{
-	const unsigned long *auxv = _auxv;
-	unsigned long ret;
-
-	if (!auxv)
-		return 0;
-
-	while (1) {
-		if (!auxv[0] && !auxv[1]) {
-			ret = 0;
-			break;
-		}
-
-		if (auxv[0] == type) {
-			ret = auxv[1];
-			break;
-		}
-
-		auxv += 2;
-	}
-
-	return ret;
 }
 
 static __attribute__((unused))
@@ -275,7 +252,7 @@ int itoa_r(long in, char *buffer)
 	int len = 0;
 
 	if (in < 0) {
-		in = -in;
+		in = -(unsigned long)in;
 		*(ptr++) = '-';
 		len++;
 	}
@@ -411,7 +388,7 @@ int i64toa_r(int64_t in, char *buffer)
 	int len = 0;
 
 	if (in < 0) {
-		in = -in;
+		in = -(uint64_t)in;
 		*(ptr++) = '-';
 		len++;
 	}
@@ -547,8 +524,5 @@ uintmax_t strtoumax(const char *nptr, char **endptr, int base)
 {
 	return __strtox(nptr, endptr, base, 0, UINTMAX_MAX);
 }
-
-/* make sure to include all global symbols */
-#include "nolibc.h"
 
 #endif /* _NOLIBC_STDLIB_H */

@@ -4,6 +4,9 @@
  * Copyright (C) 2017-2021 Willy Tarreau <w@1wt.eu>
  */
 
+/* make sure to include all global symbols */
+#include "nolibc.h"
+
 #ifndef _NOLIBC_TYPES_H
 #define _NOLIBC_TYPES_H
 
@@ -201,7 +204,7 @@ struct stat {
 /* WARNING, it only deals with the 4096 first majors and 256 first minors */
 #define makedev(major, minor) ((dev_t)((((major) & 0xfff) << 8) | ((minor) & 0xff)))
 #define major(dev) ((unsigned int)(((dev) >> 8) & 0xfff))
-#define minor(dev) ((unsigned int)(((dev) & 0xff))
+#define minor(dev) ((unsigned int)((dev) & 0xff))
 
 #ifndef offsetof
 #define offsetof(TYPE, FIELD) ((size_t) &((TYPE *)0)->FIELD)
@@ -213,8 +216,5 @@ struct stat {
 	(TYPE *)((char *) __FIELD_PTR - offsetof(TYPE, FIELD));	\
 })
 #endif
-
-/* make sure to include all global symbols */
-#include "nolibc.h"
 
 #endif /* _NOLIBC_TYPES_H */
