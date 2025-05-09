@@ -7,6 +7,7 @@
 
 #include <kunit/test.h>
 #include <linux/atomic.h>
+#include <linux/bitops.h>
 #include <linux/random.h>
 #include <linux/spinlock.h>
 
@@ -25,7 +26,7 @@ static void __init init_id(atomic64_t *const counter, const u32 random_32bits)
 	 * Ensures sure 64-bit values are always used by user space (or may
 	 * fail with -EOVERFLOW), and makes this testable.
 	 */
-	init = 1ULL << 32;
+	init = BIT_ULL(32);
 
 	/*
 	 * Makes a large (2^32) boot-time value to limit ID collision in logs
@@ -105,7 +106,7 @@ static u64 get_id_range(size_t number_of_ids, atomic64_t *const counter,
 	 * to get a new ID (e.g. a full landlock_restrict_self() call), and the
 	 * cost of draining all available IDs during the system's uptime.
 	 */
-	random_4bits = random_4bits % (1 << 4);
+	random_4bits = random_4bits % BIT(4);
 	step = number_of_ids + random_4bits;
 
 	/* It is safe to cast a signed atomic to an unsigned value. */
