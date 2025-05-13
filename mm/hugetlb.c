@@ -6131,7 +6131,8 @@ static void unmap_ref_private(struct mm_struct *mm, struct vm_area_struct *vma,
  * Keep the pte_same checks anyway to make transition from the mutex easier.
  */
 static vm_fault_t hugetlb_wp(struct folio *pagecache_folio,
-		       struct vm_fault *vmf)
+		       struct vm_fault *vmf,
+		       bool *pagecache_folio_unlocked)
 {
 	struct vm_area_struct *vma = vmf->vma;
 	struct mm_struct *mm = vma->vm_mm;
@@ -6228,6 +6229,22 @@ retry_avoidcopy:
 			u32 hash;
 
 			folio_put(old_folio);
+			/*
+			 * The pagecache_folio needs to be unlocked to avoid
+			 * deadlock and we won't re-lock it in hugetlb_wp(). The
+			 * pagecache_folio could be truncated after being
+			 * unlocked. So its state should not be relied
+			 * subsequently.
+			 *
+			 * Setting *pagecache_folio_unlocked to true allows the
+			 * caller to handle any necessary logic related to the
+			 * folio's unlocked state.
+			 */
+			if (pagecache_folio) {
+				folio_unlock(pagecache_folio);
+				if (pagecache_folio_unlocked)
+					*pagecache_folio_unlocked = true;
+			}
 			/*
 			 * Drop hugetlb_fault_mutex and vma_lock before
 			 * unmapping.  unmapping needs to hold vma_lock
@@ -6581,7 +6598,7 @@ static vm_fault_t hugetlb_no_page(struct address_space *mapping,
 	hugetlb_count_add(pages_per_huge_page(h), mm);
 	if ((vmf->flags & FAULT_FLAG_WRITE) && !(vma->vm_flags & VM_SHARED)) {
 		/* Optimization, do the COW without a second fault */
-		ret = hugetlb_wp(folio, vmf);
+		ret = hugetlb_wp(folio, vmf, NULL);
 	}
 
 	spin_unlock(vmf->ptl);
@@ -6653,6 +6670,7 @@ vm_fault_t hugetlb_fault(struct mm_struct *mm, struct vm_area_struct *vma,
 	struct hstate *h = hstate_vma(vma);
 	struct address_space *mapping;
 	int need_wait_lock = 0;
+	bool pagecache_folio_unlocked = false;
 	struct vm_fault vmf = {
 		.vma = vma,
 		.address = address & huge_page_mask(h),
@@ -6807,7 +6825,8 @@ vm_fault_t hugetlb_fault(struct mm_struct *mm, struct vm_area_struct *vma,
 
 	if (flags & (FAULT_FLAG_WRITE|FAULT_FLAG_UNSHARE)) {
 		if (!huge_pte_write(vmf.orig_pte)) {
-			ret = hugetlb_wp(pagecache_folio, &vmf);
+			ret = hugetlb_wp(pagecache_folio, &vmf,
+					&pagecache_folio_unlocked);
 			goto out_put_page;
 		} else if (likely(flags & FAULT_FLAG_WRITE)) {
 			vmf.orig_pte = huge_pte_mkdirty(vmf.orig_pte);
@@ -6824,10 +6843,14 @@ out_put_page:
 out_ptl:
 	spin_unlock(vmf.ptl);
 
-	if (pagecache_folio) {
+	/*
+	 * If the pagecache_folio is unlocked in hugetlb_wp(), we skip
+	 * folio_unlock() here.
+	 */
+	if (pagecache_folio && !pagecache_folio_unlocked)
 		folio_unlock(pagecache_folio);
+	if (pagecache_folio)
 		folio_put(pagecache_folio);
-	}
 out_mutex:
 	hugetlb_vma_unlock_read(vma);
 
