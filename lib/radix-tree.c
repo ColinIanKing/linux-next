@@ -510,6 +510,14 @@ static inline bool radix_tree_shrink(struct radix_tree_root *root)
 			root_tag_clear(root, IDR_FREE);
 
 		/*
+		 * Kmemleak might report a false positive if it traverses the
+		 * tree while we're shrinking it, since the reference moves
+		 * from node->slots[0] to root->xa_head.
+		 */
+		if (radix_tree_is_internal_node(child))
+			kmemleak_transient_leak(entry_to_node(child));
+
+		/*
 		 * We have a dilemma here. The node's slot[0] must not be
 		 * NULLed in case there are concurrent lookups expecting to
 		 * find the item. However if this was a bottom-level node,
