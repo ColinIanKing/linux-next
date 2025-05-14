@@ -3622,6 +3622,7 @@ static int do_move_mount(struct path *old_path,
 	struct mountpoint *mp, *old_mp;
 	int err;
 	bool attached, beneath = flags & MNT_TREE_BENEATH;
+	bool clear_flags = false;
 
 	mp = do_lock_mount(new_path, beneath);
 	if (IS_ERR(mp))
@@ -3666,6 +3667,7 @@ static int do_move_mount(struct path *old_path,
 		 * propagate onto them.
 		 */
 		ns->mntns_flags |= MNTNS_PROPAGATING;
+		clear_flags = true;
 	} else if (is_anon_ns(p->mnt_ns)) {
 		/*
 		 * Don't allow moving an attached mount tree to an
@@ -3722,7 +3724,7 @@ static int do_move_mount(struct path *old_path,
 	if (attached)
 		put_mountpoint(old_mp);
 out:
-	if (is_anon_ns(ns))
+	if (clear_flags)
 		ns->mntns_flags &= ~MNTNS_PROPAGATING;
 	unlock_mount(mp);
 	if (!err) {
