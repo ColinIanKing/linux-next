@@ -16,7 +16,7 @@
 #include <asm/amd/nb.h>
 #include <asm/cacheinfo.h>
 #include <asm/cpufeature.h>
-#include <asm/cpuid.h>
+#include <asm/cpuid/api.h>
 #include <asm/mtrr.h>
 #include <asm/smp.h>
 #include <asm/tlbflush.h>
@@ -381,20 +381,20 @@ static void intel_cacheinfo_done(struct cpuinfo_x86 *c, unsigned int l3,
 static void intel_cacheinfo_0x2(struct cpuinfo_x86 *c)
 {
 	unsigned int l1i = 0, l1d = 0, l2 = 0, l3 = 0;
-	const struct leaf_0x2_table *entry;
+	const struct leaf_0x2_table *desc;
 	union leaf_0x2_regs regs;
 	u8 *ptr;
 
 	if (c->cpuid_level < 2)
 		return;
 
-	cpuid_get_leaf_0x2_regs(&regs);
-	for_each_leaf_0x2_entry(regs, ptr, entry) {
-		switch (entry->c_type) {
-		case CACHE_L1_INST:	l1i += entry->c_size; break;
-		case CACHE_L1_DATA:	l1d += entry->c_size; break;
-		case CACHE_L2:		l2  += entry->c_size; break;
-		case CACHE_L3:		l3  += entry->c_size; break;
+	cpuid_leaf_0x2(&regs);
+	for_each_cpuid_0x2_desc(regs, ptr, desc) {
+		switch (desc->c_type) {
+		case CACHE_L1_INST:	l1i += desc->c_size; break;
+		case CACHE_L1_DATA:	l1d += desc->c_size; break;
+		case CACHE_L2:		l2  += desc->c_size; break;
+		case CACHE_L3:		l3  += desc->c_size; break;
 		}
 	}
 
