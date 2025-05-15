@@ -47,6 +47,8 @@
 
 #define NFSDDBG_FACILITY		NFSDDBG_FILEOP
 
+bool nfsd_disable_splice_read __read_mostly;
+
 /**
  * nfserrno - Map Linux errnos to NFS errnos
  * @errno: POSIX(-ish) error code to be mapped
@@ -244,7 +246,7 @@ nfsd_lookup_dentry(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	struct dentry		*dentry;
 	int			host_err;
 
-	dprintk("nfsd: nfsd_lookup(fh %s, %.*s)\n", SVCFH_fmt(fhp), len,name);
+	trace_nfsd_vfs_lookup(rqstp, fhp, name, len);
 
 	dparent = fhp->fh_dentry;
 	exp = exp_get(fhp->fh_export);
@@ -498,6 +500,8 @@ nfsd_setattr(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	bool		get_write_count;
 	bool		size_change = (iap->ia_valid & ATTR_SIZE);
 	int		retries;
+
+	trace_nfsd_vfs_setattr(rqstp, fhp, iap, guardtime);
 
 	if (iap->ia_valid & ATTR_SIZE) {
 		accmode |= NFSD_MAY_WRITE|NFSD_MAY_OWNER_OVERRIDE;
@@ -1236,6 +1240,8 @@ out_nfserr:
  */
 bool nfsd_read_splice_ok(struct svc_rqst *rqstp)
 {
+	if (nfsd_disable_splice_read)
+		return false;
 	switch (svc_auth_flavor(rqstp)) {
 	case RPC_AUTH_GSS_KRB5I:
 	case RPC_AUTH_GSS_KRB5P:
@@ -1339,6 +1345,8 @@ nfsd_commit(struct svc_rqst *rqstp, struct svc_fh *fhp, struct nfsd_file *nf,
 	loff_t			start, end;
 	struct nfsd_net		*nn;
 
+	trace_nfsd_commit_start(rqstp, fhp, offset, count);
+
 	/*
 	 * Convert the client-provided (offset, count) range to a
 	 * (start, end) range. If the client-provided range falls
@@ -1377,6 +1385,7 @@ nfsd_commit(struct svc_rqst *rqstp, struct svc_fh *fhp, struct nfsd_file *nf,
 	} else
 		nfsd_copy_write_verifier(verf, nn);
 
+	trace_nfsd_commit_done(rqstp, fhp, offset, count);
 	return err;
 }
 
@@ -1540,6 +1549,8 @@ nfsd_create(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	__be32		err;
 	int		host_err;
 
+	trace_nfsd_vfs_create(rqstp, fhp, type, fname, flen);
+
 	if (isdotent(fname, flen))
 		return nfserr_exist;
 
@@ -1640,6 +1651,8 @@ nfsd_symlink(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	__be32		err, cerr;
 	int		host_err;
 
+	trace_nfsd_vfs_symlink(rqstp, fhp, fname, flen, path);
+
 	err = nfserr_noent;
 	if (!flen || path[0] == '\0')
 		goto out;
@@ -1707,6 +1720,8 @@ nfsd_link(struct svc_rqst *rqstp, struct svc_fh *ffhp,
 	int		type;
 	__be32		err;
 	int		host_err;
+
+	trace_nfsd_vfs_link(rqstp, ffhp, tfhp, name, len);
 
 	err = fh_verify(rqstp, ffhp, S_IFDIR, NFSD_MAY_CREATE);
 	if (err)
@@ -1824,6 +1839,8 @@ nfsd_rename(struct svc_rqst *rqstp, struct svc_fh *ffhp, char *fname, int flen,
 	__be32		err;
 	int		host_err;
 	bool		close_cached = false;
+
+	trace_nfsd_vfs_rename(rqstp, ffhp, tfhp, fname, flen, tname, tlen);
 
 	err = fh_verify(rqstp, ffhp, S_IFDIR, NFSD_MAY_REMOVE);
 	if (err)
@@ -1982,6 +1999,8 @@ nfsd_unlink(struct svc_rqst *rqstp, struct svc_fh *fhp, int type,
 	struct inode	*rinode;
 	__be32		err;
 	int		host_err;
+
+	trace_nfsd_vfs_unlink(rqstp, fhp, fname, flen);
 
 	err = nfserr_acces;
 	if (!flen || isdotent(fname, flen))
@@ -2270,6 +2289,8 @@ __be32
 nfsd_statfs(struct svc_rqst *rqstp, struct svc_fh *fhp, struct kstatfs *stat, int access)
 {
 	__be32 err;
+
+	trace_nfsd_vfs_statfs(rqstp, fhp);
 
 	err = fh_verify(rqstp, fhp, 0, NFSD_MAY_NOP | access);
 	if (!err) {
