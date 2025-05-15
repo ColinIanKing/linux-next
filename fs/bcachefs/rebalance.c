@@ -80,11 +80,13 @@ static inline unsigned bch2_bkey_ptrs_need_move(struct bch_fs *c,
 	unsigned ptr_bit = 1;
 	unsigned rewrite_ptrs = 0;
 
+	rcu_read_lock();
 	bkey_for_each_ptr(ptrs, ptr) {
 		if (!ptr->cached && !bch2_dev_in_target(c, ptr->dev, opts->background_target))
 			rewrite_ptrs |= ptr_bit;
 		ptr_bit <<= 1;
 	}
+	rcu_read_unlock();
 
 	return rewrite_ptrs;
 }
@@ -94,6 +96,9 @@ static unsigned bch2_bkey_ptrs_need_rebalance(struct bch_fs *c,
 					      struct bkey_s_c k)
 {
 	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
+
+	if (bch2_bkey_extent_ptrs_flags(ptrs) & BIT_ULL(BCH_EXTENT_FLAG_poisoned))
+		return 0;
 
 	return bch2_bkey_ptrs_need_compress(c, opts, k, ptrs) |
 		bch2_bkey_ptrs_need_move(c, opts, ptrs);
@@ -105,6 +110,9 @@ u64 bch2_bkey_sectors_need_rebalance(struct bch_fs *c, struct bkey_s_c k)
 
 	const struct bch_extent_rebalance *opts = bch2_bkey_ptrs_rebalance_opts(ptrs);
 	if (!opts)
+		return 0;
+
+	if (bch2_bkey_extent_ptrs_flags(ptrs) & BIT_ULL(BCH_EXTENT_FLAG_poisoned))
 		return 0;
 
 	const union bch_extent_entry *entry;
@@ -126,10 +134,14 @@ u64 bch2_bkey_sectors_need_rebalance(struct bch_fs *c, struct bkey_s_c k)
 		}
 	}
 incompressible:
-	if (opts->background_target)
+	if (opts->background_target) {
+		rcu_read_lock();
 		bkey_for_each_ptr_decode(k.k, ptrs, p, entry)
-			if (!p.ptr.cached && !bch2_dev_in_target(c, p.ptr.dev, opts->background_target))
+			if (!p.ptr.cached &&
+			    !bch2_dev_in_target(c, p.ptr.dev, opts->background_target))
 				sectors += p.crc.compressed_size;
+		rcu_read_unlock();
+	}
 
 	return sectors;
 }
@@ -448,7 +460,7 @@ out:
 }
 
 static bool rebalance_pred(struct bch_fs *c, void *arg,
-			   struct bkey_s_c k,
+			   enum btree_id btree, struct bkey_s_c k,
 			   struct bch_io_opts *io_opts,
 			   struct data_update_opts *data_opts)
 {
@@ -506,6 +518,13 @@ static void rebalance_wait(struct bch_fs *c)
 	bch2_kthread_io_clock_wait(clock, r->wait_iotime_end, MAX_SCHEDULE_TIMEOUT);
 }
 
+static bool bch2_rebalance_enabled(struct bch_fs *c)
+{
+	return c->opts.rebalance_enabled &&
+		!(c->opts.rebalance_on_ac_only &&
+		  c->rebalance.on_battery);
+}
+
 static int do_rebalance(struct moving_context *ctxt)
 {
 	struct btree_trans *trans = ctxt->trans;
@@ -525,9 +544,9 @@ static int do_rebalance(struct moving_context *ctxt)
 			     BTREE_ITER_all_snapshots);
 
 	while (!bch2_move_ratelimit(ctxt)) {
-		if (!c->opts.rebalance_enabled) {
+		if (!bch2_rebalance_enabled(c)) {
 			bch2_moving_ctxt_flush_all(ctxt);
-			kthread_wait_freezable(c->opts.rebalance_enabled ||
+			kthread_wait_freezable(bch2_rebalance_enabled(c) ||
 					       kthread_should_stop());
 		}
 
@@ -702,7 +721,156 @@ int bch2_rebalance_start(struct bch_fs *c)
 	return 0;
 }
 
-void bch2_fs_rebalance_init(struct bch_fs *c)
+#ifdef CONFIG_POWER_SUPPLY
+#include <linux/power_supply.h>
+
+static int bch2_rebalance_power_notifier(struct notifier_block *nb,
+					 unsigned long event, void *data)
 {
-	bch2_pd_controller_init(&c->rebalance.pd);
+	struct bch_fs *c = container_of(nb, struct bch_fs, rebalance.power_notifier);
+
+	c->rebalance.on_battery = !power_supply_is_system_supplied();
+	bch2_rebalance_wakeup(c);
+	return NOTIFY_OK;
+}
+#endif
+
+void bch2_fs_rebalance_exit(struct bch_fs *c)
+{
+#ifdef CONFIG_POWER_SUPPLY
+	power_supply_unreg_notifier(&c->rebalance.power_notifier);
+#endif
+}
+
+int bch2_fs_rebalance_init(struct bch_fs *c)
+{
+	struct bch_fs_rebalance *r = &c->rebalance;
+
+	bch2_pd_controller_init(&r->pd);
+
+#ifdef CONFIG_POWER_SUPPLY
+	r->power_notifier.notifier_call = bch2_rebalance_power_notifier;
+	int ret = power_supply_reg_notifier(&r->power_notifier);
+	if (ret)
+		return ret;
+
+	r->on_battery = !power_supply_is_system_supplied();
+#endif
+	return 0;
+}
+
+static int check_rebalance_work_one(struct btree_trans *trans,
+				    struct btree_iter *extent_iter,
+				    struct btree_iter *rebalance_iter,
+				    struct bkey_buf *last_flushed)
+{
+	struct bch_fs *c = trans->c;
+	struct bkey_s_c extent_k, rebalance_k;
+	struct printbuf buf = PRINTBUF;
+
+	int ret = bkey_err(extent_k	= bch2_btree_iter_peek(trans, extent_iter)) ?:
+		  bkey_err(rebalance_k	= bch2_btree_iter_peek(trans, rebalance_iter));
+	if (ret)
+		return ret;
+
+	if (!extent_k.k &&
+	    extent_iter->btree_id == BTREE_ID_reflink &&
+	    (!rebalance_k.k ||
+	     rebalance_k.k->p.inode >= BCACHEFS_ROOT_INO)) {
+		bch2_trans_iter_exit(trans, extent_iter);
+		bch2_trans_iter_init(trans, extent_iter,
+				     BTREE_ID_extents, POS_MIN,
+				     BTREE_ITER_prefetch|
+				     BTREE_ITER_all_snapshots);
+		return -BCH_ERR_transaction_restart_nested;
+	}
+
+	if (!extent_k.k && !rebalance_k.k)
+		return 1;
+
+	int cmp = bpos_cmp(extent_k.k	 ? extent_k.k->p    : SPOS_MAX,
+			   rebalance_k.k ? rebalance_k.k->p : SPOS_MAX);
+
+	struct bkey deleted;
+	bkey_init(&deleted);
+
+	if (cmp < 0) {
+		deleted.p = extent_k.k->p;
+		rebalance_k.k = &deleted;
+	} else if (cmp > 0) {
+		deleted.p = rebalance_k.k->p;
+		extent_k.k = &deleted;
+	}
+
+	bool should_have_rebalance =
+		bch2_bkey_sectors_need_rebalance(c, extent_k) != 0;
+	bool have_rebalance = rebalance_k.k->type == KEY_TYPE_set;
+
+	if (should_have_rebalance != have_rebalance) {
+		ret = bch2_btree_write_buffer_maybe_flush(trans, extent_k, last_flushed);
+		if (ret)
+			return ret;
+
+		bch2_bkey_val_to_text(&buf, c, extent_k);
+	}
+
+	if (fsck_err_on(!should_have_rebalance && have_rebalance,
+			trans, rebalance_work_incorrectly_set,
+			"rebalance work incorrectly set\n%s", buf.buf)) {
+		ret = bch2_btree_bit_mod_buffered(trans, BTREE_ID_rebalance_work,
+						  extent_k.k->p, false);
+		if (ret)
+			goto err;
+	}
+
+	if (fsck_err_on(should_have_rebalance && !have_rebalance,
+			trans, rebalance_work_incorrectly_unset,
+			"rebalance work incorrectly unset\n%s", buf.buf)) {
+		ret = bch2_btree_bit_mod_buffered(trans, BTREE_ID_rebalance_work,
+						  extent_k.k->p, true);
+		if (ret)
+			goto err;
+	}
+
+	if (cmp <= 0)
+		bch2_btree_iter_advance(trans, extent_iter);
+	if (cmp >= 0)
+		bch2_btree_iter_advance(trans, rebalance_iter);
+err:
+fsck_err:
+	printbuf_exit(&buf);
+	return ret;
+}
+
+int bch2_check_rebalance_work(struct bch_fs *c)
+{
+	struct btree_trans *trans = bch2_trans_get(c);
+	struct btree_iter rebalance_iter, extent_iter;
+	int ret = 0;
+
+	bch2_trans_iter_init(trans, &extent_iter,
+			     BTREE_ID_reflink, POS_MIN,
+			     BTREE_ITER_prefetch);
+	bch2_trans_iter_init(trans, &rebalance_iter,
+			     BTREE_ID_rebalance_work, POS_MIN,
+			     BTREE_ITER_prefetch);
+
+	struct bkey_buf last_flushed;
+	bch2_bkey_buf_init(&last_flushed);
+	bkey_init(&last_flushed.k->k);
+
+	while (!ret) {
+		bch2_trans_begin(trans);
+
+		ret = check_rebalance_work_one(trans, &extent_iter, &rebalance_iter, &last_flushed);
+
+		if (bch2_err_matches(ret, BCH_ERR_transaction_restart))
+			ret = 0;
+	}
+
+	bch2_bkey_buf_exit(&last_flushed, c);
+	bch2_trans_iter_exit(trans, &extent_iter);
+	bch2_trans_iter_exit(trans, &rebalance_iter);
+	bch2_trans_put(trans);
+	return ret < 0 ? ret : 0;
 }
