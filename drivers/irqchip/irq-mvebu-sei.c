@@ -402,7 +402,7 @@ static int mvebu_sei_probe(struct platform_device *pdev)
 	}
 
 	/* Create the root SEI domain */
-	sei->sei_domain = irq_domain_create_linear(of_node_to_fwnode(node),
+	sei->sei_domain = irq_domain_create_linear(of_fwnode_handle(node),
 						   (sei->caps->ap_range.size +
 						    sei->caps->cp_range.size),
 						   &mvebu_sei_domain_ops,
@@ -418,7 +418,7 @@ static int mvebu_sei_probe(struct platform_device *pdev)
 	/* Create the 'wired' domain */
 	sei->ap_domain = irq_domain_create_hierarchy(sei->sei_domain, 0,
 						     sei->caps->ap_range.size,
-						     of_node_to_fwnode(node),
+						     of_fwnode_handle(node),
 						     &mvebu_sei_ap_domain_ops,
 						     sei);
 	if (!sei->ap_domain) {
@@ -432,7 +432,7 @@ static int mvebu_sei_probe(struct platform_device *pdev)
 	/* Create the 'MSI' domain */
 	sei->cp_domain = irq_domain_create_hierarchy(sei->sei_domain, 0,
 						     sei->caps->cp_range.size,
-						     of_node_to_fwnode(node),
+						     of_fwnode_handle(node),
 						     &mvebu_sei_cp_domain_ops,
 						     sei);
 	if (!sei->cp_domain) {
