@@ -493,14 +493,13 @@ struct q_inval {
 
 /* Page Request Queue depth */
 #define PRQ_ORDER	4
-#define PRQ_RING_MASK	((0x1000 << PRQ_ORDER) - 0x20)
-#define PRQ_DEPTH	((0x1000 << PRQ_ORDER) >> 5)
+#define PRQ_SIZE	(SZ_4K << PRQ_ORDER)
+#define PRQ_RING_MASK	(PRQ_SIZE - 0x20)
+#define PRQ_DEPTH	(PRQ_SIZE >> 5)
 
 struct dmar_pci_notify_info;
 
 #ifdef CONFIG_IRQ_REMAP
-/* 1MB - maximum possible interrupt remapping table size */
-#define INTR_REMAP_PAGE_ORDER	8
 #define INTR_REMAP_TABLE_REG_SIZE	0xf
 #define INTR_REMAP_TABLE_REG_SIZE_MASK  0xf
 
@@ -1297,6 +1296,39 @@ void intel_iommu_drain_pasid_prq(struct device *dev, u32 pasid);
 
 int intel_iommu_enable_iopf(struct device *dev);
 void intel_iommu_disable_iopf(struct device *dev);
+
+static inline int iopf_for_domain_set(struct iommu_domain *domain,
+				      struct device *dev)
+{
+	if (!domain || !domain->iopf_handler)
+		return 0;
+
+	return intel_iommu_enable_iopf(dev);
+}
+
+static inline void iopf_for_domain_remove(struct iommu_domain *domain,
+					  struct device *dev)
+{
+	if (!domain || !domain->iopf_handler)
+		return;
+
+	intel_iommu_disable_iopf(dev);
+}
+
+static inline int iopf_for_domain_replace(struct iommu_domain *new,
+					  struct iommu_domain *old,
+					  struct device *dev)
+{
+	int ret;
+
+	ret = iopf_for_domain_set(new, dev);
+	if (ret)
+		return ret;
+
+	iopf_for_domain_remove(old, dev);
+
+	return 0;
+}
 
 #ifdef CONFIG_INTEL_IOMMU_SVM
 void intel_svm_check(struct intel_iommu *iommu);
