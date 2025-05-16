@@ -9,6 +9,16 @@
 #include "core.h"
 #include "cxlmem.h"
 
+/**
+ * DOC: cxl features
+ *
+ * CXL Features:
+ * A CXL device that includes a mailbox supports commands that allows
+ * listing, getting, and setting of optionally defined features such
+ * as memory sparing or post package sparing. Vendors may define custom
+ * features for the device.
+ */
+
 /* All the features below are exclusive to the kernel */
 static const uuid_t cxl_exclusive_feats[] = {
 	CXL_FEAT_PATROL_SCRUB_UUID,
@@ -614,11 +624,7 @@ static bool cxlctl_validate_hw_command(struct cxl_features_state *cxlfs,
 	switch (opcode) {
 	case CXL_MBOX_OP_GET_SUPPORTED_FEATURES:
 	case CXL_MBOX_OP_GET_FEATURE:
-		if (cxl_mbox->feat_cap < CXL_FEATURES_RO)
-			return false;
-		if (scope >= FWCTL_RPC_CONFIGURATION)
-			return true;
-		return false;
+		return cxl_mbox->feat_cap >= CXL_FEATURES_RO;
 	case CXL_MBOX_OP_SET_FEATURE:
 		if (cxl_mbox->feat_cap < CXL_FEATURES_RW)
 			return false;
