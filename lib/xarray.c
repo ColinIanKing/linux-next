@@ -8,6 +8,7 @@
 
 #include <linux/bitmap.h>
 #include <linux/export.h>
+#include <linux/kmemleak.h>
 #include <linux/list.h>
 #include <linux/slab.h>
 #include <linux/xarray.h>
@@ -476,6 +477,7 @@ static void xas_shrink(struct xa_state *xas)
 			break;
 		node = xa_to_node(entry);
 		node->parent = NULL;
+		kmemleak_transient_leak(node);
 	}
 }
 
