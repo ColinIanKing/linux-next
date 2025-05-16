@@ -103,8 +103,7 @@ struct bio_vec *bvec_alloc(mempool_t *pool, unsigned short *nr_vecs,
 void bvec_free(mempool_t *pool, struct bio_vec *bv, unsigned short nr_vecs);
 
 bool bvec_try_merge_hw_page(struct request_queue *q, struct bio_vec *bv,
-		struct page *page, unsigned len, unsigned offset,
-		bool *same_page);
+		struct page *page, unsigned len, unsigned offset);
 
 static inline bool biovec_phys_mergeable(struct request_queue *q,
 		struct bio_vec *vec1, struct bio_vec *vec2)
@@ -322,11 +321,9 @@ bool blk_bio_list_merge(struct request_queue *q, struct list_head *list,
 
 bool blk_insert_flush(struct request *rq);
 
-int elevator_switch(struct request_queue *q, struct elevator_type *new_e);
-void elevator_disable(struct request_queue *q);
-void elevator_exit(struct request_queue *q);
-int elv_register_queue(struct request_queue *q, bool uevent);
-void elv_unregister_queue(struct request_queue *q);
+void elv_update_nr_hw_queues(struct request_queue *q);
+void elevator_set_default(struct request_queue *q);
+void elevator_set_none(struct request_queue *q);
 
 ssize_t part_size_show(struct device *dev, struct device_attribute *attr,
 		char *buf);
@@ -421,7 +418,6 @@ void blk_apply_bdi_limits(struct backing_dev_info *bdi,
 int blk_dev_init(void);
 
 void update_io_ticks(struct block_device *part, unsigned long now, bool end);
-unsigned int part_in_flight(struct block_device *part);
 
 static inline void req_set_nomerge(struct request_queue *q, struct request *req)
 {
@@ -442,23 +438,6 @@ static inline void ioc_clear_queue(struct request_queue *q)
 {
 }
 #endif /* CONFIG_BLK_ICQ */
-
-struct bio *__blk_queue_bounce(struct bio *bio, struct request_queue *q);
-
-static inline bool blk_queue_may_bounce(struct request_queue *q)
-{
-	return IS_ENABLED(CONFIG_BOUNCE) &&
-		(q->limits.features & BLK_FEAT_BOUNCE_HIGH) &&
-		max_low_pfn >= max_pfn;
-}
-
-static inline struct bio *blk_queue_bounce(struct bio *bio,
-		struct request_queue *q)
-{
-	if (unlikely(blk_queue_may_bounce(q) && bio_has_data(bio)))
-		return __blk_queue_bounce(bio, q);
-	return bio;
-}
 
 #ifdef CONFIG_BLK_DEV_ZONED
 void disk_init_zone_resources(struct gendisk *disk);
