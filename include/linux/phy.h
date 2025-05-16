@@ -1753,56 +1753,13 @@ int phy_modify_paged(struct phy_device *phydev, int page, u32 regnum,
 struct phy_device *phy_device_create(struct mii_bus *bus, int addr, u32 phy_id,
 				     bool is_c45,
 				     struct phy_c45_device_ids *c45_ids);
-#if IS_ENABLED(CONFIG_PHYLIB)
 int fwnode_get_phy_id(struct fwnode_handle *fwnode, u32 *phy_id);
 struct mdio_device *fwnode_mdio_find_device(struct fwnode_handle *fwnode);
 struct phy_device *fwnode_phy_find_device(struct fwnode_handle *phy_fwnode);
-struct phy_device *device_phy_find_device(struct device *dev);
 struct fwnode_handle *fwnode_get_phy_node(const struct fwnode_handle *fwnode);
 struct phy_device *get_phy_device(struct mii_bus *bus, int addr, bool is_c45);
 int phy_device_register(struct phy_device *phy);
 void phy_device_free(struct phy_device *phydev);
-#else
-static inline int fwnode_get_phy_id(struct fwnode_handle *fwnode, u32 *phy_id)
-{
-	return 0;
-}
-static inline
-struct mdio_device *fwnode_mdio_find_device(struct fwnode_handle *fwnode)
-{
-	return 0;
-}
-
-static inline
-struct phy_device *fwnode_phy_find_device(struct fwnode_handle *phy_fwnode)
-{
-	return NULL;
-}
-
-static inline struct phy_device *device_phy_find_device(struct device *dev)
-{
-	return NULL;
-}
-
-static inline
-struct fwnode_handle *fwnode_get_phy_node(struct fwnode_handle *fwnode)
-{
-	return NULL;
-}
-
-static inline
-struct phy_device *get_phy_device(struct mii_bus *bus, int addr, bool is_c45)
-{
-	return NULL;
-}
-
-static inline int phy_device_register(struct phy_device *phy)
-{
-	return 0;
-}
-
-static inline void phy_device_free(struct phy_device *phydev) { }
-#endif /* CONFIG_PHYLIB */
 void phy_device_remove(struct phy_device *phydev);
 int phy_get_c45_ids(struct phy_device *phydev);
 int phy_init_hw(struct phy_device *phydev);
@@ -2046,6 +2003,9 @@ int phy_get_tx_amplitude_gain(struct phy_device *phydev, struct device *dev,
 			      enum ethtool_link_mode_bit_indices linkmode,
 			      u32 *val);
 
+int phy_get_mac_termination(struct phy_device *phydev, struct device *dev,
+			    u32 *val);
+
 void phy_resolve_pause(unsigned long *local_adv, unsigned long *partner_adv,
 		       bool *tx_pause, bool *rx_pause);
 
@@ -2102,6 +2062,7 @@ int __phy_hwtstamp_set(struct phy_device *phydev,
 		       struct netlink_ext_ack *extack);
 
 extern const struct bus_type mdio_bus_type;
+extern const struct class mdio_bus_class;
 
 struct mdio_board_info {
 	const char	*bus_id;
@@ -2110,17 +2071,8 @@ struct mdio_board_info {
 	const void	*platform_data;
 };
 
-#if IS_ENABLED(CONFIG_MDIO_DEVICE)
 int mdiobus_register_board_info(const struct mdio_board_info *info,
 				unsigned int n);
-#else
-static inline int mdiobus_register_board_info(const struct mdio_board_info *i,
-					      unsigned int n)
-{
-	return 0;
-}
-#endif
-
 
 /**
  * phy_module_driver() - Helper macro for registering PHY drivers

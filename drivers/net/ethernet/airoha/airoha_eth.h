@@ -17,6 +17,7 @@
 
 #define AIROHA_MAX_NUM_GDM_PORTS	4
 #define AIROHA_MAX_NUM_QDMA		2
+#define AIROHA_MAX_NUM_IRQ_BANKS	4
 #define AIROHA_MAX_DSA_PORTS		7
 #define AIROHA_MAX_NUM_RSTS		3
 #define AIROHA_MAX_NUM_XSI_RSTS		5
@@ -125,6 +126,11 @@ enum tx_sched_mode {
 	TC_SCH_WRR4,
 	TC_SCH_WRR3,
 	TC_SCH_WRR2,
+};
+
+enum trtcm_unit_type {
+	TRTCM_BYTE_UNIT,
+	TRTCM_PACKET_UNIT,
 };
 
 enum trtcm_param_type {
@@ -422,26 +428,58 @@ struct airoha_flow_data {
 	} pppoe;
 };
 
+enum airoha_flow_entry_type {
+	FLOW_TYPE_L4,
+	FLOW_TYPE_L2,
+	FLOW_TYPE_L2_SUBFLOW,
+};
+
 struct airoha_flow_table_entry {
-	struct hlist_node list;
+	union {
+		struct hlist_node list; /* PPE L3 flow entry */
+		struct {
+			struct rhash_head l2_node;  /* L2 flow entry */
+			struct hlist_head l2_flows; /* PPE L2 subflows list */
+		};
+	};
 
 	struct airoha_foe_entry data;
+	struct hlist_node l2_subflow_node; /* PPE L2 subflow entry */
 	u32 hash;
+
+	enum airoha_flow_entry_type type;
 
 	struct rhash_head node;
 	unsigned long cookie;
+};
+
+/* RX queue to IRQ mapping: BIT(q) in IRQ(n) */
+#define RX_IRQ0_BANK_PIN_MASK			0x839f
+#define RX_IRQ1_BANK_PIN_MASK			0x7fe00000
+#define RX_IRQ2_BANK_PIN_MASK			0x20
+#define RX_IRQ3_BANK_PIN_MASK			0x40
+#define RX_IRQ_BANK_PIN_MASK(_n)		\
+	(((_n) == 3) ? RX_IRQ3_BANK_PIN_MASK :	\
+	 ((_n) == 2) ? RX_IRQ2_BANK_PIN_MASK :	\
+	 ((_n) == 1) ? RX_IRQ1_BANK_PIN_MASK :	\
+	 RX_IRQ0_BANK_PIN_MASK)
+
+struct airoha_irq_bank {
+	struct airoha_qdma *qdma;
+
+	/* protect concurrent irqmask accesses */
+	spinlock_t irq_lock;
+	u32 irqmask[QDMA_INT_REG_MAX];
+	int irq;
 };
 
 struct airoha_qdma {
 	struct airoha_eth *eth;
 	void __iomem *regs;
 
-	/* protect concurrent irqmask accesses */
-	spinlock_t irq_lock;
-	u32 irqmask[QDMA_INT_REG_MAX];
-	int irq;
-
 	atomic_t users;
+
+	struct airoha_irq_bank irq_banks[AIROHA_MAX_NUM_IRQ_BANKS];
 
 	struct airoha_tx_irq_queue q_tx_irq[AIROHA_NUM_TX_IRQ];
 
@@ -479,6 +517,8 @@ struct airoha_ppe {
 
 	void *foe;
 	dma_addr_t foe_dma;
+
+	struct rhashtable l2_flows;
 
 	struct hlist_head *foe_flow;
 	u16 foe_check_time[PPE_NUM_ENTRIES];
@@ -535,9 +575,9 @@ u32 airoha_rmw(void __iomem *base, u32 offset, u32 mask, u32 val);
 bool airoha_is_valid_gdm_port(struct airoha_eth *eth,
 			      struct airoha_gdm_port *port);
 
-void airoha_ppe_check_skb(struct airoha_ppe *ppe, u16 hash);
-int airoha_ppe_setup_tc_block_cb(enum tc_setup_type type, void *type_data,
-				 void *cb_priv);
+void airoha_ppe_check_skb(struct airoha_ppe *ppe, struct sk_buff *skb,
+			  u16 hash);
+int airoha_ppe_setup_tc_block_cb(struct net_device *dev, void *type_data);
 int airoha_ppe_init(struct airoha_eth *eth);
 void airoha_ppe_deinit(struct airoha_eth *eth);
 struct airoha_foe_entry *airoha_ppe_foe_get_entry(struct airoha_ppe *ppe,
