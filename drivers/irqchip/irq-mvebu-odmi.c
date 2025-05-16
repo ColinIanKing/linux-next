@@ -207,7 +207,7 @@ static int __init mvebu_odmi_init(struct device_node *node,
 
 	inner_domain = irq_domain_create_hierarchy(parent_domain, 0,
 						   odmis_count * NODMIS_PER_FRAME,
-						   of_node_to_fwnode(node),
+						   of_fwnode_handle(node),
 						   &odmi_domain_ops, NULL);
 	if (!inner_domain) {
 		ret = -ENOMEM;

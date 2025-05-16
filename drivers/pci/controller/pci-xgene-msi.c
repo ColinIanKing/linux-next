@@ -242,8 +242,7 @@ static const struct irq_domain_ops msi_domain_ops = {
 
 static int xgene_allocate_domains(struct xgene_msi *msi)
 {
-	msi->inner_domain = irq_domain_add_linear(NULL, NR_MSI_VEC,
-						  &msi_domain_ops, msi);
+	msi->inner_domain = irq_domain_create_linear(NULL, NR_MSI_VEC, &msi_domain_ops, msi);
 	if (!msi->inner_domain)
 		return -ENOMEM;
 
