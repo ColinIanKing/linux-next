@@ -4,6 +4,9 @@
  * Copyright (C) 2017-2021 Willy Tarreau <w@1wt.eu>
  */
 
+/* make sure to include all global symbols */
+#include "nolibc.h"
+
 #ifndef _NOLIBC_TYPES_H
 #define _NOLIBC_TYPES_H
 
@@ -156,20 +159,6 @@ typedef struct {
 			__set->fds[__idx] = 0;				\
 	} while (0)
 
-/* for poll() */
-#define POLLIN          0x0001
-#define POLLPRI         0x0002
-#define POLLOUT         0x0004
-#define POLLERR         0x0008
-#define POLLHUP         0x0010
-#define POLLNVAL        0x0020
-
-struct pollfd {
-	int fd;
-	short int events;
-	short int revents;
-};
-
 /* for getdents64() */
 struct linux_dirent64 {
 	uint64_t       d_ino;
@@ -198,10 +187,13 @@ struct stat {
 	union { time_t st_ctime; struct timespec st_ctim; }; /* time of last status change */
 };
 
+typedef __kernel_clockid_t clockid_t;
+typedef int timer_t;
+
 /* WARNING, it only deals with the 4096 first majors and 256 first minors */
 #define makedev(major, minor) ((dev_t)((((major) & 0xfff) << 8) | ((minor) & 0xff)))
 #define major(dev) ((unsigned int)(((dev) >> 8) & 0xfff))
-#define minor(dev) ((unsigned int)(((dev) & 0xff))
+#define minor(dev) ((unsigned int)((dev) & 0xff))
 
 #ifndef offsetof
 #define offsetof(TYPE, FIELD) ((size_t) &((TYPE *)0)->FIELD)
@@ -213,8 +205,5 @@ struct stat {
 	(TYPE *)((char *) __FIELD_PTR - offsetof(TYPE, FIELD));	\
 })
 #endif
-
-/* make sure to include all global symbols */
-#include "nolibc.h"
 
 #endif /* _NOLIBC_TYPES_H */

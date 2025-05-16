@@ -96,7 +96,17 @@
 #include "arch.h"
 #include "types.h"
 #include "sys.h"
+#include "sys/auxv.h"
+#include "sys/mman.h"
+#include "sys/random.h"
+#include "sys/stat.h"
+#include "sys/syscall.h"
+#include "sys/time.h"
+#include "sys/timerfd.h"
+#include "sys/wait.h"
 #include "ctype.h"
+#include "elf.h"
+#include "sched.h"
 #include "signal.h"
 #include "unistd.h"
 #include "stdio.h"
@@ -105,6 +115,10 @@
 #include "time.h"
 #include "stackprotector.h"
 #include "dirent.h"
+#include "fcntl.h"
+#include "getopt.h"
+#include "poll.h"
+#include "math.h"
 
 /* Used by programs to avoid std includes */
 #define NOLIBC
