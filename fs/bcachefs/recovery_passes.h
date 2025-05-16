@@ -3,16 +3,23 @@
 
 extern const char * const bch2_recovery_passes[];
 
+extern const struct bch_sb_field_ops bch_sb_field_ops_recovery_passes;
+
 u64 bch2_recovery_passes_to_stable(u64 v);
 u64 bch2_recovery_passes_from_stable(u64 v);
 
 u64 bch2_fsck_recovery_passes(void);
 
 int bch2_run_explicit_recovery_pass(struct bch_fs *, enum bch_recovery_pass);
-int bch2_run_explicit_recovery_pass_persistent_locked(struct bch_fs *, enum bch_recovery_pass);
-int bch2_run_explicit_recovery_pass_persistent(struct bch_fs *, enum bch_recovery_pass);
+
+int __bch2_run_explicit_recovery_pass_persistent(struct bch_fs *, struct printbuf *,
+					       enum bch_recovery_pass);
+int bch2_run_explicit_recovery_pass_persistent(struct bch_fs *, struct printbuf *,
+					       enum bch_recovery_pass);
 
 int bch2_run_online_recovery_passes(struct bch_fs *);
 int bch2_run_recovery_passes(struct bch_fs *);
+
+void bch2_fs_recovery_passes_init(struct bch_fs *);
 
 #endif /* _BCACHEFS_RECOVERY_PASSES_H */

@@ -346,8 +346,9 @@ restart_drop_extra_replicas:
 							.btree	= m->btree_id,
 							.flags	= BCH_VALIDATE_commit,
 						 });
-		if (invalid) {
+		if (unlikely(invalid)) {
 			struct printbuf buf = PRINTBUF;
+			bch2_log_msg_start(c, &buf);
 
 			prt_str(&buf, "about to insert invalid key in data update path");
 			prt_printf(&buf, "\nop.nonce: %u", m->op.nonce);
@@ -358,13 +359,29 @@ restart_drop_extra_replicas:
 			prt_str(&buf, "\nnew: ");
 			bch2_bkey_val_to_text(&buf, c, bkey_i_to_s_c(insert));
 
-			bch2_print_string_as_lines(KERN_ERR, buf.buf);
+			bch2_fs_emergency_read_only2(c, &buf);
+
+			bch2_print_str(c, KERN_ERR, buf.buf);
 			printbuf_exit(&buf);
 
-			bch2_fatal_error(c);
 			ret = -BCH_ERR_invalid_bkey;
 			goto out;
 		}
+
+		printbuf_reset(&journal_msg);
+		prt_str(&journal_msg, bch2_data_update_type_strs[m->type]);
+
+		ret =   bch2_trans_log_msg(trans, &journal_msg) ?:
+			bch2_trans_log_bkey(trans, m->btree_id, 0, m->k.k) ?:
+			bch2_insert_snapshot_whiteouts(trans, m->btree_id,
+						k.k->p, bkey_start_pos(&insert->k)) ?:
+			bch2_insert_snapshot_whiteouts(trans, m->btree_id,
+						k.k->p, insert->k.p) ?:
+			bch2_bkey_set_needs_rebalance(c, &op->opts, insert) ?:
+			bch2_trans_update(trans, &iter, insert,
+				BTREE_UPDATE_internal_snapshot_node);
+		if (ret)
+			goto err;
 
 		if (trace_data_update_enabled()) {
 			struct printbuf buf = PRINTBUF;
@@ -380,30 +397,38 @@ restart_drop_extra_replicas:
 			printbuf_exit(&buf);
 		}
 
-		printbuf_reset(&journal_msg);
-		prt_str(&journal_msg, bch2_data_update_type_strs[m->type]);
+		if (bch2_bkey_sectors_need_rebalance(c, bkey_i_to_s_c(insert)) * k.k->size >
+		    bch2_bkey_sectors_need_rebalance(c, k) * insert->k.size) {
+			struct printbuf buf = PRINTBUF;
 
-		ret =   bch2_trans_log_msg(trans, &journal_msg) ?:
-			bch2_trans_log_bkey(trans, m->btree_id, 0, m->k.k) ?:
-			bch2_insert_snapshot_whiteouts(trans, m->btree_id,
-						k.k->p, bkey_start_pos(&insert->k)) ?:
-			bch2_insert_snapshot_whiteouts(trans, m->btree_id,
-						k.k->p, insert->k.p) ?:
-			bch2_bkey_set_needs_rebalance(c, &op->opts, insert) ?:
-			bch2_trans_update(trans, &iter, insert,
-				BTREE_UPDATE_internal_snapshot_node) ?:
-			bch2_trans_commit(trans, &op->res,
+			bch2_data_update_opts_to_text(&buf, c, &m->op.opts, &m->data_opts);
+
+			prt_str(&buf, "\nold: ");
+			bch2_bkey_val_to_text(&buf, c, old);
+			prt_str(&buf, "\nk:   ");
+			bch2_bkey_val_to_text(&buf, c, k);
+			prt_str(&buf, "\nnew: ");
+			bch2_bkey_val_to_text(&buf, c, bkey_i_to_s_c(insert));
+
+			trace_io_move_created_rebalance(c, buf.buf);
+			printbuf_exit(&buf);
+
+			this_cpu_inc(c->counters[BCH_COUNTER_io_move_created_rebalance]);
+		}
+
+		ret =   bch2_trans_commit(trans, &op->res,
 				NULL,
 				BCH_TRANS_COMMIT_no_check_rw|
 				BCH_TRANS_COMMIT_no_enospc|
 				m->data_opts.btree_insert_flags);
-		if (!ret) {
-			bch2_btree_iter_set_pos(trans, &iter, next_pos);
+		if (ret)
+			goto err;
 
-			this_cpu_add(c->counters[BCH_COUNTER_io_move_finish], new->k.size);
-			if (trace_io_move_finish_enabled())
-				trace_io_move_finish2(m, &new->k_i, insert);
-		}
+		bch2_btree_iter_set_pos(trans, &iter, next_pos);
+
+		this_cpu_add(c->counters[BCH_COUNTER_io_move_finish], new->k.size);
+		if (trace_io_move_finish_enabled())
+			trace_io_move_finish2(m, &new->k_i, insert);
 err:
 		if (bch2_err_matches(ret, BCH_ERR_transaction_restart))
 			ret = 0;
@@ -587,6 +612,10 @@ void bch2_data_update_opts_to_text(struct printbuf *out, struct bch_fs *c,
 
 	prt_str_indented(out, "extra replicas:\t");
 	prt_u64(out, data_opts->extra_replicas);
+	prt_newline(out);
+
+	prt_str_indented(out, "scrub:\t");
+	prt_u64(out, data_opts->scrub);
 }
 
 void bch2_data_update_to_text(struct printbuf *out, struct data_update *m)
@@ -607,9 +636,17 @@ void bch2_data_update_inflight_to_text(struct printbuf *out, struct data_update 
 	prt_newline(out);
 	printbuf_indent_add(out, 2);
 	bch2_data_update_opts_to_text(out, m->op.c, &m->op.opts, &m->data_opts);
-	prt_printf(out, "read_done:\t%u\n", m->read_done);
-	bch2_write_op_to_text(out, &m->op);
-	printbuf_indent_sub(out, 2);
+
+	if (!m->read_done) {
+		prt_printf(out, "read:\n");
+		printbuf_indent_add(out, 2);
+		bch2_read_bio_to_text(out, &m->rbio);
+	} else {
+		prt_printf(out, "write:\n");
+		printbuf_indent_add(out, 2);
+		bch2_write_op_to_text(out, &m->op);
+	}
+	printbuf_indent_sub(out, 4);
 }
 
 int bch2_extent_drop_ptrs(struct btree_trans *trans,
@@ -707,7 +744,9 @@ static int can_write_extent(struct bch_fs *c, struct data_update *m)
 	rcu_read_lock();
 	unsigned nr_replicas = 0, i;
 	for_each_set_bit(i, devs.d, BCH_SB_MEMBERS_MAX) {
-		struct bch_dev *ca = bch2_dev_rcu(c, i);
+		struct bch_dev *ca = bch2_dev_rcu_noerror(c, i);
+		if (!ca)
+			continue;
 
 		struct bch_dev_usage usage;
 		bch2_dev_usage_read_fast(ca, &usage);

@@ -47,6 +47,8 @@
 
 #define NFSDDBG_FACILITY		NFSDDBG_FILEOP
 
+bool nfsd_disable_splice_read __read_mostly;
+
 /**
  * nfserrno - Map Linux errnos to NFS errnos
  * @errno: POSIX(-ish) error code to be mapped
@@ -244,7 +246,7 @@ nfsd_lookup_dentry(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	struct dentry		*dentry;
 	int			host_err;
 
-	dprintk("nfsd: nfsd_lookup(fh %s, %.*s)\n", SVCFH_fmt(fhp), len,name);
+	trace_nfsd_vfs_lookup(rqstp, fhp, name, len);
 
 	dparent = fhp->fh_dentry;
 	exp = exp_get(fhp->fh_export);
@@ -264,7 +266,8 @@ nfsd_lookup_dentry(struct svc_rqst *rqstp, struct svc_fh *fhp,
 				goto out_nfserr;
 		}
 	} else {
-		dentry = lookup_one_len_unlocked(name, dparent, len);
+		dentry = lookup_one_unlocked(&nop_mnt_idmap,
+					     &QSTR_LEN(name, len), dparent);
 		host_err = PTR_ERR(dentry);
 		if (IS_ERR(dentry))
 			goto out_nfserr;
@@ -498,6 +501,8 @@ nfsd_setattr(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	bool		get_write_count;
 	bool		size_change = (iap->ia_valid & ATTR_SIZE);
 	int		retries;
+
+	trace_nfsd_vfs_setattr(rqstp, fhp, iap, guardtime);
 
 	if (iap->ia_valid & ATTR_SIZE) {
 		accmode |= NFSD_MAY_WRITE|NFSD_MAY_OWNER_OVERRIDE;
@@ -922,7 +927,7 @@ nfsd_open(struct svc_rqst *rqstp, struct svc_fh *fhp, umode_t type,
 	 * directories, but we never have and it doesn't seem to have
 	 * caused anyone a problem.  If we were to change this, note
 	 * also that our filldir callbacks would need a variant of
-	 * lookup_one_len that doesn't check permissions.
+	 * lookup_one_positive_unlocked() that doesn't check permissions.
 	 */
 	if (type == S_IFREG)
 		may_flags |= NFSD_MAY_OWNER_OVERRIDE;
@@ -1236,6 +1241,8 @@ out_nfserr:
  */
 bool nfsd_read_splice_ok(struct svc_rqst *rqstp)
 {
+	if (nfsd_disable_splice_read)
+		return false;
 	switch (svc_auth_flavor(rqstp)) {
 	case RPC_AUTH_GSS_KRB5I:
 	case RPC_AUTH_GSS_KRB5P:
@@ -1339,6 +1346,8 @@ nfsd_commit(struct svc_rqst *rqstp, struct svc_fh *fhp, struct nfsd_file *nf,
 	loff_t			start, end;
 	struct nfsd_net		*nn;
 
+	trace_nfsd_commit_start(rqstp, fhp, offset, count);
+
 	/*
 	 * Convert the client-provided (offset, count) range to a
 	 * (start, end) range. If the client-provided range falls
@@ -1377,6 +1386,7 @@ nfsd_commit(struct svc_rqst *rqstp, struct svc_fh *fhp, struct nfsd_file *nf,
 	} else
 		nfsd_copy_write_verifier(verf, nn);
 
+	trace_nfsd_commit_done(rqstp, fhp, offset, count);
 	return err;
 }
 
@@ -1540,6 +1550,8 @@ nfsd_create(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	__be32		err;
 	int		host_err;
 
+	trace_nfsd_vfs_create(rqstp, fhp, type, fname, flen);
+
 	if (isdotent(fname, flen))
 		return nfserr_exist;
 
@@ -1554,7 +1566,7 @@ nfsd_create(struct svc_rqst *rqstp, struct svc_fh *fhp,
 		return nfserrno(host_err);
 
 	inode_lock_nested(dentry->d_inode, I_MUTEX_PARENT);
-	dchild = lookup_one_len(fname, dentry, flen);
+	dchild = lookup_one(&nop_mnt_idmap, &QSTR_LEN(fname, flen), dentry);
 	host_err = PTR_ERR(dchild);
 	if (IS_ERR(dchild)) {
 		err = nfserrno(host_err);
@@ -1640,6 +1652,8 @@ nfsd_symlink(struct svc_rqst *rqstp, struct svc_fh *fhp,
 	__be32		err, cerr;
 	int		host_err;
 
+	trace_nfsd_vfs_symlink(rqstp, fhp, fname, flen, path);
+
 	err = nfserr_noent;
 	if (!flen || path[0] == '\0')
 		goto out;
@@ -1659,7 +1673,7 @@ nfsd_symlink(struct svc_rqst *rqstp, struct svc_fh *fhp,
 
 	dentry = fhp->fh_dentry;
 	inode_lock_nested(dentry->d_inode, I_MUTEX_PARENT);
-	dnew = lookup_one_len(fname, dentry, flen);
+	dnew = lookup_one(&nop_mnt_idmap, &QSTR_LEN(fname, flen), dentry);
 	if (IS_ERR(dnew)) {
 		err = nfserrno(PTR_ERR(dnew));
 		inode_unlock(dentry->d_inode);
@@ -1708,6 +1722,8 @@ nfsd_link(struct svc_rqst *rqstp, struct svc_fh *ffhp,
 	__be32		err;
 	int		host_err;
 
+	trace_nfsd_vfs_link(rqstp, ffhp, tfhp, name, len);
+
 	err = fh_verify(rqstp, ffhp, S_IFDIR, NFSD_MAY_CREATE);
 	if (err)
 		goto out;
@@ -1734,7 +1750,7 @@ nfsd_link(struct svc_rqst *rqstp, struct svc_fh *ffhp,
 	dirp = d_inode(ddir);
 	inode_lock_nested(dirp, I_MUTEX_PARENT);
 
-	dnew = lookup_one_len(name, ddir, len);
+	dnew = lookup_one(&nop_mnt_idmap, &QSTR_LEN(name, len), ddir);
 	if (IS_ERR(dnew)) {
 		host_err = PTR_ERR(dnew);
 		goto out_unlock;
@@ -1825,6 +1841,8 @@ nfsd_rename(struct svc_rqst *rqstp, struct svc_fh *ffhp, char *fname, int flen,
 	int		host_err;
 	bool		close_cached = false;
 
+	trace_nfsd_vfs_rename(rqstp, ffhp, tfhp, fname, flen, tname, tlen);
+
 	err = fh_verify(rqstp, ffhp, S_IFDIR, NFSD_MAY_REMOVE);
 	if (err)
 		goto out;
@@ -1867,7 +1885,7 @@ retry:
 	if (err != nfs_ok)
 		goto out_unlock;
 
-	odentry = lookup_one_len(fname, fdentry, flen);
+	odentry = lookup_one(&nop_mnt_idmap, &QSTR_LEN(fname, flen), fdentry);
 	host_err = PTR_ERR(odentry);
 	if (IS_ERR(odentry))
 		goto out_nfserr;
@@ -1880,7 +1898,7 @@ retry:
 		goto out_dput_old;
 	type = d_inode(odentry)->i_mode & S_IFMT;
 
-	ndentry = lookup_one_len(tname, tdentry, tlen);
+	ndentry = lookup_one(&nop_mnt_idmap, &QSTR_LEN(tname, tlen), tdentry);
 	host_err = PTR_ERR(ndentry);
 	if (IS_ERR(ndentry))
 		goto out_dput_old;
@@ -1983,6 +2001,8 @@ nfsd_unlink(struct svc_rqst *rqstp, struct svc_fh *fhp, int type,
 	__be32		err;
 	int		host_err;
 
+	trace_nfsd_vfs_unlink(rqstp, fhp, fname, flen);
+
 	err = nfserr_acces;
 	if (!flen || isdotent(fname, flen))
 		goto out;
@@ -1998,7 +2018,7 @@ nfsd_unlink(struct svc_rqst *rqstp, struct svc_fh *fhp, int type,
 	dirp = d_inode(dentry);
 	inode_lock_nested(dirp, I_MUTEX_PARENT);
 
-	rdentry = lookup_one_len(fname, dentry, flen);
+	rdentry = lookup_one(&nop_mnt_idmap, &QSTR_LEN(fname, flen), dentry);
 	host_err = PTR_ERR(rdentry);
 	if (IS_ERR(rdentry))
 		goto out_unlock;
@@ -2270,6 +2290,8 @@ __be32
 nfsd_statfs(struct svc_rqst *rqstp, struct svc_fh *fhp, struct kstatfs *stat, int access)
 {
 	__be32 err;
+
+	trace_nfsd_vfs_statfs(rqstp, fhp);
 
 	err = fh_verify(rqstp, fhp, 0, NFSD_MAY_NOP | access);
 	if (!err) {

@@ -339,6 +339,11 @@ DEFINE_EVENT(bio, io_read_reuse_race,
 	TP_ARGS(bio)
 );
 
+DEFINE_EVENT(bio, io_read_fail_and_poison,
+	TP_PROTO(struct bio *bio),
+	TP_ARGS(bio)
+);
+
 /* ec.c */
 
 TRACE_EVENT(stripe_create,
@@ -1464,6 +1469,11 @@ DEFINE_EVENT(fs_str, rebalance_extent,
 );
 
 DEFINE_EVENT(fs_str, data_update,
+	TP_PROTO(struct bch_fs *c, const char *str),
+	TP_ARGS(c, str)
+);
+
+DEFINE_EVENT(fs_str, io_move_created_rebalance,
 	TP_PROTO(struct bch_fs *c, const char *str),
 	TP_ARGS(c, str)
 );
