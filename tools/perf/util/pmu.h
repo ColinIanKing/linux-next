@@ -194,6 +194,9 @@ struct perf_pmu {
 struct perf_pmu_info {
 	const char *unit;
 	double scale;
+	double retirement_latency_mean;
+	double retirement_latency_min;
+	double retirement_latency_max;
 	bool per_pkg;
 	bool snapshot;
 };
@@ -273,6 +276,8 @@ void pmu_add_cpu_aliases_table(struct perf_pmu *pmu,
 bool pmu_uncore_identifier_match(const char *compat, const char *id);
 
 int perf_pmu__convert_scale(const char *scale, char **end, double *sval);
+
+struct perf_pmu_caps *perf_pmu__get_cap(struct perf_pmu *pmu, const char *name);
 
 int perf_pmu__caps_parse(struct perf_pmu *pmu);
 
