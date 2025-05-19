@@ -225,11 +225,11 @@ struct taskstats {
 	__u64	compact_delay_max;
 	__u64	compact_delay_min;
 
-	__u64    wpcopy_delay_max;
-	__u64    wpcopy_delay_min;
+	__u64	wpcopy_delay_max;
+	__u64	wpcopy_delay_min;
 
-	__u64    irq_delay_max;
-	__u64    irq_delay_min;
+	__u64	irq_delay_max;
+	__u64	irq_delay_min;
 };
 
 
