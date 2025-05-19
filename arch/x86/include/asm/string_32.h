@@ -145,12 +145,6 @@ static __always_inline void *__constant_memcpy(void *to, const void *from,
 #define __HAVE_ARCH_MEMCPY
 extern void *memcpy(void *, const void *, size_t);
 
-#ifndef CONFIG_FORTIFY_SOURCE
-
-#define memcpy(t, f, n) __builtin_memcpy(t, f, n)
-
-#endif /* !CONFIG_FORTIFY_SOURCE */
-
 #define __HAVE_ARCH_MEMMOVE
 void *memmove(void *dest, const void *src, size_t n);
 
