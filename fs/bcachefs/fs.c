@@ -1681,6 +1681,10 @@ static int fssetxattr_inode_update_fn(struct btree_trans *trans,
 		bi->bi_casefold = s->casefold + 1;
 		bi->bi_fields_set |= BIT(Inode_opt_casefold);
 
+		ret = bch2_maybe_propagate_has_case_insensitive(trans, inode_inum(inode), bi);
+		if (ret)
+			return ret;
+
 #else
 		printk(KERN_ERR "Cannot use casefolding on a kernel without CONFIG_UNICODE\n");
 		return -EOPNOTSUPP;
