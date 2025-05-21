@@ -962,8 +962,10 @@ void do_coredump(const kernel_siginfo_t *siginfo)
 		free_vma_snapshot(&cprm);
 	}
 
+#ifdef CONFIG_NET
 	if (sock_from_file(cprm.file))
 		kernel_sock_shutdown(sock_from_file(cprm.file), SHUT_WR);
+#endif
 
 	/*
 	 * When core_pipe_limit is set we wait for the coredump server
@@ -975,6 +977,7 @@ void do_coredump(const kernel_siginfo_t *siginfo)
 		case COREDUMP_PIPE:
 			wait_for_dump_helpers(cprm.file);
 			break;
+#ifdef CONFIG_NET
 		case COREDUMP_SOCK: {
 			/*
 			 * We use a simple read to wait for the coredump
@@ -985,6 +988,7 @@ void do_coredump(const kernel_siginfo_t *siginfo)
 			__kernel_read(cprm.file, &(char){ 0 }, 1, NULL);
 			break;
 		}
+#endif
 		default:
 			break;
 		}
