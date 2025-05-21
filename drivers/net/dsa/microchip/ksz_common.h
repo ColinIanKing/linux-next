@@ -142,7 +142,7 @@ struct ksz_port {
 	struct ksz_irq pirq;
 	u8 num;
 #if IS_ENABLED(CONFIG_NET_DSA_MICROCHIP_KSZ_PTP)
-	struct hwtstamp_config tstamp_config;
+	struct kernel_hwtstamp_config tstamp_config;
 	bool hwts_tx_en;
 	bool hwts_rx_en;
 	struct ksz_irq ptpirq;
@@ -835,6 +835,25 @@ static inline bool is_lan937x_tx_phy(struct ksz_device *dev, int port)
 #define SW_DRIVE_STRENGTH_28MA		7
 #define SW_HI_SPEED_DRIVE_STRENGTH_S	4
 #define SW_LO_SPEED_DRIVE_STRENGTH_S	0
+
+/* TXQ Split Control Register for per-port, per-queue configuration.
+ * Register 0xAF is TXQ Split for Q3 on Port 1.
+ * Register offset formula: 0xAF + (port * 4) + (3 - queue)
+ *   where: port = 0..2, queue = 0..3
+ */
+#define KSZ8873_TXQ_SPLIT_CTRL_REG(port, queue) \
+	(0xAF + ((port) * 4) + (3 - (queue)))
+
+/* Bit 7 selects between:
+ *   0 = Strict priority mode (highest-priority queue first)
+ *   1 = Weighted Fair Queuing (WFQ) mode:
+ *       Queue weights: Q3:Q2:Q1:Q0 = 8:4:2:1
+ *       If any queues are empty, weight is redistributed.
+ *
+ * Note: This is referred to as "Weighted Fair Queuing" (WFQ) in KSZ8863/8873
+ * documentation, and as "Weighted Round Robin" (WRR) in KSZ9477 family docs.
+ */
+#define KSZ8873_TXQ_WFQ_ENABLE		BIT(7)
 
 #define KSZ9477_REG_PORT_OUT_RATE_0	0x0420
 #define KSZ9477_OUT_RATE_NO_LIMIT	0
