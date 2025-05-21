@@ -84,6 +84,7 @@ struct ublk_rq_data {
 
 	/* for auto-unregister buffer in case of UBLK_F_AUTO_BUF_REG */
 	u16 buf_index;
+	unsigned long buf_ctx_id;
 };
 
 struct ublk_uring_cmd_pdu {
@@ -1192,6 +1193,11 @@ static void ublk_auto_buf_reg_fallback(struct request *req, struct ublk_io *io)
 	refcount_set(&data->ref, 1);
 }
 
+static unsigned long ublk_uring_cmd_ctx_id(struct io_uring_cmd *cmd)
+{
+	return (unsigned long)(cmd_to_io_kiocb(cmd)->ctx);
+}
+
 static bool ublk_auto_buf_reg(struct request *req, struct ublk_io *io,
 			      unsigned int issue_flags)
 {
@@ -1211,6 +1217,8 @@ static bool ublk_auto_buf_reg(struct request *req, struct ublk_io *io,
 	}
 	/* one extra reference is dropped by ublk_io_release */
 	refcount_set(&data->ref, 2);
+
+	data->buf_ctx_id = ublk_uring_cmd_ctx_id(io->cmd);
 	/* store buffer index in request payload */
 	data->buf_index = pdu->buf.index;
 	io->flags |= UBLK_IO_FLAG_AUTO_BUF_REG;
@@ -1994,6 +2002,21 @@ static void ublk_io_release(void *priv)
 {
 	struct request *rq = priv;
 	struct ublk_queue *ubq = rq->mq_hctx->driver_data;
+	struct ublk_io *io = &ubq->ios[rq->tag];
+
+	/*
+	 * In case of UBLK_F_AUTO_BUF_REG, the `io_uring_ctx` for registering
+	 * this buffer may be released, so we reach here not from handling
+	 * `UBLK_IO_COMMIT_AND_FETCH_REQ`.
+	 *
+	 * Force to clear UBLK_IO_FLAG_AUTO_BUF_REG, so that ublk server
+	 * still may complete this IO request by issuing uring_cmd from
+	 * another `io_uring_ctx` in case that the `io_ring_ctx` for
+	 * registering the buffer is gone
+	 */
+	if (ublk_support_auto_buf_reg(ubq) &&
+			(io->flags & UBLK_IO_FLAG_AUTO_BUF_REG))
+		io->flags &= ~UBLK_IO_FLAG_AUTO_BUF_REG;
 
 	ublk_put_req_ref(ubq, rq);
 }
@@ -2109,14 +2132,18 @@ static int ublk_commit_and_fetch(const struct ublk_queue *ubq,
 	}
 
 	if (ublk_support_auto_buf_reg(ubq)) {
+		struct ublk_rq_data *data = blk_mq_rq_to_pdu(req);
 		int ret;
 
 		if (io->flags & UBLK_IO_FLAG_AUTO_BUF_REG) {
-			struct ublk_rq_data *data = blk_mq_rq_to_pdu(req);
 
-			WARN_ON_ONCE(io_buffer_unregister_bvec(cmd,
-						data->buf_index,
-						issue_flags));
+			if (data->buf_ctx_id != ublk_uring_cmd_ctx_id(cmd))
+				return -EBADF;
+
+			ret = io_buffer_unregister_bvec(cmd, data->buf_index,
+							issue_flags);
+			if (ret)
+				return ret;
 			io->flags &= ~UBLK_IO_FLAG_AUTO_BUF_REG;
 		}
 
