@@ -3805,6 +3805,7 @@ static void reweight_entity(struct cfs_rq *cfs_rq, struct sched_entity *se,
 		update_entity_lag(cfs_rq, se);
 		se->deadline -= se->vruntime;
 		se->rel_deadline = 1;
+		cfs_rq->nr_queued--;
 		if (!curr)
 			__dequeue_entity(cfs_rq, se);
 		update_load_sub(&cfs_rq->load, se->load.weight);
@@ -3831,10 +3832,11 @@ static void reweight_entity(struct cfs_rq *cfs_rq, struct sched_entity *se,
 
 	enqueue_load_avg(cfs_rq, se);
 	if (se->on_rq) {
-		update_load_add(&cfs_rq->load, se->load.weight);
 		place_entity(cfs_rq, se, 0);
+		update_load_add(&cfs_rq->load, se->load.weight);
 		if (!curr)
 			__enqueue_entity(cfs_rq, se);
+		cfs_rq->nr_queued++;
 
 		/*
 		 * The entity's vruntime has been adjusted, so let's check
@@ -4941,13 +4943,6 @@ static inline void util_est_update(struct cfs_rq *cfs_rq,
 	last_ewma_diff = ewma - dequeued;
 	if (last_ewma_diff < UTIL_EST_MARGIN)
 		goto done;
-
-	/*
-	 * To avoid overestimation of actual task utilization, skip updates if
-	 * we cannot grant there is idle time in this CPU.
-	 */
-	if (dequeued > arch_scale_cpu_capacity(cpu_of(rq_of(cfs_rq))))
-		return;
 
 	/*
 	 * To avoid underestimate of task utilization, skip updates of EWMA if
@@ -10266,7 +10261,7 @@ sched_group_asym(struct lb_env *env, struct sg_lb_stats *sgs, struct sched_group
 	    (sgs->group_weight - sgs->idle_cpus != 1))
 		return false;
 
-	return sched_asym(env->sd, env->dst_cpu, group->asym_prefer_cpu);
+	return sched_asym(env->sd, env->dst_cpu, READ_ONCE(group->asym_prefer_cpu));
 }
 
 /* One group has more than one SMT CPU while the other group does not */
@@ -10503,7 +10498,8 @@ static bool update_sd_pick_busiest(struct lb_env *env,
 
 	case group_asym_packing:
 		/* Prefer to move from lowest priority CPU's work */
-		return sched_asym_prefer(sds->busiest->asym_prefer_cpu, sg->asym_prefer_cpu);
+		return sched_asym_prefer(READ_ONCE(sds->busiest->asym_prefer_cpu),
+					 READ_ONCE(sg->asym_prefer_cpu));
 
 	case group_misfit_task:
 		/*

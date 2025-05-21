@@ -1102,6 +1102,15 @@ static inline pci_power_t mid_pci_get_power_state(struct pci_dev *pdev)
 
 int pcim_intx(struct pci_dev *dev, int enable);
 
+#ifdef CONFIG_PCI_MSI
+int pci_msix_write_tph_tag(struct pci_dev *pdev, unsigned int index, u16 tag);
+#else
+static inline int pci_msix_write_tph_tag(struct pci_dev *pdev, unsigned int index, u16 tag)
+{
+	return -ENODEV;
+}
+#endif
+
 /*
  * Config Address for PCI Configuration Mechanism #1
  *
