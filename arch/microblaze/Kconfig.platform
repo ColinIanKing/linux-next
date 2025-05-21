@@ -11,7 +11,7 @@ config OPT_LIB_FUNCTION
 	bool "Optimalized lib function"
 	default y
 	help
-	  Allows turn on optimalized library function (memcpy and memmove).
+	  Allows turn on optimized library function (memcpy and memmove).
 	  They are optimized by using word alignment. This will work
 	  fine if both source and destination are aligned on the same
 	  boundary. However, if they are aligned on different boundaries
@@ -24,7 +24,7 @@ config OPT_LIB_ASM
 	depends on CPU_BIG_ENDIAN
 	default n
 	help
-	  Allows turn on optimalized library function (memcpy and memmove).
+	  Allows turn on optimized library function (memcpy and memmove).
 	  Function are written in asm code.
 
 # Definitions for MICROBLAZE0
