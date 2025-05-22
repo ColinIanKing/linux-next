@@ -752,7 +752,7 @@ impl RawFormatter {
     /// for the lifetime of the returned [`RawFormatter`].
     pub(crate) unsafe fn from_buffer(buf: *mut u8, len: usize) -> Self {
         let pos = buf as usize;
-        // INVARIANT: We ensure that `end` is never less then `buf`, and the safety requirements
+        // INVARIANT: We ensure that `end` is never less than `buf`, and the safety requirements
         // guarantees that the memory region is valid for writes.
         Self {
             pos,
@@ -886,7 +886,7 @@ impl CString {
 
         // SAFETY: The number of bytes that can be written to `f` is bounded by `size`, which is
         // `buf`'s capacity. The contents of the buffer have been initialised by writes to `f`.
-        unsafe { buf.set_len(f.bytes_written()) };
+        unsafe { buf.inc_len(f.bytes_written()) };
 
         // Check that there are no `NUL` bytes before the end.
         // SAFETY: The buffer is valid for read because `f.bytes_written()` is bounded by `size`
