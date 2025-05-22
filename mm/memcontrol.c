@@ -575,7 +575,7 @@ static inline void memcg_rstat_updated(struct mem_cgroup *memcg, int val,
 
 	/* TODO: add to cgroup update tree once it is nmi-safe. */
 	if (!in_nmi())
-		cgroup_rstat_updated(memcg->css.cgroup, cpu);
+		css_rstat_updated(&memcg->css, cpu);
 	statc_pcpu = memcg->vmstats_percpu;
 	for (; statc_pcpu; statc_pcpu = statc->parent_pcpu) {
 		statc = this_cpu_ptr(statc_pcpu);
@@ -610,7 +610,7 @@ static void __mem_cgroup_flush_stats(struct mem_cgroup *memcg, bool force)
 	if (mem_cgroup_is_root(memcg))
 		WRITE_ONCE(flush_last_time, jiffies_64);
 
-	cgroup_rstat_flush(memcg->css.cgroup);
+	css_rstat_flush(&memcg->css);
 }
 
 /*
