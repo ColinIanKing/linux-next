@@ -67,6 +67,7 @@
 						\
 	S(ACC_UNATTACHED),			\
 	S(DEBUG_ACC_ATTACHED),			\
+	S(DEBUG_ACC_DEBOUNCE),			\
 	S(AUDIO_ACC_ATTACHED),			\
 	S(AUDIO_ACC_DEBOUNCE),			\
 						\
@@ -621,7 +622,8 @@ static const char * const pd_rev[] = {
 	  !tcpm_cc_is_source((port)->cc1)))
 
 #define tcpm_port_is_debug(port) \
-	(tcpm_cc_is_source((port)->cc1) && tcpm_cc_is_source((port)->cc2))
+	((tcpm_cc_is_source((port)->cc1) && tcpm_cc_is_source((port)->cc2)) || \
+	 (tcpm_cc_is_sink((port)->cc1) && tcpm_cc_is_sink((port)->cc2)))
 
 #define tcpm_port_is_audio(port) \
 	(tcpm_cc_is_audio((port)->cc1) && tcpm_cc_is_audio((port)->cc2))
@@ -1151,7 +1153,7 @@ static int tcpm_set_attached_state(struct tcpm_port *port, bool attached)
 				     port->data_role);
 }
 
-static int tcpm_set_roles(struct tcpm_port *port, bool attached,
+static int tcpm_set_roles(struct tcpm_port *port, bool attached, int state,
 			  enum typec_role role, enum typec_data_role data)
 {
 	enum typec_orientation orientation;
@@ -1188,7 +1190,7 @@ static int tcpm_set_roles(struct tcpm_port *port, bool attached,
 		}
 	}
 
-	ret = tcpm_mux_set(port, TYPEC_STATE_USB, usb_role, orientation);
+	ret = tcpm_mux_set(port, state, usb_role, orientation);
 	if (ret < 0)
 		return ret;
 
@@ -4353,7 +4355,8 @@ static int tcpm_src_attach(struct tcpm_port *port)
 
 	tcpm_enable_auto_vbus_discharge(port, true);
 
-	ret = tcpm_set_roles(port, true, TYPEC_SOURCE, tcpm_data_role_for_source(port));
+	ret = tcpm_set_roles(port, true, TYPEC_STATE_USB,
+			     TYPEC_SOURCE, tcpm_data_role_for_source(port));
 	if (ret < 0)
 		return ret;
 
@@ -4528,7 +4531,8 @@ static int tcpm_snk_attach(struct tcpm_port *port)
 
 	tcpm_enable_auto_vbus_discharge(port, true);
 
-	ret = tcpm_set_roles(port, true, TYPEC_SINK, tcpm_data_role_for_sink(port));
+	ret = tcpm_set_roles(port, true, TYPEC_STATE_USB,
+			     TYPEC_SINK, tcpm_data_role_for_sink(port));
 	if (ret < 0)
 		return ret;
 
@@ -4551,12 +4555,24 @@ static void tcpm_snk_detach(struct tcpm_port *port)
 static int tcpm_acc_attach(struct tcpm_port *port)
 {
 	int ret;
+	enum typec_role role;
+	enum typec_data_role data;
+	int state = TYPEC_STATE_USB;
 
 	if (port->attached)
 		return 0;
 
-	ret = tcpm_set_roles(port, true, TYPEC_SOURCE,
-			     tcpm_data_role_for_source(port));
+	role = tcpm_port_is_sink(port) ? TYPEC_SINK : TYPEC_SOURCE;
+	data = tcpm_port_is_sink(port) ? tcpm_data_role_for_sink(port)
+				       : tcpm_data_role_for_source(port);
+
+	if (tcpm_port_is_audio(port))
+		state = TYPEC_MODE_AUDIO;
+
+	if (tcpm_port_is_debug(port))
+		state = TYPEC_MODE_DEBUG;
+
+	ret = tcpm_set_roles(port, true, state, role, data);
 	if (ret < 0)
 		return ret;
 
@@ -4964,7 +4980,13 @@ static void run_state_machine(struct tcpm_port *port)
 			tcpm_set_state(port, SRC_UNATTACHED, PD_T_DRP_SRC);
 		break;
 	case SNK_ATTACH_WAIT:
-		if ((port->cc1 == TYPEC_CC_OPEN &&
+		if (tcpm_port_is_debug(port))
+			tcpm_set_state(port, DEBUG_ACC_ATTACHED,
+				       PD_T_CC_DEBOUNCE);
+		else if (tcpm_port_is_audio(port))
+			tcpm_set_state(port, AUDIO_ACC_ATTACHED,
+				       PD_T_CC_DEBOUNCE);
+		else if ((port->cc1 == TYPEC_CC_OPEN &&
 		     port->cc2 != TYPEC_CC_OPEN) ||
 		    (port->cc1 != TYPEC_CC_OPEN &&
 		     port->cc2 == TYPEC_CC_OPEN))
@@ -4978,6 +5000,12 @@ static void run_state_machine(struct tcpm_port *port)
 		if (tcpm_port_is_disconnected(port))
 			tcpm_set_state(port, SNK_UNATTACHED,
 				       PD_T_PD_DEBOUNCE);
+		else if (tcpm_port_is_debug(port))
+			tcpm_set_state(port, DEBUG_ACC_ATTACHED,
+				       PD_T_CC_DEBOUNCE);
+		else if (tcpm_port_is_audio(port))
+			tcpm_set_state(port, AUDIO_ACC_ATTACHED,
+				       PD_T_CC_DEBOUNCE);
 		else if (port->vbus_present)
 			tcpm_set_state(port,
 				       tcpm_try_src(port) ? SRC_TRY
@@ -5276,7 +5304,10 @@ static void run_state_machine(struct tcpm_port *port)
 	/* Accessory states */
 	case ACC_UNATTACHED:
 		tcpm_acc_detach(port);
-		tcpm_set_state(port, SRC_UNATTACHED, 0);
+		if (port->port_type == TYPEC_PORT_SRC)
+			tcpm_set_state(port, SRC_UNATTACHED, 0);
+		else
+			tcpm_set_state(port, SNK_UNATTACHED, 0);
 		break;
 	case DEBUG_ACC_ATTACHED:
 	case AUDIO_ACC_ATTACHED:
@@ -5284,6 +5315,7 @@ static void run_state_machine(struct tcpm_port *port)
 		if (ret < 0)
 			tcpm_set_state(port, ACC_UNATTACHED, 0);
 		break;
+	case DEBUG_ACC_DEBOUNCE:
 	case AUDIO_ACC_DEBOUNCE:
 		tcpm_set_state(port, ACC_UNATTACHED, port->timings.cc_debounce_time);
 		break;
@@ -5326,7 +5358,7 @@ static void run_state_machine(struct tcpm_port *port)
 		 */
 		tcpm_set_vconn(port, false);
 		tcpm_set_vbus(port, false);
-		tcpm_set_roles(port, port->self_powered, TYPEC_SOURCE,
+		tcpm_set_roles(port, port->self_powered, TYPEC_STATE_USB, TYPEC_SOURCE,
 			       tcpm_data_role_for_source(port));
 		/*
 		 * If tcpc fails to notify vbus off, TCPM will wait for PD_T_SAFE_0V +
@@ -5358,7 +5390,7 @@ static void run_state_machine(struct tcpm_port *port)
 		tcpm_set_vconn(port, false);
 		if (port->pd_capable)
 			tcpm_set_charge(port, false);
-		tcpm_set_roles(port, port->self_powered, TYPEC_SINK,
+		tcpm_set_roles(port, port->self_powered, TYPEC_STATE_USB, TYPEC_SINK,
 			       tcpm_data_role_for_sink(port));
 		/*
 		 * VBUS may or may not toggle, depending on the adapter.
@@ -5482,10 +5514,10 @@ static void run_state_machine(struct tcpm_port *port)
 	case DR_SWAP_CHANGE_DR:
 		tcpm_unregister_altmodes(port);
 		if (port->data_role == TYPEC_HOST)
-			tcpm_set_roles(port, true, port->pwr_role,
+			tcpm_set_roles(port, true, TYPEC_STATE_USB, port->pwr_role,
 				       TYPEC_DEVICE);
 		else
-			tcpm_set_roles(port, true, port->pwr_role,
+			tcpm_set_roles(port, true, TYPEC_STATE_USB, port->pwr_role,
 				       TYPEC_HOST);
 		tcpm_ams_finish(port);
 		tcpm_set_state(port, ready_state(port), 0);
@@ -5875,7 +5907,8 @@ static void _tcpm_cc_change(struct tcpm_port *port, enum typec_cc_status cc1,
 		}
 		break;
 	case SNK_UNATTACHED:
-		if (tcpm_port_is_sink(port))
+		if (tcpm_port_is_debug(port) || tcpm_port_is_audio(port) ||
+		    tcpm_port_is_sink(port))
 			tcpm_set_state(port, SNK_ATTACH_WAIT, 0);
 		break;
 	case SNK_ATTACH_WAIT:
@@ -5938,7 +5971,12 @@ static void _tcpm_cc_change(struct tcpm_port *port, enum typec_cc_status cc1,
 
 	case DEBUG_ACC_ATTACHED:
 		if (cc1 == TYPEC_CC_OPEN || cc2 == TYPEC_CC_OPEN)
-			tcpm_set_state(port, ACC_UNATTACHED, 0);
+			tcpm_set_state(port, DEBUG_ACC_DEBOUNCE, 0);
+		break;
+
+	case DEBUG_ACC_DEBOUNCE:
+		if (tcpm_port_is_debug(port))
+			tcpm_set_state(port, DEBUG_ACC_ATTACHED, 0);
 		break;
 
 	case SNK_TRY:
