@@ -8321,7 +8321,7 @@ static int sctp_hash(struct sock *sk)
 
 static void sctp_unhash(struct sock *sk)
 {
-	/* STUB */
+	sock_rps_delete_flow(sk);
 }
 
 /* Check if port is acceptable.  Possibly find first available port.
@@ -9100,7 +9100,8 @@ static void __sctp_write_space(struct sctp_association *asoc)
 		wq = rcu_dereference(sk->sk_wq);
 		if (wq) {
 			if (waitqueue_active(&wq->wait))
-				wake_up_interruptible(&wq->wait);
+				wake_up_interruptible_poll(&wq->wait, EPOLLOUT |
+						EPOLLWRNORM | EPOLLWRBAND);
 
 			/* Note that we try to include the Async I/O support
 			 * here by modeling from the current TCP/UDP code.

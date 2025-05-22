@@ -45,6 +45,19 @@ table inet filter {
 EOF
 }
 
+load_input_ruleset() {
+	local netns=$1
+
+ip netns exec "$netns" nft -f /dev/stdin <<EOF
+table inet filter {
+	chain input {
+		type filter hook input priority 0; policy accept;
+	        fib saddr . iif oif missing counter log prefix "$netns nft_rpfilter: " drop
+	}
+}
+EOF
+}
+
 load_pbr_ruleset() {
 	local netns=$1
 
@@ -154,8 +167,6 @@ test_ping() {
 ip netns exec "$nsrouter" sysctl net.ipv6.conf.all.forwarding=1 > /dev/null
 ip netns exec "$nsrouter" sysctl net.ipv4.conf.veth0.forwarding=1 > /dev/null
 ip netns exec "$nsrouter" sysctl net.ipv4.conf.veth1.forwarding=1 > /dev/null
-ip netns exec "$nsrouter" sysctl net.ipv4.conf.all.rp_filter=0 > /dev/null
-ip netns exec "$nsrouter" sysctl net.ipv4.conf.veth0.rp_filter=0 > /dev/null
 
 test_ping 10.0.2.1 dead:2::1 || exit 1
 check_drops || exit 1
@@ -164,6 +175,16 @@ test_ping 10.0.2.99 dead:2::99 || exit 1
 check_drops || exit 1
 
 echo "PASS: fib expression did not cause unwanted packet drops"
+
+load_input_ruleset "$ns1"
+
+test_ping 127.0.0.1 ::1 || exit 1
+check_drops || exit 1
+
+test_ping 10.0.1.99 dead:1::99 || exit 1
+check_drops || exit 1
+
+echo "PASS: fib expression did not discard loopback packets"
 
 ip netns exec "$nsrouter" nft flush table inet filter
 

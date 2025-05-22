@@ -1781,7 +1781,6 @@ void sk_free(struct sock *sk);
 void sk_net_refcnt_upgrade(struct sock *sk);
 void sk_destruct(struct sock *sk);
 struct sock *sk_clone_lock(const struct sock *sk, const gfp_t priority);
-void sk_free_unlock_clone(struct sock *sk);
 
 struct sk_buff *sock_wmalloc(struct sock *sk, unsigned long size, int force,
 			     gfp_t priority);
@@ -1852,6 +1851,7 @@ struct sockcm_cookie {
 	u32 tsflags;
 	u32 ts_opt_id;
 	u32 priority;
+	u32 dmabuf_id;
 };
 
 static inline void sockcm_init(struct sockcm_cookie *sockc,
@@ -2605,8 +2605,8 @@ struct sock_skb_cb {
  * using skb->cb[] would keep using it directly and utilize its
  * alignment guarantee.
  */
-#define SOCK_SKB_CB_OFFSET ((sizeof_field(struct sk_buff, cb) - \
-			    sizeof(struct sock_skb_cb)))
+#define SOCK_SKB_CB_OFFSET (sizeof_field(struct sk_buff, cb) - \
+			    sizeof(struct sock_skb_cb))
 
 #define SOCK_SKB_CB(__skb) ((struct sock_skb_cb *)((__skb)->cb + \
 			    SOCK_SKB_CB_OFFSET))
@@ -2736,8 +2736,6 @@ static inline void _sock_tx_timestamp(struct sock *sk,
 				*tskey = atomic_inc_return(&sk->sk_tskey) - 1;
 		}
 	}
-	if (unlikely(sock_flag(sk, SOCK_WIFI_STATUS)))
-		*tx_flags |= SKBTX_WIFI_STATUS;
 }
 
 static inline void sock_tx_timestamp(struct sock *sk,
