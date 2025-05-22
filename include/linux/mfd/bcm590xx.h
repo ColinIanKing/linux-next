@@ -23,7 +23,6 @@ struct bcm590xx {
 	struct i2c_client *i2c_sec;
 	struct regmap *regmap_pri;
 	struct regmap *regmap_sec;
-	unsigned int id;
 };
 
 #endif /*  __LINUX_MFD_BCM590XX_H */
