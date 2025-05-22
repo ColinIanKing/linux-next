@@ -638,6 +638,8 @@ int kvm_vm_ioctl_check_extension(struct kvm *kvm, long ext)
 			r = KVM_S390_ESCA_CPU_SLOTS;
 		if (ext == KVM_CAP_NR_VCPUS)
 			r = min_t(unsigned int, num_online_cpus(), r);
+		else if (ext == KVM_CAP_MAX_VCPU_ID)
+			r -= 1;
 		break;
 	case KVM_CAP_S390_COW:
 		r = machine_has_esop();
