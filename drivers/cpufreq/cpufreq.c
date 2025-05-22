@@ -806,7 +806,7 @@ static ssize_t show_scaling_governor(struct cpufreq_policy *policy, char *buf)
 static ssize_t store_scaling_governor(struct cpufreq_policy *policy,
 					const char *buf, size_t count)
 {
-	char str_governor[16];
+	char str_governor[CPUFREQ_NAME_LEN];
 	int ret;
 
 	ret = sscanf(buf, "%15s", str_governor);
@@ -917,9 +917,9 @@ static ssize_t store_scaling_setspeed(struct cpufreq_policy *policy,
 	if (!policy->governor || !policy->governor->store_setspeed)
 		return -EINVAL;
 
-	ret = sscanf(buf, "%u", &freq);
-	if (ret != 1)
-		return -EINVAL;
+	ret = kstrtouint(buf, 0, &freq);
+	if (ret)
+		return ret;
 
 	policy->governor->store_setspeed(policy, freq);
 
