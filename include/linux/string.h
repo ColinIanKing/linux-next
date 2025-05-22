@@ -4,6 +4,7 @@
 
 #include <linux/args.h>
 #include <linux/array_size.h>
+#include <linux/bug.h>
 #include <linux/cleanup.h>	/* for DEFINE_FREE() */
 #include <linux/compiler.h>	/* for inline */
 #include <linux/types.h>	/* for size_t */
@@ -390,7 +391,19 @@ static inline const char *kbasename(const char *path)
 
 #if !defined(__NO_FORTIFY) && defined(__OPTIMIZE__) && defined(CONFIG_FORTIFY_SOURCE)
 #include <linux/fortify-string.h>
+#else
+/* Basic sanity checking even without FORTIFY_SOURCE */
+# ifndef __HAVE_ARCH_MEMCPY
+#  define memcpy(t, f, n)					\
+	do {							\
+		typeof(n) __n = (n);				\
+		/* Skip impossible sizes. */			\
+		if (!WARN_ON(__n < 0 || __n == SIZE_MAX))	\
+			__builtin_memcpy(t, f, __n);		\
+	} while (0)
+# endif
 #endif
+
 #ifndef unsafe_memcpy
 #define unsafe_memcpy(dst, src, bytes, justification)		\
 	memcpy(dst, src, bytes)
