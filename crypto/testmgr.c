@@ -17,10 +17,19 @@
  */
 
 #include <crypto/aead.h>
-#include <crypto/hash.h>
+#include <crypto/acompress.h>
+#include <crypto/akcipher.h>
+#include <crypto/drbg.h>
+#include <crypto/internal/cipher.h>
+#include <crypto/internal/hash.h>
+#include <crypto/internal/simd.h>
+#include <crypto/kpp.h>
+#include <crypto/rng.h>
+#include <crypto/sig.h>
 #include <crypto/skcipher.h>
 #include <linux/err.h>
 #include <linux/fips.h>
+#include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/once.h>
 #include <linux/prandom.h>
@@ -28,14 +37,6 @@
 #include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/uio.h>
-#include <crypto/rng.h>
-#include <crypto/drbg.h>
-#include <crypto/akcipher.h>
-#include <crypto/kpp.h>
-#include <crypto/acompress.h>
-#include <crypto/sig.h>
-#include <crypto/internal/cipher.h>
-#include <crypto/internal/simd.h>
 
 #include "internal.h"
 
@@ -43,22 +44,17 @@ MODULE_IMPORT_NS("CRYPTO_INTERNAL");
 
 static bool notests;
 module_param(notests, bool, 0644);
-MODULE_PARM_DESC(notests, "disable crypto self-tests");
+MODULE_PARM_DESC(notests, "disable all crypto self-tests");
 
-static bool panic_on_fail;
-module_param(panic_on_fail, bool, 0444);
-
-#ifdef CONFIG_CRYPTO_MANAGER_EXTRA_TESTS
-static bool noextratests;
-module_param(noextratests, bool, 0644);
-MODULE_PARM_DESC(noextratests, "disable expensive crypto self-tests");
+static bool noslowtests;
+module_param(noslowtests, bool, 0644);
+MODULE_PARM_DESC(noslowtests, "disable slow crypto self-tests");
 
 static unsigned int fuzz_iterations = 100;
 module_param(fuzz_iterations, uint, 0644);
 MODULE_PARM_DESC(fuzz_iterations, "number of fuzz test iterations");
-#endif
 
-#ifdef CONFIG_CRYPTO_MANAGER_DISABLE_TESTS
+#ifndef CONFIG_CRYPTO_SELFTESTS
 
 /* a perfect nop */
 int alg_test(const char *driver, const char *alg, u32 type, u32 mask)
@@ -324,10 +320,9 @@ struct testvec_config {
 
 /*
  * The following are the lists of testvec_configs to test for each algorithm
- * type when the basic crypto self-tests are enabled, i.e. when
- * CONFIG_CRYPTO_MANAGER_DISABLE_TESTS is unset.  They aim to provide good test
- * coverage, while keeping the test time much shorter than the full fuzz tests
- * so that the basic tests can be enabled in a wider range of circumstances.
+ * type when the fast crypto self-tests are enabled.  They aim to provide good
+ * test coverage, while keeping the test time much shorter than the full tests
+ * so that the fast tests can be used to fulfill FIPS 140 testing requirements.
  */
 
 /* Configs for skciphers and aeads */
@@ -876,8 +871,6 @@ static int prepare_keybuf(const u8 *key, unsigned int ksize,
 	err;								\
 })
 
-#ifdef CONFIG_CRYPTO_MANAGER_EXTRA_TESTS
-
 /*
  * The fuzz tests use prandom instead of the normal Linux RNG since they don't
  * need cryptographically secure random numbers.  This greatly improves the
@@ -1242,15 +1235,6 @@ too_long:
 	       algname);
 	return -ENAMETOOLONG;
 }
-#else /* !CONFIG_CRYPTO_MANAGER_EXTRA_TESTS */
-static void crypto_disable_simd_for_test(void)
-{
-}
-
-static void crypto_reenable_simd_for_test(void)
-{
-}
-#endif /* !CONFIG_CRYPTO_MANAGER_EXTRA_TESTS */
 
 static int build_hash_sglist(struct test_sglist *tsgl,
 			     const struct hash_testvec *vec,
@@ -1481,6 +1465,49 @@ static int check_nonfinal_ahash_op(const char *op, int err,
 	return 0;
 }
 
+static int check_ahash_export(struct ahash_request *req,
+			      const struct hash_testvec *vec,
+			      const char *vec_name,
+			      const struct testvec_config *cfg,
+			      const char *driver, u8 *hashstate)
+{
+	struct crypto_ahash *tfm = crypto_ahash_reqtfm(req);
+	const unsigned int digestsize = crypto_ahash_digestsize(tfm);
+	HASH_FBREQ_ON_STACK(fbreq, req);
+	int err;
+
+	if (!vec->state)
+		return 0;
+
+	err = crypto_ahash_export(req, hashstate);
+	if (err) {
+		pr_err("alg: ahash: %s mixed export() failed with err %d on test vector %s, cfg=\"%s\"\n",
+		       driver, err, vec_name, cfg->name);
+		return err;
+	}
+	err = crypto_ahash_import(req, vec->state);
+	if (err) {
+		pr_err("alg: ahash: %s mixed import() failed with err %d on test vector %s, cfg=\"%s\"\n",
+		       driver, err, vec_name, cfg->name);
+		return err;
+	}
+	err = crypto_ahash_import(fbreq, hashstate);
+	if (err) {
+		pr_err("alg: ahash: %s fallback import() failed with err %d on test vector %s, cfg=\"%s\"\n",
+		       crypto_ahash_driver_name(crypto_ahash_reqtfm(fbreq)), err, vec_name, cfg->name);
+		return err;
+	}
+	ahash_request_set_crypt(fbreq, NULL, hashstate, 0);
+	testmgr_poison(hashstate, digestsize + TESTMGR_POISON_LEN);
+	err = crypto_ahash_final(fbreq);
+	if (err) {
+		pr_err("alg: ahash: %s fallback final() failed with err %d on test vector %s, cfg=\"%s\"\n",
+		       crypto_ahash_driver_name(crypto_ahash_reqtfm(fbreq)), err, vec_name, cfg->name);
+		return err;
+	}
+	return check_hash_result("ahash export", hashstate, digestsize, vec, vec_name, driver, cfg);
+}
+
 /* Test one hash test vector in one configuration, using the ahash API */
 static int test_ahash_vec_cfg(const struct hash_testvec *vec,
 			      const char *vec_name,
@@ -1626,6 +1653,10 @@ static int test_ahash_vec_cfg(const struct hash_testvec *vec,
 					      driver, vec_name, cfg);
 		if (err)
 			return err;
+		err = check_ahash_export(req, vec, vec_name, cfg,
+					 driver, hashstate);
+		if (err)
+			return err;
 		err = do_ahash_op(crypto_ahash_final, req, &wait, cfg->nosimd);
 		if (err) {
 			pr_err("alg: ahash: %s final() failed with err %d on test vector %s, cfg=\"%s\"\n",
@@ -1691,8 +1722,7 @@ static int test_hash_vec(const struct hash_testvec *vec, unsigned int vec_num,
 			return err;
 	}
 
-#ifdef CONFIG_CRYPTO_MANAGER_EXTRA_TESTS
-	if (!noextratests) {
+	if (!noslowtests) {
 		struct rnd_state rng;
 		struct testvec_config cfg;
 		char cfgname[TESTVEC_CONFIG_NAMELEN];
@@ -1709,17 +1739,15 @@ static int test_hash_vec(const struct hash_testvec *vec, unsigned int vec_num,
 			cond_resched();
 		}
 	}
-#endif
 	return 0;
 }
 
-#ifdef CONFIG_CRYPTO_MANAGER_EXTRA_TESTS
 /*
  * Generate a hash test vector from the given implementation.
  * Assumes the buffers in 'vec' were already allocated.
  */
 static void generate_random_hash_testvec(struct rnd_state *rng,
-					 struct shash_desc *desc,
+					 struct ahash_request *req,
 					 struct hash_testvec *vec,
 					 unsigned int maxkeysize,
 					 unsigned int maxdatasize,
@@ -1741,16 +1769,28 @@ static void generate_random_hash_testvec(struct rnd_state *rng,
 			vec->ksize = prandom_u32_inclusive(rng, 1, maxkeysize);
 		generate_random_bytes(rng, (u8 *)vec->key, vec->ksize);
 
-		vec->setkey_error = crypto_shash_setkey(desc->tfm, vec->key,
-							vec->ksize);
+		vec->setkey_error = crypto_ahash_setkey(
+			crypto_ahash_reqtfm(req), vec->key, vec->ksize);
 		/* If the key couldn't be set, no need to continue to digest. */
 		if (vec->setkey_error)
 			goto done;
 	}
 
 	/* Digest */
-	vec->digest_error = crypto_shash_digest(desc, vec->plaintext,
-						vec->psize, (u8 *)vec->digest);
+	vec->digest_error = crypto_hash_digest(
+		crypto_ahash_reqtfm(req), vec->plaintext,
+		vec->psize, (u8 *)vec->digest);
+
+	if (vec->digest_error || !vec->state)
+		goto done;
+
+	ahash_request_set_callback(req, CRYPTO_TFM_REQ_MAY_SLEEP, NULL, NULL);
+	ahash_request_set_virt(req, vec->plaintext, (u8 *)vec->digest,
+			       vec->psize);
+	crypto_ahash_init(req);
+	crypto_ahash_update(req);
+	crypto_ahash_export(req, (u8 *)vec->state);
+
 done:
 	snprintf(name, max_namelen, "\"random: psize=%u ksize=%u\"",
 		 vec->psize, vec->ksize);
@@ -1769,14 +1809,15 @@ static int test_hash_vs_generic_impl(const char *generic_driver,
 {
 	struct crypto_ahash *tfm = crypto_ahash_reqtfm(req);
 	const unsigned int digestsize = crypto_ahash_digestsize(tfm);
+	const unsigned int statesize = crypto_ahash_statesize(tfm);
 	const unsigned int blocksize = crypto_ahash_blocksize(tfm);
 	const unsigned int maxdatasize = (2 * PAGE_SIZE) - TESTMGR_POISON_LEN;
 	const char *algname = crypto_hash_alg_common(tfm)->base.cra_name;
 	const char *driver = crypto_ahash_driver_name(tfm);
 	struct rnd_state rng;
 	char _generic_driver[CRYPTO_MAX_ALG_NAME];
-	struct crypto_shash *generic_tfm = NULL;
-	struct shash_desc *generic_desc = NULL;
+	struct ahash_request *generic_req = NULL;
+	struct crypto_ahash *generic_tfm = NULL;
 	unsigned int i;
 	struct hash_testvec vec = { 0 };
 	char vec_name[64];
@@ -1784,7 +1825,7 @@ static int test_hash_vs_generic_impl(const char *generic_driver,
 	char cfgname[TESTVEC_CONFIG_NAMELEN];
 	int err;
 
-	if (noextratests)
+	if (noslowtests)
 		return 0;
 
 	init_rnd_state(&rng);
@@ -1799,7 +1840,7 @@ static int test_hash_vs_generic_impl(const char *generic_driver,
 	if (strcmp(generic_driver, driver) == 0) /* Already the generic impl? */
 		return 0;
 
-	generic_tfm = crypto_alloc_shash(generic_driver, 0, 0);
+	generic_tfm = crypto_alloc_ahash(generic_driver, 0, 0);
 	if (IS_ERR(generic_tfm)) {
 		err = PTR_ERR(generic_tfm);
 		if (err == -ENOENT) {
@@ -1818,29 +1859,43 @@ static int test_hash_vs_generic_impl(const char *generic_driver,
 		goto out;
 	}
 
-	generic_desc = kzalloc(sizeof(*desc) +
-			       crypto_shash_descsize(generic_tfm), GFP_KERNEL);
-	if (!generic_desc) {
+	generic_req = ahash_request_alloc(generic_tfm, GFP_KERNEL);
+	if (!generic_req) {
 		err = -ENOMEM;
 		goto out;
 	}
-	generic_desc->tfm = generic_tfm;
 
 	/* Check the algorithm properties for consistency. */
 
-	if (digestsize != crypto_shash_digestsize(generic_tfm)) {
+	if (digestsize != crypto_ahash_digestsize(generic_tfm)) {
 		pr_err("alg: hash: digestsize for %s (%u) doesn't match generic impl (%u)\n",
 		       driver, digestsize,
-		       crypto_shash_digestsize(generic_tfm));
+		       crypto_ahash_digestsize(generic_tfm));
 		err = -EINVAL;
 		goto out;
 	}
 
-	if (blocksize != crypto_shash_blocksize(generic_tfm)) {
+	if (blocksize != crypto_ahash_blocksize(generic_tfm)) {
 		pr_err("alg: hash: blocksize for %s (%u) doesn't match generic impl (%u)\n",
-		       driver, blocksize, crypto_shash_blocksize(generic_tfm));
+		       driver, blocksize, crypto_ahash_blocksize(generic_tfm));
 		err = -EINVAL;
 		goto out;
+	}
+
+	if (crypto_hash_no_export_core(tfm) ||
+	    crypto_hash_no_export_core(generic_tfm))
+		;
+	else if (statesize != crypto_ahash_statesize(generic_tfm)) {
+		pr_err("alg: hash: statesize for %s (%u) doesn't match generic impl (%u)\n",
+		       driver, statesize,
+		       crypto_ahash_statesize(generic_tfm));
+		err = -EINVAL;
+		goto out;
+	} else {
+		vec.state = kmalloc(statesize, GFP_KERNEL);
+		err = -ENOMEM;
+		if (!vec.state)
+			goto out;
 	}
 
 	/*
@@ -1857,7 +1912,7 @@ static int test_hash_vs_generic_impl(const char *generic_driver,
 	}
 
 	for (i = 0; i < fuzz_iterations * 8; i++) {
-		generate_random_hash_testvec(&rng, generic_desc, &vec,
+		generate_random_hash_testvec(&rng, generic_req, &vec,
 					     maxkeysize, maxdatasize,
 					     vec_name, sizeof(vec_name));
 		generate_random_testvec_config(&rng, cfg, cfgname,
@@ -1875,21 +1930,11 @@ out:
 	kfree(vec.key);
 	kfree(vec.plaintext);
 	kfree(vec.digest);
-	crypto_free_shash(generic_tfm);
-	kfree_sensitive(generic_desc);
+	kfree(vec.state);
+	ahash_request_free(generic_req);
+	crypto_free_ahash(generic_tfm);
 	return err;
 }
-#else /* !CONFIG_CRYPTO_MANAGER_EXTRA_TESTS */
-static int test_hash_vs_generic_impl(const char *generic_driver,
-				     unsigned int maxkeysize,
-				     struct ahash_request *req,
-				     struct shash_desc *desc,
-				     struct test_sglist *tsgl,
-				     u8 *hashstate)
-{
-	return 0;
-}
-#endif /* !CONFIG_CRYPTO_MANAGER_EXTRA_TESTS */
 
 static int alloc_shash(const char *driver, u32 type, u32 mask,
 		       struct crypto_shash **tfm_ret,
@@ -1900,7 +1945,7 @@ static int alloc_shash(const char *driver, u32 type, u32 mask,
 
 	tfm = crypto_alloc_shash(driver, type, mask);
 	if (IS_ERR(tfm)) {
-		if (PTR_ERR(tfm) == -ENOENT) {
+		if (PTR_ERR(tfm) == -ENOENT || PTR_ERR(tfm) == -EEXIST) {
 			/*
 			 * This algorithm is only available through the ahash
 			 * API, not the shash API, so skip the shash tests.
@@ -2263,8 +2308,7 @@ static int test_aead_vec(int enc, const struct aead_testvec *vec,
 			return err;
 	}
 
-#ifdef CONFIG_CRYPTO_MANAGER_EXTRA_TESTS
-	if (!noextratests) {
+	if (!noslowtests) {
 		struct rnd_state rng;
 		struct testvec_config cfg;
 		char cfgname[TESTVEC_CONFIG_NAMELEN];
@@ -2281,13 +2325,10 @@ static int test_aead_vec(int enc, const struct aead_testvec *vec,
 			cond_resched();
 		}
 	}
-#endif
 	return 0;
 }
 
-#ifdef CONFIG_CRYPTO_MANAGER_EXTRA_TESTS
-
-struct aead_extra_tests_ctx {
+struct aead_slow_tests_ctx {
 	struct rnd_state rng;
 	struct aead_request *req;
 	struct crypto_aead *tfm;
@@ -2462,8 +2503,7 @@ static void generate_random_aead_testvec(struct rnd_state *rng,
 		 vec->alen, vec->plen, authsize, vec->klen, vec->novrfy);
 }
 
-static void try_to_generate_inauthentic_testvec(
-					struct aead_extra_tests_ctx *ctx)
+static void try_to_generate_inauthentic_testvec(struct aead_slow_tests_ctx *ctx)
 {
 	int i;
 
@@ -2482,7 +2522,7 @@ static void try_to_generate_inauthentic_testvec(
  * Generate inauthentic test vectors (i.e. ciphertext, AAD pairs that aren't the
  * result of an encryption with the key) and verify that decryption fails.
  */
-static int test_aead_inauthentic_inputs(struct aead_extra_tests_ctx *ctx)
+static int test_aead_inauthentic_inputs(struct aead_slow_tests_ctx *ctx)
 {
 	unsigned int i;
 	int err;
@@ -2517,7 +2557,7 @@ static int test_aead_inauthentic_inputs(struct aead_extra_tests_ctx *ctx)
  * Test the AEAD algorithm against the corresponding generic implementation, if
  * one is available.
  */
-static int test_aead_vs_generic_impl(struct aead_extra_tests_ctx *ctx)
+static int test_aead_vs_generic_impl(struct aead_slow_tests_ctx *ctx)
 {
 	struct crypto_aead *tfm = ctx->tfm;
 	const char *algname = crypto_aead_alg(tfm)->base.cra_name;
@@ -2621,15 +2661,15 @@ out:
 	return err;
 }
 
-static int test_aead_extra(const struct alg_test_desc *test_desc,
-			   struct aead_request *req,
-			   struct cipher_test_sglists *tsgls)
+static int test_aead_slow(const struct alg_test_desc *test_desc,
+			  struct aead_request *req,
+			  struct cipher_test_sglists *tsgls)
 {
-	struct aead_extra_tests_ctx *ctx;
+	struct aead_slow_tests_ctx *ctx;
 	unsigned int i;
 	int err;
 
-	if (noextratests)
+	if (noslowtests)
 		return 0;
 
 	ctx = kzalloc(sizeof(*ctx), GFP_KERNEL);
@@ -2671,14 +2711,6 @@ out:
 	kfree(ctx);
 	return err;
 }
-#else /* !CONFIG_CRYPTO_MANAGER_EXTRA_TESTS */
-static int test_aead_extra(const struct alg_test_desc *test_desc,
-			   struct aead_request *req,
-			   struct cipher_test_sglists *tsgls)
-{
-	return 0;
-}
-#endif /* !CONFIG_CRYPTO_MANAGER_EXTRA_TESTS */
 
 static int test_aead(int enc, const struct aead_test_suite *suite,
 		     struct aead_request *req,
@@ -2744,7 +2776,7 @@ static int alg_test_aead(const struct alg_test_desc *desc, const char *driver,
 	if (err)
 		goto out;
 
-	err = test_aead_extra(desc, req, tsgls);
+	err = test_aead_slow(desc, req, tsgls);
 out:
 	free_cipher_test_sglists(tsgls);
 	aead_request_free(req);
@@ -3018,8 +3050,7 @@ static int test_skcipher_vec(int enc, const struct cipher_testvec *vec,
 			return err;
 	}
 
-#ifdef CONFIG_CRYPTO_MANAGER_EXTRA_TESTS
-	if (!noextratests) {
+	if (!noslowtests) {
 		struct rnd_state rng;
 		struct testvec_config cfg;
 		char cfgname[TESTVEC_CONFIG_NAMELEN];
@@ -3036,11 +3067,9 @@ static int test_skcipher_vec(int enc, const struct cipher_testvec *vec,
 			cond_resched();
 		}
 	}
-#endif
 	return 0;
 }
 
-#ifdef CONFIG_CRYPTO_MANAGER_EXTRA_TESTS
 /*
  * Generate a symmetric cipher test vector from the given implementation.
  * Assumes the buffers in 'vec' were already allocated.
@@ -3123,7 +3152,7 @@ static int test_skcipher_vs_generic_impl(const char *generic_driver,
 	char cfgname[TESTVEC_CONFIG_NAMELEN];
 	int err;
 
-	if (noextratests)
+	if (noslowtests)
 		return 0;
 
 	init_rnd_state(&rng);
@@ -3239,14 +3268,6 @@ out:
 	skcipher_request_free(generic_req);
 	return err;
 }
-#else /* !CONFIG_CRYPTO_MANAGER_EXTRA_TESTS */
-static int test_skcipher_vs_generic_impl(const char *generic_driver,
-					 struct skcipher_request *req,
-					 struct cipher_test_sglists *tsgls)
-{
-	return 0;
-}
-#endif /* !CONFIG_CRYPTO_MANAGER_EXTRA_TESTS */
 
 static int test_skcipher(int enc, const struct cipher_test_suite *suite,
 			 struct skcipher_request *req,
@@ -5407,12 +5428,6 @@ static const struct alg_test_desc alg_test_descs[] = {
 		.test = alg_test_null,
 		.fips_allowed = 1,
 	}, {
-		.alg = "poly1305",
-		.test = alg_test_hash,
-		.suite = {
-			.hash = __VECS(poly1305_tv_template)
-		}
-	}, {
 		.alg = "polyval",
 		.test = alg_test_hash,
 		.suite = {
@@ -5769,9 +5784,8 @@ static void testmgr_onetime_init(void)
 	alg_check_test_descs_order();
 	alg_check_testvec_configs();
 
-#ifdef CONFIG_CRYPTO_MANAGER_EXTRA_TESTS
-	pr_warn("alg: extra crypto tests enabled.  This is intended for developer use only.\n");
-#endif
+	if (!noslowtests)
+		pr_warn("alg: full crypto tests enabled.  This is intended for developer use only.\n");
 }
 
 static int alg_find_test(const char *alg)
@@ -5860,11 +5874,10 @@ int alg_test(const char *driver, const char *alg, u32 type, u32 mask)
 
 test_done:
 	if (rc) {
-		if (fips_enabled || panic_on_fail) {
+		if (fips_enabled) {
 			fips_fail_notify();
-			panic("alg: self-tests for %s (%s) failed in %s mode!\n",
-			      driver, alg,
-			      fips_enabled ? "fips" : "panic_on_fail");
+			panic("alg: self-tests for %s (%s) failed in fips mode!\n",
+			      driver, alg);
 		}
 		pr_warn("alg: self-tests for %s using %s failed (rc=%d)",
 			alg, driver, rc);
@@ -5909,6 +5922,6 @@ non_fips_alg:
 	return alg_fips_disabled(driver, alg);
 }
 
-#endif /* CONFIG_CRYPTO_MANAGER_DISABLE_TESTS */
+#endif /* CONFIG_CRYPTO_SELFTESTS */
 
 EXPORT_SYMBOL_GPL(alg_test);
