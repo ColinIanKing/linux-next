@@ -2020,6 +2020,9 @@ static int amdgpu_dm_init(struct amdgpu_device *adev)
 	if (amdgpu_dc_debug_mask & DC_HDCP_LC_ENABLE_SW_FALLBACK)
 		adev->dm.dc->debug.hdcp_lc_enable_sw_fallback = true;
 
+	if (amdgpu_dc_debug_mask & DC_SKIP_DETECTION_LT)
+		adev->dm.dc->debug.skip_detection_link_training = true;
+
 	adev->dm.dc->debug.visual_confirm = amdgpu_dc_visual_confirm;
 
 	/* TODO: Remove after DP2 receiver gets proper support of Cable ID feature */
@@ -3380,11 +3383,6 @@ static int dm_resume(struct amdgpu_ip_block *ip_block)
 
 		return 0;
 	}
-
-	/* leave display off for S4 sequence */
-	if (adev->in_s4)
-		return 0;
-
 	/* Recreate dc_state - DC invalidates it when setting power state to S3. */
 	dc_state_release(dm_state->context);
 	dm_state->context = dc_state_create(dm->dc, NULL);
