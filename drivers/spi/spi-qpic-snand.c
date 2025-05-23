@@ -116,7 +116,6 @@ struct qpic_spi_nand {
 	struct nand_ecc_engine ecc_eng;
 	u8 *data_buf;
 	u8 *oob_buf;
-	u32 wlen;
 	__le32 addr1;
 	__le32 addr2;
 	__le32 cmd;
@@ -250,9 +249,11 @@ static const struct mtd_ooblayout_ops qcom_spi_ooblayout = {
 static int qcom_spi_ecc_init_ctx_pipelined(struct nand_device *nand)
 {
 	struct qcom_nand_controller *snandc = nand_to_qcom_snand(nand);
+	struct nand_ecc_props *reqs = &nand->ecc.requirements;
+	struct nand_ecc_props *user = &nand->ecc.user_conf;
 	struct nand_ecc_props *conf = &nand->ecc.ctx.conf;
 	struct mtd_info *mtd = nanddev_to_mtd(nand);
-	int cwperpage, bad_block_byte;
+	int cwperpage, bad_block_byte, ret;
 	struct qpic_ecc *ecc_cfg;
 
 	cwperpage = mtd->writesize / NANDC_STEP_SIZE;
@@ -261,11 +262,39 @@ static int qcom_spi_ecc_init_ctx_pipelined(struct nand_device *nand)
 	ecc_cfg = kzalloc(sizeof(*ecc_cfg), GFP_KERNEL);
 	if (!ecc_cfg)
 		return -ENOMEM;
-	snandc->qspi->oob_buf = kzalloc(mtd->writesize + mtd->oobsize,
+
+	if (user->step_size && user->strength) {
+		ecc_cfg->step_size = user->step_size;
+		ecc_cfg->strength = user->strength;
+	} else if (reqs->step_size && reqs->strength) {
+		ecc_cfg->step_size = reqs->step_size;
+		ecc_cfg->strength = reqs->strength;
+	} else {
+		/* use defaults */
+		ecc_cfg->step_size = NANDC_STEP_SIZE;
+		ecc_cfg->strength = 4;
+	}
+
+	if (ecc_cfg->step_size != NANDC_STEP_SIZE) {
+		dev_err(snandc->dev,
+			"only %u bytes ECC step size is supported\n",
+			NANDC_STEP_SIZE);
+		ret = -EOPNOTSUPP;
+		goto err_free_ecc_cfg;
+	}
+
+	if (ecc_cfg->strength != 4) {
+		dev_err(snandc->dev,
+			"only 4 bits ECC strength is supported\n");
+		ret = -EOPNOTSUPP;
+		goto err_free_ecc_cfg;
+	}
+
+	snandc->qspi->oob_buf = kmalloc(mtd->writesize + mtd->oobsize,
 					GFP_KERNEL);
 	if (!snandc->qspi->oob_buf) {
-		kfree(ecc_cfg);
-		return -ENOMEM;
+		ret = -ENOMEM;
+		goto err_free_ecc_cfg;
 	}
 
 	memset(snandc->qspi->oob_buf, 0xff, mtd->writesize + mtd->oobsize);
@@ -280,8 +309,6 @@ static int qcom_spi_ecc_init_ctx_pipelined(struct nand_device *nand)
 	ecc_cfg->bytes = ecc_cfg->ecc_bytes_hw + ecc_cfg->spare_bytes + ecc_cfg->bbm_size;
 
 	ecc_cfg->steps = 4;
-	ecc_cfg->strength = 4;
-	ecc_cfg->step_size = 512;
 	ecc_cfg->cw_data = 516;
 	ecc_cfg->cw_size = ecc_cfg->cw_data + ecc_cfg->bytes;
 	bad_block_byte = mtd->writesize - ecc_cfg->cw_size * (cwperpage - 1) + 1;
@@ -339,6 +366,10 @@ static int qcom_spi_ecc_init_ctx_pipelined(struct nand_device *nand)
 		ecc_cfg->strength, ecc_cfg->step_size);
 
 	return 0;
+
+err_free_ecc_cfg:
+	kfree(ecc_cfg);
+	return ret;
 }
 
 static void qcom_spi_ecc_cleanup_ctx_pipelined(struct nand_device *nand)
@@ -493,6 +524,22 @@ static void qcom_spi_config_single_cw_page_read(struct qcom_nand_controller *sna
 	qcom_read_reg_dma(snandc, NAND_FLASH_STATUS, 1, 0);
 }
 
+static int qcom_spi_check_raw_flash_errors(struct qcom_nand_controller *snandc, int cw_cnt)
+{
+	int i;
+
+	qcom_nandc_dev_to_mem(snandc, true);
+
+	for (i = 0; i < cw_cnt; i++) {
+		u32 flash = le32_to_cpu(snandc->reg_read_buf[i]);
+
+		if (flash & (FS_OP_ERR | FS_MPU_ERR))
+			return -EIO;
+	}
+
+	return 0;
+}
+
 static int qcom_spi_read_last_cw(struct qcom_nand_controller *snandc,
 				 const struct spi_mem_op *op)
 {
@@ -538,11 +585,9 @@ static int qcom_spi_read_last_cw(struct qcom_nand_controller *snandc,
 		return ret;
 	}
 
-	qcom_nandc_dev_to_mem(snandc, true);
-	u32 flash = le32_to_cpu(snandc->reg_read_buf[0]);
-
-	if (flash & (FS_OP_ERR | FS_MPU_ERR))
-		return -EIO;
+	ret = qcom_spi_check_raw_flash_errors(snandc, 1);
+	if (ret)
+		return ret;
 
 	bbpos = mtd->writesize - ecc_cfg->cw_size * (num_cw - 1);
 
@@ -556,7 +601,7 @@ static int qcom_spi_read_last_cw(struct qcom_nand_controller *snandc,
 	return ret;
 }
 
-static int qcom_spi_check_error(struct qcom_nand_controller *snandc, u8 *data_buf, u8 *oob_buf)
+static int qcom_spi_check_error(struct qcom_nand_controller *snandc)
 {
 	struct snandc_read_status *buf;
 	struct qpic_ecc *ecc_cfg = snandc->qspi->ecc;
@@ -573,15 +618,6 @@ static int qcom_spi_check_error(struct qcom_nand_controller *snandc, u8 *data_bu
 
 	for (i = 0; i < num_cw; i++, buf++) {
 		u32 flash, buffer, erased_cw;
-		int data_len, oob_len;
-
-		if (i == (num_cw - 1)) {
-			data_len = NANDC_STEP_SIZE - ((num_cw - 1) << 2);
-			oob_len = num_cw << 2;
-		} else {
-			data_len = ecc_cfg->cw_data;
-			oob_len = 0;
-		}
 
 		flash = le32_to_cpu(buf->snandc_flash);
 		buffer = le32_to_cpu(buf->snandc_buffer);
@@ -605,11 +641,6 @@ static int qcom_spi_check_error(struct qcom_nand_controller *snandc, u8 *data_bu
 			snandc->qspi->ecc_stats.corrected += stat;
 			max_bitflips = max(max_bitflips, stat);
 		}
-
-		if (data_buf)
-			data_buf += data_len;
-		if (oob_buf)
-			oob_buf += oob_len + ecc_cfg->bytes;
 	}
 
 	if (flash_op_err)
@@ -619,22 +650,6 @@ static int qcom_spi_check_error(struct qcom_nand_controller *snandc, u8 *data_bu
 		snandc->qspi->ecc_stats.bitflips = max_bitflips;
 	else
 		snandc->qspi->ecc_stats.failed++;
-
-	return 0;
-}
-
-static int qcom_spi_check_raw_flash_errors(struct qcom_nand_controller *snandc, int cw_cnt)
-{
-	int i;
-
-	qcom_nandc_dev_to_mem(snandc, true);
-
-	for (i = 0; i < cw_cnt; i++) {
-		u32 flash = le32_to_cpu(snandc->reg_read_buf[i]);
-
-		if (flash & (FS_OP_ERR | FS_MPU_ERR))
-			return -EIO;
-	}
 
 	return 0;
 }
@@ -763,15 +778,12 @@ static int qcom_spi_read_page_ecc(struct qcom_nand_controller *snandc,
 				  const struct spi_mem_op *op)
 {
 	struct qpic_ecc *ecc_cfg = snandc->qspi->ecc;
-	u8 *data_buf = NULL, *data_buf_start, *oob_buf = NULL, *oob_buf_start;
+	u8 *data_buf = NULL, *oob_buf = NULL;
 	int ret, i;
 	u32 cfg0, cfg1, ecc_bch_cfg, num_cw = snandc->qspi->num_cw;
 
 	data_buf = op->data.buf.in;
-	data_buf_start = data_buf;
-
 	oob_buf = snandc->qspi->oob_buf;
-	oob_buf_start = oob_buf;
 
 	snandc->buf_count = 0;
 	snandc->buf_start = 0;
@@ -852,21 +864,18 @@ static int qcom_spi_read_page_ecc(struct qcom_nand_controller *snandc,
 		return ret;
 	}
 
-	return qcom_spi_check_error(snandc, data_buf_start, oob_buf_start);
+	return qcom_spi_check_error(snandc);
 }
 
 static int qcom_spi_read_page_oob(struct qcom_nand_controller *snandc,
 				  const struct spi_mem_op *op)
 {
 	struct qpic_ecc *ecc_cfg = snandc->qspi->ecc;
-	u8 *data_buf = NULL, *data_buf_start, *oob_buf = NULL, *oob_buf_start;
+	u8 *oob_buf = NULL;
 	int ret, i;
 	u32 cfg0, cfg1, ecc_bch_cfg, num_cw = snandc->qspi->num_cw;
 
 	oob_buf = op->data.buf.in;
-	oob_buf_start = oob_buf;
-
-	data_buf_start = data_buf;
 
 	snandc->buf_count = 0;
 	snandc->buf_start = 0;
@@ -934,7 +943,7 @@ static int qcom_spi_read_page_oob(struct qcom_nand_controller *snandc,
 		return ret;
 	}
 
-	return qcom_spi_check_error(snandc, data_buf_start, oob_buf_start);
+	return qcom_spi_check_error(snandc);
 }
 
 static int qcom_spi_read_page(struct qcom_nand_controller *snandc,
