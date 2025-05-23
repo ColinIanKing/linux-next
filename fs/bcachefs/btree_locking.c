@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 #include "bcachefs.h"
+#include "btree_cache.h"
 #include "btree_locking.h"
 #include "btree_types.h"
 
@@ -236,7 +237,7 @@ static noinline int break_cycle(struct lock_graph *g, struct printbuf *cycle,
 			prt_newline(&buf);
 		}
 
-		bch2_print_string_as_lines_nonblocking(KERN_ERR, buf.buf);
+		bch2_print_str_nonblocking(g->g->trans->c, KERN_ERR, buf.buf);
 		printbuf_exit(&buf);
 		BUG();
 	}
@@ -618,22 +619,23 @@ bool bch2_btree_path_upgrade_noupgrade_sibs(struct btree_trans *trans,
 			       unsigned new_locks_want,
 			       struct get_locks_fail *f)
 {
-	EBUG_ON(path->locks_want >= new_locks_want);
-
-	path->locks_want = new_locks_want;
+	path->locks_want = max_t(unsigned, path->locks_want, new_locks_want);
 
 	bool ret = btree_path_get_locks(trans, path, true, f);
 	bch2_trans_verify_locks(trans);
 	return ret;
 }
 
-bool __bch2_btree_path_upgrade(struct btree_trans *trans,
-			       struct btree_path *path,
-			       unsigned new_locks_want,
-			       struct get_locks_fail *f)
+int __bch2_btree_path_upgrade(struct btree_trans *trans,
+			      struct btree_path *path,
+			      unsigned new_locks_want)
 {
-	bool ret = bch2_btree_path_upgrade_noupgrade_sibs(trans, path, new_locks_want, f);
-	if (ret)
+	struct get_locks_fail f = {};
+	unsigned old_locks = path->nodes_locked;
+	unsigned old_locks_want = path->locks_want;
+	int ret = 0;
+
+	if (bch2_btree_path_upgrade_noupgrade_sibs(trans, path, new_locks_want, &f))
 		goto out;
 
 	/*
@@ -668,6 +670,28 @@ bool __bch2_btree_path_upgrade(struct btree_trans *trans,
 				btree_path_get_locks(trans, linked, true, NULL);
 			}
 	}
+
+	count_event(trans->c, trans_restart_upgrade);
+	if (trace_trans_restart_upgrade_enabled()) {
+		struct printbuf buf = PRINTBUF;
+
+		prt_printf(&buf, "%s %pS\n", trans->fn, (void *) _RET_IP_);
+		prt_printf(&buf, "btree %s pos\n", bch2_btree_id_str(path->btree_id));
+		bch2_bpos_to_text(&buf, path->pos);
+		prt_printf(&buf, "locks want %u -> %u level %u\n",
+			   old_locks_want, new_locks_want, f.l);
+		prt_printf(&buf, "nodes_locked %x -> %x\n",
+			   old_locks, path->nodes_locked);
+		prt_printf(&buf, "node %s ", IS_ERR(f.b) ? bch2_err_str(PTR_ERR(f.b)) :
+			   !f.b ? "(null)" : "(node)");
+		prt_printf(&buf, "path seq %u node seq %u\n",
+			   IS_ERR_OR_NULL(f.b) ? 0 : f.b->c.lock.seq,
+			   path->l[f.l].lock_seq);
+
+		trace_trans_restart_upgrade(trans->c, buf.buf);
+		printbuf_exit(&buf);
+	}
+	ret = btree_trans_restart(trans, BCH_ERR_transaction_restart_upgrade);
 out:
 	bch2_trans_verify_locks(trans);
 	return ret;
@@ -738,7 +762,9 @@ static noinline __cold int bch2_trans_relock_fail(struct btree_trans *trans, str
 		struct printbuf buf = PRINTBUF;
 
 		bch2_bpos_to_text(&buf, path->pos);
-		prt_printf(&buf, " l=%u seq=%u node seq=", f->l, path->l[f->l].lock_seq);
+		prt_printf(&buf, " %s l=%u seq=%u node seq=",
+			   bch2_btree_id_str(path->btree_id),
+			   f->l, path->l[f->l].lock_seq);
 		if (IS_ERR_OR_NULL(f->b)) {
 			prt_str(&buf, bch2_err_str(PTR_ERR(f->b)));
 		} else {
@@ -799,13 +825,6 @@ int bch2_trans_relock_notrace(struct btree_trans *trans)
 	return __bch2_trans_relock(trans, false);
 }
 
-void bch2_trans_unlock_noassert(struct btree_trans *trans)
-{
-	__bch2_trans_unlock(trans);
-
-	trans_set_unlocked(trans);
-}
-
 void bch2_trans_unlock(struct btree_trans *trans)
 {
 	__bch2_trans_unlock(trans);
@@ -842,9 +861,7 @@ int __bch2_trans_mutex_lock(struct btree_trans *trans,
 
 /* Debug */
 
-#ifdef CONFIG_BCACHEFS_DEBUG
-
-void bch2_btree_path_verify_locks(struct btree_path *path)
+void __bch2_btree_path_verify_locks(struct btree_path *path)
 {
 	/*
 	 * A path may be uptodate and yet have nothing locked if and only if
@@ -885,7 +902,7 @@ static bool bch2_trans_locked(struct btree_trans *trans)
 	return false;
 }
 
-void bch2_trans_verify_locks(struct btree_trans *trans)
+void __bch2_trans_verify_locks(struct btree_trans *trans)
 {
 	if (!trans->locked) {
 		BUG_ON(bch2_trans_locked(trans));
@@ -896,7 +913,5 @@ void bch2_trans_verify_locks(struct btree_trans *trans)
 	unsigned i;
 
 	trans_for_each_path(trans, path, i)
-		bch2_btree_path_verify_locks(path);
+		__bch2_btree_path_verify_locks(path);
 }
-
-#endif

@@ -59,7 +59,7 @@ static void v9fs_issue_write(struct netfs_io_subrequest *subreq)
 	len = p9_client_write(fid, subreq->start, &subreq->io_iter, &err);
 	if (len > 0)
 		__set_bit(NETFS_SREQ_MADE_PROGRESS, &subreq->flags);
-	netfs_write_subrequest_terminated(subreq, len ?: err, false);
+	netfs_write_subrequest_terminated(subreq, len ?: err);
 }
 
 /**
@@ -164,4 +164,5 @@ const struct address_space_operations v9fs_addr_operations = {
 	.invalidate_folio	= netfs_invalidate_folio,
 	.direct_IO		= noop_direct_IO,
 	.writepages		= netfs_writepages,
+	.migrate_folio		= filemap_migrate_folio,
 };
