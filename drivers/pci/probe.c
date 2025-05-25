@@ -2510,6 +2510,7 @@ EXPORT_SYMBOL(pci_bus_read_dev_vendor_id);
 
 static struct platform_device *pci_pwrctrl_create_device(struct pci_bus *bus, int devfn)
 {
+#if defined(CONFIG_PCI_PWRCTL) || defined(CONFIG_PCI_PWRCTL_MODULE)
 	struct pci_host_bridge *host = pci_find_host_bridge(bus);
 	struct platform_device *pdev;
 	struct device_node *np;
@@ -2536,6 +2537,9 @@ static struct platform_device *pci_pwrctrl_create_device(struct pci_bus *bus, in
 	}
 
 	return pdev;
+#else
+	return NULL;
+#endif
 }
 
 /*
