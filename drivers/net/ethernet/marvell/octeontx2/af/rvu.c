@@ -1393,8 +1393,6 @@ static void rvu_detach_block(struct rvu *rvu, int pcifunc, int blktype)
 	if (blkaddr < 0)
 		return;
 
-	if (blktype == BLKTYPE_NIX)
-		rvu_nix_reset_mac(pfvf, pcifunc);
 
 	block = &hw->block[blkaddr];
 
@@ -1407,6 +1405,10 @@ static void rvu_detach_block(struct rvu *rvu, int pcifunc, int blktype)
 		if (lf < 0) /* This should never happen */
 			continue;
 
+		if (blktype == BLKTYPE_NIX) {
+			rvu_nix_reset_mac(pfvf, pcifunc);
+			rvu_npc_clear_ucast_entry(rvu, pcifunc, lf);
+		}
 		/* Disable the LF */
 		rvu_write64(rvu, blkaddr, block->lfcfg_reg |
 			    (lf << block->lfshift), 0x00ULL);
@@ -2173,7 +2175,7 @@ static int rvu_process_mbox_msg(struct otx2_mbox *mbox, int devid,
 		if (rsp && err)						\
 			rsp->hdr.rc = err;				\
 									\
-		trace_otx2_msg_process(mbox->pdev, _id, err);		\
+		trace_otx2_msg_process(mbox->pdev, _id, err, req->pcifunc); \
 		return rsp ? err : -ENOMEM;				\
 	}
 MBOX_MESSAGES
