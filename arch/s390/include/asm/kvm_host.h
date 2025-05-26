@@ -27,8 +27,6 @@
 #include <asm/isc.h>
 #include <asm/guarded_storage.h>
 
-#define KVM_MAX_VCPUS 255
-
 #define KVM_INTERNAL_MEM_SLOTS 1
 
 /*
@@ -631,9 +629,8 @@ struct kvm_s390_pv {
 	struct mmu_notifier mmu_notifier;
 };
 
-struct kvm_arch{
-	void *sca;
-	int use_esca;
+struct kvm_arch {
+	struct esca_block *sca;
 	rwlock_t sca_lock;
 	debug_info_t *dbf;
 	struct kvm_s390_float_interrupt float_int;
