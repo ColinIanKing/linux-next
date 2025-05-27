@@ -11,6 +11,7 @@
 #include <linux/kvm.h>
 #include <linux/kvm_host.h>
 #include <asm/gmap.h>
+#include <asm/gmap_helpers.h>
 #include <asm/virtio-ccw.h>
 #include "kvm-s390.h"
 #include "trace.h"
@@ -32,12 +33,13 @@ static int diag_release_pages(struct kvm_vcpu *vcpu)
 
 	VCPU_EVENT(vcpu, 5, "diag release pages %lX %lX", start, end);
 
+	mmap_read_lock(vcpu->kvm->mm);
 	/*
 	 * We checked for start >= end above, so lets check for the
 	 * fast path (no prefix swap page involved)
 	 */
 	if (end <= prefix || start >= prefix + 2 * PAGE_SIZE) {
-		gmap_discard(vcpu->arch.gmap, start, end);
+		gmap_helper_discard(vcpu->kvm->mm, start, end);
 	} else {
 		/*
 		 * This is slow path.  gmap_discard will check for start
@@ -45,13 +47,14 @@ static int diag_release_pages(struct kvm_vcpu *vcpu)
 		 * prefix and let gmap_discard make some of these calls
 		 * NOPs.
 		 */
-		gmap_discard(vcpu->arch.gmap, start, prefix);
+		gmap_helper_discard(vcpu->kvm->mm, start, prefix);
 		if (start <= prefix)
-			gmap_discard(vcpu->arch.gmap, 0, PAGE_SIZE);
+			gmap_helper_discard(vcpu->kvm->mm, 0, PAGE_SIZE);
 		if (end > prefix + PAGE_SIZE)
-			gmap_discard(vcpu->arch.gmap, PAGE_SIZE, 2 * PAGE_SIZE);
-		gmap_discard(vcpu->arch.gmap, prefix + 2 * PAGE_SIZE, end);
+			gmap_helper_discard(vcpu->kvm->mm, PAGE_SIZE, 2 * PAGE_SIZE);
+		gmap_helper_discard(vcpu->kvm->mm, prefix + 2 * PAGE_SIZE, end);
 	}
+	mmap_read_unlock(vcpu->kvm->mm);
 	return 0;
 }
 
