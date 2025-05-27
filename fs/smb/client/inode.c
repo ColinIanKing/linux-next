@@ -1046,61 +1046,6 @@ static __u64 simple_hashstr(const char *str)
 	return hash;
 }
 
-#ifdef CONFIG_CIFS_ALLOW_INSECURE_LEGACY
-/**
- * cifs_backup_query_path_info - SMB1 fallback code to get ino
- *
- * Fallback code to get file metadata when we don't have access to
- * full_path (EACCES) and have backup creds.
- *
- * @xid:	transaction id used to identify original request in logs
- * @tcon:	information about the server share we have mounted
- * @sb:	the superblock stores info such as disk space available
- * @full_path:	name of the file we are getting the metadata for
- * @resp_buf:	will be set to cifs resp buf and needs to be freed with
- * 		cifs_buf_release() when done with @data
- * @data:	will be set to search info result buffer
- */
-static int
-cifs_backup_query_path_info(int xid,
-			    struct cifs_tcon *tcon,
-			    struct super_block *sb,
-			    const char *full_path,
-			    void **resp_buf,
-			    FILE_ALL_INFO **data)
-{
-	struct cifs_sb_info *cifs_sb = CIFS_SB(sb);
-	struct cifs_search_info info = {0};
-	u16 flags;
-	int rc;
-
-	*resp_buf = NULL;
-	info.endOfSearch = false;
-	if (tcon->unix_ext)
-		info.info_level = SMB_FIND_FILE_UNIX;
-	else if ((tcon->ses->capabilities &
-		  tcon->ses->server->vals->cap_nt_find) == 0)
-		info.info_level = SMB_FIND_FILE_INFO_STANDARD;
-	else if (cifs_sb->mnt_cifs_flags & CIFS_MOUNT_SERVER_INUM)
-		info.info_level = SMB_FIND_FILE_ID_FULL_DIR_INFO;
-	else /* no srvino useful for fallback to some netapp */
-		info.info_level = SMB_FIND_FILE_DIRECTORY_INFO;
-
-	flags = CIFS_SEARCH_CLOSE_ALWAYS |
-		CIFS_SEARCH_CLOSE_AT_END |
-		CIFS_SEARCH_BACKUP_SEARCH;
-
-	rc = CIFSFindFirst(xid, tcon, full_path,
-			   cifs_sb, NULL, flags, &info, false);
-	if (rc)
-		return rc;
-
-	*resp_buf = (void *)info.ntwrk_buf_start;
-	*data = (FILE_ALL_INFO *)info.srch_entries_start;
-	return 0;
-}
-#endif /* CONFIG_CIFS_ALLOW_INSECURE_LEGACY */
-
 static void cifs_set_fattr_ino(int xid, struct cifs_tcon *tcon, struct super_block *sb,
 			       struct inode **inode, const char *full_path,
 			       struct cifs_open_info_data *data, struct cifs_fattr *fattr)
@@ -1314,45 +1259,6 @@ static int cifs_get_fattr(struct cifs_open_info_data *data,
 		cifs_create_junction_fattr(fattr, sb);
 		rc = 0;
 		break;
-	case -EACCES:
-#ifdef CONFIG_CIFS_ALLOW_INSECURE_LEGACY
-		/*
-		 * perm errors, try again with backup flags if possible
-		 *
-		 * For SMB2 and later the backup intent flag
-		 * is already sent if needed on open and there
-		 * is no path based FindFirst operation to use
-		 * to retry with
-		 */
-		if (backup_cred(cifs_sb) && is_smb1_server(server)) {
-			/* for easier reading */
-			FILE_ALL_INFO *fi;
-			FILE_DIRECTORY_INFO *fdi;
-			SEARCH_ID_FULL_DIR_INFO *si;
-
-			rc = cifs_backup_query_path_info(xid, tcon, sb,
-							 full_path,
-							 &smb1_backup_rsp_buf,
-							 &fi);
-			if (rc)
-				goto out;
-
-			move_cifs_info_to_smb2(&data->fi, fi);
-			fdi = (FILE_DIRECTORY_INFO *)fi;
-			si = (SEARCH_ID_FULL_DIR_INFO *)fi;
-
-			cifs_dir_info_to_fattr(fattr, fdi, cifs_sb);
-			fattr->cf_uniqueid = le64_to_cpu(si->UniqueId);
-			/* uniqueid set, skip get inum step */
-			goto handle_mnt_opt;
-		} else {
-			/* nothing we can do, bail out */
-			goto out;
-		}
-#else
-		goto out;
-#endif /* CONFIG_CIFS_ALLOW_INSECURE_LEGACY */
-		break;
 	default:
 		cifs_dbg(FYI, "%s: unhandled err rc %d\n", __func__, rc);
 		goto out;
@@ -1367,9 +1273,6 @@ static int cifs_get_fattr(struct cifs_open_info_data *data,
 	/*
 	 * 4. Tweak fattr based on mount options
 	 */
-#ifdef CONFIG_CIFS_ALLOW_INSECURE_LEGACY
-handle_mnt_opt:
-#endif /* CONFIG_CIFS_ALLOW_INSECURE_LEGACY */
 	/* query for SFU type info if supported and needed */
 	if ((fattr->cf_cifsattrs & ATTR_SYSTEM) &&
 	    (cifs_sb->mnt_cifs_flags & CIFS_MOUNT_UNX_EMUL)) {

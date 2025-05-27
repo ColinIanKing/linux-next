@@ -4888,7 +4888,7 @@ smb2_writev_callback(struct mid_q_entry *mid)
 			      0, cifs_trace_rw_credits_write_response_clear);
 	wdata->credits.value = 0;
 	trace_netfs_sreq(&wdata->subreq, netfs_sreq_trace_io_progress);
-	cifs_write_subrequest_terminated(wdata, result ?: written, true);
+	cifs_write_subrequest_terminated(wdata, result ?: written);
 	release_mid(mid);
 	trace_smb3_rw_credits(rreq_debug_id, subreq_debug_index, 0,
 			      server->credits, server->in_flight,
@@ -5061,7 +5061,7 @@ out:
 				      -(int)wdata->credits.value,
 				      cifs_trace_rw_credits_write_response_clear);
 		add_credits_and_wake_if(wdata->server, &wdata->credits, 0);
-		cifs_write_subrequest_terminated(wdata, rc, true);
+		cifs_write_subrequest_terminated(wdata, rc);
 	}
 }
 
@@ -5907,71 +5907,6 @@ replay_again:
 		copy_posix_fs_info_to_kstatfs(info, fsdata);
 
 posix_qfsinf_exit:
-	free_rsp_buf(resp_buftype, rsp_iov.iov_base);
-
-	if (is_replayable_error(rc) &&
-	    smb2_should_replay(tcon, &retries, &cur_sleep))
-		goto replay_again;
-
-	return rc;
-}
-
-int
-SMB2_QFS_info(const unsigned int xid, struct cifs_tcon *tcon,
-	      u64 persistent_fid, u64 volatile_fid, struct kstatfs *fsdata)
-{
-	struct smb_rqst rqst;
-	struct smb2_query_info_rsp *rsp = NULL;
-	struct kvec iov;
-	struct kvec rsp_iov;
-	int rc = 0;
-	int resp_buftype;
-	struct cifs_ses *ses = tcon->ses;
-	struct TCP_Server_Info *server;
-	struct smb2_fs_full_size_info *info = NULL;
-	int flags = 0;
-	int retries = 0, cur_sleep = 1;
-
-replay_again:
-	/* reinitialize for possible replay */
-	flags = 0;
-	server = cifs_pick_channel(ses);
-
-	rc = build_qfs_info_req(&iov, tcon, server,
-				FS_FULL_SIZE_INFORMATION,
-				sizeof(struct smb2_fs_full_size_info),
-				persistent_fid, volatile_fid);
-	if (rc)
-		return rc;
-
-	if (smb3_encryption_required(tcon))
-		flags |= CIFS_TRANSFORM_REQ;
-
-	memset(&rqst, 0, sizeof(struct smb_rqst));
-	rqst.rq_iov = &iov;
-	rqst.rq_nvec = 1;
-
-	if (retries)
-		smb2_set_replay(server, &rqst);
-
-	rc = cifs_send_recv(xid, ses, server,
-			    &rqst, &resp_buftype, flags, &rsp_iov);
-	free_qfs_info_req(&iov);
-	if (rc) {
-		cifs_stats_fail_inc(tcon, SMB2_QUERY_INFO_HE);
-		goto qfsinf_exit;
-	}
-	rsp = (struct smb2_query_info_rsp *)rsp_iov.iov_base;
-
-	info = (struct smb2_fs_full_size_info *)(
-		le16_to_cpu(rsp->OutputBufferOffset) + (char *)rsp);
-	rc = smb2_validate_iov(le16_to_cpu(rsp->OutputBufferOffset),
-			       le32_to_cpu(rsp->OutputBufferLength), &rsp_iov,
-			       sizeof(struct smb2_fs_full_size_info));
-	if (!rc)
-		smb2_copy_fs_info_to_kstatfs(info, fsdata);
-
-qfsinf_exit:
 	free_rsp_buf(resp_buftype, rsp_iov.iov_base);
 
 	if (is_replayable_error(rc) &&
