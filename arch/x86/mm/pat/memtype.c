@@ -38,6 +38,7 @@
 #include <linux/kernel.h>
 #include <linux/pfn_t.h>
 #include <linux/slab.h>
+#include <linux/io.h>
 #include <linux/mm.h>
 #include <linux/highmem.h>
 #include <linux/fs.h>
@@ -232,7 +233,7 @@ void pat_cpu_init(void)
 		panic("x86/PAT: PAT enabled, but not supported by secondary CPU\n");
 	}
 
-	wrmsrl(MSR_IA32_CR_PAT, pat_msr_val);
+	wrmsrq(MSR_IA32_CR_PAT, pat_msr_val);
 
 	__flush_tlb_all();
 }
@@ -256,7 +257,7 @@ void __init pat_bp_init(void)
 	if (!cpu_feature_enabled(X86_FEATURE_PAT))
 		pat_disable("PAT not supported by the CPU.");
 	else
-		rdmsrl(MSR_IA32_CR_PAT, pat_msr_val);
+		rdmsrq(MSR_IA32_CR_PAT, pat_msr_val);
 
 	if (!pat_msr_val) {
 		pat_disable("PAT support disabled by the firmware.");
@@ -682,6 +683,7 @@ static enum page_cache_mode lookup_memtype(u64 paddr)
 /**
  * pat_pfn_immune_to_uc_mtrr - Check whether the PAT memory type
  * of @pfn cannot be overridden by UC MTRR memory type.
+ * @pfn: The page frame number to check.
  *
  * Only to be called when PAT is enabled.
  *
@@ -773,33 +775,6 @@ pgprot_t phys_mem_access_prot(struct file *file, unsigned long pfn,
 	return vma_prot;
 }
 
-#ifdef CONFIG_STRICT_DEVMEM
-/* This check is done in drivers/char/mem.c in case of STRICT_DEVMEM */
-static inline int range_is_allowed(unsigned long pfn, unsigned long size)
-{
-	return 1;
-}
-#else
-/* This check is needed to avoid cache aliasing when PAT is enabled */
-static inline int range_is_allowed(unsigned long pfn, unsigned long size)
-{
-	u64 from = ((u64)pfn) << PAGE_SHIFT;
-	u64 to = from + size;
-	u64 cursor = from;
-
-	if (!pat_enabled())
-		return 1;
-
-	while (cursor < to) {
-		if (!devmem_is_allowed(pfn))
-			return 0;
-		cursor += PAGE_SIZE;
-		pfn++;
-	}
-	return 1;
-}
-#endif /* CONFIG_STRICT_DEVMEM */
-
 static inline void pgprot_set_cachemode(pgprot_t *prot, enum page_cache_mode pcm)
 {
 	*prot = __pgprot((pgprot_val(*prot) & ~_PAGE_CACHE_MASK) |
@@ -810,6 +785,9 @@ int phys_mem_access_prot_allowed(struct file *file, unsigned long pfn,
 				unsigned long size, pgprot_t *vma_prot)
 {
 	enum page_cache_mode pcm = _PAGE_CACHE_MODE_WB;
+
+	if (!pat_enabled())
+		return 1;
 
 	if (!range_is_allowed(pfn, size))
 		return 0;
