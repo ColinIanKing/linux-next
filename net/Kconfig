@@ -75,6 +75,10 @@ config NET_DEVMEM
 config NET_SHAPER
 	bool
 
+config NET_CRC32C
+	bool
+	select CRC32
+
 menu "Networking options"
 
 source "net/packet/Kconfig"
@@ -245,7 +249,6 @@ source "net/bridge/netfilter/Kconfig"
 
 endif
 
-source "net/dccp/Kconfig"
 source "net/sctp/Kconfig"
 source "net/rds/Kconfig"
 source "net/tipc/Kconfig"
