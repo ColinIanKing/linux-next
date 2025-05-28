@@ -10,6 +10,8 @@
 #include "ntlmssp.h"
 #include "smbacl.h"
 
+#include "../common/smb_direct/smb_direct.h"
+
 /*Create Action Flags*/
 #define FILE_SUPERSEDED                0x00000000
 #define FILE_OPENED            0x00000001
@@ -62,6 +64,9 @@ struct preauth_integrity_info {
 #define SMB2_SESSION_VALID		BIT(1)
 
 #define SMB2_SESSION_TIMEOUT		(10 * HZ)
+
+/* Apple Defined Contexts */
+#define SMB2_CREATE_AAPL		"AAPL"
 
 struct create_durable_req_v2 {
 	struct create_context_hdr ccontext;
@@ -131,12 +136,6 @@ struct create_posix_rsp {
 	__le32 mode;
 	/* SidBuffer contain two sids(Domain sid(28), UNIX group sid(16)) */
 	u8 SidBuffer[44];
-} __packed;
-
-struct smb2_buffer_desc_v1 {
-	__le64 offset;
-	__le32 token;
-	__le32 length;
 } __packed;
 
 #define SMB2_0_IOCTL_IS_FSCTL 0x00000001
