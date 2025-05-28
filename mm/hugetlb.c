@@ -5440,6 +5440,7 @@ void hugetlb_split(struct vm_area_struct *vma, unsigned long addr)
 	 * walks (except hardware and gup_fast()).
 	 */
 	vma_assert_write_locked(vma);
+	i_mmap_assert_write_locked(vma->vm_file->f_mapping);
 
 	if (addr & ~PUD_MASK) {
 		unsigned long floor = addr & PUD_MASK;
@@ -5456,7 +5457,7 @@ void hugetlb_split(struct vm_area_struct *vma, unsigned long addr)
 			 * table walks, which are not possible thanks to the
 			 * locks held by our caller.
 			 */
-			hugetlb_unshare_pmds(vma, floor, ceil, false);
+			hugetlb_unshare_pmds(vma, floor, ceil, /* take_locks = */ false);
 		}
 	}
 }
@@ -7900,6 +7901,8 @@ void move_hugetlb_state(struct folio *old_folio, struct folio *new_folio, int re
 /*
  * If @take_locks is false, the caller must ensure that no concurrent page table
  * access can happen (except for gup_fast() and hardware page walks).
+ * If @take_locks is true, we take the hugetlb VMA lock (to lock out things like
+ * concurrent page fault handling) and the file rmap lock.
  */
 static void hugetlb_unshare_pmds(struct vm_area_struct *vma,
 				   unsigned long start,
@@ -7961,7 +7964,8 @@ static void hugetlb_unshare_pmds(struct vm_area_struct *vma,
 void hugetlb_unshare_all_pmds(struct vm_area_struct *vma)
 {
 	hugetlb_unshare_pmds(vma, ALIGN(vma->vm_start, PUD_SIZE),
-			ALIGN_DOWN(vma->vm_end, PUD_SIZE), true);
+			ALIGN_DOWN(vma->vm_end, PUD_SIZE),
+			/* take_locks = */ true);
 }
 
 /*
