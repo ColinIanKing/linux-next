@@ -337,11 +337,10 @@ void bch2_alloc_v4_swab(struct bkey_s k)
 	a->stripe_sectors	= swab32(a->stripe_sectors);
 }
 
-void bch2_alloc_to_text(struct printbuf *out, struct bch_fs *c, struct bkey_s_c k)
+static inline void __bch2_alloc_v4_to_text(struct printbuf *out, struct bch_fs *c,
+					   unsigned dev, const struct bch_alloc_v4 *a)
 {
-	struct bch_alloc_v4 _a;
-	const struct bch_alloc_v4 *a = bch2_alloc_to_v4(k, &_a);
-	struct bch_dev *ca = c ? bch2_dev_bucket_tryget_noerror(c, k.k->p) : NULL;
+	struct bch_dev *ca = c ? bch2_dev_tryget_noerror(c, dev) : NULL;
 
 	prt_newline(out);
 	printbuf_indent_add(out, 2);
@@ -367,6 +366,19 @@ void bch2_alloc_to_text(struct printbuf *out, struct bch_fs *c, struct bkey_s_c 
 	printbuf_indent_sub(out, 2);
 
 	bch2_dev_put(ca);
+}
+
+void bch2_alloc_to_text(struct printbuf *out, struct bch_fs *c, struct bkey_s_c k)
+{
+	struct bch_alloc_v4 _a;
+	const struct bch_alloc_v4 *a = bch2_alloc_to_v4(k, &_a);
+
+	__bch2_alloc_v4_to_text(out, c, k.k->p.inode, a);
+}
+
+void bch2_alloc_v4_to_text(struct printbuf *out, struct bch_fs *c, struct bkey_s_c k)
+{
+	__bch2_alloc_v4_to_text(out, c, k.k->p.inode, bkey_s_c_to_alloc_v4(k).v);
 }
 
 void __bch2_alloc_to_v4(struct bkey_s_c k, struct bch_alloc_v4 *out)
@@ -697,8 +709,8 @@ static int __need_discard_or_freespace_err(struct btree_trans *trans,
 				  set ? "" : "un",
 				  bch2_btree_id_str(btree),
 				  buf.buf);
-	if (ret == -BCH_ERR_fsck_ignore ||
-	    ret == -BCH_ERR_fsck_errors_not_fixed)
+	if (bch2_err_matches(ret, BCH_ERR_fsck_ignore) ||
+	    bch2_err_matches(ret, BCH_ERR_fsck_errors_not_fixed))
 		ret = 0;
 
 	printbuf_exit(&buf);
