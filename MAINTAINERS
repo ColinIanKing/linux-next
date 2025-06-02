@@ -12120,7 +12120,7 @@ M:	Andy Shevchenko <andy@kernel.org>
 L:	linux-kernel@vger.kernel.org
 S:	Supported
 F:	arch/x86/include/asm/intel-mid.h
-F:	arch/x86/pci/intel_mid_pci.c
+F:	arch/x86/pci/intel_mid.c
 F:	arch/x86/platform/intel-mid/
 F:	drivers/dma/hsu/
 F:	drivers/extcon/extcon-intel-mrfld.c
@@ -18582,7 +18582,7 @@ F:	drivers/pci/controller/pcie-xilinx-cpm.c
 
 PCI ENDPOINT SUBSYSTEM
 M:	Manivannan Sadhasivam <manivannan.sadhasivam@linaro.org>
-M:	Krzysztof Wilczyński <kw@linux.com>
+M:	Krzysztof Wilczyński <kwilczynski@kernel.org>
 R:	Kishon Vijay Abraham I <kishon@kernel.org>
 L:	linux-pci@vger.kernel.org
 S:	Supported
@@ -18633,7 +18633,7 @@ F:	drivers/pci/controller/pci-xgene-msi.c
 
 PCI NATIVE HOST BRIDGE AND ENDPOINT DRIVERS
 M:	Lorenzo Pieralisi <lpieralisi@kernel.org>
-M:	Krzysztof Wilczyński <kw@linux.com>
+M:	Krzysztof Wilczyński <kwilczynski@kernel.org>
 R:	Manivannan Sadhasivam <manivannan.sadhasivam@linaro.org>
 R:	Rob Herring <robh@kernel.org>
 L:	linux-pci@vger.kernel.org
