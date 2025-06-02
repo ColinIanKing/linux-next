@@ -5763,6 +5763,11 @@ void shmem_unlock_mapping(struct address_space *mapping)
 {
 }
 
+int shmem_writeout(struct folio *folio, struct writeback_control *wbc)
+{
+	return 0;
+}
+
 #ifdef CONFIG_MMU
 unsigned long shmem_get_unmapped_area(struct file *file,
 				      unsigned long addr, unsigned long len,
