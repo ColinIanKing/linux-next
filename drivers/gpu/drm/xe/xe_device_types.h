@@ -325,6 +325,10 @@ struct xe_device {
 		u8 has_heci_gscfi:1;
 		/** @info.has_llc: Device has a shared CPU+GPU last level cache */
 		u8 has_llc:1;
+		/** @info.has_mbx_power_limits: Device has support to manage power limits using
+		 * pcode mailbox commands.
+		 */
+		u8 has_mbx_power_limits:1;
 		/** @info.has_pxp: Device has PXP support */
 		u8 has_pxp:1;
 		/** @info.has_range_tlb_invalidation: Has range based TLB invalidations */
@@ -571,6 +575,9 @@ struct xe_device {
 
 	/** @pmu: performance monitoring unit */
 	struct xe_pmu pmu;
+
+	/** @atomic_svm_timeslice_ms: Atomic SVM fault timeslice MS */
+	u32 atomic_svm_timeslice_ms;
 
 #ifdef TEST_VM_OPS_ERROR
 	/**
