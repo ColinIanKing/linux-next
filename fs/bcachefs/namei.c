@@ -768,6 +768,7 @@ static int bch2_check_dirent_inode_dirent(struct btree_trans *trans,
 			ret = __bch2_fsck_write_inode(trans, target);
 		}
 	} else {
+		printbuf_reset(&buf);
 		bch2_bkey_val_to_text(&buf, c, d.s_c);
 		prt_newline(&buf);
 		bch2_bkey_val_to_text(&buf, c, bp_dirent.s_c);
@@ -857,7 +858,8 @@ int __bch2_check_dirent_target(struct btree_trans *trans,
 			n->v.d_inum = cpu_to_le64(target->bi_inum);
 		}
 
-		ret = bch2_trans_update(trans, dirent_iter, &n->k_i, 0);
+		ret = bch2_trans_update(trans, dirent_iter, &n->k_i,
+					BTREE_UPDATE_internal_snapshot_node);
 		if (ret)
 			goto err;
 	}
