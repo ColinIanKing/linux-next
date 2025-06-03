@@ -1189,13 +1189,8 @@ export ARCH_LIB		:= $(filter %/, $(libs-y))
 export ARCH_DRIVERS	:= $(drivers-y) $(drivers-m)
 # Externally visible symbols (used by link-vmlinux.sh)
 
-KBUILD_VMLINUX_OBJS := ./built-in.a
-ifdef CONFIG_MODULES
-KBUILD_VMLINUX_OBJS += $(patsubst %/, %/lib.a, $(filter %/, $(libs-y)))
+KBUILD_VMLINUX_OBJS := built-in.a $(patsubst %/, %/lib.a, $(filter %/, $(libs-y)))
 KBUILD_VMLINUX_LIBS := $(filter-out %/, $(libs-y))
-else
-KBUILD_VMLINUX_LIBS := $(patsubst %/,%/lib.a, $(libs-y))
-endif
 
 export KBUILD_VMLINUX_LIBS
 export KBUILD_LDS          := arch/$(SRCARCH)/kernel/vmlinux.lds
@@ -1370,7 +1365,7 @@ PHONY += archheaders archscripts
 hdr-inst := -f $(srctree)/scripts/Makefile.headersinst obj
 
 PHONY += headers
-headers: $(version_h) scripts_unifdef uapi-asm-generic archheaders archscripts
+headers: $(version_h) scripts_unifdef uapi-asm-generic archheaders
 ifdef HEADER_ARCH
 	$(Q)$(MAKE) -f $(srctree)/Makefile HEADER_ARCH= SRCARCH=$(HEADER_ARCH) headers
 else
