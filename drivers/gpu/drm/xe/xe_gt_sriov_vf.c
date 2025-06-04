@@ -415,6 +415,7 @@ static int vf_get_ggtt_info(struct xe_gt *gt)
 	xe_gt_sriov_dbg_verbose(gt, "GGTT %#llx-%#llx = %lluK\n",
 				start, start + size - 1, size / SZ_1K);
 
+	config->ggtt_shift = start - (s64)config->ggtt_base;
 	config->ggtt_base = start;
 	config->ggtt_size = size;
 
@@ -560,106 +561,56 @@ u64 xe_gt_sriov_vf_lmem(struct xe_gt *gt)
 	return gt->sriov.vf.self_config.lmem_size;
 }
 
-static struct xe_ggtt_node *
-vf_balloon_ggtt_node(struct xe_ggtt *ggtt, u64 start, u64 end)
-{
-	struct xe_ggtt_node *node;
-	int err;
-
-	node = xe_ggtt_node_init(ggtt);
-	if (IS_ERR(node))
-		return node;
-
-	err = xe_ggtt_node_insert_balloon(node, start, end);
-	if (err) {
-		xe_ggtt_node_fini(node);
-		return ERR_PTR(err);
-	}
-
-	return node;
-}
-
-static int vf_balloon_ggtt(struct xe_gt *gt)
-{
-	struct xe_gt_sriov_vf_selfconfig *config = &gt->sriov.vf.self_config;
-	struct xe_tile *tile = gt_to_tile(gt);
-	struct xe_ggtt *ggtt = tile->mem.ggtt;
-	struct xe_device *xe = gt_to_xe(gt);
-	u64 start, end;
-
-	xe_gt_assert(gt, IS_SRIOV_VF(xe));
-	xe_gt_assert(gt, !xe_gt_is_media_type(gt));
-
-	if (!config->ggtt_size)
-		return -ENODATA;
-
-	/*
-	 * VF can only use part of the GGTT as allocated by the PF:
-	 *
-	 *      WOPCM                                  GUC_GGTT_TOP
-	 *      |<------------ Total GGTT size ------------------>|
-	 *
-	 *           VF GGTT base -->|<- size ->|
-	 *
-	 *      +--------------------+----------+-----------------+
-	 *      |////////////////////|   block  |\\\\\\\\\\\\\\\\\|
-	 *      +--------------------+----------+-----------------+
-	 *
-	 *      |<--- balloon[0] --->|<-- VF -->|<-- balloon[1] ->|
-	 */
-
-	start = xe_wopcm_size(xe);
-	end = config->ggtt_base;
-	if (end != start) {
-		tile->sriov.vf.ggtt_balloon[0] = vf_balloon_ggtt_node(ggtt, start, end);
-		if (IS_ERR(tile->sriov.vf.ggtt_balloon[0]))
-			return PTR_ERR(tile->sriov.vf.ggtt_balloon[0]);
-	}
-
-	start = config->ggtt_base + config->ggtt_size;
-	end = GUC_GGTT_TOP;
-	if (end != start) {
-		tile->sriov.vf.ggtt_balloon[1] = vf_balloon_ggtt_node(ggtt, start, end);
-		if (IS_ERR(tile->sriov.vf.ggtt_balloon[1])) {
-			xe_ggtt_node_remove_balloon(tile->sriov.vf.ggtt_balloon[0]);
-			return PTR_ERR(tile->sriov.vf.ggtt_balloon[1]);
-		}
-	}
-
-	return 0;
-}
-
-static void deballoon_ggtt(struct drm_device *drm, void *arg)
-{
-	struct xe_tile *tile = arg;
-
-	xe_tile_assert(tile, IS_SRIOV_VF(tile_to_xe(tile)));
-	xe_ggtt_node_remove_balloon(tile->sriov.vf.ggtt_balloon[1]);
-	xe_ggtt_node_remove_balloon(tile->sriov.vf.ggtt_balloon[0]);
-}
-
 /**
- * xe_gt_sriov_vf_prepare_ggtt - Prepare a VF's GGTT configuration.
+ * xe_gt_sriov_vf_ggtt - VF GGTT configuration.
  * @gt: the &xe_gt
  *
  * This function is for VF use only.
  *
- * Return: 0 on success or a negative error code on failure.
+ * Return: size of the GGTT assigned to VF.
  */
-int xe_gt_sriov_vf_prepare_ggtt(struct xe_gt *gt)
+u64 xe_gt_sriov_vf_ggtt(struct xe_gt *gt)
 {
-	struct xe_tile *tile = gt_to_tile(gt);
-	struct xe_device *xe = tile_to_xe(tile);
-	int err;
+	xe_gt_assert(gt, IS_SRIOV_VF(gt_to_xe(gt)));
+	xe_gt_assert(gt, gt->sriov.vf.guc_version.major);
+	xe_gt_assert(gt, gt->sriov.vf.self_config.ggtt_size);
 
-	if (xe_gt_is_media_type(gt))
-		return 0;
+	return gt->sriov.vf.self_config.ggtt_size;
+}
 
-	err = vf_balloon_ggtt(gt);
-	if (err)
-		return err;
+/**
+ * xe_gt_sriov_vf_ggtt_base - VF GGTT base offset.
+ * @gt: the &xe_gt
+ *
+ * This function is for VF use only.
+ *
+ * Return: base offset of the GGTT assigned to VF.
+ */
+u64 xe_gt_sriov_vf_ggtt_base(struct xe_gt *gt)
+{
+	xe_gt_assert(gt, IS_SRIOV_VF(gt_to_xe(gt)));
+	xe_gt_assert(gt, gt->sriov.vf.guc_version.major);
+	xe_gt_assert(gt, gt->sriov.vf.self_config.ggtt_size);
 
-	return drmm_add_action_or_reset(&xe->drm, deballoon_ggtt, tile);
+	return gt->sriov.vf.self_config.ggtt_base;
+}
+
+/**
+ * xe_gt_sriov_vf_ggtt_shift - Return shift in GGTT range due to VF migration
+ * @gt: the &xe_gt struct instance
+ *
+ * This function is for VF use only.
+ *
+ * Return: The shift value; could be negative
+ */
+s64 xe_gt_sriov_vf_ggtt_shift(struct xe_gt *gt)
+{
+	struct xe_gt_sriov_vf_selfconfig *config = &gt->sriov.vf.self_config;
+
+	xe_gt_assert(gt, IS_SRIOV_VF(gt_to_xe(gt)));
+	xe_gt_assert(gt, !xe_gt_is_media_type(gt));
+
+	return config->ggtt_shift;
 }
 
 static int relay_action_handshake(struct xe_gt *gt, u32 *major, u32 *minor)
@@ -1042,6 +993,8 @@ void xe_gt_sriov_vf_print_config(struct xe_gt *gt, struct drm_printer *p)
 
 	string_get_size(config->ggtt_size, 1, STRING_UNITS_2, buf, sizeof(buf));
 	drm_printf(p, "GGTT size:\t%llu (%s)\n", config->ggtt_size, buf);
+
+	drm_printf(p, "GGTT shift on last restore:\t%lld\n", config->ggtt_shift);
 
 	if (IS_DGFX(xe) && !xe_gt_is_media_type(gt)) {
 		string_get_size(config->lmem_size, 1, STRING_UNITS_2, buf, sizeof(buf));
