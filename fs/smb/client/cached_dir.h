@@ -25,6 +25,9 @@ struct cached_dirents {
 				  * Only used to make sure we only take entries
 				  * from a single context. Never dereferenced.
 				  */
+	struct file *file; /* Only used to make sure we only take entries
+			    * from a single file. Never dereferenced.
+			    */
 	struct mutex de_mutex;
 	int pos;		 /* Expected ctx->pos */
 	struct list_head entries;
