@@ -473,13 +473,13 @@ static int proc_reg_open(struct inode *inode, struct file *file)
 	typeof_member(struct proc_ops, proc_open) open;
 	struct pde_opener *pdeo;
 
-	if (!pde->proc_ops->proc_lseek)
-		file->f_mode &= ~FMODE_LSEEK;
-
 	if (pde_is_permanent(pde)) {
 		open = pde->proc_ops->proc_open;
-		if (open)
+		if (open) {
+			if (!pde->proc_ops->proc_lseek)
+				file->f_mode &= ~FMODE_LSEEK;
 			rv = open(inode, file);
+		}
 		return rv;
 	}
 
@@ -505,6 +505,9 @@ static int proc_reg_open(struct inode *inode, struct file *file)
 			goto out_unuse;
 		}
 	}
+
+	if (!pde->proc_ops->proc_lseek)
+		file->f_mode &= ~FMODE_LSEEK;
 
 	open = pde->proc_ops->proc_open;
 	if (open)
