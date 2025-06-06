@@ -273,8 +273,8 @@ It is good practice to use a ``CONFIG_`` variable when assigning directory
 names. This allows kbuild to totally skip the directory if the
 corresponding ``CONFIG_`` option is neither "y" nor "m".
 
-Non-builtin vmlinux targets - extra-y
--------------------------------------
+Non-builtin vmlinux targets - extra-y (DEPRECATED)
+--------------------------------------------------
 
 extra-y specifies targets which are needed for building vmlinux,
 but not combined into built-in.a.
@@ -290,6 +290,10 @@ Example::
 
   # arch/x86/kernel/Makefile
   extra-y	+= vmlinux.lds
+
+extra-y is now deprecated because this is equivalent to:
+
+  always-$(KBUILD_BUILTIN) += vmlinux.lds
 
 $(extra-y) should only contain targets needed for vmlinux.
 
