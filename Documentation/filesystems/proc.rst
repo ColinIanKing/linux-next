@@ -610,6 +610,7 @@ encoded manner. The codes are the following:
     ss    shadow/guarded control stack page
     sl    sealed
     lf    lock on fault pages
+    dp    always lazily freeable mapping
     ==    =======================================
 
 Note that there is no guarantee that every flag and associated mnemonic will
