@@ -19,6 +19,7 @@
 #include <malloc.h>
 #include <stdbool.h>
 #include <time.h>
+#include <linux/mman.h>
 #include "vm_util.h"
 #include "../kselftest.h"
 
@@ -180,7 +181,7 @@ void split_pmd_thp_to_order(int order)
 	free(one_page);
 }
 
-void split_pte_mapped_thp(void)
+void split_pte_mapped_thp(bool relocate_anon)
 {
 	char *one_page, *pte_mapped, *pte_mapped2;
 	size_t len = 4 * pmd_pagesize;
@@ -221,10 +222,14 @@ void split_pte_mapped_thp(void)
 
 	/* remap the Nth pagesize of Nth THP */
 	for (i = 1; i < 4; i++) {
-		pte_mapped2 = mremap(one_page + pmd_pagesize * i + pagesize * i,
-				     pagesize, pagesize,
-				     MREMAP_MAYMOVE|MREMAP_FIXED,
-				     pte_mapped + pagesize * i);
+		int mremap_flags = MREMAP_MAYMOVE|MREMAP_FIXED;
+
+		if (relocate_anon)
+			mremap_flags |= MREMAP_RELOCATE_ANON;
+
+		pte_mapped2 = sys_mremap(one_page + pmd_pagesize * i + pagesize * i,
+					 pagesize, pagesize, mremap_flags,
+					 pte_mapped + pagesize * i);
 		if (pte_mapped2 == MAP_FAILED)
 			ksft_exit_fail_msg("mremap failed: %s\n", strerror(errno));
 	}
@@ -257,7 +262,10 @@ void split_pte_mapped_thp(void)
 	if (thp_size)
 		ksft_exit_fail_msg("Still %ld THPs not split\n", thp_size);
 
-	ksft_test_result_pass("Split PTE-mapped huge pages successful\n");
+	if (relocate_anon)
+		ksft_test_result_pass("Split PTE-mapped huge pages w/MREMAP_RELOCATE_ANON successful\n");
+	else
+		ksft_test_result_pass("Split PTE-mapped huge pages successful\n");
 	munmap(one_page, len);
 	close(pagemap_fd);
 	close(kpageflags_fd);
@@ -534,7 +542,7 @@ int main(int argc, char **argv)
 	if (argc > 1)
 		optional_xfs_path = argv[1];
 
-	ksft_set_plan(1+8+1+9+9+8*4+2);
+	ksft_set_plan(1+8+1+1+9+9+8*4+2);
 
 	pagesize = getpagesize();
 	pageshift = ffs(pagesize) - 1;
@@ -550,7 +558,8 @@ int main(int argc, char **argv)
 		if (i != 1)
 			split_pmd_thp_to_order(i);
 
-	split_pte_mapped_thp();
+	split_pte_mapped_thp(/* relocate_anon= */false);
+	split_pte_mapped_thp(/* relocate_anon= */true);
 	for (i = 0; i < 9; i++)
 		split_file_backed_thp(i);
 
