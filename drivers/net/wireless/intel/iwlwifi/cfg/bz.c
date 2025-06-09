@@ -10,7 +10,7 @@
 #include "fw/api/txq.h"
 
 /* Highest firmware API version supported */
-#define IWL_BZ_UCODE_API_MAX	99
+#define IWL_BZ_UCODE_API_MAX	100
 
 /* Lowest firmware API version supported */
 #define IWL_BZ_UCODE_API_MIN	93
