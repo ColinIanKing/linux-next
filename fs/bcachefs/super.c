@@ -104,7 +104,7 @@ const char * const bch2_dev_write_refs[] = {
 #undef x
 
 static void __bch2_print_str(struct bch_fs *c, const char *prefix,
-			     const char *str, bool nonblocking)
+			     const char *str)
 {
 #ifdef __KERNEL__
 	struct stdio_redirect *stdio = bch2_fs_stdio_redirect(c);
@@ -114,17 +114,12 @@ static void __bch2_print_str(struct bch_fs *c, const char *prefix,
 		return;
 	}
 #endif
-	bch2_print_string_as_lines(KERN_ERR, str, nonblocking);
+	bch2_print_string_as_lines(KERN_ERR, str);
 }
 
 void bch2_print_str(struct bch_fs *c, const char *prefix, const char *str)
 {
-	__bch2_print_str(c, prefix, str, false);
-}
-
-void bch2_print_str_nonblocking(struct bch_fs *c, const char *prefix, const char *str)
-{
-	__bch2_print_str(c, prefix, str, true);
+	__bch2_print_str(c, prefix, str);
 }
 
 __printf(2, 0)
@@ -591,7 +586,7 @@ static void __bch2_fs_free(struct bch_fs *c)
 	for (unsigned i = 0; i < BCH_TIME_STAT_NR; i++)
 		bch2_time_stats_exit(&c->times[i]);
 
-#ifdef CONFIG_UNICODE
+#if IS_ENABLED(CONFIG_UNICODE)
 	utf8_unload(c->cf_encoding);
 #endif
 
@@ -1020,7 +1015,7 @@ static struct bch_fs *bch2_fs_alloc(struct bch_sb *sb, struct bch_opts *opts,
 	if (ret)
 		goto err;
 
-#ifdef CONFIG_UNICODE
+#if IS_ENABLED(CONFIG_UNICODE)
 	/* Default encoding until we can potentially have more as an option. */
 	c->cf_encoding = utf8_load(BCH_FS_DEFAULT_UTF8_ENCODING);
 	if (IS_ERR(c->cf_encoding)) {
@@ -1148,12 +1143,11 @@ int bch2_fs_start(struct bch_fs *c)
 
 	print_mount_opts(c);
 
-#ifdef CONFIG_UNICODE
-	bch_info(c, "Using encoding defined by superblock: utf8-%u.%u.%u",
-		 unicode_major(BCH_FS_DEFAULT_UTF8_ENCODING),
-		 unicode_minor(BCH_FS_DEFAULT_UTF8_ENCODING),
-		 unicode_rev(BCH_FS_DEFAULT_UTF8_ENCODING));
-#endif
+	if (IS_ENABLED(CONFIG_UNICODE))
+		bch_info(c, "Using encoding defined by superblock: utf8-%u.%u.%u",
+			 unicode_major(BCH_FS_DEFAULT_UTF8_ENCODING),
+			 unicode_minor(BCH_FS_DEFAULT_UTF8_ENCODING),
+			 unicode_rev(BCH_FS_DEFAULT_UTF8_ENCODING));
 
 	if (!bch2_fs_may_start(c))
 		return bch_err_throw(c, insufficient_devices_to_start);
@@ -1994,6 +1988,22 @@ int bch2_dev_add(struct bch_fs *c, const char *path)
 		if (ret)
 			goto err_late;
 	}
+
+	/*
+	 * We just changed the superblock UUID, invalidate cache and send a
+	 * uevent to update /dev/disk/by-uuid
+	 */
+	invalidate_bdev(ca->disk_sb.bdev);
+
+	char uuid_str[37];
+	snprintf(uuid_str, sizeof(uuid_str), "UUID=%pUb", &c->sb.uuid);
+
+	char *envp[] = {
+		"CHANGE=uuid",
+		uuid_str,
+		NULL,
+	};
+	kobject_uevent_env(&ca->disk_sb.bdev->bd_device.kobj, KOBJ_CHANGE, envp);
 
 	up_write(&c->state_lock);
 out:
