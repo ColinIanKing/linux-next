@@ -26,6 +26,7 @@
 #include <linux/mm.h>
 #include <linux/rbtree.h>
 #include <linux/refcount.h>
+#include <linux/rwsem.h>
 
 extern unsigned long stack_guard_gap;
 #ifdef CONFIG_MMU
@@ -204,6 +205,8 @@ struct anon_vma {
 	struct anon_vma *root;
 	struct rb_root_cached rb_root;
 
+	unsigned long num_children;
+
 	/* Test fields. */
 	bool was_cloned;
 	bool was_unlinked;
@@ -259,6 +262,8 @@ struct mm_struct {
 	unsigned long def_flags;
 
 	unsigned long flags; /* Must use atomic bitops to access */
+
+	struct rw_semaphore mmap_lock;
 };
 
 struct vm_area_struct;
@@ -1409,6 +1414,17 @@ static inline int ksm_execve(struct mm_struct *mm)
 	return 0;
 }
 
+static int do_munmap(struct mm_struct *mm, unsigned long start, size_t len,
+		struct list_head *uf)
+{
+	(void)mm;
+	(void)start;
+	(void)len;
+	(void)uf;
+
+	return 0;
+}
+
 static inline void ksm_exit(struct mm_struct *mm)
 {
 	(void)mm;
@@ -1493,6 +1509,28 @@ static inline vm_flags_t ksm_vma_flags(const struct mm_struct *, const struct fi
 			 vm_flags_t vm_flags)
 {
 	return vm_flags;
+}
+
+static inline int rwsem_is_locked(struct rw_semaphore *sem)
+{
+	(void)sem;
+
+	return 0;
+}
+
+static inline void anon_vma_lock_read(struct anon_vma *anon_vma)
+{
+	(void)anon_vma;
+}
+
+static inline void anon_vma_unlock_read(struct anon_vma *anon_vma)
+{
+	(void)anon_vma;
+}
+
+static inline void anon_vma_assert_locked(const struct anon_vma *anon_vma)
+{
+	(void)anon_vma;
 }
 
 #endif	/* __MM_VMA_INTERNAL_H */
