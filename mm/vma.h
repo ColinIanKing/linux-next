@@ -322,6 +322,9 @@ __must_check struct vm_area_struct
 *vma_merge_new_range(struct vma_merge_struct *vmg);
 
 __must_check struct vm_area_struct
+*vma_merge_existing_range(struct vma_merge_struct *vmg);
+
+__must_check struct vm_area_struct
 *vma_merge_extend(struct vma_iterator *vmi,
 		  struct vm_area_struct *vma,
 		  unsigned long delta);
@@ -341,7 +344,7 @@ int vma_link(struct mm_struct *mm, struct vm_area_struct *vma);
 
 struct vm_area_struct *copy_vma(struct vm_area_struct **vmap,
 	unsigned long addr, unsigned long len, pgoff_t pgoff,
-	bool *need_rmap_locks);
+	bool *need_rmap_locks, bool *relocate_anon);
 
 struct anon_vma *find_mergeable_anon_vma(struct vm_area_struct *vma);
 
@@ -558,6 +561,37 @@ struct vm_area_struct *vma_iter_next_rewind(struct vma_iterator *vmi,
 
 	return next;
 }
+
+/*
+ * Is this VMA either the parent of forked processes or the child of a forking
+ * process which may possess an unCOW'd reference to a shared folio?
+ */
+bool vma_maybe_has_shared_anon_folios(struct vm_area_struct *vma);
+
+/*
+ * If, at any point, the VMA had unCoW'd mappings from parents, it will maintain
+ * more than one anon_vma_chain connecting it to more than one anon_vma. A merge
+ * would mean a wider range of folios sharing the root anon_vma lock, and thus
+ * potential lock contention, we do not wish to encourage merging such that this
+ * scales to a problem.
+ *
+ * Assumes VMA is locked.
+ */
+static inline bool vma_had_uncowed_parents(struct vm_area_struct *vma)
+{
+	/*
+	 * The list_is_singular() test is to avoid merging VMA cloned from
+	 * parents. This can improve scalability caused by anon_vma lock.
+	 */
+	return vma && vma->anon_vma && !list_is_singular(&vma->anon_vma_chain);
+}
+
+/*
+ * If, at any point, folios mapped by the VMA had unCoW'd mappings potentially
+ * present in child processes forked from this one, then the underlying mapped
+ * folios may be non-exclusively mapped.
+ */
+bool vma_had_uncowed_children(struct vm_area_struct *vma);
 
 #ifdef CONFIG_64BIT
 
