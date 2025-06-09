@@ -71,6 +71,15 @@ struct vma_remap_struct {
 	unsigned long charged;		/* If VM_ACCOUNT, # pages to account. */
 };
 
+/* Represents local PTE state. */
+struct pte_state {
+	unsigned long old_addr;
+	unsigned long new_addr;
+	unsigned long old_end;
+	pte_t *ptep;
+	spinlock_t *ptl;
+};
+
 static pud_t *get_old_pud(struct mm_struct *mm, unsigned long addr)
 {
 	pgd_t *pgd;
@@ -139,18 +148,50 @@ static pmd_t *alloc_new_pmd(struct mm_struct *mm, unsigned long addr)
 	return pmd;
 }
 
-static void take_rmap_locks(struct vm_area_struct *vma)
+/*
+ * Determine whether the old and new VMAs share the same anon_vma. If so, this
+ * has implications around locking and to avoid deadlock we need to tread
+ * carefully.
+ */
+static bool has_shared_anon_vma(struct pagetable_move_control *pmc)
 {
-	if (vma->vm_file)
-		i_mmap_lock_write(vma->vm_file->f_mapping);
-	if (vma->anon_vma)
-		anon_vma_lock_write(vma->anon_vma);
+	struct vm_area_struct *vma = pmc->old;
+	struct vm_area_struct *locked = pmc->relocate_locked;
+
+	if (!locked)
+		return false;
+
+	return vma->anon_vma->root == locked->anon_vma->root;
 }
 
-static void drop_rmap_locks(struct vm_area_struct *vma)
+static void maybe_take_rmap_locks(struct pagetable_move_control *pmc)
 {
-	if (vma->anon_vma)
-		anon_vma_unlock_write(vma->anon_vma);
+	struct vm_area_struct *vma;
+	struct anon_vma *anon_vma;
+
+	if (!pmc->need_rmap_locks)
+		return;
+
+	vma = pmc->old;
+	anon_vma = vma->anon_vma;
+	if (vma->vm_file)
+		i_mmap_lock_write(vma->vm_file->f_mapping);
+	if (anon_vma && !has_shared_anon_vma(pmc))
+		anon_vma_lock_write(anon_vma);
+}
+
+static void maybe_drop_rmap_locks(struct pagetable_move_control *pmc)
+{
+	struct vm_area_struct *vma;
+	struct anon_vma *anon_vma;
+
+	if (!pmc->need_rmap_locks)
+		return;
+
+	vma = pmc->old;
+	anon_vma = vma->anon_vma;
+	if (anon_vma && !has_shared_anon_vma(pmc))
+		anon_vma_unlock_write(anon_vma);
 	if (vma->vm_file)
 		i_mmap_unlock_write(vma->vm_file->f_mapping);
 }
@@ -204,8 +245,7 @@ static int move_ptes(struct pagetable_move_control *pmc,
 	 *   serialize access to individual ptes, but only rmap traversal
 	 *   order guarantees that we won't miss both the old and new ptes).
 	 */
-	if (pmc->need_rmap_locks)
-		take_rmap_locks(vma);
+	maybe_take_rmap_locks(pmc);
 
 	/*
 	 * We don't have to worry about the ordering of src and dst
@@ -280,8 +320,7 @@ static int move_ptes(struct pagetable_move_control *pmc,
 	pte_unmap(new_pte - 1);
 	pte_unmap_unlock(old_pte - 1, old_ptl);
 out:
-	if (pmc->need_rmap_locks)
-		drop_rmap_locks(vma);
+	maybe_drop_rmap_locks(pmc);
 	return err;
 }
 
@@ -539,15 +578,14 @@ static __always_inline unsigned long get_extent(enum pgt_entry entry,
  * Should move_pgt_entry() acquire the rmap locks? This is either expressed in
  * the PMC, or overridden in the case of normal, larger page tables.
  */
-static bool should_take_rmap_locks(struct pagetable_move_control *pmc,
-				   enum pgt_entry entry)
+static bool should_take_rmap_locks(enum pgt_entry entry)
 {
 	switch (entry) {
 	case NORMAL_PMD:
 	case NORMAL_PUD:
 		return true;
 	default:
-		return pmc->need_rmap_locks;
+		return false;
 	}
 }
 
@@ -559,11 +597,15 @@ static bool move_pgt_entry(struct pagetable_move_control *pmc,
 			   enum pgt_entry entry, void *old_entry, void *new_entry)
 {
 	bool moved = false;
-	bool need_rmap_locks = should_take_rmap_locks(pmc, entry);
+	bool override_locks = false;
 
-	/* See comment in move_ptes() */
-	if (need_rmap_locks)
-		take_rmap_locks(pmc->old);
+	if (!pmc->need_rmap_locks && should_take_rmap_locks(entry)) {
+		override_locks = true;
+
+		pmc->need_rmap_locks = true;
+		/* See comment in move_ptes() */
+		maybe_take_rmap_locks(pmc);
+	}
 
 	switch (entry) {
 	case NORMAL_PMD:
@@ -587,8 +629,9 @@ static bool move_pgt_entry(struct pagetable_move_control *pmc,
 		break;
 	}
 
-	if (need_rmap_locks)
-		drop_rmap_locks(pmc->old);
+	maybe_drop_rmap_locks(pmc);
+	if (override_locks)
+		pmc->need_rmap_locks = false;
 
 	return moved;
 }
@@ -752,6 +795,209 @@ static unsigned long pmc_progress(struct pagetable_move_control *pmc)
 	 * itself.
 	 */
 	return old_addr < orig_old_addr ? 0 : old_addr - orig_old_addr;
+}
+
+/*
+ * If the folio mapped at the specified pte entry can have its index and mapping
+ * relocated, then do so.
+ *
+ * Returns the number of pages we have traversed, or 0 if the operation failed.
+ */
+static unsigned long relocate_anon_pte(struct pagetable_move_control *pmc,
+		struct pte_state *state, bool undo)
+{
+	struct folio *folio;
+	struct vm_area_struct *old, *new;
+	pgoff_t new_index;
+	pte_t pte;
+	unsigned long ret = 1;
+	unsigned long old_addr = state->old_addr;
+	unsigned long new_addr = state->new_addr;
+
+	old = pmc->old;
+	new = pmc->new;
+
+	pte = ptep_get(state->ptep);
+
+	/* Ensure we have truly got an anon folio. */
+	folio = vm_normal_folio(old, old_addr, pte);
+	if (!folio)
+		return ret;
+
+	folio_lock(folio);
+
+	/* No-op. */
+	if (!folio_test_anon(folio) || folio_test_ksm(folio))
+		goto out;
+
+	/*
+	 * This should never be the case as we have already checked to ensure
+	 * that the anon_vma is not forked, and we have just asserted that it is
+	 * anonymous.
+	 */
+	if (WARN_ON_ONCE(folio_maybe_mapped_shared(folio)))
+		goto out;
+	/* The above check should imply these. */
+	VM_WARN_ON_ONCE(folio_mapcount(folio) > folio_nr_pages(folio));
+	VM_WARN_ON_ONCE(!PageAnonExclusive(folio_page(folio, 0)));
+
+	/*
+	 * A pinned folio implies that it will be used for a duration longer
+	 * than that over which the mmap_lock is held, meaning that another part
+	 * of the kernel may be making use of this folio.
+	 *
+	 * Since we are about to manipulate index & mapping fields, we cannot
+	 * safely proceed because whatever has pinned this folio may then
+	 * incorrectly assume these do not change.
+	 */
+	if (folio_maybe_dma_pinned(folio))
+		goto out;
+
+	/*
+	 * This should not happen as we explicitly disallow this, but check
+	 * anyway.
+	 */
+	if (folio_test_large(folio)) {
+		ret = 0;
+		goto out;
+	}
+
+	if (!undo)
+		new_index = linear_page_index(new, new_addr);
+	else
+		new_index = linear_page_index(old, old_addr);
+
+	/*
+	 * The PTL should keep us safe from unmapping, and the fact the folio is
+	 * a PTE keeps the folio referenced.
+	 *
+	 * The mmap/VMA locks should keep us safe from fork and other processes.
+	 *
+	 * The rmap locks should keep us safe from anything happening to the
+	 * VMA/anon_vma.
+	 *
+	 * The folio lock should keep us safe from reclaim, migration, etc.
+	 */
+	folio_move_anon_rmap(folio, undo ? old : new);
+	WRITE_ONCE(folio->index, new_index);
+
+out:
+	folio_unlock(folio);
+	return ret;
+}
+
+static bool pte_done(struct pte_state *state)
+{
+	return state->old_addr >= state->old_end;
+}
+
+static void pte_next(struct pte_state *state, unsigned long nr_pages)
+{
+	state->old_addr += nr_pages * PAGE_SIZE;
+	state->new_addr += nr_pages * PAGE_SIZE;
+	state->ptep += nr_pages;
+}
+
+static bool relocate_anon_ptes(struct pagetable_move_control *pmc,
+		unsigned long extent, pmd_t *pmdp, bool undo)
+{
+	struct mm_struct *mm = current->mm;
+	struct pte_state state = {
+		.old_addr = pmc->old_addr,
+		.new_addr = pmc->new_addr,
+		.old_end = pmc->old_addr + extent,
+	};
+	pte_t *ptep_start;
+	bool ret;
+	unsigned long nr_pages;
+
+	ptep_start = pte_offset_map_lock(mm, pmdp, pmc->old_addr, &state.ptl);
+	/*
+	 * We prevent faults with mmap write lock, hold the rmap lock and should
+	 * not fail to obtain this lock. Just give up if we can't.
+	 */
+	if (!ptep_start)
+		return false;
+
+	state.ptep = ptep_start;
+	for (; !pte_done(&state); pte_next(&state, nr_pages)) {
+		pte_t pte = ptep_get(state.ptep);
+
+		if (pte_none(pte) || !pte_present(pte)) {
+			nr_pages = 1;
+			continue;
+		}
+
+		nr_pages = relocate_anon_pte(pmc, &state, undo);
+		if (!nr_pages) {
+			ret = false;
+			goto out;
+		}
+	}
+
+	ret = true;
+out:
+	pte_unmap_unlock(ptep_start, state.ptl);
+	return ret;
+}
+
+static bool __relocate_anon_folios(struct pagetable_move_control *pmc, bool undo)
+{
+	pud_t *pudp;
+	pmd_t *pmdp;
+	unsigned long extent;
+	struct mm_struct *mm = current->mm;
+
+	if (!pmc->len_in)
+		return true;
+
+	for (; !pmc_done(pmc); pmc_next(pmc, extent)) {
+		pmd_t pmd;
+		pud_t pud;
+
+		extent = get_extent(NORMAL_PUD, pmc);
+
+		pudp = get_old_pud(mm, pmc->old_addr);
+		if (!pudp)
+			continue;
+		pud = pudp_get(pudp);
+
+		if (pud_trans_huge(pud) || pud_devmap(pud))
+			return false;
+
+		extent = get_extent(NORMAL_PMD, pmc);
+		pmdp = get_old_pmd(mm, pmc->old_addr);
+		if (!pmdp)
+			continue;
+		pmd = pmdp_get(pmdp);
+
+		if (is_swap_pmd(pmd) || pmd_trans_huge(pmd) ||
+		    pmd_devmap(pmd))
+			return false;
+
+		if (pmd_none(pmd))
+			continue;
+
+		if (!relocate_anon_ptes(pmc, extent, pmdp, undo))
+			return false;
+	}
+
+	return true;
+}
+
+static bool relocate_anon_folios(struct pagetable_move_control *pmc, bool undo)
+{
+	unsigned long old_addr = pmc->old_addr;
+	unsigned long new_addr = pmc->new_addr;
+	bool ret;
+
+	ret = __relocate_anon_folios(pmc, undo);
+
+	/* Reset state ready for retry. */
+	pmc->old_addr = old_addr;
+	pmc->new_addr = new_addr;
+
+	return ret;
 }
 
 unsigned long move_page_tables(struct pagetable_move_control *pmc)
@@ -1135,6 +1381,67 @@ static void unmap_source_vma(struct vma_remap_struct *vrm)
 }
 
 /*
+ * Should we attempt to relocate anonymous folios to the location that the VMA
+ * is being moved to by updating index and mapping fields accordingly?
+ */
+static bool should_relocate_anon(struct vma_remap_struct *vrm,
+	struct pagetable_move_control *pmc)
+{
+	struct vm_area_struct *old = vrm->vma;
+
+	/* Currently we only do this if requested. */
+	if (!(vrm->flags & MREMAP_RELOCATE_ANON))
+		return false;
+
+	/* We can't deal with special or hugetlb mappings. */
+	if (old->vm_flags & (VM_SPECIAL | VM_HUGETLB))
+		return false;
+
+	/* We only support anonymous mappings. */
+	if (!vma_is_anonymous(old))
+		return false;
+
+	/* If no folios are mapped, then no need to attempt this. */
+	if (!old->anon_vma)
+		return false;
+
+	/* We don't allow relocation of non-exclusive folios. */
+	if (vma_maybe_has_shared_anon_folios(old))
+		return false;
+
+	/* Otherwise, we're good to go! */
+	return true;
+}
+
+static void lock_new_anon_vma(struct vm_area_struct *new_vma)
+{
+	/*
+	 * We have a new VMA to reassign folios to. We take a lock on
+	 * its anon_vma so reclaim doesn't fail to unmap mappings.
+	 *
+	 * We have acquired a VMA write lock by now (in vma_link()), so
+	 * we do not have to worry about racing faults.
+	 *
+	 * NOTE: we do NOT need to acquire an rmap lock on the old VMA,
+	 * as forks require an mmap write lock, which we hold.
+	 */
+	anon_vma_lock_write(new_vma->anon_vma);
+
+	/*
+	 * lockdep is unable to differentiate between the anon_vma lock we take
+	 * in the old VMA and the one we are taking here in the new VMA.
+	 *
+	 * In each instance where the old VMA might have its anon_vma
+	 * lock taken, we explicitly check to ensure they are not one
+	 * and the same, avoiding deadlock.
+	 *
+	 * Express this to lockdep through a subclass.
+	 */
+	lock_set_subclass(&new_vma->anon_vma->root->rwsem.dep_map, 1,
+			  _THIS_IP_);
+}
+
+/*
  * Copy vrm->vma over to vrm->new_addr possibly adjusting size as part of the
  * process. Additionally handle an error occurring on moving of page tables,
  * where we reset vrm state to cause unmapping of the new VMA.
@@ -1153,9 +1460,11 @@ static int copy_vma_and_data(struct vma_remap_struct *vrm,
 	struct vm_area_struct *new_vma;
 	int err = 0;
 	PAGETABLE_MOVE(pmc, NULL, NULL, vrm->addr, vrm->new_addr, vrm->old_len);
+	bool relocate_anon = should_relocate_anon(vrm, &pmc);
 
+again:
 	new_vma = copy_vma(&vma, vrm->new_addr, vrm->new_len, new_pgoff,
-			   &pmc.need_rmap_locks);
+			   &pmc.need_rmap_locks, &relocate_anon);
 	if (!new_vma) {
 		vrm_uncharge(vrm);
 		*new_vma_ptr = NULL;
@@ -1165,11 +1474,58 @@ static int copy_vma_and_data(struct vma_remap_struct *vrm,
 	pmc.old = vma;
 	pmc.new = new_vma;
 
+	if (relocate_anon) {
+		lock_new_anon_vma(new_vma);
+		pmc.relocate_locked = new_vma;
+
+		if (!relocate_anon_folios(&pmc, /* undo= */false)) {
+			unsigned long start = new_vma->vm_start;
+			unsigned long size = new_vma->vm_end - start;
+
+			/* Undo if fails. */
+			relocate_anon_folios(&pmc, /* undo= */true);
+			vrm_stat_account(vrm, vrm->new_len);
+
+			anon_vma_unlock_write(new_vma->anon_vma);
+			pmc.relocate_locked = NULL;
+
+			do_munmap(current->mm, start, size, NULL);
+			relocate_anon = false;
+			goto again;
+		}
+	}
+
 	moved_len = move_page_tables(&pmc);
 	if (moved_len < vrm->old_len)
 		err = -ENOMEM;
 	else if (vma->vm_ops && vma->vm_ops->mremap)
 		err = vma->vm_ops->mremap(new_vma);
+
+	if (unlikely(err && relocate_anon)) {
+		relocate_anon_folios(&pmc, /* undo= */true);
+		anon_vma_unlock_write(new_vma->anon_vma);
+		pmc.relocate_locked = NULL;
+	} else if (relocate_anon /* && !err */) {
+		unsigned long addr = vrm->new_addr;
+		unsigned long end = addr + vrm->new_len;
+		VMA_ITERATOR(vmi, vma->vm_mm, addr);
+		VMG_VMA_STATE(vmg, &vmi, NULL, new_vma, addr, end);
+		struct vm_area_struct *merged;
+
+		/*
+		 * Now we have successfully copied page tables and set up
+		 * folios, we can safely drop the anon_vma lock.
+		 */
+		anon_vma_unlock_write(new_vma->anon_vma);
+		pmc.relocate_locked = NULL;
+
+		/* Let's try merge again... */
+		vmg.prev = vma_prev(&vmi);
+		vma_next(&vmi);
+		merged = vma_merge_existing_range(&vmg);
+		if (merged)
+			new_vma = merged;
+	}
 
 	if (unlikely(err)) {
 		PAGETABLE_MOVE(pmc_revert, new_vma, vma, vrm->new_addr,
@@ -1483,7 +1839,8 @@ static unsigned long check_mremap_params(struct vma_remap_struct *vrm)
 	unsigned long flags = vrm->flags;
 
 	/* Ensure no unexpected flag values. */
-	if (flags & ~(MREMAP_FIXED | MREMAP_MAYMOVE | MREMAP_DONTUNMAP))
+	if (flags & ~(MREMAP_FIXED | MREMAP_MAYMOVE | MREMAP_DONTUNMAP |
+		      MREMAP_RELOCATE_ANON))
 		return -EINVAL;
 
 	/* Start address must be page-aligned. */
@@ -1496,6 +1853,10 @@ static unsigned long check_mremap_params(struct vma_remap_struct *vrm)
 	 * a zero new-len is nonsensical.
 	 */
 	if (!PAGE_ALIGN(vrm->new_len))
+		return -EINVAL;
+
+	/* We can't relocate without allowing a move. */
+	if ((flags & MREMAP_RELOCATE_ANON) && !(flags & MREMAP_MAYMOVE))
 		return -EINVAL;
 
 	/* Remainder of checks are for cases with specific new_addr. */

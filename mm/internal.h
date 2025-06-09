@@ -46,6 +46,7 @@ struct folio_batch;
 struct pagetable_move_control {
 	struct vm_area_struct *old; /* Source VMA. */
 	struct vm_area_struct *new; /* Destination VMA. */
+	struct vm_area_struct *relocate_locked; /* VMA which is rmap locked. */
 	unsigned long old_addr; /* Address from which the move begins. */
 	unsigned long old_end; /* Exclusive address at which old range ends. */
 	unsigned long new_addr; /* Address to move page tables to. */
