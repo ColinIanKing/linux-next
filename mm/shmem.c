@@ -2259,6 +2259,7 @@ static int shmem_swapin_folio(struct inode *inode, pgoff_t index,
 	folio = swap_cache_get_folio(swap, NULL, 0);
 	order = xa_get_order(&mapping->i_pages, index);
 	if (!folio) {
+		int nr_pages = 1 << order;
 		bool fallback_order0 = false;
 
 		/* Or update major stats only when swapin succeeds?? */
@@ -2274,7 +2275,8 @@ static int shmem_swapin_folio(struct inode *inode, pgoff_t index,
 		 * to swapin order-0 folio, as well as for zswap case.
 		 */
 		if (order > 0 && ((vma && unlikely(userfaultfd_armed(vma))) ||
-				  !zswap_never_enabled()))
+				  !zswap_never_enabled() ||
+				  non_swapcache_batch(swap, nr_pages) != nr_pages))
 			fallback_order0 = true;
 
 		/* Skip swapcache for synchronous device. */
