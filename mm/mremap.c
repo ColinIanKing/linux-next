@@ -77,6 +77,7 @@ struct pte_state {
 	unsigned long new_addr;
 	unsigned long old_end;
 	pte_t *ptep;
+	pmd_t *pmdp;
 	spinlock_t *ptl;
 };
 
@@ -534,6 +535,52 @@ enum pgt_entry {
 	HPAGE_PUD,
 };
 
+static void __get_mask_size(enum pgt_entry entry,
+		unsigned long *mask, unsigned long *size)
+{
+	switch (entry) {
+	case HPAGE_PMD:
+	case NORMAL_PMD:
+		*mask = PMD_MASK;
+		*size = PMD_SIZE;
+		break;
+	case HPAGE_PUD:
+	case NORMAL_PUD:
+		*mask = PUD_MASK;
+		*size = PUD_SIZE;
+		break;
+	default:
+		BUILD_BUG();
+		break;
+	}
+}
+
+/* Same as get extent, only ignores new address.  */
+static unsigned long __get_old_extent(struct pagetable_move_control *pmc,
+		unsigned long mask, unsigned long size)
+{
+	unsigned long next, extent;
+	unsigned long old_addr = pmc->old_addr;
+	unsigned long old_end = pmc->old_end;
+
+	next = (old_addr + size) & mask;
+	/* even if next overflowed, extent below will be ok */
+	extent = next - old_addr;
+	if (extent > old_end - old_addr)
+		extent = old_end - old_addr;
+
+	return extent;
+}
+
+static unsigned long get_old_extent(enum pgt_entry entry,
+		struct pagetable_move_control *pmc)
+{
+	unsigned long mask, size;
+
+	__get_mask_size(entry, &mask, &size);
+	return __get_old_extent(pmc, mask, size);
+}
+
 /*
  * Returns an extent of the corresponding size for the pgt_entry specified if
  * valid. Else returns a smaller extent bounded by the end of the source and
@@ -543,31 +590,12 @@ static __always_inline unsigned long get_extent(enum pgt_entry entry,
 						struct pagetable_move_control *pmc)
 {
 	unsigned long next, extent, mask, size;
-	unsigned long old_addr = pmc->old_addr;
-	unsigned long old_end = pmc->old_end;
 	unsigned long new_addr = pmc->new_addr;
 
-	switch (entry) {
-	case HPAGE_PMD:
-	case NORMAL_PMD:
-		mask = PMD_MASK;
-		size = PMD_SIZE;
-		break;
-	case HPAGE_PUD:
-	case NORMAL_PUD:
-		mask = PUD_MASK;
-		size = PUD_SIZE;
-		break;
-	default:
-		BUILD_BUG();
-		break;
-	}
+	__get_mask_size(entry, &mask, &size);
 
-	next = (old_addr + size) & mask;
-	/* even if next overflowed, extent below will be ok */
-	extent = next - old_addr;
-	if (extent > old_end - old_addr)
-		extent = old_end - old_addr;
+	extent = __get_old_extent(pmc, mask, size);
+
 	next = (new_addr + size) & mask;
 	if (extent > next - new_addr)
 		extent = next - new_addr;
@@ -797,6 +825,165 @@ static unsigned long pmc_progress(struct pagetable_move_control *pmc)
 	return old_addr < orig_old_addr ? 0 : old_addr - orig_old_addr;
 }
 
+/* Assumes folio lock is held. */
+static bool __relocate_large_folio(struct pagetable_move_control *pmc,
+		unsigned long old_addr, unsigned long new_addr,
+		struct folio *folio, bool undo)
+{
+	pgoff_t new_index;
+	struct vm_area_struct *old = pmc->old;
+	struct vm_area_struct *new = pmc->new;
+
+	VM_WARN_ON_ONCE(!folio_test_locked(folio));
+
+	/* no-op. */
+	if (!folio_test_anon(folio))
+		return true;
+
+	if (!undo)
+		new_index = linear_page_index(new, new_addr);
+	else
+		new_index = linear_page_index(old, old_addr);
+
+	/* See comment in relocate_anon_pte(). */
+	folio_move_anon_rmap(folio, undo ? old : new);
+	WRITE_ONCE(folio->index, new_index);
+	return true;
+}
+
+static bool relocate_large_folio(struct pagetable_move_control *pmc,
+		unsigned long old_addr, unsigned long new_addr,
+		struct folio *folio, bool undo)
+{
+	bool ret;
+
+	folio_lock(folio);
+
+	if (!folio_test_large(folio) || folio_test_ksm(folio)) {
+		ret = false;
+		goto out;
+	}
+
+	/* See relocate_anon_pte() for description. */
+	if (WARN_ON_ONCE(folio_maybe_mapped_shared(folio))) {
+		ret = false;
+		goto out;
+	}
+	if (folio_maybe_dma_pinned(folio)) {
+		ret = false;
+		goto out;
+	}
+
+	ret = __relocate_large_folio(pmc, old_addr, new_addr, folio, undo);
+
+out:
+	folio_unlock(folio);
+	return ret;
+}
+
+static bool relocate_anon_pud(struct pagetable_move_control *pmc,
+		pud_t *pudp, bool undo)
+{
+	spinlock_t *ptl;
+	pud_t pud;
+	struct folio *folio;
+	struct page *page;
+	bool ret;
+	unsigned long old_addr = pmc->old_addr;
+	unsigned long new_addr = pmc->new_addr;
+
+	VM_WARN_ON(old_addr & ~HPAGE_PUD_MASK);
+	VM_WARN_ON(new_addr & ~HPAGE_PUD_MASK);
+
+	ptl = pud_trans_huge_lock(pudp, pmc->old);
+	if (!ptl)
+		return false;
+
+	pud = pudp_get(pudp);
+	if (!pud_present(pud)) {
+		ret = true;
+		goto out;
+	}
+	if (!pud_leaf(pud)) {
+		ret = false;
+		goto out;
+	}
+
+	page = pud_page(pud);
+	if (!page) {
+		ret = true;
+		goto out;
+	}
+
+	folio = page_folio(page);
+	ret = relocate_large_folio(pmc, old_addr, new_addr, folio, undo);
+
+out:
+	spin_unlock(ptl);
+	return ret;
+}
+
+static bool relocate_anon_pmd(struct pagetable_move_control *pmc,
+		pmd_t *pmdp, bool undo)
+{
+	spinlock_t *ptl;
+	pmd_t pmd;
+	struct folio *folio;
+	bool ret;
+	unsigned long old_addr = pmc->old_addr;
+	unsigned long new_addr = pmc->new_addr;
+
+	VM_WARN_ON(old_addr & ~HPAGE_PMD_MASK);
+	VM_WARN_ON(new_addr & ~HPAGE_PMD_MASK);
+
+	ptl = pmd_trans_huge_lock(pmdp, pmc->old);
+	if (!ptl)
+		return false;
+
+	pmd = pmdp_get(pmdp);
+	if (!pmd_present(pmd)) {
+		ret = true;
+		goto out;
+	}
+	if (is_huge_zero_pmd(pmd)) {
+		ret = true;
+		goto out;
+	}
+	if (!pmd_leaf(pmd)) {
+		ret = false;
+		goto out;
+	}
+
+	folio = pmd_folio(pmd);
+	if (!folio) {
+		ret = true;
+		goto out;
+	}
+
+	ret = relocate_large_folio(pmc, old_addr, new_addr, folio, undo);
+out:
+	spin_unlock(ptl);
+	return ret;
+}
+
+/*
+ * Is the THP discovered at old_addr fully spanned at both the old and new VMAs?
+ */
+static bool is_thp_fully_spanned(struct pagetable_move_control *pmc,
+				 unsigned long old_addr,
+				 size_t thp_size)
+{
+	unsigned long old_end = pmc->old_end;
+	unsigned long orig_old_addr = old_end - pmc->len_in;
+	unsigned long aligned_start = old_addr & ~(thp_size - 1);
+	unsigned long aligned_end = aligned_start + thp_size;
+
+	if (aligned_start < orig_old_addr || aligned_end > old_end)
+		return false;
+
+	return true;
+}
+
 /*
  * If the folio mapped at the specified pte entry can have its index and mapping
  * relocated, then do so.
@@ -813,10 +1000,12 @@ static unsigned long relocate_anon_pte(struct pagetable_move_control *pmc,
 	unsigned long ret = 1;
 	unsigned long old_addr = state->old_addr;
 	unsigned long new_addr = state->new_addr;
+	struct mm_struct *mm = current->mm;
 
 	old = pmc->old;
 	new = pmc->new;
 
+retry:
 	pte = ptep_get(state->ptep);
 
 	/* Ensure we have truly got an anon folio. */
@@ -853,13 +1042,55 @@ static unsigned long relocate_anon_pte(struct pagetable_move_control *pmc,
 	if (folio_maybe_dma_pinned(folio))
 		goto out;
 
-	/*
-	 * This should not happen as we explicitly disallow this, but check
-	 * anyway.
-	 */
+	/* If a split huge PMD, try to relocate all at once. */
 	if (folio_test_large(folio)) {
-		ret = 0;
-		goto out;
+		size_t size = folio_size(folio);
+
+		if (is_thp_fully_spanned(pmc, old_addr, size) &&
+		    __relocate_large_folio(pmc, old_addr, new_addr, folio, undo)) {
+			VM_WARN_ON_ONCE(old_addr & (size - 1));
+			ret = folio_nr_pages(folio);
+			goto out;
+		} else {
+			int err;
+			struct anon_vma *anon_vma = folio_anon_vma(folio);
+
+			/*
+			 * If the folio has the anon_vma whose lock we hold, we
+			 * have a problem, as split_folio() will attempt to lock
+			 * the already-locked anon_vma causing a deadlock. In
+			 * this case, bail out.
+			 */
+			if (anon_vma->root == pmc->relocate_locked->anon_vma->root) {
+				ret = 0;
+				goto out;
+			}
+
+			/* split_folio() expects elevated refcount. */
+			folio_get(folio);
+
+			/*
+			 * We must relinquish/reacquire the PTE lock over this
+			 * operation. We hold the folio lock and an increased
+			 * reference count, so there's no danger of the folio
+			 * disappearing beneath us.
+			 */
+			pte_unmap_unlock(state->ptep, state->ptl);
+			err = split_folio(folio);
+			state->ptep = pte_offset_map_lock(mm, state->pmdp,
+							  old_addr, &state->ptl);
+			folio_unlock(folio);
+			folio_put(folio);
+
+			if (err || !state->ptep)
+				return 0;
+
+			/*
+			 * If we split, we need to look up the folio again, so
+			 * simply retry the operation.
+			 */
+			goto retry;
+		}
 	}
 
 	if (!undo)
@@ -906,6 +1137,7 @@ static bool relocate_anon_ptes(struct pagetable_move_control *pmc,
 		.old_addr = pmc->old_addr,
 		.new_addr = pmc->new_addr,
 		.old_end = pmc->old_addr + extent,
+		.pmdp = pmdp,
 	};
 	pte_t *ptep_start;
 	bool ret;
@@ -955,28 +1187,63 @@ static bool __relocate_anon_folios(struct pagetable_move_control *pmc, bool undo
 		pmd_t pmd;
 		pud_t pud;
 
-		extent = get_extent(NORMAL_PUD, pmc);
+		extent = get_old_extent(NORMAL_PUD, pmc);
 
 		pudp = get_old_pud(mm, pmc->old_addr);
 		if (!pudp)
 			continue;
 		pud = pudp_get(pudp);
+		if (pud_trans_huge(pud)) {
+			unsigned long old_addr = pmc->old_addr;
 
-		if (pud_trans_huge(pud) || pud_devmap(pud))
+			if (extent != HPAGE_PUD_SIZE)
+				return false;
+
+			VM_WARN_ON_ONCE(old_addr & ~HPAGE_PUD_MASK);
+
+			/* We may relocate iff the new address is aligned. */
+			if (!(pmc->new_addr & ~HPAGE_PUD_MASK) &&
+			    is_thp_fully_spanned(pmc, old_addr, HPAGE_PUD_SIZE)) {
+				if (!relocate_anon_pud(pmc, pudp, undo))
+					return false;
+				continue;
+			}
+
+			/* Otherwise, we split so we can do this with PMDs/PTEs. */
+			split_huge_pud(pmc->old, pudp, old_addr);
+		} else if (pud_devmap(pud)) {
 			return false;
+		}
 
-		extent = get_extent(NORMAL_PMD, pmc);
+		extent = get_old_extent(NORMAL_PMD, pmc);
 		pmdp = get_old_pmd(mm, pmc->old_addr);
 		if (!pmdp)
 			continue;
 		pmd = pmdp_get(pmdp);
-
-		if (is_swap_pmd(pmd) || pmd_trans_huge(pmd) ||
-		    pmd_devmap(pmd))
-			return false;
-
 		if (pmd_none(pmd))
 			continue;
+
+		if (pmd_trans_huge(pmd)) {
+			unsigned long old_addr = pmc->old_addr;
+
+			if (extent != HPAGE_PMD_SIZE)
+				return false;
+
+			VM_WARN_ON_ONCE(old_addr & ~HPAGE_PMD_MASK);
+
+			/* We may relocate iff the new address is aligned. */
+			if (!(pmc->new_addr & ~HPAGE_PMD_MASK) &&
+			    is_thp_fully_spanned(pmc, old_addr, HPAGE_PMD_SIZE)) {
+				if (!relocate_anon_pmd(pmc, pmdp, undo))
+					return false;
+				continue;
+			}
+
+			/* Otherwise, we split so we can do this with PTEs. */
+			split_huge_pmd(pmc->old, pmdp, old_addr);
+		} else if (is_swap_pmd(pmd) || pmd_devmap(pmd)) {
+			return false;
+		}
 
 		if (!relocate_anon_ptes(pmc, extent, pmdp, undo))
 			return false;
