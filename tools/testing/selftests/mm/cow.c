@@ -853,13 +853,14 @@ enum thp_run {
 	THP_RUN_SINGLE_PTE,
 	THP_RUN_SINGLE_PTE_SWAPOUT,
 	THP_RUN_PARTIAL_MREMAP,
+	THP_RUN_PARTIAL_MREMAP_RELOCATE_ANON,
 	THP_RUN_PARTIAL_SHARED,
 };
 
 static void do_run_with_thp(test_fn fn, enum thp_run thp_run, size_t thpsize)
 {
 	char *mem, *mmap_mem, *tmp, *mremap_mem = MAP_FAILED;
-	size_t size, mmap_size, mremap_size;
+	size_t size, mmap_size, mremap_size, mremap_flags;
 	int ret;
 
 	/* For alignment purposes, we need twice the thp size. */
@@ -935,6 +936,7 @@ static void do_run_with_thp(test_fn fn, enum thp_run thp_run, size_t thpsize)
 		size = pagesize;
 		break;
 	case THP_RUN_PARTIAL_MREMAP:
+	case THP_RUN_PARTIAL_MREMAP_RELOCATE_ANON:
 		/*
 		 * Remap half of the THP. We need some new memory location
 		 * for that.
@@ -947,8 +949,13 @@ static void do_run_with_thp(test_fn fn, enum thp_run thp_run, size_t thpsize)
 			log_test_result(KSFT_FAIL);
 			goto munmap;
 		}
-		tmp = mremap(mem + mremap_size, mremap_size, mremap_size,
-			     MREMAP_MAYMOVE | MREMAP_FIXED, mremap_mem);
+
+		mremap_flags = MREMAP_MAYMOVE | MREMAP_FIXED;
+		if (thp_run == THP_RUN_PARTIAL_MREMAP_RELOCATE_ANON)
+			mremap_flags |= MREMAP_RELOCATE_ANON;
+
+		tmp = sys_mremap(mem + mremap_size, mremap_size, mremap_size,
+				 mremap_flags, mremap_mem);
 		if (tmp != mremap_mem) {
 			ksft_perror("mremap() failed");
 			log_test_result(KSFT_FAIL);
@@ -1058,6 +1065,13 @@ static void run_with_partial_mremap_thp(test_fn fn, const char *desc, size_t siz
 	log_test_start("%s ... with partially mremap()'ed THP (%zu kB)",
 		desc, size / 1024);
 	do_run_with_thp(fn, THP_RUN_PARTIAL_MREMAP, size);
+}
+
+static void run_with_partial_mremap_relocate_anon_thp(test_fn fn, const char *desc, size_t size)
+{
+	ksft_print_msg("[RUN] %s ... with partially mremap(MREMAP_RELOCATE_ANON)'ed THP (%zu kB)\n",
+		desc, size / 1024);
+	do_run_with_thp(fn, THP_RUN_PARTIAL_MREMAP_RELOCATE_ANON, size);
 }
 
 static void run_with_partial_shared_thp(test_fn fn, const char *desc, size_t size)
@@ -1255,6 +1269,7 @@ static void run_anon_test_case(struct test_case const *test_case)
 		run_with_single_pte_of_thp(test_case->fn, test_case->desc, size);
 		run_with_single_pte_of_thp_swap(test_case->fn, test_case->desc, size);
 		run_with_partial_mremap_thp(test_case->fn, test_case->desc, size);
+		run_with_partial_mremap_relocate_anon_thp(test_case->fn, test_case->desc, size);
 		run_with_partial_shared_thp(test_case->fn, test_case->desc, size);
 
 		thp_pop_settings();
@@ -1278,7 +1293,7 @@ static int tests_per_anon_test_case(void)
 {
 	int tests = 2 + nr_hugetlbsizes;
 
-	tests += 6 * nr_thpsizes;
+	tests += 7 * nr_thpsizes;
 	if (pmdsize)
 		tests += 2;
 	return tests;
