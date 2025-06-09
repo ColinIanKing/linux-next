@@ -147,6 +147,10 @@ static inline void anon_vma_unlock_read(struct anon_vma *anon_vma)
 	up_read(&anon_vma->root->rwsem);
 }
 
+static inline void anon_vma_assert_locked(const struct anon_vma *anon_vma)
+{
+	rwsem_assert_held(&anon_vma->root->rwsem);
+}
 
 /*
  * anon_vma helper functions.
