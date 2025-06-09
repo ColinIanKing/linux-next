@@ -4,6 +4,7 @@
 #include "../kselftest_harness.h"
 #include <linux/prctl.h>
 #include <fcntl.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -15,11 +16,18 @@
 #include "vm_util.h"
 #include <linux/mman.h>
 
+enum poll_action {
+	POLL_TASK_RUN,
+	POLL_TASK_WAIT,
+	POLL_TASK_EXIT,
+};
+
 FIXTURE(merge)
 {
 	unsigned int page_size;
 	char *carveout;
 	struct procmap_fd procmap;
+	volatile enum poll_action *ipc;
 };
 
 FIXTURE_SETUP(merge)
@@ -31,6 +39,11 @@ FIXTURE_SETUP(merge)
 	ASSERT_NE(self->carveout, MAP_FAILED);
 	/* Setup PROCMAP_QUERY interface. */
 	ASSERT_EQ(open_self_procmap(&self->procmap), 0);
+
+	/* Quick and dirty IPC. */
+	self->ipc = (volatile enum poll_action *)mmap(NULL, self->page_size,
+			PROT_READ | PROT_WRITE, MAP_SHARED | MAP_ANON, -1, 0);
+	ASSERT_NE(self->ipc, MAP_FAILED);
 }
 
 FIXTURE_TEARDOWN(merge)
@@ -42,6 +55,7 @@ FIXTURE_TEARDOWN(merge)
 	 * fails (KSM may be disabled for instance).
 	 */
 	prctl(PR_SET_MEMORY_MERGE, 0, 0, 0, 0);
+	ASSERT_EQ(munmap((void *)self->ipc, self->page_size), 0);
 }
 
 TEST_F(merge, mprotect_unfaulted_left)
@@ -1899,6 +1913,353 @@ TEST_F(merge, mremap_relocate_anon_mprotect_faulted_faulted)
 	ASSERT_TRUE(find_vma_procmap(procmap, ptr));
 	ASSERT_EQ(procmap->query.vma_start, (unsigned long)ptr);
 	ASSERT_EQ(procmap->query.vma_end, (unsigned long)ptr + 10 * page_size);
+}
+
+TEST_F(merge, mremap_relocate_anon_single_fork)
+{
+	unsigned int page_size = self->page_size;
+	char *carveout = self->carveout;
+	volatile enum poll_action *poll = self->ipc;
+	char *ptr, *ptr2;
+	pid_t pid2;
+	int err;
+
+	/*
+	 * .           .           .
+	 * . |-------| .           .  Map A, fault in and
+	 * . |   A   |-.-----|     .  fork process 1 to
+	 * . |-------| .     |     .  process 2.
+	 * .           .     v     .
+	 * .           . |-------| .
+	 * .           . |   B   | .
+	 * .           . |-------| .
+	 * .           .           .
+	 * . Process 1 . Process 2 .
+	 */
+	ptr = mmap(carveout, 3 * page_size, PROT_READ | PROT_WRITE,
+		   MAP_ANON | MAP_PRIVATE | MAP_FIXED, -1, 0);
+	ASSERT_NE(ptr, MAP_FAILED);
+	/* Fault it in. */
+	ptr[0] = 'x';
+
+	pid2 = fork();
+	ASSERT_NE(pid2, -1);
+	/* Parent process. */
+	if (pid2 != 0) {
+		/* mremap() fails due to forked children. */
+		ptr2 = sys_mremap(ptr, page_size, page_size,
+				  MREMAP_MAYMOVE | MREMAP_FIXED | MREMAP_MUST_RELOCATE_ANON,
+				  &carveout[3 * page_size]);
+		err = errno;
+		ASSERT_EQ(ptr2, MAP_FAILED);
+		ASSERT_EQ(err, EFAULT);
+
+		poll[0] = POLL_TASK_EXIT;
+
+		wait(NULL);
+		return;
+	}
+
+	/* This is process 2. */
+
+	/* mremap() fails due to forked parents. */
+	ptr2 = sys_mremap(ptr, page_size, page_size,
+		MREMAP_MAYMOVE | MREMAP_FIXED | MREMAP_MUST_RELOCATE_ANON,
+		&carveout[3 * page_size]);
+	err = errno;
+	ASSERT_EQ(ptr2, MAP_FAILED);
+	ASSERT_EQ(err, EFAULT);
+
+	/* Wait for parent to finish. */
+	while (poll[0] == POLL_TASK_RUN)
+		;
+}
+
+TEST_F(merge, mremap_relocate_anon_fork_twice)
+{
+	unsigned int page_size = self->page_size;
+	char *carveout = self->carveout;
+	volatile enum poll_action *poll = self->ipc;
+	char *ptr, *ptr2;
+	pid_t pid2, pid3;
+	int err;
+
+	/*
+	 * .           .           .
+	 * . |-------| .           .  Map A, fault in and
+	 * . |   A   |-.-----|     .  fork process 1 to
+	 * . |-------| .     |     .  process 2.
+	 * .           .     v     .
+	 * .           . |-------| .
+	 * .           . |   B   | .
+	 * .           . |-------| .
+	 * .           .           .
+	 * . Process 1 . Process 2 .
+	 */
+	ptr = mmap(carveout, 3 * page_size, PROT_READ | PROT_WRITE,
+		   MAP_ANON | MAP_PRIVATE | MAP_FIXED, -1, 0);
+	ASSERT_NE(ptr, MAP_FAILED);
+	/* Fault it in. */
+	ptr[0] = 'x';
+	pid2 = fork();
+	ASSERT_NE(pid2, -1);
+	/* If parent process, simply wait. */
+	if (pid2 != 0) {
+		while (true) {
+			if (poll[0] == POLL_TASK_EXIT)
+				break;
+			if (poll[0] == POLL_TASK_WAIT)
+				continue;
+
+			/* mremap() fails due to forked children. */
+			ptr2 = sys_mremap(ptr, page_size, page_size,
+					  MREMAP_MAYMOVE | MREMAP_FIXED |
+					  MREMAP_MUST_RELOCATE_ANON,
+					  &carveout[3 * page_size]);
+			err = errno;
+			ASSERT_EQ(ptr2, MAP_FAILED);
+			ASSERT_EQ(err, EFAULT);
+
+			/* Strictly, should be atomic. */
+			if (poll[0] == POLL_TASK_RUN)
+				poll[0] = POLL_TASK_WAIT;
+		}
+
+		wait(NULL);
+		return;
+	}
+
+	/* This is process 2. */
+
+	/* Wait for parent to finish. */
+	while (poll[0] == POLL_TASK_RUN)
+		;
+
+	/*
+	 * .           .           .           .
+	 * . |-------| .           .           .
+	 * . |   A   | .           .           .
+	 * . |-------| .           .           .
+	 * .           .           .           .
+	 * .           . |-------| .           . Fork process 2 to
+	 * .           . |   B   |-.-----|     . process 3.
+	 * .           . |-------| .     |     .
+	 * .           .           .     v     .
+	 * .           .           . |-------| .
+	 * .           .           . |   C   | .
+	 * .           .           . |-------| .
+	 * .           .           .           .
+	 * . Process 1 . Process 2 . Process 3 .
+	 */
+	pid3 = fork();
+	ASSERT_NE(pid3, -1);
+	/* If parent process, simply wait. */
+	if (pid3 != 0) {
+		/* mremap() fails due to forked children. */
+		ptr2 = sys_mremap(ptr, page_size, page_size,
+				  MREMAP_MAYMOVE | MREMAP_FIXED |
+				  MREMAP_MUST_RELOCATE_ANON,
+				  &carveout[3 * page_size]);
+		err = errno;
+		ASSERT_EQ(ptr2, MAP_FAILED);
+		ASSERT_EQ(err, EFAULT);
+
+		/* We don't retrigger, so just indicate we're done. */
+		poll[1] = POLL_TASK_EXIT;
+
+		wait(NULL);
+		return;
+	}
+
+	/* This is process 3. */
+
+	/* Trigger root mremap(). */
+	poll[0] = POLL_TASK_RUN;
+	/* Wait for parents to finish. */
+
+	while (poll[0] == POLL_TASK_RUN)
+		;
+	while (poll[1] == POLL_TASK_RUN)
+		;
+
+	/* mremap() fails due to forked parents. */
+	ptr2 = sys_mremap(ptr, page_size, page_size,
+		MREMAP_MAYMOVE | MREMAP_FIXED | MREMAP_MUST_RELOCATE_ANON,
+		&carveout[3 * page_size]);
+	err = errno;
+	ASSERT_EQ(ptr2, MAP_FAILED);
+	ASSERT_EQ(err, EFAULT);
+	/* Kill waiting parent. */
+	poll[0] = POLL_TASK_EXIT;
+}
+
+TEST_F(merge, mremap_relocate_anon_3_times_reuse_anon_vma)
+{
+	unsigned int page_size = self->page_size;
+	char *carveout = self->carveout;
+	volatile enum poll_action *poll = self->ipc;
+	char *ptr, *ptr2;
+	pid_t pid2, pid3, pid4;
+	int err;
+
+	/*
+	 * .           .           .
+	 * . |-------| .           .  Map A, fault in and
+	 * . |   A   |-.-----|     .  fork process 1 to
+	 * . |-------| .     |     .  process 2.
+	 * .           .     v     .
+	 * .           . |-------| .
+	 * .           . |   B   | .
+	 * .           . |-------| .
+	 * .           .           .
+	 * . Process 1 . Process 2 .
+	 */
+	ptr = mmap(carveout, 3 * page_size, PROT_READ | PROT_WRITE,
+		   MAP_ANON | MAP_PRIVATE | MAP_FIXED, -1, 0);
+	ASSERT_NE(ptr, MAP_FAILED);
+	/* Fault it in. */
+	ptr[0] = 'x';
+	pid2 = fork();
+	ASSERT_NE(pid2, -1);
+	/* If parent process, simply wait. */
+	if (pid2 != 0) {
+		while (true) {
+			if (poll[0] == POLL_TASK_EXIT)
+				break;
+			if (poll[0] == POLL_TASK_WAIT)
+				continue;
+
+			/* mremap() fails due to forked children. */
+			ptr2 = sys_mremap(ptr, page_size, page_size,
+					  MREMAP_MAYMOVE | MREMAP_FIXED |
+					  MREMAP_MUST_RELOCATE_ANON,
+					  &carveout[3 * page_size]);
+			err = errno;
+			ASSERT_EQ(ptr2, MAP_FAILED);
+			ASSERT_EQ(err, EFAULT);
+
+			if (poll[0] == POLL_TASK_RUN)
+				poll[0] = POLL_TASK_WAIT;
+		}
+
+		wait(NULL);
+		return;
+	}
+
+	/* This is process 2. */
+
+	/* Wait for parent to finish. */
+	while (poll[0] == POLL_TASK_RUN)
+		;
+
+	/*
+	 * .           .           .           .
+	 * . |-------| .           .           .
+	 * . |   A   | .           .           .
+	 * . |-------| .           .           .
+	 * .           .           .           .
+	 * .           . |-------| .           . Fork process 2 to
+	 * .           . |   B   |-.-----|     . process 3.
+	 * .           . |-------| .     |     .
+	 * .           .           .     v     .
+	 * .           .           . |-------| .
+	 * .           .           . |   C   | .
+	 * .           .           . |-------| .
+	 * .           .           .           .
+	 * . Process 1 . Process 2 . Process 3 .
+	 */
+	pid3 = fork();
+	ASSERT_NE(pid3, -1);
+	/* If parent process, simply wait. */
+	if (pid3 != 0) {
+		/*
+		 * We only try to mremap once, before unmapping so we can
+		 * trigger reuse of B's anon_vma.
+		 */
+		/* mremap() fails due to forked children. */
+		ptr2 = sys_mremap(ptr, page_size, page_size,
+				  MREMAP_MAYMOVE | MREMAP_FIXED |
+				  MREMAP_MUST_RELOCATE_ANON,
+				  &carveout[3 * page_size]);
+		err = errno;
+		ASSERT_EQ(ptr2, MAP_FAILED);
+		ASSERT_EQ(err, EFAULT);
+
+		/*
+		 * .           .           .           .
+		 * . |-------| .           .           .
+		 * . |   A   | .           .           .
+		 * . |-------| .           .           .
+		 * .           .           .           .
+		 * .           .           .           . Unmap VMA B, but
+		 * .           .           .           . anon_vma is left
+		 * .           .           .           . around.
+		 * .           .           .           .
+		 * .           .           . |-------| .
+		 * .           .           . |   C   | .
+		 * .           .           . |-------| .
+		 * .           .           .           .
+		 * . Process 1 . Process 2 . Process 3 .
+		 */
+		munmap(ptr, 3 * page_size);
+
+		/* We indicate we're done so child waits for */
+		poll[1] = POLL_TASK_EXIT;
+
+		wait(NULL);
+		return;
+	}
+
+	/* This is process 3. */
+
+	/* Trigger root mremap(). */
+	poll[0] = POLL_TASK_RUN;
+	/* Wait for parents to finish. */
+	while (poll[0] == POLL_TASK_RUN)
+		;
+	while (poll[1] == POLL_TASK_RUN)
+		;
+
+	pid4 = fork();
+	ASSERT_NE(pid4, -1);
+
+	if (pid4 != 0) {
+		/* mremap() fails due to forked children. */
+		ptr2 = sys_mremap(ptr, page_size, page_size,
+				  MREMAP_MAYMOVE | MREMAP_FIXED |
+				  MREMAP_MUST_RELOCATE_ANON,
+				  &carveout[3 * page_size]);
+		err = errno;
+		ASSERT_EQ(ptr2, MAP_FAILED);
+		ASSERT_EQ(err, EFAULT);
+
+		/* We don't retrigger, so just indicate we're done. */
+		poll[2] = POLL_TASK_EXIT;
+
+		wait(NULL);
+		return;
+	}
+
+	/* This is process 4. */
+
+	/* Trigger root mremap(). */
+	poll[0] = POLL_TASK_RUN;
+	/* We unmapped VMA B, so nothing to trigger there. */
+	/* Wait for parents to finish. */
+	while (poll[0] == POLL_TASK_RUN)
+		;
+	while (poll[2] == POLL_TASK_RUN)
+		;
+
+	/* mremap() fails due to forked parents. */
+	ptr2 = sys_mremap(ptr, page_size, page_size,
+		MREMAP_MAYMOVE | MREMAP_FIXED | MREMAP_MUST_RELOCATE_ANON,
+		&carveout[3 * page_size]);
+	err = errno;
+	ASSERT_EQ(ptr2, MAP_FAILED);
+	ASSERT_EQ(err, EFAULT);
+	/* Kill waiting parent. */
+	poll[0] = POLL_TASK_EXIT;
 }
 
 TEST_HARNESS_MAIN
