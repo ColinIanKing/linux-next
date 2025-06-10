@@ -30,6 +30,26 @@ more expensive. As with the non-inline versions, it is important to use the
 macro wrappers for inline functions instead of directly calling the functions
 themselves.
 
+Equality-Aware Heap Maintenance
+-------------------------------
+
+In some workloads, a large number of elements in the heap may be equal under
+the user-defined comparison function. For such cases, the standard
+``min_heap_sift_down()`` implementation, which uses the bottom-up heapify
+strategy, can be inefficient. While bottom-up heapify reduces the number of
+comparisons by approximately 50% for randomly ordered data, it may perform up
+to :math:`2 \times \log_2(n)` comparisons in the presence of many equal
+elements.
+
+To address this, equality-aware versions of heap maintenance APIs are provided.
+These versions use the traditional top-down heapify strategy, which performs
+better - sometimes requiring only :math:`\mathcal{O}(1)` comparisons - when
+many elements are equal.
+
+The equality-aware APIs are suffixed with ``_eqaware``, and serve as drop-in
+replacements for their standard counterparts when equal elements are expected.
+
+
 Data Structures
 ===============
 
