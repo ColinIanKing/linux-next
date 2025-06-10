@@ -371,17 +371,23 @@ void __min_heap_sift_up_inline(min_heap_char *heap, size_t elem_size, size_t idx
 /* Floyd's approach to heapification that is O(nr). */
 static __always_inline
 void __min_heapify_all_inline(min_heap_char *heap, size_t elem_size,
-			      const struct min_heap_callbacks *func, void *args)
+			      const struct min_heap_callbacks *func, void *args, bool eqaware)
 {
 	ssize_t i;
+	siftdown_fn_t sift_down = eqaware ? __min_heap_sift_down_eqaware_inline :
+					    __min_heap_sift_down_inline;
 
 	for (i = heap->nr / 2 - 1; i >= 0; i--)
-		__min_heap_sift_down_inline(heap, i, elem_size, func, args);
+		sift_down(heap, i, elem_size, func, args);
 }
 
 #define min_heapify_all_inline(_heap, _func, _args)	\
 	__min_heapify_all_inline(container_of(&(_heap)->nr, min_heap_char, nr),	\
-				 __minheap_obj_size(_heap), _func, _args)
+				 __minheap_obj_size(_heap), _func, _args, false)
+
+#define min_heapify_all_eqaware_inline(_heap, _func, _args)	\
+	__min_heapify_all_inline(container_of(&(_heap)->nr, min_heap_char, nr),	\
+				 __minheap_obj_size(_heap), _func, _args, true)
 
 /* Remove minimum element from the heap, O(log2(nr)). */
 static __always_inline
@@ -487,7 +493,7 @@ void __min_heap_sift_down_eqaware(min_heap_char *heap, size_t pos, size_t elem_s
 void __min_heap_sift_up(min_heap_char *heap, size_t elem_size, size_t idx,
 			const struct min_heap_callbacks *func, void *args);
 void __min_heapify_all(min_heap_char *heap, size_t elem_size,
-		       const struct min_heap_callbacks *func, void *args);
+		       const struct min_heap_callbacks *func, void *args, bool eqaware);
 bool __min_heap_pop(min_heap_char *heap, size_t elem_size,
 		    const struct min_heap_callbacks *func, void *args);
 void __min_heap_pop_push(min_heap_char *heap, const void *element, size_t elem_size,
@@ -514,7 +520,10 @@ bool __min_heap_del(min_heap_char *heap, size_t elem_size, size_t idx,
 			   __minheap_obj_size(_heap), _idx, _func, _args)
 #define min_heapify_all(_heap, _func, _args)	\
 	__min_heapify_all(container_of(&(_heap)->nr, min_heap_char, nr),	\
-			  __minheap_obj_size(_heap), _func, _args)
+			  __minheap_obj_size(_heap), _func, _args, false)
+#define min_heapify_all_eqaware(_heap, _func, _args)	\
+	__min_heapify_all(container_of(&(_heap)->nr, min_heap_char, nr),	\
+			  __minheap_obj_size(_heap), _func, _args, true)
 #define min_heap_pop(_heap, _func, _args)	\
 	__min_heap_pop(container_of(&(_heap)->nr, min_heap_char, nr),	\
 		       __minheap_obj_size(_heap), _func, _args)
