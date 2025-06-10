@@ -325,9 +325,12 @@ static void bch2_sb_members_v1_to_text(struct printbuf *out, struct bch_sb *sb,
 {
 	struct bch_sb_field_members_v1 *mi = field_to_type(f, members_v1);
 	struct bch_sb_field_disk_groups *gi = bch2_sb_field_get(sb, disk_groups);
-	unsigned i;
+	int nr = (vstruct_end(&mi->field) - (void *) &gi->entries[0]) / sizeof(gi->entries[0]);
 
-	for (i = 0; i < sb->nr_devices; i++)
+	if (nr != sb->nr_devices)
+		prt_printf(out, "nr_devices mismatch: have %i entries, should be %u", nr, sb->nr_devices);
+
+	for (int i = 0; i < nr; i++)
 		member_to_text(out, members_v1_get(mi, i), gi, sb, i);
 }
 
@@ -341,9 +344,17 @@ static void bch2_sb_members_v2_to_text(struct printbuf *out, struct bch_sb *sb,
 {
 	struct bch_sb_field_members_v2 *mi = field_to_type(f, members_v2);
 	struct bch_sb_field_disk_groups *gi = bch2_sb_field_get(sb, disk_groups);
-	unsigned i;
+	int nr = (vstruct_end(&mi->field) - (void *) &gi->entries[0]) / le16_to_cpu(mi->member_bytes);
 
-	for (i = 0; i < sb->nr_devices; i++)
+	if (nr != sb->nr_devices)
+		prt_printf(out, "nr_devices mismatch: have %i entries, should be %u", nr, sb->nr_devices);
+
+	/*
+	 * We call to_text() on superblock sections that haven't passed
+	 * validate, so we can't trust sb->nr_devices.
+	 */
+
+	for (int i = 0; i < nr; i++)
 		member_to_text(out, members_v2_get(mi, i), gi, sb, i);
 }
 
