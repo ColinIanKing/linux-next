@@ -292,6 +292,52 @@ void __min_heap_sift_down_inline(min_heap_char *heap, size_t pos, size_t elem_si
 	__min_heap_sift_down_inline(container_of(&(_heap)->nr, min_heap_char, nr), _pos,	\
 				    __minheap_obj_size(_heap), _func, _args)
 
+/*
+ * Sift the element at pos down the heap.
+ *
+ * Variants of heap functions using an equal-elements-aware sift_down.
+ * These may perform better when the heap contains many equal elements.
+ */
+static __always_inline
+void __min_heap_sift_down_eqaware_inline(min_heap_char * heap, size_t pos, size_t elem_size,
+					 const struct min_heap_callbacks *func, void *args)
+{
+	void *data = heap->data;
+	void (*swp)(void *lhs, void *rhs, void *args) = func->swp;
+	/* pre-scale counters for performance */
+	size_t a = pos * elem_size;
+	size_t b, c, smallest;
+	size_t n = heap->nr * elem_size;
+
+	if (!swp)
+		swp = select_swap_func(data, elem_size);
+
+	for (;;) {
+		b = 2 * a + elem_size;
+		c = b + elem_size;
+		smallest = a;
+
+		if (b >= n)
+			break;
+
+		if (func->less(data + b, data + smallest, args))
+			smallest = b;
+
+		if (c < n && func->less(data + c, data + smallest, args))
+			smallest = c;
+
+		if (smallest == a)
+			break;
+
+		do_swap(data + a, data + smallest, elem_size, swp, args);
+		a = smallest;
+	}
+}
+
+#define min_heap_sift_down_eqaware_inline(_heap, _pos, _func, _args)	\
+	__min_heap_sift_down_inline(container_of(&(_heap)->nr, min_heap_char, nr), _pos,	\
+				    __minheap_obj_size(_heap), _func, _args)
+
 /* Sift up ith element from the heap, O(log2(nr)). */
 static __always_inline
 void __min_heap_sift_up_inline(min_heap_char *heap, size_t elem_size, size_t idx,
@@ -433,6 +479,8 @@ void *__min_heap_peek(struct min_heap_char *heap);
 bool __min_heap_full(min_heap_char *heap);
 void __min_heap_sift_down(min_heap_char *heap, size_t pos, size_t elem_size,
 			  const struct min_heap_callbacks *func, void *args);
+void __min_heap_sift_down_eqaware(min_heap_char *heap, size_t pos, size_t elem_size,
+				  const struct min_heap_callbacks *func, void *args);
 void __min_heap_sift_up(min_heap_char *heap, size_t elem_size, size_t idx,
 			const struct min_heap_callbacks *func, void *args);
 void __min_heapify_all(min_heap_char *heap, size_t elem_size,
@@ -454,6 +502,9 @@ bool __min_heap_del(min_heap_char *heap, size_t elem_size, size_t idx,
 	__min_heap_full(container_of(&(_heap)->nr, min_heap_char, nr))
 #define min_heap_sift_down(_heap, _pos, _func, _args)	\
 	__min_heap_sift_down(container_of(&(_heap)->nr, min_heap_char, nr), _pos,	\
+			     __minheap_obj_size(_heap), _func, _args)
+#define min_heap_sift_down_eqaware(_heap, _pos, _func, _args)	\
+	__min_heap_sift_down_eqaware(container_of(&(_heap)->nr, min_heap_char, nr), _pos,	\
 			     __minheap_obj_size(_heap), _func, _args)
 #define min_heap_sift_up(_heap, _idx, _func, _args)	\
 	__min_heap_sift_up(container_of(&(_heap)->nr, min_heap_char, nr),	\

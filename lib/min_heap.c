@@ -27,6 +27,13 @@ void __min_heap_sift_down(min_heap_char *heap, size_t pos, size_t elem_size,
 }
 EXPORT_SYMBOL(__min_heap_sift_down);
 
+void __min_heap_sift_down_eqaware(min_heap_char *heap, size_t pos, size_t elem_size,
+				  const struct min_heap_callbacks *func, void *args)
+{
+	__min_heap_sift_down_eqaware_inline(heap, pos, elem_size, func, args);
+}
+EXPORT_SYMBOL(__min_heap_sift_down_eqaware);
+
 void __min_heap_sift_up(min_heap_char *heap, size_t elem_size, size_t idx,
 			const struct min_heap_callbacks *func, void *args)
 {
