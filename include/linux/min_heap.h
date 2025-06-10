@@ -49,6 +49,9 @@ struct min_heap_callbacks {
 	void (*swp)(void *lhs, void *rhs, void *args);
 };
 
+typedef void (*siftdown_fn_t)(min_heap_char *heap, size_t pos, size_t elem_size,
+			    const struct min_heap_callbacks *func, void *args);
+
 /**
  * is_aligned - is this pointer & size okay for word-wide copying?
  * @base: pointer to data
