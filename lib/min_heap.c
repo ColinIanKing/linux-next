@@ -70,8 +70,8 @@ bool __min_heap_push(min_heap_char *heap, const void *element, size_t elem_size,
 EXPORT_SYMBOL(__min_heap_push);
 
 bool __min_heap_del(min_heap_char *heap, size_t elem_size, size_t idx,
-		    const struct min_heap_callbacks *func, void *args)
+		    const struct min_heap_callbacks *func, void *args, bool eqaware)
 {
-	return __min_heap_del_inline(heap, elem_size, idx, func, args);
+	return __min_heap_del_inline(heap, elem_size, idx, func, args, eqaware);
 }
 EXPORT_SYMBOL(__min_heap_del);
