@@ -49,9 +49,9 @@ void __min_heapify_all(min_heap_char *heap, size_t elem_size,
 EXPORT_SYMBOL(__min_heapify_all);
 
 bool __min_heap_pop(min_heap_char *heap, size_t elem_size,
-		    const struct min_heap_callbacks *func, void *args)
+		    const struct min_heap_callbacks *func, void *args, bool eqaware)
 {
-	return __min_heap_pop_inline(heap, elem_size, func, args);
+	return __min_heap_pop_inline(heap, elem_size, func, args, eqaware);
 }
 EXPORT_SYMBOL(__min_heap_pop);
 
