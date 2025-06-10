@@ -261,18 +261,18 @@ impl Delta {
     /// Return `true` if the [`Delta`] spans no time.
     #[inline]
     pub fn is_zero(self) -> bool {
-        self.as_nanos() == 0
+        self.into_nanos() == 0
     }
 
     /// Return `true` if the [`Delta`] spans a negative amount of time.
     #[inline]
     pub fn is_negative(self) -> bool {
-        self.as_nanos() < 0
+        self.into_nanos() < 0
     }
 
     /// Return the number of nanoseconds in the [`Delta`].
     #[inline]
-    pub const fn as_nanos(self) -> i64 {
+    pub const fn into_nanos(self) -> i64 {
         self.nanos
     }
 
@@ -282,13 +282,13 @@ impl Delta {
     pub fn as_micros_ceil(self) -> i64 {
         #[cfg(CONFIG_64BIT)]
         {
-            self.as_nanos().saturating_add(NSEC_PER_USEC - 1) / NSEC_PER_USEC
+            self.into_nanos().saturating_add(NSEC_PER_USEC - 1) / NSEC_PER_USEC
         }
 
         #[cfg(not(CONFIG_64BIT))]
         // SAFETY: It is always safe to call `ktime_to_us()` with any value.
         unsafe {
-            bindings::ktime_to_us(self.as_nanos().saturating_add(NSEC_PER_USEC - 1))
+            bindings::ktime_to_us(self.into_nanos().saturating_add(NSEC_PER_USEC - 1))
         }
     }
 
@@ -297,13 +297,13 @@ impl Delta {
     pub fn as_millis(self) -> i64 {
         #[cfg(CONFIG_64BIT)]
         {
-            self.as_nanos() / NSEC_PER_MSEC
+            self.into_nanos() / NSEC_PER_MSEC
         }
 
         #[cfg(not(CONFIG_64BIT))]
         // SAFETY: It is always safe to call `ktime_to_ms()` with any value.
         unsafe {
-            bindings::ktime_to_ms(self.as_nanos())
+            bindings::ktime_to_ms(self.into_nanos())
         }
     }
 }
