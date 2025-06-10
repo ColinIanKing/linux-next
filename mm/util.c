@@ -1170,3 +1170,4 @@ int compat_vma_mmap_prepare(struct file *file, struct vm_area_struct *vma)
 
 	return 0;
 }
+EXPORT_SYMBOL(compat_vma_mmap_prepare);
