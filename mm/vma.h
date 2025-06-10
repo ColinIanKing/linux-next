@@ -617,8 +617,4 @@ int create_init_stack_vma(struct mm_struct *mm, struct vm_area_struct **vmap,
 int relocate_vma_down(struct vm_area_struct *vma, unsigned long shift);
 #endif
 
-struct vm_area_desc *vma_to_desc(struct vm_area_struct *vma,
-		struct vm_area_desc *desc);
-void set_vma_from_desc(struct vm_area_struct *vma, struct vm_area_desc *desc);
-
 #endif	/* __MM_VMA_H */
