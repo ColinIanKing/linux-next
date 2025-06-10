@@ -424,15 +424,22 @@ bool __min_heap_pop_inline(min_heap_char *heap, size_t elem_size,
  */
 static __always_inline
 void __min_heap_pop_push_inline(min_heap_char *heap, const void *element, size_t elem_size,
-				const struct min_heap_callbacks *func, void *args)
+				const struct min_heap_callbacks *func, void *args, bool eqaware)
 {
+	siftdown_fn_t sift_down = eqaware ? __min_heap_sift_down_eqaware_inline :
+					    __min_heap_sift_down_inline;
+
 	memcpy(heap->data, element, elem_size);
-	__min_heap_sift_down_inline(heap, 0, elem_size, func, args);
+	sift_down(heap, 0, elem_size, func, args);
 }
 
 #define min_heap_pop_push_inline(_heap, _element, _func, _args)	\
 	__min_heap_pop_push_inline(container_of(&(_heap)->nr, min_heap_char, nr), _element,	\
-				   __minheap_obj_size(_heap), _func, _args)
+				   __minheap_obj_size(_heap), _func, _args, false)
+
+#define min_heap_pop_push_eqaware_inline(_heap, _element, _func, _args)	\
+	__min_heap_pop_push_inline(container_of(&(_heap)->nr, min_heap_char, nr), _element,	\
+				   __minheap_obj_size(_heap), _func, _args, true)
 
 /* Push an element on to the heap, O(log2(nr)). */
 static __always_inline
@@ -503,7 +510,7 @@ void __min_heapify_all(min_heap_char *heap, size_t elem_size,
 bool __min_heap_pop(min_heap_char *heap, size_t elem_size,
 		    const struct min_heap_callbacks *func, void *args, bool eqaware);
 void __min_heap_pop_push(min_heap_char *heap, const void *element, size_t elem_size,
-			 const struct min_heap_callbacks *func, void *args);
+			 const struct min_heap_callbacks *func, void *args, bool eqaware);
 bool __min_heap_push(min_heap_char *heap, const void *element, size_t elem_size,
 		     const struct min_heap_callbacks *func, void *args);
 bool __min_heap_del(min_heap_char *heap, size_t elem_size, size_t idx,
@@ -538,7 +545,10 @@ bool __min_heap_del(min_heap_char *heap, size_t elem_size, size_t idx,
 		       __minheap_obj_size(_heap), _func, _args, true)
 #define min_heap_pop_push(_heap, _element, _func, _args)	\
 	__min_heap_pop_push(container_of(&(_heap)->nr, min_heap_char, nr), _element,	\
-			    __minheap_obj_size(_heap), _func, _args)
+			    __minheap_obj_size(_heap), _func, _args, false)
+#define min_heap_pop_push_eqaware(_heap, _element, _func, _args)	\
+	__min_heap_pop_push(container_of(&(_heap)->nr, min_heap_char, nr), _element,	\
+			    __minheap_obj_size(_heap), _func, _args, true)
 #define min_heap_push(_heap, _element, _func, _args)	\
 	__min_heap_push(container_of(&(_heap)->nr, min_heap_char, nr), _element,	\
 			__minheap_obj_size(_heap), _func, _args)
