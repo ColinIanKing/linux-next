@@ -1411,34 +1411,50 @@ static bool ahci_broken_suspend(struct pci_dev *pdev)
 static bool ahci_broken_lpm(struct pci_dev *pdev)
 {
 	static const struct dmi_system_id sysids[] = {
-		/* Various Lenovo 50 series have LPM issues with older BIOSen */
+		/* Table contains DMI BIOS dates of BIOSes with broken LPM. */
 		{
 			.matches = {
 				DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
 				DMI_MATCH(DMI_PRODUCT_VERSION, "ThinkPad X250"),
 			},
-			.driver_data = "20180406", /* 1.31 */
+			/*
+			 * 1.31, build date 20180406, has working LPM, mark any
+			 * DMI BIOS date before that as broken.
+			 */
+			.driver_data = "20180405",
 		},
 		{
 			.matches = {
 				DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
 				DMI_MATCH(DMI_PRODUCT_VERSION, "ThinkPad L450"),
 			},
-			.driver_data = "20180420", /* 1.28 */
+			/*
+			 * 1.28, build date 20180420, has working LPM, mark any
+			 * DMI BIOS date before that as broken.
+			 */
+			.driver_data = "20180419",
 		},
 		{
 			.matches = {
 				DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
 				DMI_MATCH(DMI_PRODUCT_VERSION, "ThinkPad T450s"),
 			},
-			.driver_data = "20180315", /* 1.33 */
+			/*
+			 * 1.33, build date 20180315, has working LPM, mark any
+			 * DMI BIOS date before that as broken.
+			 */
+			.driver_data = "20180314",
 		},
 		{
 			.matches = {
 				DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
 				DMI_MATCH(DMI_PRODUCT_VERSION, "ThinkPad W541"),
 			},
-			.driver_data = "20180409", /* 2.35 */
+			/*
+			 * 2.35, build date 20180409, has working LPM, mark any
+			 * DMI BIOS date before that as broken.
+			 */
+			.driver_data = "20180408",
 		},
 		{ }	/* terminate list */
 	};
@@ -1452,7 +1468,7 @@ static bool ahci_broken_lpm(struct pci_dev *pdev)
 	dmi_get_date(DMI_BIOS_DATE, &year, &month, &date);
 	snprintf(buf, sizeof(buf), "%04d%02d%02d", year, month, date);
 
-	return strcmp(buf, dmi->driver_data) < 0;
+	return strcmp(buf, dmi->driver_data) <= 0;
 }
 
 static bool ahci_broken_online(struct pci_dev *pdev)
