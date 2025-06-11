@@ -667,7 +667,7 @@ enum btrfs_map_op {
 	BTRFS_MAP_GET_READ_MIRRORS,
 };
 
-static inline enum btrfs_map_op btrfs_op(struct bio *bio)
+static inline enum btrfs_map_op btrfs_op(const struct bio *bio)
 {
 	switch (bio_op(bio)) {
 	case REQ_OP_WRITE:
@@ -785,6 +785,7 @@ struct btrfs_chunk_map *btrfs_find_chunk_map_nolock(struct btrfs_fs_info *fs_inf
 						    u64 logical, u64 length);
 struct btrfs_chunk_map *btrfs_get_chunk_map(struct btrfs_fs_info *fs_info,
 					    u64 logical, u64 length);
+void btrfs_chunk_map_clear_bits(struct btrfs_chunk_map *map, unsigned int bits);
 void btrfs_remove_chunk_map(struct btrfs_fs_info *fs_info, struct btrfs_chunk_map *map);
 struct btrfs_super_block *btrfs_read_disk_super(struct block_device *bdev,
 						int copy_num, bool drop_cache);
