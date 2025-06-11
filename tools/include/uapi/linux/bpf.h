@@ -1794,6 +1794,13 @@ union bpf_attr {
 				};
 				__u64		expected_revision;
 			} netkit;
+			struct {
+				union {
+					__u32	relative_fd;
+					__u32	relative_id;
+				};
+				__u64		expected_revision;
+			} cgroup;
 		};
 	} link_create;
 
@@ -6653,11 +6660,15 @@ struct bpf_link_info {
 		struct {
 			__aligned_u64 tp_name; /* in/out: tp_name buffer ptr */
 			__u32 tp_name_len;     /* in/out: tp_name buffer len */
+			__u32 :32;
+			__u64 cookie;
 		} raw_tracepoint;
 		struct {
 			__u32 attach_type;
 			__u32 target_obj_id; /* prog_id for PROG_EXT, otherwise btf object id */
 			__u32 target_btf_id; /* BTF type id inside the object */
+			__u32 :32;
+			__u64 cookie;
 		} tracing;
 		struct {
 			__u64 cgroup_id;
