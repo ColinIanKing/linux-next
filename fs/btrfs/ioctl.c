@@ -3139,7 +3139,7 @@ static long btrfs_ioctl_scrub(struct file *file, void __user *arg)
 		return -EPERM;
 
 	if (btrfs_fs_incompat(fs_info, EXTENT_TREE_V2)) {
-		btrfs_err(fs_info, "scrub is not supported on extent tree v2 yet");
+		btrfs_err(fs_info, "scrub: extent tree v2 not yet supported");
 		return -EINVAL;
 	}
 
@@ -5210,6 +5210,66 @@ static int btrfs_ioctl_subvol_sync(struct btrfs_fs_info *fs_info, void __user *a
 	return 0;
 }
 
+static int btrfs_ioctl_clear_free(struct file *file, void __user *arg)
+{
+	struct btrfs_fs_info *fs_info = inode_to_fs_info(file_inode(file));
+	struct btrfs_ioctl_clear_free_args args;
+	u64 total_bytes;
+	int ret;
+
+	if (!capable(CAP_SYS_ADMIN))
+		return -EPERM;
+
+	/*
+	 * This can be relaxed to support conventional zones or zones that can
+	 * be reset. Otherwise the assumptions of write pointer are not
+	 * compatible with zeroout or trim.
+	 */
+	if (btrfs_is_zoned(fs_info))
+		return -EOPNOTSUPP;
+
+	if (copy_from_user(&args, arg, sizeof(args)))
+		return -EFAULT;
+
+	if (args.type >= BTRFS_NR_CLEAR_OP_TYPES)
+		return -EOPNOTSUPP;
+
+	if (args.type == BTRFS_CLEAR_OP_RESET_CHUNK_STATUS_CACHE) {
+		write_lock(&fs_info->mapping_tree_lock);
+		for (struct rb_node *node = rb_first_cached(&fs_info->mapping_tree);
+		     node; node = rb_next(node)) {
+			struct btrfs_chunk_map *map;
+
+			map = rb_entry(node, struct btrfs_chunk_map, rb_node);
+			btrfs_chunk_map_clear_bits(map, CHUNK_TRIMMED);
+		}
+		write_unlock(&fs_info->mapping_tree_lock);
+		return 0;
+	}
+
+	ret = mnt_want_write_file(file);
+	if (ret)
+		return ret;
+
+	total_bytes = btrfs_super_total_bytes(fs_info->super_copy);
+	if (args.start > total_bytes) {
+		ret = -EINVAL;
+		goto out_drop_write;
+	}
+
+	ret = btrfs_clear_free_space(fs_info, &args);
+	if (ret < 0)
+		goto out_drop_write;
+
+	if (copy_to_user(arg, &args, sizeof(args)))
+		ret = -EFAULT;
+
+out_drop_write:
+	mnt_drop_write_file(file);
+
+	return ret;
+}
+
 long btrfs_ioctl(struct file *file, unsigned int
 		cmd, unsigned long arg)
 {
@@ -5365,6 +5425,8 @@ long btrfs_ioctl(struct file *file, unsigned int
 #endif
 	case BTRFS_IOC_SUBVOL_SYNC_WAIT:
 		return btrfs_ioctl_subvol_sync(fs_info, argp);
+	case BTRFS_IOC_CLEAR_FREE:
+		return btrfs_ioctl_clear_free(file, argp);
 	}
 
 	return -ENOTTY;

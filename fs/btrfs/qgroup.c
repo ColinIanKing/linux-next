@@ -160,23 +160,34 @@ qgroup_rescan_init(struct btrfs_fs_info *fs_info, u64 progress_objectid,
 		   int init_flags);
 static void qgroup_rescan_zero_tracking(struct btrfs_fs_info *fs_info);
 
+static int btrfs_qgroup_qgroupid_key_cmp(const void *key, const struct rb_node *node)
+{
+	const u64 *qgroupid = key;
+	const struct btrfs_qgroup *qgroup = rb_entry(node, struct btrfs_qgroup, node);
+
+	if (qgroup->qgroupid < *qgroupid)
+		return -1;
+	else if (qgroup->qgroupid > *qgroupid)
+		return 1;
+
+	return 0;
+}
+
 /* must be called with qgroup_ioctl_lock held */
 static struct btrfs_qgroup *find_qgroup_rb(const struct btrfs_fs_info *fs_info,
 					   u64 qgroupid)
 {
-	struct rb_node *n = fs_info->qgroup_tree.rb_node;
-	struct btrfs_qgroup *qgroup;
+	struct rb_node *node;
 
-	while (n) {
-		qgroup = rb_entry(n, struct btrfs_qgroup, node);
-		if (qgroup->qgroupid < qgroupid)
-			n = n->rb_left;
-		else if (qgroup->qgroupid > qgroupid)
-			n = n->rb_right;
-		else
-			return qgroup;
-	}
-	return NULL;
+	node = rb_find(&qgroupid, &fs_info->qgroup_tree, btrfs_qgroup_qgroupid_key_cmp);
+	return rb_entry_safe(node, struct btrfs_qgroup, node);
+}
+
+static int btrfs_qgroup_qgroupid_cmp(struct rb_node *new, const struct rb_node *existing)
+{
+	const struct btrfs_qgroup *new_qgroup = rb_entry(new, struct btrfs_qgroup, node);
+
+	return btrfs_qgroup_qgroupid_key_cmp(&new_qgroup->qgroupid, existing);
 }
 
 /*
@@ -191,39 +202,25 @@ static struct btrfs_qgroup *add_qgroup_rb(struct btrfs_fs_info *fs_info,
 					  struct btrfs_qgroup *prealloc,
 					  u64 qgroupid)
 {
-	struct rb_node **p = &fs_info->qgroup_tree.rb_node;
-	struct rb_node *parent = NULL;
-	struct btrfs_qgroup *qgroup;
+	struct rb_node *node;
 
 	/* Caller must have pre-allocated @prealloc. */
 	ASSERT(prealloc);
 
-	while (*p) {
-		parent = *p;
-		qgroup = rb_entry(parent, struct btrfs_qgroup, node);
-
-		if (qgroup->qgroupid < qgroupid) {
-			p = &(*p)->rb_left;
-		} else if (qgroup->qgroupid > qgroupid) {
-			p = &(*p)->rb_right;
-		} else {
-			kfree(prealloc);
-			return qgroup;
-		}
+	prealloc->qgroupid = qgroupid;
+	node = rb_find_add(&prealloc->node, &fs_info->qgroup_tree, btrfs_qgroup_qgroupid_cmp);
+	if (node) {
+		kfree(prealloc);
+		return rb_entry(node, struct btrfs_qgroup, node);
 	}
 
-	qgroup = prealloc;
-	qgroup->qgroupid = qgroupid;
-	INIT_LIST_HEAD(&qgroup->groups);
-	INIT_LIST_HEAD(&qgroup->members);
-	INIT_LIST_HEAD(&qgroup->dirty);
-	INIT_LIST_HEAD(&qgroup->iterator);
-	INIT_LIST_HEAD(&qgroup->nested_iterator);
+	INIT_LIST_HEAD(&prealloc->groups);
+	INIT_LIST_HEAD(&prealloc->members);
+	INIT_LIST_HEAD(&prealloc->dirty);
+	INIT_LIST_HEAD(&prealloc->iterator);
+	INIT_LIST_HEAD(&prealloc->nested_iterator);
 
-	rb_link_node(&qgroup->node, parent, p);
-	rb_insert_color(&qgroup->node, &fs_info->qgroup_tree);
-
-	return qgroup;
+	return prealloc;
 }
 
 static void __del_qgroup_rb(struct btrfs_qgroup *qgroup)
@@ -2341,7 +2338,7 @@ static int qgroup_trace_extent_swap(struct btrfs_trans_handle* trans,
 		btrfs_item_key_to_cpu(dst_path->nodes[dst_level], &key, 0);
 
 	/* For src_path */
-	atomic_inc(&src_eb->refs);
+	refcount_inc(&src_eb->refs);
 	src_path->nodes[root_level] = src_eb;
 	src_path->slots[root_level] = dst_path->slots[root_level];
 	src_path->locks[root_level] = 0;
@@ -2574,7 +2571,7 @@ static int qgroup_trace_subtree_swap(struct btrfs_trans_handle *trans,
 		goto out;
 	}
 	/* For dst_path */
-	atomic_inc(&dst_eb->refs);
+	refcount_inc(&dst_eb->refs);
 	dst_path->nodes[level] = dst_eb;
 	dst_path->slots[level] = 0;
 	dst_path->locks[level] = 0;
@@ -2666,7 +2663,7 @@ int btrfs_qgroup_trace_subtree(struct btrfs_trans_handle *trans,
 	 * walk back up the tree (adjusting slot pointers as we go)
 	 * and restart the search process.
 	 */
-	atomic_inc(&root_eb->refs);	/* For path */
+	refcount_inc(&root_eb->refs);	/* For path */
 	path->nodes[root_level] = root_eb;
 	path->slots[root_level] = 0;
 	path->locks[root_level] = 0; /* so release_path doesn't try to unlock */
@@ -4673,6 +4670,28 @@ out:
 	spin_unlock(&swapped_blocks->lock);
 }
 
+static int qgroup_swapped_block_bytenr_key_cmp(const void *key, const struct rb_node *node)
+{
+	const u64 *bytenr = key;
+	const struct btrfs_qgroup_swapped_block *block = rb_entry(node,
+					  struct btrfs_qgroup_swapped_block, node);
+
+	if (block->subvol_bytenr < *bytenr)
+		return -1;
+	else if (block->subvol_bytenr > *bytenr)
+		return 1;
+
+	return 0;
+}
+
+static int qgroup_swapped_block_bytenr_cmp(struct rb_node *new, const struct rb_node *existing)
+{
+	const struct btrfs_qgroup_swapped_block *new_block = rb_entry(new,
+					      struct btrfs_qgroup_swapped_block, node);
+
+	return qgroup_swapped_block_bytenr_key_cmp(&new_block->subvol_bytenr, existing);
+}
+
 /*
  * Add subtree roots record into @subvol_root.
  *
@@ -4692,8 +4711,7 @@ int btrfs_qgroup_add_swapped_blocks(struct btrfs_root *subvol_root,
 	struct btrfs_fs_info *fs_info = subvol_root->fs_info;
 	struct btrfs_qgroup_swapped_blocks *blocks = &subvol_root->swapped_blocks;
 	struct btrfs_qgroup_swapped_block *block;
-	struct rb_node **cur;
-	struct rb_node *parent = NULL;
+	struct rb_node *node;
 	int level = btrfs_header_level(subvol_parent) - 1;
 	int ret = 0;
 
@@ -4742,40 +4760,26 @@ int btrfs_qgroup_add_swapped_blocks(struct btrfs_root *subvol_root,
 
 	/* Insert @block into @blocks */
 	spin_lock(&blocks->lock);
-	cur = &blocks->blocks[level].rb_node;
-	while (*cur) {
+	node = rb_find_add(&block->node, &blocks->blocks[level], qgroup_swapped_block_bytenr_cmp);
+	if (node) {
 		struct btrfs_qgroup_swapped_block *entry;
 
-		parent = *cur;
-		entry = rb_entry(parent, struct btrfs_qgroup_swapped_block,
-				 node);
+		entry = rb_entry(node, struct btrfs_qgroup_swapped_block, node);
 
-		if (entry->subvol_bytenr < block->subvol_bytenr) {
-			cur = &(*cur)->rb_left;
-		} else if (entry->subvol_bytenr > block->subvol_bytenr) {
-			cur = &(*cur)->rb_right;
-		} else {
-			if (entry->subvol_generation !=
-					block->subvol_generation ||
-			    entry->reloc_bytenr != block->reloc_bytenr ||
-			    entry->reloc_generation !=
-					block->reloc_generation) {
-				/*
-				 * Duplicated but mismatch entry found.
-				 * Shouldn't happen.
-				 *
-				 * Marking qgroup inconsistent should be enough
-				 * for end users.
-				 */
-				DEBUG_WARN("duplicated but mismatched entry found");
-				ret = -EEXIST;
-			}
-			kfree(block);
-			goto out_unlock;
+		if (entry->subvol_generation != block->subvol_generation ||
+		    entry->reloc_bytenr != block->reloc_bytenr ||
+		    entry->reloc_generation != block->reloc_generation) {
+			/*
+			 * Duplicated but mismatch entry found.  Shouldn't happen.
+			 * Marking qgroup inconsistent should be enough for end
+			 * users.
+			 */
+			DEBUG_WARN("duplicated but mismatched entry found");
+			ret = -EEXIST;
 		}
+		kfree(block);
+		goto out_unlock;
 	}
-	rb_link_node(&block->node, parent, cur);
-	rb_insert_color(&block->node, &blocks->blocks[level]);
 	blocks->swapped = true;
 out_unlock:
 	spin_unlock(&blocks->lock);
@@ -4801,7 +4805,6 @@ int btrfs_qgroup_trace_subtree_after_cow(struct btrfs_trans_handle *trans,
 	struct btrfs_qgroup_swapped_block *block;
 	struct extent_buffer *reloc_eb = NULL;
 	struct rb_node *node;
-	bool found = false;
 	bool swapped = false;
 	int level = btrfs_header_level(subvol_eb);
 	int ret = 0;
@@ -4817,23 +4820,14 @@ int btrfs_qgroup_trace_subtree_after_cow(struct btrfs_trans_handle *trans,
 		spin_unlock(&blocks->lock);
 		return 0;
 	}
-	node = blocks->blocks[level].rb_node;
-
-	while (node) {
-		block = rb_entry(node, struct btrfs_qgroup_swapped_block, node);
-		if (block->subvol_bytenr < subvol_eb->start) {
-			node = node->rb_left;
-		} else if (block->subvol_bytenr > subvol_eb->start) {
-			node = node->rb_right;
-		} else {
-			found = true;
-			break;
-		}
-	}
-	if (!found) {
+	node = rb_find(&subvol_eb->start, &blocks->blocks[level],
+			qgroup_swapped_block_bytenr_key_cmp);
+	if (!node) {
 		spin_unlock(&blocks->lock);
 		goto out;
 	}
+	block = rb_entry(node, struct btrfs_qgroup_swapped_block, node);
+
 	/* Found one, remove it from @blocks first and update blocks->swapped */
 	rb_erase(&block->node, &blocks->blocks[level]);
 	for (i = 0; i < BTRFS_MAX_LEVEL; i++) {
