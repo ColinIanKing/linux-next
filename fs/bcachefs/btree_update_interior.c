@@ -290,8 +290,6 @@ static struct btree *__bch2_btree_node_alloc(struct btree_trans *trans,
 	struct bch_fs *c = trans->c;
 	struct write_point *wp;
 	struct btree *b;
-	BKEY_PADDED_ONSTACK(k, BKEY_BTREE_PTR_VAL_U64s_MAX) tmp;
-	struct open_buckets obs = { .nr = 0 };
 	struct bch_devs_list devs_have = (struct bch_devs_list) { 0 };
 	enum bch_watermark watermark = flags & BCH_WATERMARK_MASK;
 	unsigned nr_reserve = watermark < BCH_WATERMARK_reclaim
@@ -310,8 +308,8 @@ static struct btree *__bch2_btree_node_alloc(struct btree_trans *trans,
 		struct btree_alloc *a =
 			&c->btree_reserve_cache[--c->btree_reserve_cache_nr];
 
-		obs = a->ob;
-		bkey_copy(&tmp.k, &a->k);
+		bkey_copy(&b->key, &a->k);
+		b->ob = a->ob;
 		mutex_unlock(&c->btree_reserve_cache_lock);
 		goto out;
 	}
@@ -345,14 +343,12 @@ retry:
 		goto retry;
 	}
 
-	bkey_btree_ptr_v2_init(&tmp.k);
-	bch2_alloc_sectors_append_ptrs(c, wp, &tmp.k, btree_sectors(c), false);
+	bkey_btree_ptr_v2_init(&b->key);
+	bch2_alloc_sectors_append_ptrs(c, wp, &b->key, btree_sectors(c), false);
 
-	bch2_open_bucket_get(c, wp, &obs);
+	bch2_open_bucket_get(c, wp, &b->ob);
 	bch2_alloc_sectors_done(c, wp);
 out:
-	bkey_copy(&b->key, &tmp.k);
-	b->ob = obs;
 	six_unlock_write(&b->c.lock);
 	six_unlock_intent(&b->c.lock);
 
@@ -513,30 +509,25 @@ static int bch2_btree_reserve_get(struct btree_trans *trans,
 				  unsigned flags,
 				  struct closure *cl)
 {
-	struct btree *b;
-	unsigned interior;
-	int ret = 0;
-
 	BUG_ON(nr_nodes[0] + nr_nodes[1] > BTREE_RESERVE_MAX);
 
 	/*
 	 * Protects reaping from the btree node cache and using the btree node
 	 * open bucket reserve:
 	 */
-	ret = bch2_btree_cache_cannibalize_lock(trans, cl);
+	int ret = bch2_btree_cache_cannibalize_lock(trans, cl);
 	if (ret)
 		return ret;
 
-	for (interior = 0; interior < 2; interior++) {
+	for (unsigned interior = 0; interior < 2; interior++) {
 		struct prealloc_nodes *p = as->prealloc_nodes + interior;
 
 		while (p->nr < nr_nodes[interior]) {
-			b = __bch2_btree_node_alloc(trans, &as->disk_res, cl,
-						    interior, target, flags);
-			if (IS_ERR(b)) {
-				ret = PTR_ERR(b);
+			struct btree *b = __bch2_btree_node_alloc(trans, &as->disk_res,
+							cl, interior, target, flags);
+			ret = PTR_ERR_OR_ZERO(b);
+			if (ret)
 				goto err;
-			}
 
 			p->b[p->nr++] = b;
 		}
@@ -1138,6 +1129,13 @@ static void bch2_btree_update_done(struct btree_update *as, struct btree_trans *
 			       start_time);
 }
 
+static const char * const btree_node_reawrite_reason_strs[] = {
+#define x(n)	#n,
+	BTREE_NODE_REWRITE_REASON()
+#undef x
+	NULL,
+};
+
 static struct btree_update *
 bch2_btree_update_start(struct btree_trans *trans, struct btree_path *path,
 			unsigned level_start, bool split,
@@ -1231,6 +1229,15 @@ bch2_btree_update_start(struct btree_trans *trans, struct btree_path *path,
 	mutex_lock(&c->btree_interior_update_lock);
 	list_add_tail(&as->list, &c->btree_interior_update_list);
 	mutex_unlock(&c->btree_interior_update_lock);
+
+	struct btree *b = btree_path_node(path, path->level);
+	as->node_start	= b->data->min_key;
+	as->node_end	= b->data->max_key;
+	as->node_needed_rewrite = btree_node_rewrite_reason(b);
+	as->node_written = b->written;
+	as->node_sectors = btree_buf_bytes(b) >> 9;
+	as->node_remaining = __bch2_btree_u64s_remaining(b,
+				btree_bkey_last(b, bset_tree_last(b)));
 
 	/*
 	 * We don't want to allocate if we're in an error state, that can cause
@@ -2108,6 +2115,9 @@ int __bch2_foreground_maybe_merge(struct btree_trans *trans,
 	if (ret)
 		goto err;
 
+	as->node_start	= prev->data->min_key;
+	as->node_end	= next->data->max_key;
+
 	trace_and_count(c, btree_node_merge, trans, b);
 
 	n = bch2_btree_node_alloc(as, trans, b->c.level);
@@ -2681,9 +2691,19 @@ static void bch2_btree_update_to_text(struct printbuf *out, struct btree_update 
 
 	prt_str(out, " ");
 	bch2_btree_id_to_text(out, as->btree_id);
-	prt_printf(out, " l=%u-%u mode=%s nodes_written=%u cl.remaining=%u journal_seq=%llu\n",
+	prt_printf(out, " l=%u-%u ",
 		   as->update_level_start,
-		   as->update_level_end,
+		   as->update_level_end);
+	bch2_bpos_to_text(out, as->node_start);
+	prt_char(out, ' ');
+	bch2_bpos_to_text(out, as->node_end);
+	prt_printf(out, "\nwritten %u/%u u64s_remaining %u need_rewrite %s",
+		   as->node_written,
+		   as->node_sectors,
+		   as->node_remaining,
+		   btree_node_reawrite_reason_strs[as->node_needed_rewrite]);
+
+	prt_printf(out, "\nmode=%s nodes_written=%u cl.remaining=%u journal_seq=%llu\n",
 		   bch2_btree_update_modes[as->mode],
 		   as->nodes_written,
 		   closure_nr_remaining(&as->cl),
