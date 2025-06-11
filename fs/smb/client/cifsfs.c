@@ -1180,7 +1180,8 @@ const char *cifs_get_link(struct dentry *dentry, struct inode *inode,
 		strscpy(target_path, CIFS_I(inode)->symlink_target, PATH_MAX);
 	} else {
 		kfree(target_path);
-		target_path = ERR_PTR(-EOPNOTSUPP);
+		/* If symlink_target is not filled for symlink then it is an IO error. */
+		target_path = ERR_PTR(-EIO);
 	}
 	spin_unlock(&inode->i_lock);
 

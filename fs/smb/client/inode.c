@@ -480,6 +480,12 @@ static int cifs_get_unix_fattr(const unsigned char *full_path,
 						cifs_sb, full_path,
 						&fattr->cf_symlink_target);
 		cifs_dbg(FYI, "%s: query_symlink: %d\n", __func__, rc);
+		/*
+		 * Convert -EIO to 0. This let lstat() success and
+		 * empty data->cf_symlink_target triggers readlink() to fail with -EIO.
+		 */
+		if (rc == -EIO)
+			rc = 0;
 	}
 	return rc;
 }
@@ -1188,6 +1194,12 @@ static int reparse_info_to_fattr(struct cifs_open_info_data *data,
 			rc = server->ops->query_symlink(xid, tcon,
 							cifs_sb, full_path,
 							&data->symlink_target);
+			/*
+			 * Convert -EIO to 0. This let lstat() success and
+			 * empty data->symlink_target triggers readlink() to fail with -EIO.
+			 */
+			if (rc == -EIO)
+				rc = 0;
 		}
 		if (rc == -EOPNOTSUPP)
 			data->reparse.tag = IO_REPARSE_TAG_INTERNAL;
@@ -1237,6 +1249,18 @@ static int reparse_info_to_fattr(struct cifs_open_info_data *data,
 			 */
 			if (rc == -EOPNOTSUPP)
 				rc = 0;
+		} else if (data->reparse.tag == IO_REPARSE_TAG_SYMLINK) {
+			/*
+			 * data->reparse.tag can be set to IO_REPARSE_TAG_SYMLINK
+			 * by STATUS_STOPPED_ON_SYMLINK error code. In this case
+			 * we do not have a real reparse point iov buffer so
+			 * data->reparse.buf and data->reparse.io.iov.iov_base
+			 * are not set. And in the case symlink target location
+			 * in the struct smb2_symlink_err_rsp is parsable then we
+			 * even do not have data->symlink_target. So set rc to 0
+			 * which let lstat() success and readlink() to fail.
+			 */
+			rc = 0;
 		}
 
 		if (data->reparse.tag == IO_REPARSE_TAG_SYMLINK && !rc) {
