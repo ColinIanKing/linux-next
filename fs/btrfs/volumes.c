@@ -3282,6 +3282,12 @@ int btrfs_remove_chunk(struct btrfs_trans_handle *trans, u64 chunk_offset)
 					device->bytes_used - dev_extent_len);
 			atomic64_add(dev_extent_len, &fs_info->free_chunk_space);
 			btrfs_clear_space_info_full(fs_info);
+
+			if (list_empty(&device->post_commit_list)) {
+				list_add_tail(&device->post_commit_list,
+					      &trans->transaction->dev_update_list);
+			}
+
 			mutex_unlock(&fs_info->chunk_mutex);
 		}
 	}
@@ -3454,7 +3460,8 @@ int btrfs_relocate_chunk(struct btrfs_fs_info *fs_info, u64 chunk_offset)
 	 * filesystem's point of view.
 	 */
 	if (btrfs_is_zoned(fs_info)) {
-		ret = btrfs_discard_extent(fs_info, chunk_offset, length, NULL);
+		ret = btrfs_discard_extent(fs_info, chunk_offset, length, NULL,
+					   BTRFS_CLEAR_OP_DISCARD);
 		if (ret)
 			btrfs_info(fs_info,
 				"failed to reset zone %llu after relocation",
@@ -7932,7 +7939,7 @@ static int verify_one_dev_extent(struct btrfs_fs_info *fs_info,
 	}
 
 	/*
-	 * Very old mkfs.btrfs (before v4.1) will not respect the reserved
+	 * Very old mkfs.btrfs (before v4.15) will not respect the reserved
 	 * space. Although kernel can handle it without problem, better to warn
 	 * the users.
 	 */
@@ -8019,6 +8026,11 @@ static int verify_chunk_dev_extent_mapping(struct btrfs_fs_info *fs_info)
 out:
 	read_unlock(&fs_info->mapping_tree_lock);
 	return ret;
+}
+
+void btrfs_chunk_map_clear_bits(struct btrfs_chunk_map *map, unsigned int bits)
+{
+	chunk_map_device_clear_bits(map, bits);
 }
 
 /*
