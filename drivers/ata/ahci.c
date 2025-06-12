@@ -1411,27 +1411,39 @@ static bool ahci_broken_suspend(struct pci_dev *pdev)
 static bool ahci_broken_lpm(struct pci_dev *pdev)
 {
 	static const struct dmi_system_id sysids[] = {
-		/* Various Lenovo 50 series have LPM issues with older BIOSen */
+		/* Table contains DMI BIOS dates of BIOSes with broken LPM. */
 		{
 			.matches = {
 				DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
 				DMI_MATCH(DMI_PRODUCT_VERSION, "ThinkPad X250"),
 			},
-			.driver_data = "20180406", /* 1.31 */
+			/*
+			 * 1.31, build date 20180406, has working LPM, mark any
+			 * DMI BIOS date before that as broken.
+			 */
+			.driver_data = "20180405",
 		},
 		{
 			.matches = {
 				DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
 				DMI_MATCH(DMI_PRODUCT_VERSION, "ThinkPad L450"),
 			},
-			.driver_data = "20180420", /* 1.28 */
+			/*
+			 * 1.28, build date 20180420, has working LPM, mark any
+			 * DMI BIOS date before that as broken.
+			 */
+			.driver_data = "20180419",
 		},
 		{
 			.matches = {
 				DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
 				DMI_MATCH(DMI_PRODUCT_VERSION, "ThinkPad T450s"),
 			},
-			.driver_data = "20180315", /* 1.33 */
+			/*
+			 * 1.33, build date 20180315, has working LPM, mark any
+			 * DMI BIOS date before that as broken.
+			 */
+			.driver_data = "20180314",
 		},
 		{
 			.matches = {
@@ -1439,12 +1451,21 @@ static bool ahci_broken_lpm(struct pci_dev *pdev)
 				DMI_MATCH(DMI_PRODUCT_VERSION, "ThinkPad W541"),
 			},
 			/*
-			 * Note date based on release notes, 2.35 has been
-			 * reported to be good, but I've been unable to get
-			 * a hold of the reporter to get the DMI BIOS date.
-			 * TODO: fix this.
+			 * 2.35, build date 20180409, has working LPM, mark any
+			 * DMI BIOS date before that as broken.
 			 */
-			.driver_data = "20180310", /* 2.35 */
+			.driver_data = "20180408",
+		},
+		{
+			.matches = {
+				DMI_MATCH(DMI_SYS_VENDOR, "ASUSTeK COMPUTER INC."),
+				DMI_MATCH(DMI_PRODUCT_VERSION, "ASUSPRO D840MB_M840SA"),
+			},
+			/*
+			 * 320, build date 20230208, has broken LPM, no working
+			 * BIOS exists at the time of writing.
+			 */
+			.driver_data = "20230208",
 		},
 		{ }	/* terminate list */
 	};
@@ -1458,7 +1479,7 @@ static bool ahci_broken_lpm(struct pci_dev *pdev)
 	dmi_get_date(DMI_BIOS_DATE, &year, &month, &date);
 	snprintf(buf, sizeof(buf), "%04d%02d%02d", year, month, date);
 
-	return strcmp(buf, dmi->driver_data) < 0;
+	return strcmp(buf, dmi->driver_data) <= 0;
 }
 
 static bool ahci_broken_online(struct pci_dev *pdev)
