@@ -76,11 +76,11 @@ int smb2_fix_symlink_target_type(char **target, bool directory, struct cifs_sb_i
 		return 0;
 
 	if (!*target)
-		return -EIO;
+		return 0;
 
 	len = strlen(*target);
 	if (!len)
-		return -EIO;
+		return 0;
 
 	/*
 	 * If this is directory symlink and it does not have trailing slash then
@@ -103,8 +103,10 @@ int smb2_fix_symlink_target_type(char **target, bool directory, struct cifs_sb_i
 	 * cannot contain slash character. File name with slash is invalid on
 	 * both Windows and Linux systems. So return an error for such symlink.
 	 */
-	if (!directory && (*target)[len-1] == '/')
-		return -EIO;
+	if (!directory && (*target)[len-1] == '/') {
+		kfree(*target);
+		*target = NULL;
+	}
 
 	return 0;
 }
