@@ -2286,7 +2286,7 @@ static int vc4_hdmi_audio_init(struct vc4_hdmi *vc4_hdmi)
 	}
 
 	ret = drm_connector_hdmi_audio_init(&vc4_hdmi->connector, dev,
-					    &vc4_hdmi_audio_funcs, 8, false,
+					    &vc4_hdmi_audio_funcs, 8, 0, false,
 					    -1);
 	if (ret)
 		return ret;
