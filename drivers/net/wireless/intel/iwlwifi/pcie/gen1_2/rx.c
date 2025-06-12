@@ -12,7 +12,7 @@
 #include "iwl-io.h"
 #include "internal.h"
 #include "iwl-op-mode.h"
-#include "iwl-context-info-v2.h"
+#include "pcie/iwl-context-info-v2.h"
 #include "fw/dbg.h"
 
 /******************************************************************************
@@ -1700,6 +1700,15 @@ static void iwl_pcie_irq_handle_error(struct iwl_trans *trans)
 		timer_delete(&trans_pcie->txqs.txq[i]->stuck_timer);
 	}
 
+	if (trans->mac_cfg->device_family >= IWL_DEVICE_FAMILY_SC) {
+		u32 val = iwl_read32(trans, CSR_IPC_STATE);
+
+		if (val & CSR_IPC_STATE_TOP_RESET_REQ) {
+			IWL_ERR(trans, "FW requested TOP reset for FSEQ\n");
+			trans->do_top_reset = 1;
+		}
+	}
+
 	/* The STATUS_FW_ERROR bit is set in this function. This must happen
 	 * before we wake up the command caller, to ensure a proper cleanup. */
 	iwl_trans_fw_error(trans, IWL_ERR_TYPE_IRQ);
@@ -1852,7 +1861,12 @@ static void iwl_trans_pcie_handle_reset_interrupt(struct iwl_trans *trans)
 		}
 		fallthrough;
 	case CSR_IPC_STATE_RESET_TOP_READY:
-		/* FIXME: handle this case when requesting TOP reset */
+		if (trans_pcie->fw_reset_state == FW_RESET_TOP_REQUESTED) {
+			IWL_DEBUG_ISR(trans, "TOP Reset continues\n");
+			trans_pcie->fw_reset_state = FW_RESET_OK;
+			wake_up(&trans_pcie->fw_reset_waitq);
+			break;
+		}
 		fallthrough;
 	case CSR_IPC_STATE_RESET_NONE:
 		IWL_FW_CHECK_FAILED(trans,

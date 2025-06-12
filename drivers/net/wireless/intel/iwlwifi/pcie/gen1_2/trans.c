@@ -28,7 +28,7 @@
 #include "mei/iwl-mei.h"
 #include "internal.h"
 #include "iwl-fh.h"
-#include "iwl-context-info-v2.h"
+#include "pcie/iwl-context-info-v2.h"
 
 /* extended range in FW SRAM */
 #define IWL_FW_MEM_EXTENDED_START	0x40000
@@ -1845,7 +1845,7 @@ static int iwl_pcie_gen2_force_power_gating(struct iwl_trans *trans)
 	return iwl_trans_pcie_sw_reset(trans, true);
 }
 
-static int _iwl_trans_pcie_start_hw(struct iwl_trans *trans)
+int _iwl_trans_pcie_start_hw(struct iwl_trans *trans)
 {
 	struct iwl_trans_pcie *trans_pcie = IWL_TRANS_GET_PCIE_TRANS(trans);
 	int err;
