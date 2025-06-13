@@ -27,6 +27,13 @@ void __min_heap_sift_down(min_heap_char *heap, size_t pos, size_t elem_size,
 }
 EXPORT_SYMBOL(__min_heap_sift_down);
 
+void __min_heap_sift_down_eqaware(min_heap_char *heap, size_t pos, size_t elem_size,
+				  const struct min_heap_callbacks *func, void *args)
+{
+	__min_heap_sift_down_eqaware_inline(heap, pos, elem_size, func, args);
+}
+EXPORT_SYMBOL(__min_heap_sift_down_eqaware);
+
 void __min_heap_sift_up(min_heap_char *heap, size_t elem_size, size_t idx,
 			const struct min_heap_callbacks *func, void *args)
 {
@@ -35,23 +42,23 @@ void __min_heap_sift_up(min_heap_char *heap, size_t elem_size, size_t idx,
 EXPORT_SYMBOL(__min_heap_sift_up);
 
 void __min_heapify_all(min_heap_char *heap, size_t elem_size,
-		       const struct min_heap_callbacks *func, void *args)
+		       const struct min_heap_callbacks *func, void *args, bool eqaware)
 {
-	__min_heapify_all_inline(heap, elem_size, func, args);
+	__min_heapify_all_inline(heap, elem_size, func, args, eqaware);
 }
 EXPORT_SYMBOL(__min_heapify_all);
 
 bool __min_heap_pop(min_heap_char *heap, size_t elem_size,
-		    const struct min_heap_callbacks *func, void *args)
+		    const struct min_heap_callbacks *func, void *args, bool eqaware)
 {
-	return __min_heap_pop_inline(heap, elem_size, func, args);
+	return __min_heap_pop_inline(heap, elem_size, func, args, eqaware);
 }
 EXPORT_SYMBOL(__min_heap_pop);
 
 void __min_heap_pop_push(min_heap_char *heap, const void *element, size_t elem_size,
-			 const struct min_heap_callbacks *func, void *args)
+			 const struct min_heap_callbacks *func, void *args, bool eqaware)
 {
-	__min_heap_pop_push_inline(heap, element, elem_size, func, args);
+	__min_heap_pop_push_inline(heap, element, elem_size, func, args, eqaware);
 }
 EXPORT_SYMBOL(__min_heap_pop_push);
 
@@ -63,8 +70,8 @@ bool __min_heap_push(min_heap_char *heap, const void *element, size_t elem_size,
 EXPORT_SYMBOL(__min_heap_push);
 
 bool __min_heap_del(min_heap_char *heap, size_t elem_size, size_t idx,
-		    const struct min_heap_callbacks *func, void *args)
+		    const struct min_heap_callbacks *func, void *args, bool eqaware)
 {
-	return __min_heap_del_inline(heap, elem_size, idx, func, args);
+	return __min_heap_del_inline(heap, elem_size, idx, func, args, eqaware);
 }
 EXPORT_SYMBOL(__min_heap_del);
