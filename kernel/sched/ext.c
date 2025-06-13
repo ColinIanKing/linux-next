@@ -1247,7 +1247,7 @@ static void scx_kf_disallow(u32 mask)
  * This allows kfuncs to safely operate on rq from any scx ops callback,
  * knowing which rq is already locked.
  */
-static DEFINE_PER_CPU(struct rq *, locked_rq);
+DEFINE_PER_CPU(struct rq *, scx_locked_rq_state);
 
 static inline void update_locked_rq(struct rq *rq)
 {
@@ -1258,16 +1258,7 @@ static inline void update_locked_rq(struct rq *rq)
 	 */
 	if (rq)
 		lockdep_assert_rq_held(rq);
-	__this_cpu_write(locked_rq, rq);
-}
-
-/*
- * Return the rq currently locked from an scx callback, or NULL if no rq is
- * locked.
- */
-static inline struct rq *scx_locked_rq(void)
-{
-	return __this_cpu_read(locked_rq);
+	__this_cpu_write(scx_locked_rq_state, rq);
 }
 
 #define SCX_CALL_OP(sch, mask, op, rq, args...)					\
@@ -1699,11 +1690,6 @@ static bool scx_tryset_enable_state(enum scx_enable_state to,
 	int from_v = from;
 
 	return atomic_try_cmpxchg(&scx_enable_state_var, &from_v, to);
-}
-
-static bool scx_rq_bypassing(struct rq *rq)
-{
-	return unlikely(rq->scx.flags & SCX_RQ_BYPASSING);
 }
 
 /**
