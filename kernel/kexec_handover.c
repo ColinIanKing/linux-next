@@ -166,13 +166,13 @@ static int __kho_preserve_order(struct kho_mem_track *track, unsigned long pfn,
 /* almost as free_reserved_page(), just don't free the page */
 static void kho_restore_page(struct page *page, unsigned int order)
 {
-	unsigned int i, nr_pages = (1 << order);
+	unsigned int nr_pages = (1 << order);
 
 	/* Head page gets refcount of 1. */
 	set_page_count(page, 1);
 
 	/* For higher order folios, tail pages get a page count of zero. */
-	for (i = 1; i < nr_pages; i++)
+	for (unsigned int i = 1; i < nr_pages; i++)
 		set_page_count(page + i, 0);
 
 	if (order > 0)
