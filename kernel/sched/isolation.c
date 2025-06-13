@@ -143,6 +143,7 @@ int housekeeping_update(struct cpumask *isol_mask)
 	synchronize_rcu();
 
 	mem_cgroup_flush_workqueue();
+	vmstat_flush_workqueue();
 
 	kfree(old);
 
