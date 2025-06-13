@@ -28,7 +28,7 @@
 #include "mei/iwl-mei.h"
 #include "internal.h"
 #include "iwl-fh.h"
-#include "iwl-context-info-v2.h"
+#include "pcie/iwl-context-info-v2.h"
 
 /* extended range in FW SRAM */
 #define IWL_FW_MEM_EXTENDED_START	0x40000
@@ -1536,30 +1536,41 @@ static int iwl_pcie_d3_handshake(struct iwl_trans *trans, bool suspend)
 	struct iwl_trans_pcie *trans_pcie = IWL_TRANS_GET_PCIE_TRANS(trans);
 	int ret;
 
+	if (trans->mac_cfg->device_family < IWL_DEVICE_FAMILY_AX210)
+		return 0;
+
+	trans_pcie->sx_state = IWL_SX_WAITING;
+
 	if (trans->mac_cfg->device_family == IWL_DEVICE_FAMILY_AX210)
 		iwl_write_umac_prph(trans, UREG_DOORBELL_TO_ISR6,
 				    suspend ? UREG_DOORBELL_TO_ISR6_SUSPEND :
 					      UREG_DOORBELL_TO_ISR6_RESUME);
-	else if (trans->mac_cfg->device_family >= IWL_DEVICE_FAMILY_BZ)
+	else
 		iwl_write32(trans, CSR_IPC_SLEEP_CONTROL,
 			    suspend ? CSR_IPC_SLEEP_CONTROL_SUSPEND :
 				      CSR_IPC_SLEEP_CONTROL_RESUME);
-	else
-		return 0;
 
 	ret = wait_event_timeout(trans_pcie->sx_waitq,
-				 trans_pcie->sx_complete, 2 * HZ);
-
-	/* Invalidate it toward next suspend or resume */
-	trans_pcie->sx_complete = false;
-
+				 trans_pcie->sx_state != IWL_SX_WAITING,
+				 2 * HZ);
 	if (!ret) {
 		IWL_ERR(trans, "Timeout %s D3\n",
 			suspend ? "entering" : "exiting");
-		return -ETIMEDOUT;
+		ret = -ETIMEDOUT;
+	} else {
+		ret = 0;
 	}
 
-	return 0;
+	if (trans_pcie->sx_state == IWL_SX_ERROR) {
+		IWL_ERR(trans, "FW error while %s D3\n",
+			suspend ? "entering" : "exiting");
+		ret = -EIO;
+	}
+
+	/* Invalidate it toward next suspend or resume */
+	trans_pcie->sx_state = IWL_SX_INVALID;
+
+	return ret;
 }
 
 int iwl_trans_pcie_d3_suspend(struct iwl_trans *trans, bool test, bool reset)
@@ -1845,7 +1856,7 @@ static int iwl_pcie_gen2_force_power_gating(struct iwl_trans *trans)
 	return iwl_trans_pcie_sw_reset(trans, true);
 }
 
-static int _iwl_trans_pcie_start_hw(struct iwl_trans *trans)
+int _iwl_trans_pcie_start_hw(struct iwl_trans *trans)
 {
 	struct iwl_trans_pcie *trans_pcie = IWL_TRANS_GET_PCIE_TRANS(trans);
 	int err;
