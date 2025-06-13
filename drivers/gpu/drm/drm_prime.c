@@ -90,7 +90,6 @@ struct drm_prime_member {
 	uint32_t handle;
 
 	struct rb_node dmabuf_rb;
-	struct rb_node handle_rb;
 };
 
 static int drm_prime_add_buf_handle(struct drm_prime_file_private *prime_fpriv,
@@ -122,43 +121,7 @@ static int drm_prime_add_buf_handle(struct drm_prime_file_private *prime_fpriv,
 	rb_link_node(&member->dmabuf_rb, rb, p);
 	rb_insert_color(&member->dmabuf_rb, &prime_fpriv->dmabufs);
 
-	rb = NULL;
-	p = &prime_fpriv->handles.rb_node;
-	while (*p) {
-		struct drm_prime_member *pos;
-
-		rb = *p;
-		pos = rb_entry(rb, struct drm_prime_member, handle_rb);
-		if (handle > pos->handle)
-			p = &rb->rb_right;
-		else
-			p = &rb->rb_left;
-	}
-	rb_link_node(&member->handle_rb, rb, p);
-	rb_insert_color(&member->handle_rb, &prime_fpriv->handles);
-
 	return 0;
-}
-
-static struct dma_buf *drm_prime_lookup_buf_by_handle(struct drm_prime_file_private *prime_fpriv,
-						      uint32_t handle)
-{
-	struct rb_node *rb;
-
-	rb = prime_fpriv->handles.rb_node;
-	while (rb) {
-		struct drm_prime_member *member;
-
-		member = rb_entry(rb, struct drm_prime_member, handle_rb);
-		if (member->handle == handle)
-			return member->dma_buf;
-		else if (member->handle < handle)
-			rb = rb->rb_right;
-		else
-			rb = rb->rb_left;
-	}
-
-	return NULL;
 }
 
 static int drm_prime_lookup_buf_handle(struct drm_prime_file_private *prime_fpriv,
@@ -186,25 +149,28 @@ static int drm_prime_lookup_buf_handle(struct drm_prime_file_private *prime_fpri
 }
 
 void drm_prime_remove_buf_handle(struct drm_prime_file_private *prime_fpriv,
+				 struct dma_buf *dma_buf,
 				 uint32_t handle)
 {
 	struct rb_node *rb;
 
+	if (!dma_buf)
+		return;
+
 	mutex_lock(&prime_fpriv->lock);
 
-	rb = prime_fpriv->handles.rb_node;
+	rb = prime_fpriv->dmabufs.rb_node;
 	while (rb) {
 		struct drm_prime_member *member;
 
-		member = rb_entry(rb, struct drm_prime_member, handle_rb);
-		if (member->handle == handle) {
-			rb_erase(&member->handle_rb, &prime_fpriv->handles);
+		member = rb_entry(rb, struct drm_prime_member, dmabuf_rb);
+		if (member->dma_buf == dma_buf && member->handle == handle) {
 			rb_erase(&member->dmabuf_rb, &prime_fpriv->dmabufs);
 
 			dma_buf_put(member->dma_buf);
 			kfree(member);
 			break;
-		} else if (member->handle < handle) {
+		} else if (member->dma_buf < dma_buf) {
 			rb = rb->rb_right;
 		} else {
 			rb = rb->rb_left;
@@ -446,12 +412,6 @@ struct dma_buf *drm_gem_prime_handle_to_dmabuf(struct drm_device *dev,
 		goto out_unlock;
 	}
 
-	dmabuf = drm_prime_lookup_buf_by_handle(&file_priv->prime, handle);
-	if (dmabuf) {
-		get_dma_buf(dmabuf);
-		goto out;
-	}
-
 	mutex_lock(&dev->object_name_lock);
 	/* re-export the original imported/exported object */
 	if (obj->dma_buf) {
@@ -599,6 +559,7 @@ int drm_gem_map_attach(struct dma_buf *dma_buf,
 		       struct dma_buf_attachment *attach)
 {
 	struct drm_gem_object *obj = dma_buf->priv;
+	int ret;
 
 	/*
 	 * drm_gem_map_dma_buf() requires obj->get_sg_table(), but drivers
@@ -608,7 +569,16 @@ int drm_gem_map_attach(struct dma_buf *dma_buf,
 	    !obj->funcs->get_sg_table)
 		return -ENOSYS;
 
-	return drm_gem_pin(obj);
+	if (!obj->funcs->pin)
+		return 0;
+
+	ret = dma_resv_lock(obj->resv, NULL);
+	if (ret)
+		return ret;
+	ret = obj->funcs->pin(obj);
+	dma_resv_unlock(obj->resv);
+
+	return ret;
 }
 EXPORT_SYMBOL(drm_gem_map_attach);
 
@@ -625,8 +595,16 @@ void drm_gem_map_detach(struct dma_buf *dma_buf,
 			struct dma_buf_attachment *attach)
 {
 	struct drm_gem_object *obj = dma_buf->priv;
+	int ret;
 
-	drm_gem_unpin(obj);
+	if (!obj->funcs->unpin)
+		return;
+
+	ret = dma_resv_lock(obj->resv, NULL);
+	if (drm_WARN_ON(obj->dev, ret))
+		return;
+	obj->funcs->unpin(obj);
+	dma_resv_unlock(obj->resv);
 }
 EXPORT_SYMBOL(drm_gem_map_detach);
 
@@ -910,6 +888,26 @@ struct dma_buf *drm_gem_prime_export(struct drm_gem_object *obj,
 }
 EXPORT_SYMBOL(drm_gem_prime_export);
 
+
+/**
+ * drm_gem_is_prime_exported_dma_buf -
+ * checks if the DMA-BUF was exported from a GEM object belonging to @dev.
+ * @dev: drm_device to check against
+ * @dma_buf: dma-buf object to import
+ *
+ * Return: true if the DMA-BUF was exported from a GEM object belonging
+ * to @dev, false otherwise.
+ */
+
+bool drm_gem_is_prime_exported_dma_buf(struct drm_device *dev,
+				       struct dma_buf *dma_buf)
+{
+	struct drm_gem_object *obj = dma_buf->priv;
+
+	return (dma_buf->ops == &drm_gem_prime_dmabuf_ops) && (obj->dev == dev);
+}
+EXPORT_SYMBOL(drm_gem_is_prime_exported_dma_buf);
+
 /**
  * drm_gem_prime_import_dev - core implementation of the import callback
  * @dev: drm_device to import into
@@ -933,16 +931,14 @@ struct drm_gem_object *drm_gem_prime_import_dev(struct drm_device *dev,
 	struct drm_gem_object *obj;
 	int ret;
 
-	if (dma_buf->ops == &drm_gem_prime_dmabuf_ops) {
+	if (drm_gem_is_prime_exported_dma_buf(dev, dma_buf)) {
+		/*
+		 * Importing dmabuf exported from our own gem increases
+		 * refcount on gem itself instead of f_count of dmabuf.
+		 */
 		obj = dma_buf->priv;
-		if (obj->dev == dev) {
-			/*
-			 * Importing dmabuf exported from our own gem increases
-			 * refcount on gem itself instead of f_count of dmabuf.
-			 */
-			drm_gem_object_get(obj);
-			return obj;
-		}
+		drm_gem_object_get(obj);
+		return obj;
 	}
 
 	if (!dev->driver->gem_prime_import_sg_table)

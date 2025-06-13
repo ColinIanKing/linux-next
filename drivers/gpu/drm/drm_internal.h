@@ -86,6 +86,7 @@ int drm_prime_fd_to_handle_ioctl(struct drm_device *dev, void *data,
 void drm_prime_init_file_private(struct drm_prime_file_private *prime_fpriv);
 void drm_prime_destroy_file_private(struct drm_prime_file_private *prime_fpriv);
 void drm_prime_remove_buf_handle(struct drm_prime_file_private *prime_fpriv,
+				 struct dma_buf *dma_buf,
 				 uint32_t handle);
 
 /* drm_managed.c */
@@ -175,10 +176,6 @@ void drm_gem_release(struct drm_device *dev, struct drm_file *file_private);
 void drm_gem_print_info(struct drm_printer *p, unsigned int indent,
 			const struct drm_gem_object *obj);
 
-int drm_gem_pin_locked(struct drm_gem_object *obj);
-void drm_gem_unpin_locked(struct drm_gem_object *obj);
-int drm_gem_pin(struct drm_gem_object *obj);
-void drm_gem_unpin(struct drm_gem_object *obj);
 int drm_gem_vmap_locked(struct drm_gem_object *obj, struct iosys_map *map);
 void drm_gem_vunmap_locked(struct drm_gem_object *obj, struct iosys_map *map);
 
