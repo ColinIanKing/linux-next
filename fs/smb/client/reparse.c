@@ -735,7 +735,11 @@ static int parse_reparse_nfs(struct reparse_nfs_data_buffer *buf,
 	case NFS_SPECFILE_LNK:
 		if (len == 0 || (len % 2)) {
 			cifs_dbg(VFS, "srv returned malformed nfs symlink buffer\n");
-			return -EIO;
+			/*
+			 * This is an -EIO error. Convert it to 0. This let lstat() success and
+			 * empty data->symlink_target triggers readlink() to fail with -EIO.
+			 */
+			return 0;
 		}
 		/*
 		 * Check that buffer does not contain UTF-16 null codepoint
@@ -743,7 +747,11 @@ static int parse_reparse_nfs(struct reparse_nfs_data_buffer *buf,
 		 */
 		if (UniStrnlen((wchar_t *)buf->DataBuffer, len/2) != len/2) {
 			cifs_dbg(VFS, "srv returned null byte in nfs symlink target location\n");
-			return -EIO;
+			/*
+			 * This is an -EIO error. Convert it to 0. This let lstat() success and
+			 * empty data->symlink_target triggers readlink() to fail with -EIO.
+			 */
+			return 0;
 		}
 		data->symlink_target = cifs_strndup_from_utf16(buf->DataBuffer,
 							       len, true,
@@ -982,6 +990,14 @@ out:
 	if (rc != 0)
 		kfree(linux_target);
 	kfree(smb_target);
+
+	/*
+	 * Convert -EIO to 0. This let lstat() success and
+	 * empty *target triggers readlink() to fail with -EIO.
+	 */
+	if (rc == -EIO)
+		rc = 0;
+
 	return rc;
 }
 
@@ -1000,7 +1016,11 @@ static int parse_reparse_native_symlink(struct reparse_symlink_data_buffer *sym,
 	len = le16_to_cpu(sym->SubstituteNameLength);
 	if (offs + 20 > plen || offs + len + 20 > plen) {
 		cifs_dbg(VFS, "srv returned malformed symlink buffer\n");
-		return -EIO;
+		/*
+		 * This is an -EIO error. Convert it to 0. This let lstat() success and
+		 * empty data->symlink_target triggers readlink() to fail with -EIO.
+		 */
+		return 0;
 	}
 
 	return smb2_parse_native_symlink(&data->symlink_target,
@@ -1020,16 +1040,19 @@ static int parse_reparse_wsl_symlink(struct reparse_wsl_symlink_data_buffer *buf
 	int symname_utf8_len;
 	__le16 *symname_utf16;
 	int symname_utf16_len;
+	int rc = 0;
 
 	if (len <= data_offset) {
 		cifs_dbg(VFS, "srv returned malformed wsl symlink buffer\n");
-		return -EIO;
+		rc = -EIO;
+		goto out;
 	}
 
 	/* MS-FSCC 2.1.2.7 defines layout of the Target field only for Version 2. */
 	if (le32_to_cpu(buf->Version) != 2) {
 		cifs_dbg(VFS, "srv returned unsupported wsl symlink version %u\n", le32_to_cpu(buf->Version));
-		return -EIO;
+		rc = -EIO;
+		goto out;
 	}
 
 	/* Target for Version 2 is in UTF-8 but without trailing null-term byte */
@@ -1040,17 +1063,21 @@ static int parse_reparse_wsl_symlink(struct reparse_wsl_symlink_data_buffer *buf
 	 */
 	if (strnlen(buf->Target, symname_utf8_len) != symname_utf8_len) {
 		cifs_dbg(VFS, "srv returned null byte in wsl symlink target location\n");
-		return -EIO;
+		rc = -EIO;
+		goto out;
 	}
 	symname_utf16 = kzalloc(symname_utf8_len * 2, GFP_KERNEL);
-	if (!symname_utf16)
-		return -ENOMEM;
+	if (!symname_utf16) {
+		rc = -ENOMEM;
+		goto out;
+	}
 	symname_utf16_len = utf8s_to_utf16s(buf->Target, symname_utf8_len,
 					    UTF16_LITTLE_ENDIAN,
 					    (wchar_t *) symname_utf16, symname_utf8_len * 2);
 	if (symname_utf16_len < 0) {
 		kfree(symname_utf16);
-		return symname_utf16_len;
+		rc = symname_utf16_len;
+		goto out;
 	}
 	symname_utf16_len *= 2; /* utf8s_to_utf16s() returns number of u16 items, not byte length */
 
@@ -1058,10 +1085,20 @@ static int parse_reparse_wsl_symlink(struct reparse_wsl_symlink_data_buffer *buf
 						       symname_utf16_len, true,
 						       cifs_sb->local_nls);
 	kfree(symname_utf16);
-	if (!data->symlink_target)
-		return -ENOMEM;
+	if (!data->symlink_target) {
+		rc = -ENOMEM;
+		goto out;
+	}
 
-	return 0;
+out:
+	/*
+	 * Convert -EIO to 0. This let lstat() success and
+	 * empty data->symlink_target triggers readlink() to fail with -EIO.
+	 */
+	if (rc == -EIO)
+		rc = 0;
+
+	return rc;
 }
 
 int parse_reparse_point(struct reparse_data_buffer *buf,
