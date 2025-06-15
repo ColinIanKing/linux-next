@@ -692,7 +692,7 @@ static bool check_version_upgrade(struct bch_fs *c)
 		ret = true;
 	}
 
-	if (new_version > c->sb.version_incompat &&
+	if (new_version > c->sb.version_incompat_allowed &&
 	    c->opts.version_upgrade == BCH_VERSION_UPGRADE_incompatible) {
 		struct printbuf buf = PRINTBUF;
 
@@ -756,6 +756,11 @@ int bch2_fs_recovery(struct bch_fs *c)
 
 	if (c->opts.nochanges)
 		c->opts.read_only = true;
+
+	if (c->opts.journal_rewind) {
+		bch_info(c, "rewinding journal, fsck required");
+		c->opts.fsck = true;
+	}
 
 	mutex_lock(&c->sb_lock);
 	struct bch_sb_field_ext *ext = bch2_sb_field_get(c->disk_sb.sb, ext);
@@ -965,7 +970,7 @@ use_clean:
 
 	ret =   bch2_journal_log_msg(c, "starting journal at entry %llu, replaying %llu-%llu",
 				     journal_seq, last_seq, blacklist_seq - 1) ?:
-		bch2_fs_journal_start(&c->journal, journal_seq);
+		bch2_fs_journal_start(&c->journal, last_seq, journal_seq);
 	if (ret)
 		goto err;
 
@@ -1181,7 +1186,7 @@ int bch2_fs_initialize(struct bch_fs *c)
 	 * journal_res_get() will crash if called before this has
 	 * set up the journal.pin FIFO and journal.cur pointer:
 	 */
-	ret = bch2_fs_journal_start(&c->journal, 1);
+	ret = bch2_fs_journal_start(&c->journal, 1, 1);
 	if (ret)
 		goto err;
 

@@ -806,7 +806,7 @@ static int add_inode(struct bch_fs *c, struct inode_walker *w,
 	if (!n->whiteout) {
 		return bch2_inode_unpack(inode, &n->inode);
 	} else {
-		n->inode.bi_inum	= inode.k->p.inode;
+		n->inode.bi_inum	= inode.k->p.offset;
 		n->inode.bi_snapshot	= inode.k->p.snapshot;
 		return 0;
 	}
@@ -903,17 +903,15 @@ lookup_inode_for_snapshot(struct btree_trans *trans, struct inode_walker *w, str
 			 w->last_pos.inode, k.k->p.snapshot, i->inode.bi_snapshot,
 			 (bch2_bkey_val_to_text(&buf, c, k),
 			  buf.buf))) {
-		struct bch_inode_unpacked new = i->inode;
-		struct bkey_i whiteout;
-
-		new.bi_snapshot = k.k->p.snapshot;
-
 		if (!i->whiteout) {
+			struct bch_inode_unpacked new = i->inode;
+			new.bi_snapshot = k.k->p.snapshot;
 			ret = __bch2_fsck_write_inode(trans, &new);
 		} else {
+			struct bkey_i whiteout;
 			bkey_init(&whiteout.k);
 			whiteout.k.type = KEY_TYPE_whiteout;
-			whiteout.k.p = SPOS(0, i->inode.bi_inum, i->inode.bi_snapshot);
+			whiteout.k.p = SPOS(0, i->inode.bi_inum, k.k->p.snapshot);
 			ret = bch2_btree_insert_nonextent(trans, BTREE_ID_inodes,
 							  &whiteout,
 							  BTREE_UPDATE_internal_snapshot_node);
@@ -1822,18 +1820,39 @@ static int check_extent(struct btree_trans *trans, struct btree_iter *iter,
 			    !key_visible_in_snapshot(c, s, i->inode.bi_snapshot, k.k->p.snapshot))
 				continue;
 
-			if (fsck_err_on(k.k->p.offset > round_up(i->inode.bi_size, block_bytes(c)) >> 9 &&
+			u64 last_block = round_up(i->inode.bi_size, block_bytes(c)) >> 9;
+
+			if (fsck_err_on(k.k->p.offset > last_block &&
 					!bkey_extent_is_reservation(k),
 					trans, extent_past_end_of_inode,
 					"extent type past end of inode %llu:%u, i_size %llu\n%s",
 					i->inode.bi_inum, i->inode.bi_snapshot, i->inode.bi_size,
 					(bch2_bkey_val_to_text(&buf, c, k), buf.buf))) {
-				struct btree_iter iter2;
+				struct bkey_i *whiteout = bch2_trans_kmalloc(trans, sizeof(*whiteout));
+				ret = PTR_ERR_OR_ZERO(whiteout);
+				if (ret)
+					goto err;
 
-				bch2_trans_copy_iter(trans, &iter2, iter);
-				bch2_btree_iter_set_snapshot(trans, &iter2, i->inode.bi_snapshot);
+				bkey_init(&whiteout->k);
+				whiteout->k.p = SPOS(k.k->p.inode,
+						     last_block,
+						     i->inode.bi_snapshot);
+				bch2_key_resize(&whiteout->k,
+						min(KEY_SIZE_MAX & (~0 << c->block_bits),
+						    U64_MAX - whiteout->k.p.offset));
+
+
+				/*
+				 * Need a normal (not BTREE_ITER_all_snapshots)
+				 * iterator, if we're deleting in a different
+				 * snapshot and need to emit a whiteout
+				 */
+				struct btree_iter iter2;
+				bch2_trans_iter_init(trans, &iter2, BTREE_ID_extents,
+						     bkey_start_pos(&whiteout->k),
+						     BTREE_ITER_intent);
 				ret =   bch2_btree_iter_traverse(trans, &iter2) ?:
-					bch2_btree_delete_at(trans, &iter2,
+					bch2_trans_update(trans, &iter2, whiteout,
 						BTREE_UPDATE_internal_snapshot_node);
 				bch2_trans_iter_exit(trans, &iter2);
 				if (ret)
@@ -2184,7 +2203,7 @@ static int check_dirent(struct btree_trans *trans, struct btree_iter *iter,
 		*hash_info = bch2_hash_info_init(c, &i->inode);
 	dir->first_this_inode = false;
 
-#ifdef CONFIG_UNICODE
+#if IS_ENABLED(CONFIG_UNICODE)
 	hash_info->cf_encoding = bch2_inode_casefold(c, &i->inode) ? c->cf_encoding : NULL;
 #endif
 
@@ -2474,14 +2493,6 @@ int bch2_check_root(struct bch_fs *c)
 	return ret;
 }
 
-static bool darray_u32_has(darray_u32 *d, u32 v)
-{
-	darray_for_each(*d, i)
-		if (*i == v)
-			return true;
-	return false;
-}
-
 static int check_subvol_path(struct btree_trans *trans, struct btree_iter *iter, struct bkey_s_c k)
 {
 	struct bch_fs *c = trans->c;
@@ -2509,7 +2520,7 @@ static int check_subvol_path(struct btree_trans *trans, struct btree_iter *iter,
 
 		u32 parent = le32_to_cpu(s.v->fs_path_parent);
 
-		if (darray_u32_has(&subvol_path, parent)) {
+		if (darray_find(subvol_path, parent)) {
 			printbuf_reset(&buf);
 			prt_printf(&buf, "subvolume loop:\n");
 
