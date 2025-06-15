@@ -75,10 +75,10 @@ check_ifupdown() {
 }
 
 check_network_scripts() {
-    local if_file="/etc/sysconfig/network-scripts/ifcfg-"$1
+    local if_file="/etc/sysconfig/network-scripts/ifcfg-$1"
 
     if [ -f "$if_file" ]; then
-	grep -q dhcp "$if_file"
+	grep -q '^\s*BOOTPROTO=.*dhcp' "$if_file"
 	report
     else
 	return 1
