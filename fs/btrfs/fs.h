@@ -420,6 +420,8 @@ struct btrfs_commit_stats {
 	u64 last_commit_dur;
 	/* The total commit duration in ns */
 	u64 total_commit_dur;
+	/* Start of the last critical section in ns. */
+	u64 critical_section_start_time;
 };
 
 struct btrfs_fs_info {
@@ -779,8 +781,9 @@ struct btrfs_fs_info {
 
 	struct btrfs_delayed_root *delayed_root;
 
-	/* Entries are eb->start / sectorsize */
+	/* Entries are eb->start >> node_bits */
 	struct xarray buffer_tree;
+	int node_bits;
 
 	/* Next backup root to be overwritten */
 	int backup_root_index;

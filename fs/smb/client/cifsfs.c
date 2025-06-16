@@ -260,9 +260,9 @@ cifs_read_super(struct super_block *sb)
 	}
 
 	if (tcon->nocase)
-		sb->s_d_op = &cifs_ci_dentry_ops;
+		set_default_d_op(sb, &cifs_ci_dentry_ops);
 	else
-		sb->s_d_op = &cifs_dentry_ops;
+		set_default_d_op(sb, &cifs_dentry_ops);
 
 	sb->s_root = d_make_root(inode);
 	if (!sb->s_root) {
@@ -1180,7 +1180,8 @@ const char *cifs_get_link(struct dentry *dentry, struct inode *inode,
 		strscpy(target_path, CIFS_I(inode)->symlink_target, PATH_MAX);
 	} else {
 		kfree(target_path);
-		target_path = ERR_PTR(-EOPNOTSUPP);
+		/* If symlink_target is not filled for symlink then it is an IO error. */
+		target_path = ERR_PTR(-EIO);
 	}
 	spin_unlock(&inode->i_lock);
 
