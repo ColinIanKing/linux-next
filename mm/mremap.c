@@ -601,11 +601,11 @@ static bool move_pgt_entry(struct pagetable_move_control *pmc,
 
 	if (!pmc->need_rmap_locks && should_take_rmap_locks(entry)) {
 		override_locks = true;
-
 		pmc->need_rmap_locks = true;
-		/* See comment in move_ptes() */
-		maybe_take_rmap_locks(pmc);
 	}
+
+	/* See comment in move_ptes() */
+	maybe_take_rmap_locks(pmc);
 
 	switch (entry) {
 	case NORMAL_PMD:
@@ -824,7 +824,8 @@ static unsigned long relocate_anon_pte(struct pagetable_move_control *pmc,
 	if (!folio)
 		return ret;
 
-	folio_lock(folio);
+	if (!folio_trylock(folio))
+		return 0;
 
 	/* No-op. */
 	if (!folio_test_anon(folio) || folio_test_ksm(folio))
