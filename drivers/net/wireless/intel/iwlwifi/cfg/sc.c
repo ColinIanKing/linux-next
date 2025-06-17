@@ -10,10 +10,10 @@
 #include "fw/api/txq.h"
 
 /* Highest firmware API version supported */
-#define IWL_SC_UCODE_API_MAX	99
+#define IWL_SC_UCODE_API_MAX	101
 
 /* Lowest firmware API version supported */
-#define IWL_SC_UCODE_API_MIN	97
+#define IWL_SC_UCODE_API_MIN	98
 
 /* NVM versions */
 #define IWL_SC_NVM_VERSION		0x0a1d
