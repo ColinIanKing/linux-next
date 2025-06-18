@@ -4391,10 +4391,13 @@ replay_again:
 }
 
 #ifdef CONFIG_CIFS_SMB_DIRECT
-static inline bool smb3_use_rdma_offload(struct cifs_io_parms *io_parms)
+static inline bool smb3_use_rdma_offload(struct cifs_io_parms *io_parms,
+					 struct cifs_io_subrequest *data)
 {
 	struct TCP_Server_Info *server = io_parms->server;
 	struct cifs_tcon *tcon = io_parms->tcon;
+	struct iov_iter *iter = &data->subreq.io_iter;
+	unsigned int max_frmr_depth;
 
 	/* we can only offload if we're connected */
 	if (!server || !tcon)
@@ -4414,6 +4417,18 @@ static inline bool smb3_use_rdma_offload(struct cifs_io_parms *io_parms)
 
 	/* offload also has its overhead, so only do it if desired */
 	if (io_parms->length < server->smbd_conn->rdma_readwrite_threshold)
+		return false;
+
+	/*
+	 * TODO we would need an array of
+	 * smbdirect_buffer_descriptor_v1
+	 * in order to support more pages
+	 *
+	 * For now just use the slow path,
+	 * but at least that should work.
+	 */
+	max_frmr_depth = server->smbd_conn->max_frmr_depth;
+	if (iov_iter_npages(iter, max_frmr_depth + 1) > max_frmr_depth)
 		return false;
 
 	return true;
@@ -4465,7 +4480,7 @@ smb2_new_read_req(void **buf, unsigned int *total_len,
 	 * If we want to do a RDMA write, fill in and append
 	 * smbdirect_buffer_descriptor_v1 to the end of read request
 	 */
-	if (rdata && smb3_use_rdma_offload(io_parms)) {
+	if (rdata && smb3_use_rdma_offload(io_parms, rdata)) {
 		struct smbdirect_buffer_descriptor_v1 *v1;
 		bool need_invalidate = server->dialect == SMB30_PROT_ID;
 
@@ -4991,7 +5006,7 @@ smb2_async_writev(struct cifs_io_subrequest *wdata)
 	 * If we want to do a server RDMA read, fill in and append
 	 * smbdirect_buffer_descriptor_v1 to the end of write request
 	 */
-	if (smb3_use_rdma_offload(io_parms)) {
+	if (smb3_use_rdma_offload(io_parms, wdata)) {
 		struct smbdirect_buffer_descriptor_v1 *v1;
 		bool need_invalidate = server->dialect == SMB30_PROT_ID;
 
