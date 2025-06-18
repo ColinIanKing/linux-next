@@ -15856,10 +15856,10 @@ R:	David Rientjes <rientjes@google.com>
 R:	Shakeel Butt <shakeel.butt@linux.dev>
 L:	linux-mm@kvack.org
 S:	Maintained
-F:	mm/oom_kill.c
 F:	include/linux/oom.h
 F:	include/trace/events/oom.h
 F:	include/uapi/linux/oom.h
+F:	mm/oom_kill.c
 
 MEMORY MANAGEMENT - PAGE ALLOCATOR
 M:	Andrew Morton <akpm@linux-foundation.org>
