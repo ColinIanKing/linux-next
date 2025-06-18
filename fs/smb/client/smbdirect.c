@@ -842,7 +842,7 @@ static int smbd_post_send(struct smbd_connection *info,
 
 static int smbd_post_send_iter(struct smbd_connection *info,
 			       struct iov_iter *iter,
-			       int *_remaining_data_length)
+			       unsigned int *_remaining_data_length)
 {
 	struct smbdirect_socket *sc = &info->socket;
 	struct smbdirect_socket_parameters *sp = &sc->parameters;
@@ -907,8 +907,10 @@ wait_send_queue:
 			.local_dma_lkey	= sc->ib.pd->local_dma_lkey,
 			.direction	= DMA_TO_DEVICE,
 		};
+		size_t payload_len = min_t(size_t, *_remaining_data_length,
+					   sp->max_send_size - sizeof(*packet));
 
-		rc = smb_extract_iter_to_rdma(iter, *_remaining_data_length,
+		rc = smb_extract_iter_to_rdma(iter, payload_len,
 					      &extract);
 		if (rc < 0)
 			goto err_dma;
@@ -970,8 +972,16 @@ wait_send_queue:
 	request->sge[0].lkey = sc->ib.pd->local_dma_lkey;
 
 	rc = smbd_post_send(info, request);
-	if (!rc)
+	if (!rc) {
+		if (iter && iov_iter_count(iter) > 0) {
+			/*
+			 * There is more data to send
+			 */
+			goto wait_credit;
+		}
+
 		return 0;
+	}
 
 err_dma:
 	for (i = 0; i < request->num_sge; i++)
@@ -1007,7 +1017,7 @@ err_wait_credit:
  */
 static int smbd_post_send_empty(struct smbd_connection *info)
 {
-	int remaining_data_length = 0;
+	unsigned int remaining_data_length = 0;
 
 	info->count_send_empty++;
 	return smbd_post_send_iter(info, NULL, &remaining_data_length);
