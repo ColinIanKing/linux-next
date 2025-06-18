@@ -2448,10 +2448,8 @@ static int lan78xx_setup_irq_domain(struct lan78xx_net *dev)
 	dev->domain_data.irqchip = &lan78xx_irqchip;
 	dev->domain_data.irq_handler = handle_simple_irq;
 
-	irqdomain = irq_domain_create_simple(of_fwnode_handle(dev->udev->dev.parent->of_node),
-					     MAX_INT_EP, 0,
-					     &chip_domain_ops,
-					     &dev->domain_data);
+	irqdomain = irq_domain_create_simple(dev_fwnode(dev->udev->dev.parent), MAX_INT_EP, 0,
+					     &chip_domain_ops, &dev->domain_data);
 	if (irqdomain) {
 		/* create mapping for PHY interrupt */
 		irqmap = irq_create_mapping(irqdomain, INT_EP_PHY);
@@ -2630,7 +2628,7 @@ static int lan78xx_configure_flowcontrol(struct lan78xx_net *dev,
  */
 static struct phy_device *lan78xx_register_fixed_phy(struct lan78xx_net *dev)
 {
-	struct fixed_phy_status fphy_status = {
+	static const struct fixed_phy_status fphy_status = {
 		.link = 1,
 		.speed = SPEED_1000,
 		.duplex = DUPLEX_FULL,
