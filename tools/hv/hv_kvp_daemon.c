@@ -352,20 +352,16 @@ static int kvp_key_add_or_modify(int pool, const __u8 *key, int key_size,
 	int num_blocks;
 	int i;
 
+	if ((key_size > HV_KVP_EXCHANGE_MAX_KEY_SIZE) ||
+		(value_size > HV_KVP_EXCHANGE_MAX_VALUE_SIZE)) {
+		syslog(LOG_ERR, "%s: Too long key or value: pool=%d key=%s, val=%s",
+		       __func__, pool, key, value);
+		return 1;
+	}
+
 	if (debug)
 		syslog(LOG_DEBUG, "%s: got a KVP: pool=%d key=%s val=%s",
 		       __func__, pool, key, value);
-
-	if ((key_size > HV_KVP_EXCHANGE_MAX_KEY_SIZE) ||
-		(value_size > HV_KVP_EXCHANGE_MAX_VALUE_SIZE)) {
-		syslog(LOG_ERR, "%s: Too long key or value: key=%s, val=%s",
-		       __func__, key, value);
-
-		if (debug)
-			syslog(LOG_DEBUG, "%s: Too long key or value: pool=%d, key=%s, val=%s",
-			       __func__, pool, key, value);
-		return 1;
-	}
 
 	/*
 	 * First update the in-memory state.
