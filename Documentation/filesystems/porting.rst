@@ -1224,9 +1224,6 @@ lookup_noperm_unlocked(), lookup_noperm_positive_unlocked().  They now
 take a qstr instead of separate name and length.  QSTR() can be used
 when strlen() is needed for the length.
 
-For try_lookup_noperm() a reference to the qstr is passed in case the
-hash might subsequently be needed.
-
 These function no longer do any permission checking - they previously
 checked that the caller has 'X' permission on the parent.  They must
 ONLY be used internally by a filesystem on itself when it knows that
@@ -1249,3 +1246,21 @@ Using try_lookup_noperm() will require linux/namei.h to be included.
 
 Calling conventions for ->d_automount() have changed; we should *not* grab
 an extra reference to new mount - it should be returned with refcount 1.
+
+---
+
+**mandatory**
+
+If your filesystem sets the default dentry_operations, use set_default_d_op()
+rather than manually setting sb->s_d_op.
+
+---
+
+**mandatory**
+
+d_set_d_op() is no longer exported (or public, for that matter); _if_
+your filesystem really needed that, make use of d_splice_alias_ops()
+to have them set.  Better yet, think hard whether you need different
+->d_op for different dentries - if not, just use set_default_d_op()
+at mount time and be done with that.  Currently procfs is the only
+thing that really needs ->d_op varying between dentries.

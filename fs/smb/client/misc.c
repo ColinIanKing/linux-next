@@ -552,7 +552,7 @@ dump_smb(void *buf, int smb_buf_length)
 }
 
 void
-cifs_autodisable_serverino(struct cifs_sb_info *cifs_sb)
+cifs_autodisable_serverino(struct cifs_sb_info *cifs_sb, const char *reason, int rc)
 {
 	if (cifs_sb->mnt_cifs_flags & CIFS_MOUNT_SERVER_INUM) {
 		struct cifs_tcon *tcon = NULL;
@@ -562,6 +562,10 @@ cifs_autodisable_serverino(struct cifs_sb_info *cifs_sb)
 
 		cifs_sb->mnt_cifs_flags &= ~CIFS_MOUNT_SERVER_INUM;
 		cifs_sb->mnt_cifs_serverino_autodisabled = true;
+		if (rc)
+			cifs_dbg(VFS, "%s: %d\n", reason, rc);
+		else
+			cifs_dbg(VFS, "%s\n", reason);
 		cifs_dbg(VFS, "Autodisabling the use of server inode numbers on %s\n",
 			 tcon ? tcon->tree_name : "new server");
 		cifs_dbg(VFS, "The server doesn't seem to support them properly or the files might be on different servers (DFS)\n");

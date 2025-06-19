@@ -293,6 +293,7 @@ static int ksmbd_vfs_stream_read(struct ksmbd_file *fp, char *buf, loff_t *pos,
 
 	if (v_len - *pos < count)
 		count = v_len - *pos;
+	fp->stream.pos = v_len;
 
 	memcpy(buf, &stream_buf[*pos], count);
 
@@ -456,8 +457,8 @@ static int ksmbd_vfs_stream_write(struct ksmbd_file *fp, char *buf, loff_t *pos,
 				 true);
 	if (err < 0)
 		goto out;
-
-	fp->filp->f_pos = *pos;
+	else
+		fp->stream.pos = size;
 	err = 0;
 out:
 	kvfree(stream_buf);
@@ -764,10 +765,10 @@ retry:
 	}
 
 	rd.old_mnt_idmap	= mnt_idmap(old_path->mnt),
-	rd.old_dir		= d_inode(old_parent),
+	rd.old_parent		= old_parent,
 	rd.old_dentry		= old_child,
 	rd.new_mnt_idmap	= mnt_idmap(new_path.mnt),
-	rd.new_dir		= new_path.dentry->d_inode,
+	rd.new_parent		= new_path.dentry,
 	rd.new_dentry		= new_dentry,
 	rd.flags		= flags,
 	rd.delegated_inode	= NULL,

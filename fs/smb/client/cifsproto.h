@@ -482,6 +482,14 @@ extern int cifs_query_reparse_point(const unsigned int xid,
 				    const char *full_path,
 				    u32 *tag, struct kvec *rsp,
 				    int *rsp_buftype);
+extern struct inode *cifs_create_reparse_inode(struct cifs_open_info_data *data,
+					       struct super_block *sb,
+					       const unsigned int xid,
+					       struct cifs_tcon *tcon,
+					       const char *full_path,
+					       bool directory,
+					       struct kvec *reparse_iov,
+					       struct kvec *xattr_iov);
 extern int CIFSSMB_set_compression(const unsigned int xid,
 				   struct cifs_tcon *tcon, __u16 fid);
 extern int CIFS_open(const unsigned int xid, struct cifs_open_parms *oparms,
@@ -579,7 +587,7 @@ extern int cifs_do_set_acl(const unsigned int xid, struct cifs_tcon *tcon,
 extern int CIFSGetExtAttr(const unsigned int xid, struct cifs_tcon *tcon,
 			const int netfid, __u64 *pExtAttrBits, __u64 *pMask);
 #endif /* CIFS_ALLOW_INSECURE_LEGACY */
-extern void cifs_autodisable_serverino(struct cifs_sb_info *cifs_sb);
+extern void cifs_autodisable_serverino(struct cifs_sb_info *cifs_sb, const char *reason, int rc);
 extern bool couldbe_mf_symlink(const struct cifs_fattr *fattr);
 extern int check_mf_symlink(unsigned int xid, struct cifs_tcon *tcon,
 			      struct cifs_sb_info *cifs_sb,

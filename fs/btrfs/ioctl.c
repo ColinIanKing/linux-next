@@ -1169,7 +1169,7 @@ static noinline int btrfs_ioctl_resize(struct file *file,
 	} /* equal, nothing need to do */
 
 	if (ret == 0 && new_size != old_size)
-		btrfs_info_in_rcu(fs_info,
+		btrfs_info(fs_info,
 			"resize device %s (devid %llu) from %llu to %llu",
 			btrfs_dev_name(device), device->devid,
 			old_size, new_size);
@@ -3139,7 +3139,7 @@ static long btrfs_ioctl_scrub(struct file *file, void __user *arg)
 		return -EPERM;
 
 	if (btrfs_fs_incompat(fs_info, EXTENT_TREE_V2)) {
-		btrfs_err(fs_info, "scrub is not supported on extent tree v2 yet");
+		btrfs_err(fs_info, "scrub: extent tree v2 not yet supported");
 		return -EINVAL;
 	}
 
