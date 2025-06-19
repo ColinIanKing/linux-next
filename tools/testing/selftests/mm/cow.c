@@ -113,11 +113,11 @@ struct comm_pipes {
 static int setup_comm_pipes(struct comm_pipes *comm_pipes)
 {
 	if (pipe(comm_pipes->child_ready) < 0) {
-		ksft_perror("pipe()");
+		ksft_perror("pipe() failed");
 		return -errno;
 	}
 	if (pipe(comm_pipes->parent_ready) < 0) {
-		ksft_perror("pipe()");
+		ksft_perror("pipe() failed");
 		close(comm_pipes->child_ready[0]);
 		close(comm_pipes->child_ready[1]);
 		return -errno;
@@ -268,8 +268,10 @@ static void do_test_cow_in_parent(char *mem, size_t size, bool do_mprotect,
 		 * fail because (a) harder to fix and (b) nobody really cares.
 		 * Flag them as expected failure for now.
 		 */
+		ksft_print_msg("Leak from parent into child\n");
 		log_test_result(KSFT_XFAIL);
 	} else {
+		ksft_print_msg("Leak from parent into child\n");
 		log_test_result(KSFT_FAIL);
 	}
 close_comm_pipes:
@@ -332,7 +334,7 @@ static void do_test_vmsplice_in_parent(char *mem, size_t size,
 	if (before_fork) {
 		transferred = vmsplice(fds[1], &iov, 1, 0);
 		if (transferred <= 0) {
-			ksft_print_msg("vmsplice() failed\n");
+			ksft_perror("vmsplice() failed\n");
 			log_test_result(KSFT_FAIL);
 			goto close_pipe;
 		}
@@ -397,8 +399,10 @@ static void do_test_vmsplice_in_parent(char *mem, size_t size,
 		 * fail because (a) harder to fix and (b) nobody really cares.
 		 * Flag them as expected failure for now.
 		 */
+		ksft_print_msg("Leak from child into parent\n");
 		log_test_result(KSFT_XFAIL);
 	} else {
+		ksft_print_msg("Leak from child into parent\n");
 		log_test_result(KSFT_FAIL);
 	}
 close_pipe:
@@ -562,7 +566,7 @@ static void do_test_iouring(char *mem, size_t size, bool use_fork)
 	while (total < size) {
 		cur = pread(fd, tmp + total, size - total, total);
 		if (cur < 0) {
-			ksft_print_msg("pread() failed\n");
+			ksft_perror("pread() failed\n");
 			log_test_result(KSFT_FAIL);
 			goto quit_child;
 		}
@@ -570,10 +574,12 @@ static void do_test_iouring(char *mem, size_t size, bool use_fork)
 	}
 
 	/* Finally, check if we read what we expected. */
-	if (!memcmp(mem, tmp, size))
+	if (!memcmp(mem, tmp, size)) {
 		log_test_result(KSFT_PASS);
-	else
+	} else {
+		ksft_print_msg("Longtom R/W pin is not reliable\n");
 		log_test_result(KSFT_FAIL);
+	}
 
 quit_child:
 	if (use_fork) {
@@ -628,7 +634,7 @@ static void do_test_ro_pin(char *mem, size_t size, enum ro_pin_test test,
 
 	tmp = malloc(size);
 	if (!tmp) {
-		ksft_print_msg("malloc() failed\n");
+		ksft_perror("malloc() failed\n");
 		log_test_result(KSFT_FAIL);
 		return;
 	}
@@ -725,10 +731,12 @@ static void do_test_ro_pin(char *mem, size_t size, enum ro_pin_test test,
 		ksft_perror("PIN_LONGTERM_TEST_READ failed");
 		log_test_result(KSFT_FAIL);
 	} else {
-		if (!memcmp(mem, tmp, size))
+		if (!memcmp(mem, tmp, size)) {
 			log_test_result(KSFT_PASS);
-		else
+		} else {
+			ksft_print_msg("Longterm R/O pin is not reliable\n");
 			log_test_result(KSFT_FAIL);
+		}
 	}
 
 	ret = ioctl(gup_fd, PIN_LONGTERM_TEST_STOP);
@@ -845,13 +853,14 @@ enum thp_run {
 	THP_RUN_SINGLE_PTE,
 	THP_RUN_SINGLE_PTE_SWAPOUT,
 	THP_RUN_PARTIAL_MREMAP,
+	THP_RUN_PARTIAL_MREMAP_RELOCATE_ANON,
 	THP_RUN_PARTIAL_SHARED,
 };
 
 static void do_run_with_thp(test_fn fn, enum thp_run thp_run, size_t thpsize)
 {
 	char *mem, *mmap_mem, *tmp, *mremap_mem = MAP_FAILED;
-	size_t size, mmap_size, mremap_size;
+	size_t size, mmap_size, mremap_size, mremap_flags;
 	int ret;
 
 	/* For alignment purposes, we need twice the thp size. */
@@ -927,6 +936,7 @@ static void do_run_with_thp(test_fn fn, enum thp_run thp_run, size_t thpsize)
 		size = pagesize;
 		break;
 	case THP_RUN_PARTIAL_MREMAP:
+	case THP_RUN_PARTIAL_MREMAP_RELOCATE_ANON:
 		/*
 		 * Remap half of the THP. We need some new memory location
 		 * for that.
@@ -939,8 +949,13 @@ static void do_run_with_thp(test_fn fn, enum thp_run thp_run, size_t thpsize)
 			log_test_result(KSFT_FAIL);
 			goto munmap;
 		}
-		tmp = mremap(mem + mremap_size, mremap_size, mremap_size,
-			     MREMAP_MAYMOVE | MREMAP_FIXED, mremap_mem);
+
+		mremap_flags = MREMAP_MAYMOVE | MREMAP_FIXED;
+		if (thp_run == THP_RUN_PARTIAL_MREMAP_RELOCATE_ANON)
+			mremap_flags |= MREMAP_RELOCATE_ANON;
+
+		tmp = sys_mremap(mem + mremap_size, mremap_size, mremap_size,
+				 mremap_flags, mremap_mem);
 		if (tmp != mremap_mem) {
 			ksft_perror("mremap() failed");
 			log_test_result(KSFT_FAIL);
@@ -1050,6 +1065,13 @@ static void run_with_partial_mremap_thp(test_fn fn, const char *desc, size_t siz
 	log_test_start("%s ... with partially mremap()'ed THP (%zu kB)",
 		desc, size / 1024);
 	do_run_with_thp(fn, THP_RUN_PARTIAL_MREMAP, size);
+}
+
+static void run_with_partial_mremap_relocate_anon_thp(test_fn fn, const char *desc, size_t size)
+{
+	ksft_print_msg("[RUN] %s ... with partially mremap(MREMAP_RELOCATE_ANON)'ed THP (%zu kB)\n",
+		desc, size / 1024);
+	do_run_with_thp(fn, THP_RUN_PARTIAL_MREMAP_RELOCATE_ANON, size);
 }
 
 static void run_with_partial_shared_thp(test_fn fn, const char *desc, size_t size)
@@ -1247,6 +1269,7 @@ static void run_anon_test_case(struct test_case const *test_case)
 		run_with_single_pte_of_thp(test_case->fn, test_case->desc, size);
 		run_with_single_pte_of_thp_swap(test_case->fn, test_case->desc, size);
 		run_with_partial_mremap_thp(test_case->fn, test_case->desc, size);
+		run_with_partial_mremap_relocate_anon_thp(test_case->fn, test_case->desc, size);
 		run_with_partial_shared_thp(test_case->fn, test_case->desc, size);
 
 		thp_pop_settings();
@@ -1270,7 +1293,7 @@ static int tests_per_anon_test_case(void)
 {
 	int tests = 2 + nr_hugetlbsizes;
 
-	tests += 6 * nr_thpsizes;
+	tests += 7 * nr_thpsizes;
 	if (pmdsize)
 		tests += 2;
 	return tests;
@@ -1417,10 +1440,12 @@ static void do_test_anon_thp_collapse(char *mem, size_t size,
 	else
 		ret = -EINVAL;
 
-	if (!ret)
+	if (!ret) {
 		log_test_result(KSFT_PASS);
-	else
+	} else {
+		ksft_print_msg("Leak from parent into child\n");
 		log_test_result(KSFT_FAIL);
+	}
 close_comm_pipes:
 	close_comm_pipes(&comm_pipes);
 }
@@ -1528,10 +1553,12 @@ static void test_cow(char *mem, const char *smem, size_t size)
 	memset(mem, 0xff, size);
 
 	/* See if we still read the old values via the other mapping. */
-	if (!memcmp(smem, old, size))
+	if (!memcmp(smem, old, size)) {
 		log_test_result(KSFT_PASS);
-	else
+	} else {
+		ksft_print_msg("Other mapping modified\n");
 		log_test_result(KSFT_FAIL);
+	}
 	free(old);
 }
 
@@ -1613,13 +1640,13 @@ static void run_with_huge_zeropage(non_anon_test_fn fn, const char *desc)
 	smem = (char *)(((uintptr_t)mmap_smem + pmdsize) & ~(pmdsize - 1));
 
 	ret = madvise(mem, pmdsize, MADV_HUGEPAGE);
-	if (ret != 0) {
+	if (ret) {
 		ksft_perror("madvise()");
 		log_test_result(KSFT_FAIL);
 		goto munmap;
 	}
-	ret |= madvise(smem, pmdsize, MADV_HUGEPAGE);
-	if (ret != 0) {
+	ret = madvise(smem, pmdsize, MADV_HUGEPAGE);
+	if (ret) {
 		ksft_perror("madvise()");
 		log_test_result(KSFT_FAIL);
 		goto munmap;
