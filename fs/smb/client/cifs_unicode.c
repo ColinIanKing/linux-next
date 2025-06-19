@@ -466,6 +466,8 @@ cifsConvertToUTF16(__le16 *target, const char *source, int srclen,
 		return cifs_strtoUTF16(target, source, PATH_MAX, cp);
 
 	wchar_to = kzalloc(6, GFP_KERNEL);
+	if (wchar_to == NULL)
+		return -ENOMEM;
 
 	for (i = 0; i < srclen; j++) {
 		src_char = source[i];

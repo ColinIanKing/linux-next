@@ -599,7 +599,7 @@ skip_rdma:
 				seq_printf(m, "\n\t%d)", ++j);
 				cifs_dump_iface(m, iface);
 
-				iface_weight = iface->speed / iface_min_speed;
+				iface_weight = iface_min_speed ? (iface->speed / iface_min_speed) : 0;
 				seq_printf(m, "\t\tWeight (cur,total): (%zu,%zu)"
 					   "\n\t\tAllocated channels: %u\n",
 					   iface->weight_fulfilled,
@@ -1105,7 +1105,7 @@ static ssize_t cifs_security_flags_proc_write(struct file *file,
 	if ((count < 1) || (count > 11))
 		return -EINVAL;
 
-	memset(flags_string, 0, 12);
+	memset(flags_string, 0, sizeof(flags_string));
 
 	if (copy_from_user(flags_string, buffer, count))
 		return -EFAULT;

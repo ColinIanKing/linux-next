@@ -174,6 +174,7 @@ static int cifs_xattr_set(const struct xattr_handler *handler,
 		pacl = kmalloc(size, GFP_KERNEL);
 		if (!pacl) {
 			rc = -ENOMEM;
+			goto out;
 		} else {
 			memcpy(pacl, value, size);
 			if (pTcon->ses->server->ops->set_acl) {
@@ -211,8 +212,8 @@ static int cifs_xattr_set(const struct xattr_handler *handler,
 			}
 			if (rc == 0) /* force revalidate of the inode */
 				CIFS_I(inode)->time = 0;
-			kfree(pacl);
 		}
+		kfree(pacl);
 		break;
 	}
 	}
