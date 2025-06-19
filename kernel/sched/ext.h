@@ -13,7 +13,23 @@ static inline bool scx_kf_allowed_if_unlocked(void)
 	return !current->scx.kf_mask;
 }
 
+static inline bool scx_rq_bypassing(struct rq *rq)
+{
+	return unlikely(rq->scx.flags & SCX_RQ_BYPASSING);
+}
+
 DECLARE_STATIC_KEY_FALSE(scx_ops_allow_queued_wakeup);
+
+DECLARE_PER_CPU(struct rq *, scx_locked_rq_state);
+
+/*
+ * Return the rq currently locked from an scx callback, or NULL if no rq is
+ * locked.
+ */
+static inline struct rq *scx_locked_rq(void)
+{
+	return __this_cpu_read(scx_locked_rq_state);
+}
 
 void scx_tick(struct rq *rq);
 void init_scx_entity(struct sched_ext_entity *scx);
@@ -65,7 +81,7 @@ static inline void init_sched_ext_class(void) {}
 
 #endif	/* CONFIG_SCHED_CLASS_EXT */
 
-#if defined(CONFIG_SCHED_CLASS_EXT) && defined(CONFIG_SMP)
+#ifdef CONFIG_SCHED_CLASS_EXT
 void __scx_update_idle(struct rq *rq, bool idle, bool do_notify);
 
 static inline void scx_update_idle(struct rq *rq, bool idle, bool do_notify)
