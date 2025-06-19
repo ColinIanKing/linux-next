@@ -218,7 +218,7 @@ int cifs_try_adding_channels(struct cifs_ses *ses)
 				continue;
 
 			/* check if we already allocated enough channels */
-			iface_weight = iface->speed / iface_min_speed;
+			iface_weight = iface_min_speed ? (iface->speed / iface_min_speed) : 0;
 
 			if (iface->weight_fulfilled >= iface_weight)
 				continue;
@@ -387,7 +387,7 @@ cifs_chan_update_iface(struct cifs_ses *ses, struct TCP_Server_Info *server)
 		}
 
 		/* check if we already allocated enough channels */
-		iface_weight = iface->speed / iface_min_speed;
+		iface_weight = iface_min_speed ? (iface->speed / iface_min_speed) : 0;
 
 		if (iface->weight_fulfilled >= iface_weight)
 			continue;

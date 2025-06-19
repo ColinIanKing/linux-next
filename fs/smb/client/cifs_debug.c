@@ -599,7 +599,7 @@ skip_rdma:
 				seq_printf(m, "\n\t%d)", ++j);
 				cifs_dump_iface(m, iface);
 
-				iface_weight = iface->speed / iface_min_speed;
+				iface_weight = iface_min_speed ? (iface->speed / iface_min_speed) : 0;
 				seq_printf(m, "\t\tWeight (cur,total): (%zu,%zu)"
 					   "\n\t\tAllocated channels: %u\n",
 					   iface->weight_fulfilled,
