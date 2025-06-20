@@ -518,27 +518,28 @@ static int zap_threads(struct task_struct *tsk,
 	return nr;
 }
 
-static int coredump_wait(int exit_code, struct core_state *core_state)
+static int coredump_wait(int exit_code)
 {
 	struct task_struct *tsk = current;
+	struct core_state core_state;
 	int core_waiters = -EBUSY;
 
-	init_completion(&core_state->startup);
-	core_state->dumper.task = tsk;
-	core_state->dumper.next = NULL;
+	init_completion(&core_state.startup);
+	core_state.dumper.task = tsk;
+	core_state.dumper.next = NULL;
 
-	core_waiters = zap_threads(tsk, core_state, exit_code);
+	core_waiters = zap_threads(tsk, &core_state, exit_code);
 	if (core_waiters > 0) {
 		struct core_thread *ptr;
 
-		wait_for_completion_state(&core_state->startup,
+		wait_for_completion_state(&core_state.startup,
 					  TASK_UNINTERRUPTIBLE|TASK_FREEZABLE);
 		/*
 		 * Wait for all the threads to become inactive, so that
 		 * all the thread context (extended register state, like
 		 * fpu etc) gets copied to the memory.
 		 */
-		ptr = core_state->dumper.next;
+		ptr = core_state.dumper.next;
 		while (ptr != NULL) {
 			wait_task_inactive(ptr->task, TASK_ANY);
 			ptr = ptr->next;
@@ -858,7 +859,7 @@ static bool coredump_sock_request(struct core_name *cn, struct coredump_params *
 	return coredump_sock_mark(cprm->file, COREDUMP_MARK_REQACK);
 }
 
-static bool coredump_socket(struct core_name *cn, struct coredump_params *cprm)
+static noinline_for_stack bool coredump_socket(struct core_name *cn, struct coredump_params *cprm)
 {
 	if (!coredump_sock_connect(cn, cprm))
 		return false;
@@ -1095,7 +1096,6 @@ void vfs_coredump(const kernel_siginfo_t *siginfo)
 {
 	struct cred *cred __free(put_cred) = NULL;
 	size_t *argv __free(kfree) = NULL;
-	struct core_state core_state;
 	struct core_name cn;
 	struct mm_struct *mm = current->mm;
 	struct linux_binfmt *binfmt = mm->binfmt;
@@ -1131,7 +1131,7 @@ void vfs_coredump(const kernel_siginfo_t *siginfo)
 	if (coredump_force_suid_safe(&cprm))
 		cred->fsuid = GLOBAL_ROOT_UID;
 
-	if (coredump_wait(siginfo->si_signo, &core_state) < 0)
+	if (coredump_wait(siginfo->si_signo) < 0)
 		return;
 
 	old_cred = override_creds(cred);
