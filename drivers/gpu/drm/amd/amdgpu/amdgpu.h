@@ -1282,6 +1282,7 @@ struct amdgpu_device {
 	bool                            debug_exp_resets;
 	bool                            debug_disable_gpu_ring_reset;
 	bool                            debug_vm_userptr;
+	bool                            debug_disable_ce_logs;
 
 	/* Protection for the following isolation structure */
 	struct mutex                    enforce_isolation_mutex;
@@ -1619,6 +1620,7 @@ void amdgpu_driver_release_kms(struct drm_device *dev);
 
 int amdgpu_device_ip_suspend(struct amdgpu_device *adev);
 int amdgpu_device_prepare(struct drm_device *dev);
+void amdgpu_device_complete(struct drm_device *dev);
 int amdgpu_device_suspend(struct drm_device *dev, bool fbcon);
 int amdgpu_device_resume(struct drm_device *dev, bool fbcon);
 u32 amdgpu_get_vblank_counter_kms(struct drm_crtc *crtc);
@@ -1760,4 +1762,19 @@ extern const struct attribute_group amdgpu_flash_attr_group;
 
 void amdgpu_set_init_level(struct amdgpu_device *adev,
 			   enum amdgpu_init_lvl_id lvl);
+
+static inline int amdgpu_device_bus_status_check(struct amdgpu_device *adev)
+{
+       u32 status;
+       int r;
+
+       r = pci_read_config_dword(adev->pdev, PCI_COMMAND, &status);
+       if (r || PCI_POSSIBLE_ERROR(status)) {
+		dev_err(adev->dev, "device lost from bus!");
+		return -ENODEV;
+       }
+
+       return 0;
+}
+
 #endif
