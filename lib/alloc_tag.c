@@ -638,7 +638,7 @@ static int load_module(struct module *mod, struct codetag *start, struct codetag
 		 * Avoid a kmemleak false positive. The pointer to the counters is stored
 		 * in the alloc_tag section of the module and cannot be directly accessed.
 		 */
-		kmemleak_igonore_percpu(tag->counters);
+		kmemleak_ignore_percpu(tag->counters);
 	}
 	return 0;
 }
