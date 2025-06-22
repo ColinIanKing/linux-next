@@ -44,6 +44,7 @@ description: |
         msm8953
         msm8956
         msm8960
+        msm8960t
         msm8974
         msm8974pro
         msm8976
@@ -201,6 +202,12 @@ properties:
           - enum:
               - qcom,msm8960-cdp
               - samsung,expressatt
+          - const: qcom,msm8960
+
+      - items:
+          - enum:
+              - sony,huashan
+          - const: qcom,msm8960t
           - const: qcom,msm8960
 
       - items:
