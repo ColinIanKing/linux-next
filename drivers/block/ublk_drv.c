@@ -1336,9 +1336,8 @@ static void ublk_cmd_list_tw_cb(struct io_uring_cmd *cmd,
 	} while (rq);
 }
 
-static void ublk_queue_cmd_list(struct ublk_io *io, struct rq_list *l)
+static void ublk_queue_cmd_list(struct io_uring_cmd *cmd, struct rq_list *l)
 {
-	struct io_uring_cmd *cmd = io->cmd;
 	struct ublk_uring_cmd_pdu *pdu = ublk_get_uring_cmd_pdu(cmd);
 
 	pdu->req_list = rq_list_peek(l);
@@ -1420,16 +1419,18 @@ static void ublk_queue_rqs(struct rq_list *rqlist)
 {
 	struct rq_list requeue_list = { };
 	struct rq_list submit_list = { };
-	struct ublk_io *io = NULL;
+	struct io_uring_cmd *cmd = NULL;
 	struct request *req;
 
 	while ((req = rq_list_pop(rqlist))) {
 		struct ublk_queue *this_q = req->mq_hctx->driver_data;
-		struct ublk_io *this_io = &this_q->ios[req->tag];
+		struct io_uring_cmd *this_cmd = this_q->ios[req->tag].cmd;
 
-		if (io && io->task != this_io->task && !rq_list_empty(&submit_list))
-			ublk_queue_cmd_list(io, &submit_list);
-		io = this_io;
+		if (cmd && io_uring_cmd_ctx_handle(cmd) !=
+				io_uring_cmd_ctx_handle(this_cmd) &&
+				!rq_list_empty(&submit_list))
+			ublk_queue_cmd_list(cmd, &submit_list);
+		cmd = this_cmd;
 
 		if (ublk_prep_req(this_q, req, true) == BLK_STS_OK)
 			rq_list_add_tail(&submit_list, req);
@@ -1438,7 +1439,7 @@ static void ublk_queue_rqs(struct rq_list *rqlist)
 	}
 
 	if (!rq_list_empty(&submit_list))
-		ublk_queue_cmd_list(io, &submit_list);
+		ublk_queue_cmd_list(cmd, &submit_list);
 	*rqlist = requeue_list;
 }
 
