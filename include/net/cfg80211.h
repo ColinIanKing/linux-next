@@ -9372,6 +9372,17 @@ int cfg80211_iter_combinations(struct wiphy *wiphy,
 			       void (*iter)(const struct ieee80211_iface_combination *c,
 					    void *data),
 			       void *data);
+/**
+ * cfg80211_get_radio_idx_by_chan - get the radio index by the channel
+ *
+ * @wiphy: the wiphy
+ * @chan: channel for which the supported radio index is required
+ *
+ * Return: radio index on success or a negative error code
+ */
+int cfg80211_get_radio_idx_by_chan(struct wiphy *wiphy,
+				   const struct ieee80211_channel *chan);
+
 
 /**
  * cfg80211_stop_iface - trigger interface disconnection
@@ -9736,6 +9747,11 @@ void cfg80211_links_removed(struct net_device *dev, u16 link_mask);
  * struct cfg80211_mlo_reconf_done_data - MLO reconfiguration data
  * @buf: MLO Reconfiguration Response frame (header + body)
  * @len: length of the frame data
+ * @driver_initiated: Indicates whether the add links request is initiated by
+ *	driver. This is set to true when the link reconfiguration request
+ *	initiated by driver due to AP link recommendation requests
+ *	(Ex: BTM (BSS Transition Management) request) handling offloaded to
+ *	driver.
  * @added_links: BIT mask of links successfully added to the association
  * @links: per-link information indexed by link ID
  * @links.bss: the BSS that MLO reconfiguration was requested for, ownership of
@@ -9748,6 +9764,7 @@ void cfg80211_links_removed(struct net_device *dev, u16 link_mask);
 struct cfg80211_mlo_reconf_done_data {
 	const u8 *buf;
 	size_t len;
+	bool driver_initiated;
 	u16 added_links;
 	struct {
 		struct cfg80211_bss *bss;
