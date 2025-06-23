@@ -181,35 +181,13 @@ void io_uring_cmd_done(struct io_uring_cmd *ioucmd, ssize_t ret, u64 res2,
 }
 EXPORT_SYMBOL_GPL(io_uring_cmd_done);
 
-static int io_uring_cmd_prep_setup(struct io_kiocb *req,
-				   const struct io_uring_sqe *sqe)
+int io_uring_cmd_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
 {
 	struct io_uring_cmd *ioucmd = io_kiocb_to_cmd(req, struct io_uring_cmd);
 	struct io_async_cmd *ac;
 
 	/* see io_uring_cmd_get_async_data() */
 	BUILD_BUG_ON(offsetof(struct io_async_cmd, data) != 0);
-
-	ac = io_uring_alloc_async_data(&req->ctx->cmd_cache, req);
-	if (!ac)
-		return -ENOMEM;
-	ac->data.op_data = NULL;
-
-	/*
-	 * Unconditionally cache the SQE for now - this is only needed for
-	 * requests that go async, but prep handlers must ensure that any
-	 * sqe data is stable beyond prep. Since uring_cmd is special in
-	 * that it doesn't read in per-op data, play it safe and ensure that
-	 * any SQE data is stable beyond prep. This can later get relaxed.
-	 */
-	memcpy(ac->sqes, sqe, uring_sqe_size(req->ctx));
-	ioucmd->sqe = ac->sqes;
-	return 0;
-}
-
-int io_uring_cmd_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
-{
-	struct io_uring_cmd *ioucmd = io_kiocb_to_cmd(req, struct io_uring_cmd);
 
 	if (sqe->__pad1)
 		return -EINVAL;
@@ -223,7 +201,24 @@ int io_uring_cmd_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
 
 	ioucmd->cmd_op = READ_ONCE(sqe->cmd_op);
 
-	return io_uring_cmd_prep_setup(req, sqe);
+	ac = io_uring_alloc_async_data(&req->ctx->cmd_cache, req);
+	if (!ac)
+		return -ENOMEM;
+	ac->data.op_data = NULL;
+	ioucmd->sqe = sqe;
+	return 0;
+}
+
+void io_uring_cmd_sqe_copy(struct io_kiocb *req)
+{
+	struct io_uring_cmd *ioucmd = io_kiocb_to_cmd(req, struct io_uring_cmd);
+	struct io_async_cmd *ac = req->async_data;
+
+	/* Should not happen, as REQ_F_SQE_COPIED covers this */
+	if (WARN_ON_ONCE(ioucmd->sqe == ac->sqes))
+		return;
+	memcpy(ac->sqes, ioucmd->sqe, uring_sqe_size(req->ctx));
+	ioucmd->sqe = ac->sqes;
 }
 
 int io_uring_cmd(struct io_kiocb *req, unsigned int issue_flags)
