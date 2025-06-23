@@ -849,6 +849,8 @@ static void smp_call_function_many_cond(const struct cpumask *mask,
 			send_call_function_single_ipi(last_cpu);
 		else if (likely(nr_cpus > 1))
 			send_call_function_ipi_mask(cfd->cpumask_ipi);
+		else
+			run_remote = false;
 	}
 
 	if (run_local) {
