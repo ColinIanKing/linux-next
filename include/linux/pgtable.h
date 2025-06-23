@@ -456,6 +456,17 @@ static inline bool arch_has_hw_pte_young(void)
 }
 #endif
 
+#ifndef exec_folio_order
+/*
+ * Returns preferred minimum folio order for executable file-backed memory. Must
+ * be in range [0, PMD_ORDER). Default to order-0.
+ */
+static inline unsigned int exec_folio_order(void)
+{
+	return 0;
+}
+#endif
+
 #ifndef arch_check_zapped_pte
 static inline void arch_check_zapped_pte(struct vm_area_struct *vma,
 					 pte_t pte)
@@ -2005,7 +2016,7 @@ typedef unsigned int pgtbl_mod_mask;
  *								x: (yes) yes
  */
 #define DECLARE_VM_GET_PAGE_PROT					\
-pgprot_t vm_get_page_prot(unsigned long vm_flags)			\
+pgprot_t vm_get_page_prot(vm_flags_t vm_flags)				\
 {									\
 		return protection_map[vm_flags &			\
 			(VM_READ | VM_WRITE | VM_EXEC | VM_SHARED)];	\

@@ -32,8 +32,7 @@
 
 static bool memfd_folio_has_extra_refs(struct folio *folio)
 {
-	return folio_ref_count(folio) - folio_mapcount(folio) !=
-	       folio_nr_pages(folio);
+	return folio_ref_count(folio) != folio_expected_ref_count(folio);
 }
 
 static void memfd_tag_pins(struct xa_state *xas)
@@ -333,10 +332,10 @@ static inline bool is_write_sealed(unsigned int seals)
 	return seals & (F_SEAL_WRITE | F_SEAL_FUTURE_WRITE);
 }
 
-static int check_write_seal(unsigned long *vm_flags_ptr)
+static int check_write_seal(vm_flags_t *vm_flags_ptr)
 {
-	unsigned long vm_flags = *vm_flags_ptr;
-	unsigned long mask = vm_flags & (VM_SHARED | VM_WRITE);
+	vm_flags_t vm_flags = *vm_flags_ptr;
+	vm_flags_t mask = vm_flags & (VM_SHARED | VM_WRITE);
 
 	/* If a private mapping then writability is irrelevant. */
 	if (!(mask & VM_SHARED))
@@ -358,7 +357,7 @@ static int check_write_seal(unsigned long *vm_flags_ptr)
 	return 0;
 }
 
-int memfd_check_seals_mmap(struct file *file, unsigned long *vm_flags_ptr)
+int memfd_check_seals_mmap(struct file *file, vm_flags_t *vm_flags_ptr)
 {
 	int err = 0;
 	unsigned int *seals_ptr = memfd_file_seals_ptr(file);
@@ -475,22 +474,22 @@ SYSCALL_DEFINE2(memfd_create,
 	fd = get_unused_fd_flags((flags & MFD_CLOEXEC) ? O_CLOEXEC : 0);
 	if (fd < 0) {
 		error = fd;
-		goto err_name;
+		goto err_free_name;
 	}
 
 	file = alloc_file(name, flags);
 	if (IS_ERR(file)) {
 		error = PTR_ERR(file);
-		goto err_fd;
+		goto err_free_fd;
 	}
 
 	fd_install(fd, file);
 	kfree(name);
 	return fd;
 
-err_fd:
+err_free_fd:
 	put_unused_fd(fd);
-err_name:
+err_free_name:
 	kfree(name);
 	return error;
 }
