@@ -41,6 +41,13 @@ static const struct pci_device_id btintel_pcie_table[] = {
 };
 MODULE_DEVICE_TABLE(pci, btintel_pcie_table);
 
+struct btintel_pcie_dev_recovery {
+	struct list_head list;
+	u8 count;
+	time64_t last_error;
+	char name[];
+};
+
 /* Intel PCIe uses 4 bytes of HCI type instead of 1 byte BT SIG HCI type */
 #define BTINTEL_PCIE_HCI_TYPE_LEN	4
 #define BTINTEL_PCIE_HCI_CMD_PKT	0x00000001
@@ -61,6 +68,9 @@ MODULE_DEVICE_TABLE(pci, btintel_pcie_table);
 
 #define BTINTEL_PCIE_TRIGGER_REASON_USER_TRIGGER	0x17A2
 #define BTINTEL_PCIE_TRIGGER_REASON_FW_ASSERT		0x1E61
+
+#define BTINTEL_PCIE_RESET_WINDOW_SECS		5
+#define BTINTEL_PCIE_FLR_MAX_RETRY	1
 
 /* Alive interrupt context */
 enum {
@@ -98,6 +108,14 @@ struct btintel_pcie_dbgc_ctxt {
 	u32     num_buf;
 	struct btintel_pcie_dbgc_ctxt_buf bufs[BTINTEL_PCIE_DBGC_BUFFER_COUNT];
 };
+
+struct btintel_pcie_removal {
+	struct pci_dev *pdev;
+	struct work_struct work;
+};
+
+static LIST_HEAD(btintel_pcie_recovery_list);
+static DEFINE_SPINLOCK(btintel_pcie_recovery_lock);
 
 /* This function initializes the memory for DBGC buffers and formats the
  * DBGC fragment which consists header info and DBGC buffer's LSB, MSB and
@@ -1932,6 +1950,9 @@ static int btintel_pcie_send_frame(struct hci_dev *hdev,
 	u32 type;
 	u32 old_ctxt;
 
+	if (test_bit(BTINTEL_PCIE_CORE_HALTED, &data->flags))
+		return -ENODEV;
+
 	/* Due to the fw limitation, the type header of the packet should be
 	 * 4 bytes unlike 1 byte for UART. In UART, the firmware can read
 	 * the first byte to get the packet type and redirect the rest of data
@@ -2031,6 +2052,28 @@ static void btintel_pcie_release_hdev(struct btintel_pcie_data *data)
 	hci_unregister_dev(hdev);
 	hci_free_dev(hdev);
 	data->hdev = NULL;
+}
+
+static void btintel_pcie_disable_interrupts(struct btintel_pcie_data *data)
+{
+	spin_lock(&data->irq_lock);
+	btintel_pcie_wr_reg32(data, BTINTEL_PCIE_CSR_MSIX_FH_INT_MASK, data->fh_init_mask);
+	btintel_pcie_wr_reg32(data, BTINTEL_PCIE_CSR_MSIX_HW_INT_MASK, data->hw_init_mask);
+	spin_unlock(&data->irq_lock);
+}
+
+static void btintel_pcie_enable_interrupts(struct btintel_pcie_data *data)
+{
+	spin_lock(&data->irq_lock);
+	btintel_pcie_wr_reg32(data, BTINTEL_PCIE_CSR_MSIX_FH_INT_MASK, ~data->fh_init_mask);
+	btintel_pcie_wr_reg32(data, BTINTEL_PCIE_CSR_MSIX_HW_INT_MASK, ~data->hw_init_mask);
+	spin_unlock(&data->irq_lock);
+}
+
+static void btintel_pcie_synchronize_irqs(struct btintel_pcie_data *data)
+{
+	for (int i = 0; i < data->alloc_vecs; i++)
+		synchronize_irq(data->msix_entries[i].vector);
 }
 
 static int btintel_pcie_setup_internal(struct hci_dev *hdev)
@@ -2152,6 +2195,8 @@ static int btintel_pcie_setup(struct hci_dev *hdev)
 		bt_dev_err(hdev, "Firmware download retry count: %d",
 			   fw_dl_retry);
 		btintel_pcie_dump_debug_registers(hdev);
+		btintel_pcie_disable_interrupts(data);
+		btintel_pcie_synchronize_irqs(data);
 		err = btintel_pcie_reset_bt(data);
 		if (err) {
 			bt_dev_err(hdev, "Failed to do shr reset: %d", err);
@@ -2159,6 +2204,7 @@ static int btintel_pcie_setup(struct hci_dev *hdev)
 		}
 		usleep_range(10000, 12000);
 		btintel_pcie_reset_ia(data);
+		btintel_pcie_enable_interrupts(data);
 		btintel_pcie_config_msix(data);
 		err = btintel_pcie_enable_bt(data);
 		if (err) {
@@ -2167,7 +2213,189 @@ static int btintel_pcie_setup(struct hci_dev *hdev)
 		}
 		btintel_pcie_start_rx(data);
 	}
+
+	if (!err)
+		set_bit(BTINTEL_PCIE_SETUP_DONE, &data->flags);
 	return err;
+}
+
+static struct btintel_pcie_dev_recovery *
+btintel_pcie_get_recovery(struct pci_dev *pdev, struct device *dev)
+{
+	struct btintel_pcie_dev_recovery *tmp, *data = NULL;
+	const char *name = pci_name(pdev);
+	struct hci_dev *hdev = to_hci_dev(dev);
+
+	spin_lock(&btintel_pcie_recovery_lock);
+	list_for_each_entry(tmp, &btintel_pcie_recovery_list, list) {
+		if (strcmp(tmp->name, name))
+			continue;
+		data = tmp;
+		break;
+	}
+	spin_unlock(&btintel_pcie_recovery_lock);
+
+	if (data) {
+		bt_dev_dbg(hdev, "Found restart data for BDF: %s", data->name);
+		return data;
+	}
+
+	data = kzalloc(struct_size(data, name, strlen(name) + 1), GFP_ATOMIC);
+	if (!data)
+		return NULL;
+
+	strscpy_pad(data->name, name, strlen(name) + 1);
+	spin_lock(&btintel_pcie_recovery_lock);
+	list_add_tail(&data->list, &btintel_pcie_recovery_list);
+	spin_unlock(&btintel_pcie_recovery_lock);
+
+	return data;
+}
+
+static void btintel_pcie_free_restart_list(void)
+{
+	struct btintel_pcie_dev_recovery *tmp;
+
+	while ((tmp = list_first_entry_or_null(&btintel_pcie_recovery_list,
+					       typeof(*tmp), list))) {
+		list_del(&tmp->list);
+		kfree(tmp);
+	}
+}
+
+static void btintel_pcie_inc_recovery_count(struct pci_dev *pdev,
+					    struct device *dev)
+{
+	struct btintel_pcie_dev_recovery *data;
+	time64_t retry_window;
+
+	data = btintel_pcie_get_recovery(pdev, dev);
+	if (!data)
+		return;
+
+	retry_window = ktime_get_boottime_seconds() - data->last_error;
+	if (data->count == 0) {
+		data->last_error = ktime_get_boottime_seconds();
+		data->count++;
+	} else if (retry_window < BTINTEL_PCIE_RESET_WINDOW_SECS &&
+		   data->count <= BTINTEL_PCIE_FLR_MAX_RETRY) {
+		data->count++;
+	} else if (retry_window > BTINTEL_PCIE_RESET_WINDOW_SECS) {
+		data->last_error = 0;
+		data->count = 0;
+	}
+}
+
+static int btintel_pcie_setup_hdev(struct btintel_pcie_data *data);
+
+static void btintel_pcie_removal_work(struct work_struct *wk)
+{
+	struct btintel_pcie_removal *removal =
+		container_of(wk, struct btintel_pcie_removal, work);
+	struct pci_dev *pdev = removal->pdev;
+	struct btintel_pcie_data *data;
+	int err;
+
+	pci_lock_rescan_remove();
+
+	if (!pdev->bus)
+		goto error;
+
+	data = pci_get_drvdata(pdev);
+
+	btintel_pcie_disable_interrupts(data);
+	btintel_pcie_synchronize_irqs(data);
+
+	flush_work(&data->rx_work);
+	flush_work(&data->hdev->dump.dump_rx);
+
+	bt_dev_dbg(data->hdev, "Release bluetooth interface");
+	btintel_pcie_release_hdev(data);
+
+	err = pci_reset_function(pdev);
+	if (err) {
+		BT_ERR("Failed resetting the pcie device (%d)", err);
+		goto error;
+	}
+
+	btintel_pcie_enable_interrupts(data);
+	btintel_pcie_config_msix(data);
+
+	err = btintel_pcie_enable_bt(data);
+	if (err) {
+		BT_ERR("Failed to enable bluetooth hardware after reset (%d)",
+		       err);
+		goto error;
+	}
+
+	btintel_pcie_reset_ia(data);
+	btintel_pcie_start_rx(data);
+	data->flags = 0;
+
+	err = btintel_pcie_setup_hdev(data);
+	if (err) {
+		BT_ERR("Failed registering hdev (%d)", err);
+		goto error;
+	}
+error:
+	pci_dev_put(pdev);
+	pci_unlock_rescan_remove();
+	kfree(removal);
+}
+
+static void btintel_pcie_reset(struct hci_dev *hdev)
+{
+	struct btintel_pcie_removal *removal;
+	struct btintel_pcie_data *data;
+
+	data = hci_get_drvdata(hdev);
+
+	if (!test_bit(BTINTEL_PCIE_SETUP_DONE, &data->flags))
+		return;
+
+	if (test_and_set_bit(BTINTEL_PCIE_RECOVERY_IN_PROGRESS, &data->flags))
+		return;
+
+	removal = kzalloc(sizeof(*removal), GFP_ATOMIC);
+	if (!removal)
+		return;
+
+	removal->pdev = data->pdev;
+	INIT_WORK(&removal->work, btintel_pcie_removal_work);
+	pci_dev_get(removal->pdev);
+	schedule_work(&removal->work);
+}
+
+static void btintel_pcie_hw_error(struct hci_dev *hdev, u8 code)
+{
+	struct btintel_pcie_dev_recovery *data;
+	struct btintel_pcie_data *dev_data = hci_get_drvdata(hdev);
+	struct pci_dev *pdev = dev_data->pdev;
+	time64_t retry_window;
+
+	if (code == 0x13) {
+		bt_dev_err(hdev, "Encountered top exception");
+		return;
+	}
+
+	data = btintel_pcie_get_recovery(pdev, &hdev->dev);
+	if (!data)
+		return;
+
+	retry_window = ktime_get_boottime_seconds() - data->last_error;
+
+	if (retry_window < BTINTEL_PCIE_RESET_WINDOW_SECS &&
+	    data->count >= BTINTEL_PCIE_FLR_MAX_RETRY) {
+		bt_dev_err(hdev, "Exhausted maximum: %d recovery attempts: %d",
+			   BTINTEL_PCIE_FLR_MAX_RETRY, data->count);
+		bt_dev_dbg(hdev, "Boot time: %lld seconds",
+			   ktime_get_boottime_seconds());
+		bt_dev_dbg(hdev, "last error at: %lld seconds",
+			   data->last_error);
+		return;
+	}
+	btintel_pcie_inc_recovery_count(pdev, &hdev->dev);
+	btintel_pcie_reset(hdev);
 }
 
 static int btintel_pcie_setup_hdev(struct btintel_pcie_data *data)
@@ -2191,9 +2419,10 @@ static int btintel_pcie_setup_hdev(struct btintel_pcie_data *data)
 	hdev->send = btintel_pcie_send_frame;
 	hdev->setup = btintel_pcie_setup;
 	hdev->shutdown = btintel_shutdown_combined;
-	hdev->hw_error = btintel_hw_error;
+	hdev->hw_error = btintel_pcie_hw_error;
 	hdev->set_diag = btintel_set_diag;
 	hdev->set_bdaddr = btintel_set_bdaddr;
+	hdev->reset = btintel_pcie_reset;
 
 	err = hci_register_dev(hdev);
 	if (err < 0) {
@@ -2291,6 +2520,12 @@ static void btintel_pcie_remove(struct pci_dev *pdev)
 
 	data = pci_get_drvdata(pdev);
 
+	btintel_pcie_disable_interrupts(data);
+
+	btintel_pcie_synchronize_irqs(data);
+
+	flush_work(&data->rx_work);
+
 	btintel_pcie_reset_bt(data);
 	for (int i = 0; i < data->alloc_vecs; i++) {
 		struct msix_entry *msix_entry;
@@ -2302,8 +2537,6 @@ static void btintel_pcie_remove(struct pci_dev *pdev)
 	pci_free_irq_vectors(pdev);
 
 	btintel_pcie_release_hdev(data);
-
-	flush_work(&data->rx_work);
 
 	destroy_workqueue(data->workqueue);
 
@@ -2337,7 +2570,20 @@ static struct pci_driver btintel_pcie_driver = {
 	.driver.coredump = btintel_pcie_coredump
 #endif
 };
-module_pci_driver(btintel_pcie_driver);
+
+static int __init btintel_pcie_init(void)
+{
+	return pci_register_driver(&btintel_pcie_driver);
+}
+
+static void __exit btintel_pcie_exit(void)
+{
+	pci_unregister_driver(&btintel_pcie_driver);
+	btintel_pcie_free_restart_list();
+}
+
+module_init(btintel_pcie_init);
+module_exit(btintel_pcie_exit);
 
 MODULE_AUTHOR("Tedd Ho-Jeong An <tedd.an@intel.com>");
 MODULE_DESCRIPTION("Intel Bluetooth PCIe transport driver ver " VERSION);
