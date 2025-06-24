@@ -129,6 +129,7 @@ enum dmub_window_id {
 	DMUB_WINDOW_5_TRACEBUFF,
 	DMUB_WINDOW_6_FW_STATE,
 	DMUB_WINDOW_7_SCRATCH_MEM,
+	DMUB_WINDOW_IB_MEM,
 	DMUB_WINDOW_SHARED_STATE,
 	DMUB_WINDOW_TOTAL,
 };
@@ -355,6 +356,7 @@ struct dmub_diagnostic_data {
 	uint8_t is_traceport_en : 1;
 	uint8_t is_cw0_enabled : 1;
 	uint8_t is_cw6_enabled : 1;
+	uint8_t is_pwait : 1;
 };
 
 struct dmub_srv_inbox {
@@ -539,6 +541,7 @@ struct dmub_srv {
 	uint32_t fw_version;
 	bool is_virtual;
 	struct dmub_fb scratch_mem_fb;
+	struct dmub_fb ib_mem_gart;
 	volatile struct dmub_shared_state_feature_block *shared_state;
 	volatile const struct dmub_fw_state *fw_state;
 
