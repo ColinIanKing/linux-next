@@ -35257,6 +35257,32 @@ static noinline void __init check_rcu_simulated(struct maple_tree *mt)
 	MT_BUG_ON(mt, mas_prev(&mas_reader, 0) != xa_mk_value(val));
 	rcu_read_unlock();
 
+	/* Clear out tree & create one with only root node */
+	mtree_destroy(mt);
+	mt_init_flags(&tree, MT_FLAGS_ALLOC_RANGE | MT_FLAGS_USE_RCU);
+	mas_pause(&mas_writer);
+	mas_lock(&mas_writer);
+	for (i = 0; i <= 5; i++) {
+		mas_writer.index = i * 10;
+		mas_writer.last = i * 10 + 5;
+		mas_store_gfp(&mas_writer, xa_mk_value(i), GFP_KERNEL);
+	}
+	mas_unlock(&mas_writer);
+	target = 10;
+	val = 20;
+	mas_set(&mas_reader, target);
+	rcu_read_lock();
+	MT_BUG_ON(mt, mas_walk(&mas_reader) != xa_mk_value(target/10));
+	MT_BUG_ON(mt, mte_is_leaf(mas_reader.node) != true);
+
+	/* Overwrite the whole range */
+	mas_lock(&mas_writer);
+	mas_set_range(&mas_writer, 0, ULONG_MAX);
+	mas_store_gfp(&mas_writer, xa_mk_value(val), GFP_KERNEL);
+	mas_unlock(&mas_writer);
+	MT_BUG_ON(mt, mas_walk(&mas_reader) != xa_mk_value(val));
+	rcu_read_unlock();
+
 	rcu_unregister_thread();
 }
 
