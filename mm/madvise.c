@@ -1665,8 +1665,8 @@ int madvise_walk_vmas(struct madvise_behavior *madv_behavior)
 			vma = NULL;
 			madv_behavior->lock_dropped = false;
 		} else {
-			prev = vma;
 			vma = madv_behavior->vma;
+			prev = vma;
 		}
 
 		if (vma && range->end < vma->vm_end)
