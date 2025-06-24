@@ -8,11 +8,13 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <linux/mman.h>
 #include <sys/mman.h>
 #include <time.h>
 #include <stdbool.h>
 
 #include "../kselftest.h"
+#include "vm_util.h"
 
 #define EXPECT_SUCCESS 0
 #define EXPECT_FAILURE 1
@@ -34,6 +36,7 @@ struct config {
 	unsigned long long dest_alignment;
 	unsigned long long region_size;
 	int overlapping;
+	bool use_relocate_anon;
 	unsigned int dest_preamble_size;
 };
 
@@ -60,7 +63,8 @@ enum {
 #define PTE page_size
 
 #define MAKE_TEST(source_align, destination_align, size,	\
-		  overlaps, should_fail, test_name)		\
+		  overlaps, use_relocate_anon, should_fail,	\
+		  test_name)					\
 (struct test){							\
 	.name = test_name,					\
 	.config = {						\
@@ -68,6 +72,7 @@ enum {
 		.dest_alignment = destination_align,		\
 		.region_size = size,				\
 		.overlapping = overlaps,			\
+		.use_relocate_anon = use_relocate_anon,		\
 	},							\
 	.expect_failure = should_fail				\
 }
@@ -184,6 +189,12 @@ static void *get_source_mapping(struct config c)
 	unsigned long long addr = 0ULL;
 	void *src_addr = NULL;
 	unsigned long long mmap_min_addr;
+	int mmap_flags = MAP_FIXED_NOREPLACE | MAP_ANONYMOUS;
+
+	if (c.use_relocate_anon)
+		mmap_flags |= MAP_PRIVATE;
+	else
+		mmap_flags |= MAP_SHARED;
 
 	mmap_min_addr = get_mmap_min_addr();
 	/*
@@ -198,8 +209,7 @@ retry:
 		goto retry;
 
 	src_addr = mmap((void *) addr, c.region_size, PROT_READ | PROT_WRITE,
-					MAP_FIXED_NOREPLACE | MAP_ANONYMOUS | MAP_SHARED,
-					-1, 0);
+					mmap_flags, -1, 0);
 	if (src_addr == MAP_FAILED) {
 		if (errno == EPERM || errno == EEXIST)
 			goto retry;
@@ -251,7 +261,7 @@ static void mremap_expand_merge(FILE *maps_fp, unsigned long page_size)
 	}
 
 	munmap(start + page_size, page_size);
-	remap = mremap(start, page_size, 2 * page_size, 0);
+	remap = sys_mremap(start, page_size, 2 * page_size, 0, 0);
 	if (remap == MAP_FAILED) {
 		ksft_print_msg("mremap failed: %s\n", strerror(errno));
 		munmap(start, page_size);
@@ -292,7 +302,8 @@ static void mremap_expand_merge_offset(FILE *maps_fp, unsigned long page_size)
 
 	/* Unmap final page to ensure we have space to expand. */
 	munmap(start + 2 * page_size, page_size);
-	remap = mremap(start + page_size, page_size, 2 * page_size, 0);
+
+	remap = sys_mremap(start + page_size, page_size, 2 * page_size, 0, 0);
 	if (remap == MAP_FAILED) {
 		ksft_print_msg("mremap failed: %s\n", strerror(errno));
 		munmap(start, 2 * page_size);
@@ -324,20 +335,35 @@ out:
  *
  * |DDDDddddSSSSssss|
  */
-static void mremap_move_within_range(unsigned int pattern_seed, char *rand_addr)
+static void mremap_move_within_range(unsigned int pattern_seed, char *rand_addr,
+				     char *test_suffix, int extra_flags)
 {
 	char *test_name = "mremap mremap move within range";
 	void *src, *dest;
 	unsigned int i, success = 1;
-
 	size_t size = SIZE_MB(20);
 	void *ptr = mmap(NULL, size, PROT_READ | PROT_WRITE,
 			 MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	int mremap_flags = MREMAP_MAYMOVE | MREMAP_FIXED;
+
 	if (ptr == MAP_FAILED) {
 		perror("mmap");
 		success = 0;
 		goto out;
 	}
+
+	/*
+	 * If THP is enabled, we may end up spanning a range which has large
+	 * folios not enclosed within the mapping, which will disallow the
+	 * relocate.
+	 *
+	 * In this case, disallow huge pages in the range.
+	 */
+	if (extra_flags & MREMAP_MUST_RELOCATE_ANON)
+		madvise(ptr, size, MADV_NOHUGEPAGE);
+
+	mremap_flags |= extra_flags;
+
 	memset(ptr, 0, size);
 
 	src = ptr + SIZE_MB(6);
@@ -348,8 +374,8 @@ static void mremap_move_within_range(unsigned int pattern_seed, char *rand_addr)
 
 	dest = src - SIZE_MB(2);
 
-	void *new_ptr = mremap(src + SIZE_MB(1), SIZE_MB(1), SIZE_MB(1),
-						   MREMAP_MAYMOVE | MREMAP_FIXED, dest + SIZE_MB(1));
+	void *new_ptr = sys_mremap(src + SIZE_MB(1), SIZE_MB(1), SIZE_MB(1),
+				   mremap_flags, dest + SIZE_MB(1));
 	if (new_ptr == MAP_FAILED) {
 		perror("mremap");
 		success = 0;
@@ -375,9 +401,9 @@ out:
 		perror("munmap");
 
 	if (success)
-		ksft_test_result_pass("%s\n", test_name);
+		ksft_test_result_pass("%s%s\n", test_name, test_suffix);
 	else
-		ksft_test_result_fail("%s\n", test_name);
+		ksft_test_result_fail("%s%s\n", test_name, test_suffix);
 }
 
 /* Returns the time taken for the remap on success else returns -1. */
@@ -390,6 +416,10 @@ static long long remap_region(struct config c, unsigned int threshold_mb,
 	long long  start_ns, end_ns, align_mask, ret, offset;
 	unsigned long long threshold;
 	unsigned long num_chunks;
+	int mremap_flags = MREMAP_MAYMOVE | MREMAP_FIXED;
+
+	if (c.use_relocate_anon)
+		mremap_flags |= MREMAP_MUST_RELOCATE_ANON;
 
 	if (threshold_mb == VALIDATION_NO_THRESHOLD)
 		threshold = c.region_size;
@@ -431,10 +461,15 @@ static long long remap_region(struct config c, unsigned int threshold_mb,
 	}
 
 	if (c.dest_preamble_size) {
+		int mmap_flags = MAP_FIXED_NOREPLACE | MAP_ANONYMOUS;
+
+		if (c.use_relocate_anon)
+			mmap_flags |= MAP_PRIVATE;
+		else
+			mmap_flags |= MAP_SHARED;
+
 		dest_preamble_addr = mmap((void *) addr - c.dest_preamble_size, c.dest_preamble_size,
-					  PROT_READ | PROT_WRITE,
-					  MAP_FIXED_NOREPLACE | MAP_ANONYMOUS | MAP_SHARED,
-							-1, 0);
+					  PROT_READ | PROT_WRITE, mmap_flags, -1, 0);
 		if (dest_preamble_addr == MAP_FAILED) {
 			ksft_print_msg("Failed to map dest preamble region: %s\n",
 					strerror(errno));
@@ -447,8 +482,8 @@ static long long remap_region(struct config c, unsigned int threshold_mb,
 	}
 
 	clock_gettime(CLOCK_MONOTONIC, &t_start);
-	dest_addr = mremap(src_addr, c.region_size, c.region_size,
-					  MREMAP_MAYMOVE|MREMAP_FIXED, (char *) addr);
+	dest_addr = sys_mremap(src_addr, c.region_size, c.region_size,
+			       mremap_flags, (char *) addr);
 	clock_gettime(CLOCK_MONOTONIC, &t_end);
 
 	if (dest_addr == MAP_FAILED) {
@@ -549,6 +584,10 @@ no_preamble:
  * subsequent tests. So we clean up mappings after each test.
  */
 clean_up_dest:
+	/* Trigger reclaim to assert that adjusted rmap state is valid. */
+	if (c.use_relocate_anon)
+		madvise(dest_addr, c.region_size, MADV_PAGEOUT);
+
 	munmap(dest_addr, c.region_size);
 clean_up_dest_preamble:
 	if (c.dest_preamble_size && dest_preamble_addr)
@@ -565,16 +604,19 @@ out:
  * down address landed on a mapping that maybe does not exist.
  */
 static void mremap_move_1mb_from_start(unsigned int pattern_seed,
-				       char *rand_addr)
+				       char *rand_addr, char *test_suffix,
+				       int extra_flags)
 {
 	char *test_name = "mremap move 1mb from start at 1MB+256KB aligned src";
 	void *src = NULL, *dest = NULL;
 	unsigned int i, success = 1;
-
+	int mremap_flags = MREMAP_MAYMOVE | MREMAP_FIXED;
 	/* Config to reuse get_source_mapping() to do an aligned mmap. */
 	struct config c = {
 		.src_alignment = SIZE_MB(1) + SIZE_KB(256),
-		.region_size = SIZE_MB(6)
+		.region_size = SIZE_MB(6),
+		.use_relocate_anon = extra_flags & (MREMAP_RELOCATE_ANON |
+						    MREMAP_MUST_RELOCATE_ANON),
 	};
 
 	src = get_source_mapping(c);
@@ -582,6 +624,12 @@ static void mremap_move_1mb_from_start(unsigned int pattern_seed,
 		success = 0;
 		goto out;
 	}
+
+	/* See comment in mremap_move_within_range(). */
+	if (extra_flags & MREMAP_MUST_RELOCATE_ANON)
+		madvise(src, c.region_size, MADV_NOHUGEPAGE);
+
+	mremap_flags |= extra_flags;
 
 	c.src_alignment = SIZE_MB(1) + SIZE_KB(256);
 	dest = get_source_mapping(c);
@@ -599,8 +647,8 @@ static void mremap_move_1mb_from_start(unsigned int pattern_seed,
 	 */
 	munmap(dest, SIZE_MB(1));
 
-	void *new_ptr = mremap(src + SIZE_MB(1), SIZE_MB(1), SIZE_MB(1),
-						   MREMAP_MAYMOVE | MREMAP_FIXED, dest + SIZE_MB(1));
+	void *new_ptr = sys_mremap(src + SIZE_MB(1), SIZE_MB(1), SIZE_MB(1),
+				   mremap_flags, dest + SIZE_MB(1));
 	if (new_ptr == MAP_FAILED) {
 		perror("mremap");
 		success = 0;
@@ -629,9 +677,10 @@ out:
 		perror("munmap dest");
 
 	if (success)
-		ksft_test_result_pass("%s\n", test_name);
+		ksft_test_result_pass("%s%s\n", test_name, test_suffix);
+
 	else
-		ksft_test_result_fail("%s\n", test_name);
+		ksft_test_result_fail("%s%s\n", test_name, test_suffix);
 }
 
 static void run_mremap_test_case(struct test test_case, int *failures,
@@ -640,13 +689,17 @@ static void run_mremap_test_case(struct test test_case, int *failures,
 {
 	long long remap_time = remap_region(test_case.config, threshold_mb,
 					    rand_addr);
+	char *relocate_anon_suffix = " [MREMAP_MUST_RELOCATE_ANON]";
+	struct config *c = &test_case.config;
 
 	if (remap_time < 0) {
 		if (test_case.expect_failure)
-			ksft_test_result_xfail("%s\n\tExpected mremap failure\n",
-					      test_case.name);
+			ksft_test_result_xfail("%s%s\n\tExpected mremap failure\n",
+					       test_case.name,
+					       c->use_relocate_anon ? relocate_anon_suffix : "");
 		else {
-			ksft_test_result_fail("%s\n", test_case.name);
+			ksft_test_result_fail("%s%s\n", test_case.name,
+					      c->use_relocate_anon ? relocate_anon_suffix : "");
 			*failures += 1;
 		}
 	} else {
@@ -656,10 +709,13 @@ static void run_mremap_test_case(struct test test_case, int *failures,
 		 */
 		if (threshold_mb == VALIDATION_NO_THRESHOLD ||
 		    test_case.config.region_size <= threshold_mb * _1MB)
-			ksft_test_result_pass("%s\n\tmremap time: %12lldns\n",
-					      test_case.name, remap_time);
+			ksft_test_result_pass("%s%s\n\tmremap time: %12lldns\n",
+					      test_case.name,
+					      c->use_relocate_anon ? relocate_anon_suffix : "",
+					      remap_time);
 		else
-			ksft_test_result_pass("%s\n", test_case.name);
+			ksft_test_result_pass("%s%s\n", test_case.name,
+					      c->use_relocate_anon ? relocate_anon_suffix : "");
 	}
 }
 
@@ -703,8 +759,8 @@ static int parse_args(int argc, char **argv, unsigned int *threshold_mb,
 	return 0;
 }
 
-#define MAX_TEST 15
-#define MAX_PERF_TEST 3
+#define MAX_TEST 30
+#define MAX_PERF_TEST 6
 int main(int argc, char **argv)
 {
 	int failures = 0;
@@ -721,12 +777,15 @@ int main(int argc, char **argv)
 	char *rand_addr;
 	size_t rand_size;
 	int num_expand_tests = 2;
-	int num_misc_tests = 2;
+	int num_misc_tests = 6;
 	struct test test_cases[MAX_TEST] = {};
 	struct test perf_test_cases[MAX_PERF_TEST];
 	int page_size;
 	time_t t;
 	FILE *maps_fp;
+	bool use_relocate_anon = false;
+	struct test *test_case = test_cases;
+	struct test *perf_test_case = perf_test_cases;
 
 	pattern_seed = (unsigned int) time(&t);
 
@@ -763,66 +822,71 @@ int main(int argc, char **argv)
 
 	page_size = sysconf(_SC_PAGESIZE);
 
-	/* Expected mremap failures */
-	test_cases[0] =	MAKE_TEST(page_size, page_size, page_size,
-				  OVERLAPPING, EXPECT_FAILURE,
-				  "mremap - Source and Destination Regions Overlapping");
+	do {
+		/* Expected mremap failures */
+		*test_case++ =	MAKE_TEST(page_size, page_size, page_size,
+					  OVERLAPPING, use_relocate_anon, EXPECT_FAILURE,
+					  "mremap - Source and Destination Regions Overlapping");
 
-	test_cases[1] = MAKE_TEST(page_size, page_size/4, page_size,
-				  NON_OVERLAPPING, EXPECT_FAILURE,
-				  "mremap - Destination Address Misaligned (1KB-aligned)");
-	test_cases[2] = MAKE_TEST(page_size/4, page_size, page_size,
-				  NON_OVERLAPPING, EXPECT_FAILURE,
-				  "mremap - Source Address Misaligned (1KB-aligned)");
+		*test_case++ =	MAKE_TEST(page_size, page_size/4, page_size,
+					  NON_OVERLAPPING, use_relocate_anon, EXPECT_FAILURE,
+					  "mremap - Destination Address Misaligned (1KB-aligned)");
+		*test_case++ =	MAKE_TEST(page_size/4, page_size, page_size,
+					  NON_OVERLAPPING, use_relocate_anon, EXPECT_FAILURE,
+					  "mremap - Source Address Misaligned (1KB-aligned)");
 
-	/* Src addr PTE aligned */
-	test_cases[3] = MAKE_TEST(PTE, PTE, PTE * 2,
-				  NON_OVERLAPPING, EXPECT_SUCCESS,
-				  "8KB mremap - Source PTE-aligned, Destination PTE-aligned");
+		/* Src addr PTE aligned */
+		*test_case++ =	MAKE_TEST(PTE, PTE, PTE * 2,
+					  NON_OVERLAPPING, use_relocate_anon, EXPECT_SUCCESS,
+					  "8KB mremap - Source PTE-aligned, Destination PTE-aligned");
 
-	/* Src addr 1MB aligned */
-	test_cases[4] = MAKE_TEST(_1MB, PTE, _2MB, NON_OVERLAPPING, EXPECT_SUCCESS,
-				  "2MB mremap - Source 1MB-aligned, Destination PTE-aligned");
-	test_cases[5] = MAKE_TEST(_1MB, _1MB, _2MB, NON_OVERLAPPING, EXPECT_SUCCESS,
-				  "2MB mremap - Source 1MB-aligned, Destination 1MB-aligned");
+		/* Src addr 1MB aligned */
+		*test_case++ =	MAKE_TEST(_1MB, PTE, _2MB, NON_OVERLAPPING, use_relocate_anon, EXPECT_SUCCESS,
+					  "2MB mremap - Source 1MB-aligned, Destination PTE-aligned");
+		*test_case++ =	MAKE_TEST(_1MB, _1MB, _2MB, NON_OVERLAPPING, use_relocate_anon, EXPECT_SUCCESS,
+					  "2MB mremap - Source 1MB-aligned, Destination 1MB-aligned");
 
-	/* Src addr PMD aligned */
-	test_cases[6] = MAKE_TEST(PMD, PTE, _4MB, NON_OVERLAPPING, EXPECT_SUCCESS,
-				  "4MB mremap - Source PMD-aligned, Destination PTE-aligned");
-	test_cases[7] =	MAKE_TEST(PMD, _1MB, _4MB, NON_OVERLAPPING, EXPECT_SUCCESS,
-				  "4MB mremap - Source PMD-aligned, Destination 1MB-aligned");
-	test_cases[8] = MAKE_TEST(PMD, PMD, _4MB, NON_OVERLAPPING, EXPECT_SUCCESS,
-				  "4MB mremap - Source PMD-aligned, Destination PMD-aligned");
+		/* Src addr PMD aligned */
+		*test_case++ =	MAKE_TEST(PMD, PTE, _4MB, NON_OVERLAPPING, use_relocate_anon, EXPECT_SUCCESS,
+					  "4MB mremap - Source PMD-aligned, Destination PTE-aligned");
+		*test_case++ =	MAKE_TEST(PMD, _1MB, _4MB, NON_OVERLAPPING, use_relocate_anon, EXPECT_SUCCESS,
+					  "4MB mremap - Source PMD-aligned, Destination 1MB-aligned");
+		*test_case++ =	MAKE_TEST(PMD, PMD, _4MB, NON_OVERLAPPING, use_relocate_anon, EXPECT_SUCCESS,
+					  "4MB mremap - Source PMD-aligned, Destination PMD-aligned");
 
-	/* Src addr PUD aligned */
-	test_cases[9] = MAKE_TEST(PUD, PTE, _2GB, NON_OVERLAPPING, EXPECT_SUCCESS,
-				  "2GB mremap - Source PUD-aligned, Destination PTE-aligned");
-	test_cases[10] = MAKE_TEST(PUD, _1MB, _2GB, NON_OVERLAPPING, EXPECT_SUCCESS,
-				   "2GB mremap - Source PUD-aligned, Destination 1MB-aligned");
-	test_cases[11] = MAKE_TEST(PUD, PMD, _2GB, NON_OVERLAPPING, EXPECT_SUCCESS,
-				   "2GB mremap - Source PUD-aligned, Destination PMD-aligned");
-	test_cases[12] = MAKE_TEST(PUD, PUD, _2GB, NON_OVERLAPPING, EXPECT_SUCCESS,
-				   "2GB mremap - Source PUD-aligned, Destination PUD-aligned");
+		/* Src addr PUD aligned */
+		*test_case++ =	MAKE_TEST(PUD, PTE, _2GB, NON_OVERLAPPING, use_relocate_anon, EXPECT_SUCCESS,
+					  "2GB mremap - Source PUD-aligned, Destination PTE-aligned");
+		*test_case++ =	MAKE_TEST(PUD, _1MB, _2GB, NON_OVERLAPPING, use_relocate_anon, EXPECT_SUCCESS,
+					   "2GB mremap - Source PUD-aligned, Destination 1MB-aligned");
+		*test_case++ =	MAKE_TEST(PUD, PMD, _2GB, NON_OVERLAPPING, use_relocate_anon, EXPECT_SUCCESS,
+					   "2GB mremap - Source PUD-aligned, Destination PMD-aligned");
+		*test_case++ =	MAKE_TEST(PUD, PUD, _2GB, NON_OVERLAPPING, use_relocate_anon, EXPECT_SUCCESS,
+					   "2GB mremap - Source PUD-aligned, Destination PUD-aligned");
 
-	/* Src and Dest addr 1MB aligned. 5MB mremap. */
-	test_cases[13] = MAKE_TEST(_1MB, _1MB, _5MB, NON_OVERLAPPING, EXPECT_SUCCESS,
-				  "5MB mremap - Source 1MB-aligned, Destination 1MB-aligned");
+		/* Src and Dest addr 1MB aligned. 5MB mremap. */
+		*test_case++ =	MAKE_TEST(_1MB, _1MB, _5MB, NON_OVERLAPPING, use_relocate_anon, EXPECT_SUCCESS,
+					   "5MB mremap - Source 1MB-aligned, Destination 1MB-aligned");
 
-	/* Src and Dest addr 1MB aligned. 5MB mremap. */
-	test_cases[14] = MAKE_TEST(_1MB, _1MB, _5MB, NON_OVERLAPPING, EXPECT_SUCCESS,
-				  "5MB mremap - Source 1MB-aligned, Dest 1MB-aligned with 40MB Preamble");
-	test_cases[14].config.dest_preamble_size = 10 * _4MB;
+		/* Src and Dest addr 1MB aligned. 5MB mremap. */
+		*test_case =	MAKE_TEST(_1MB, _1MB, _5MB, NON_OVERLAPPING, use_relocate_anon, EXPECT_SUCCESS,
+					   "5MB mremap - Source 1MB-aligned, Dest 1MB-aligned with 40MB Preamble");
+		test_case++->config.dest_preamble_size = 10 * _4MB;
 
-	perf_test_cases[0] =  MAKE_TEST(page_size, page_size, _1GB, NON_OVERLAPPING, EXPECT_SUCCESS,
-					"1GB mremap - Source PTE-aligned, Destination PTE-aligned");
-	/*
-	 * mremap 1GB region - Page table level aligned time
-	 * comparison.
-	 */
-	perf_test_cases[1] = MAKE_TEST(PMD, PMD, _1GB, NON_OVERLAPPING, EXPECT_SUCCESS,
-				       "1GB mremap - Source PMD-aligned, Destination PMD-aligned");
-	perf_test_cases[2] = MAKE_TEST(PUD, PUD, _1GB, NON_OVERLAPPING, EXPECT_SUCCESS,
-				       "1GB mremap - Source PUD-aligned, Destination PUD-aligned");
+		*perf_test_case++ =	 MAKE_TEST(page_size, page_size, _1GB, NON_OVERLAPPING,
+						   use_relocate_anon, EXPECT_SUCCESS,
+						"1GB mremap - Source PTE-aligned, Destination PTE-aligned");
+		/*
+		 * mremap 1GB region - Page table level aligned time
+		 * comparison.
+		 */
+		*perf_test_case++ =	MAKE_TEST(PMD, PMD, _1GB, NON_OVERLAPPING, use_relocate_anon, EXPECT_SUCCESS,
+					       "1GB mremap - Source PMD-aligned, Destination PMD-aligned");
+		*perf_test_case++ =	MAKE_TEST(PUD, PUD, _1GB, NON_OVERLAPPING, use_relocate_anon, EXPECT_SUCCESS,
+					       "1GB mremap - Source PUD-aligned, Destination PUD-aligned");
+
+		use_relocate_anon = !use_relocate_anon;
+	} while (use_relocate_anon);
 
 	run_perf_tests =  (threshold_mb == VALIDATION_NO_THRESHOLD) ||
 				(threshold_mb * _1MB >= _1GB);
@@ -846,8 +910,18 @@ int main(int argc, char **argv)
 
 	fclose(maps_fp);
 
-	mremap_move_within_range(pattern_seed, rand_addr);
-	mremap_move_1mb_from_start(pattern_seed, rand_addr);
+	mremap_move_within_range(pattern_seed, rand_addr,
+				 "", 0);
+	mremap_move_within_range(pattern_seed, rand_addr,
+				 "[MREMAP_RELOCATE_ANON]", MREMAP_RELOCATE_ANON);
+	mremap_move_within_range(pattern_seed, rand_addr,
+				 "[MREMAP_MUST_RELOCATE_ANON]", MREMAP_MUST_RELOCATE_ANON);
+	mremap_move_1mb_from_start(pattern_seed, rand_addr,
+				   "", 0);
+	mremap_move_1mb_from_start(pattern_seed, rand_addr,
+				   "[MREMAP_RELOCATE_ANON]", MREMAP_RELOCATE_ANON);
+	mremap_move_1mb_from_start(pattern_seed, rand_addr,
+				   "[MREMAP_MUST_RELOCATE_ANON]", MREMAP_MUST_RELOCATE_ANON);
 
 	if (run_perf_tests) {
 		ksft_print_msg("\n%s\n",

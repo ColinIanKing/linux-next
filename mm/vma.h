@@ -98,7 +98,7 @@ struct vma_merge_struct {
 	unsigned long end;
 	pgoff_t pgoff;
 
-	unsigned long flags;
+	vm_flags_t vm_flags;
 	struct file *file;
 	struct anon_vma *anon_vma;
 	struct mempolicy *policy;
@@ -164,13 +164,13 @@ static inline pgoff_t vma_pgoff_offset(struct vm_area_struct *vma,
 	return vma->vm_pgoff + PHYS_PFN(addr - vma->vm_start);
 }
 
-#define VMG_STATE(name, mm_, vmi_, start_, end_, flags_, pgoff_)	\
+#define VMG_STATE(name, mm_, vmi_, start_, end_, vm_flags_, pgoff_)	\
 	struct vma_merge_struct name = {				\
 		.mm = mm_,						\
 		.vmi = vmi_,						\
 		.start = start_,					\
 		.end = end_,						\
-		.flags = flags_,					\
+		.vm_flags = vm_flags_,					\
 		.pgoff = pgoff_,					\
 		.state = VMA_MERGE_START,				\
 	}
@@ -184,7 +184,7 @@ static inline pgoff_t vma_pgoff_offset(struct vm_area_struct *vma,
 		.next = NULL,					\
 		.start = start_,				\
 		.end = end_,					\
-		.flags = vma_->vm_flags,			\
+		.vm_flags = vma_->vm_flags,			\
 		.pgoff = vma_pgoff_offset(vma_, start_),	\
 		.file = vma_->vm_file,				\
 		.anon_vma = vma_->anon_vma,			\
@@ -288,7 +288,7 @@ __must_check struct vm_area_struct
 *vma_modify_flags(struct vma_iterator *vmi,
 		struct vm_area_struct *prev, struct vm_area_struct *vma,
 		unsigned long start, unsigned long end,
-		unsigned long new_flags);
+		vm_flags_t vm_flags);
 
 /* We are about to modify the VMA's flags and/or anon_name. */
 __must_check struct vm_area_struct
@@ -297,7 +297,7 @@ __must_check struct vm_area_struct
 		       struct vm_area_struct *vma,
 		       unsigned long start,
 		       unsigned long end,
-		       unsigned long new_flags,
+		       vm_flags_t vm_flags,
 		       struct anon_vma_name *new_name);
 
 /* We are about to modify the VMA's memory policy. */
@@ -314,12 +314,15 @@ __must_check struct vm_area_struct
 		       struct vm_area_struct *prev,
 		       struct vm_area_struct *vma,
 		       unsigned long start, unsigned long end,
-		       unsigned long new_flags,
+		       vm_flags_t vm_flags,
 		       struct vm_userfaultfd_ctx new_ctx,
 		       bool give_up_on_oom);
 
 __must_check struct vm_area_struct
 *vma_merge_new_range(struct vma_merge_struct *vmg);
+
+__must_check struct vm_area_struct
+*vma_merge_existing_range(struct vma_merge_struct *vmg);
 
 __must_check struct vm_area_struct
 *vma_merge_extend(struct vma_iterator *vmi,
@@ -341,7 +344,7 @@ int vma_link(struct mm_struct *mm, struct vm_area_struct *vma);
 
 struct vm_area_struct *copy_vma(struct vm_area_struct **vmap,
 	unsigned long addr, unsigned long len, pgoff_t pgoff,
-	bool *need_rmap_locks);
+	bool *need_rmap_locks, bool *relocate_anon);
 
 struct anon_vma *find_mergeable_anon_vma(struct vm_area_struct *vma);
 
@@ -375,7 +378,7 @@ static inline bool vma_wants_manual_pte_write_upgrade(struct vm_area_struct *vma
 }
 
 #ifdef CONFIG_MMU
-static inline pgprot_t vm_pgprot_modify(pgprot_t oldprot, unsigned long vm_flags)
+static inline pgprot_t vm_pgprot_modify(pgprot_t oldprot, vm_flags_t vm_flags)
 {
 	return pgprot_modify(oldprot, vm_get_page_prot(vm_flags));
 }
@@ -558,6 +561,37 @@ struct vm_area_struct *vma_iter_next_rewind(struct vma_iterator *vmi,
 
 	return next;
 }
+
+/*
+ * Is this VMA either the parent of forked processes or the child of a forking
+ * process which may possess an unCOW'd reference to a shared folio?
+ */
+bool vma_maybe_has_shared_anon_folios(struct vm_area_struct *vma);
+
+/*
+ * If, at any point, the VMA had unCoW'd mappings from parents, it will maintain
+ * more than one anon_vma_chain connecting it to more than one anon_vma. A merge
+ * would mean a wider range of folios sharing the root anon_vma lock, and thus
+ * potential lock contention, we do not wish to encourage merging such that this
+ * scales to a problem.
+ *
+ * Assumes VMA is locked.
+ */
+static inline bool vma_had_uncowed_parents(struct vm_area_struct *vma)
+{
+	/*
+	 * The list_is_singular() test is to avoid merging VMA cloned from
+	 * parents. This can improve scalability caused by anon_vma lock.
+	 */
+	return vma && vma->anon_vma && !list_is_singular(&vma->anon_vma_chain);
+}
+
+/*
+ * If, at any point, folios mapped by the VMA had unCoW'd mappings potentially
+ * present in child processes forked from this one, then the underlying mapped
+ * folios may be non-exclusively mapped.
+ */
+bool vma_had_uncowed_children(struct vm_area_struct *vma);
 
 #ifdef CONFIG_64BIT
 
