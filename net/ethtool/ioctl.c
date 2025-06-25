@@ -1037,27 +1037,99 @@ static int ethtool_check_xfrm_rxfh(u32 input_xfrm, u64 rxfh)
 static int ethtool_check_flow_types(struct net_device *dev, u32 input_xfrm)
 {
 	const struct ethtool_ops *ops = dev->ethtool_ops;
-	struct ethtool_rxnfc info = {
-		.cmd = ETHTOOL_GRXFH,
-	};
 	int err;
 	u32 i;
 
 	for (i = 0; i < __FLOW_TYPE_COUNT; i++) {
+		struct ethtool_rxfh_fields fields = {
+			.flow_type	= i,
+		};
+
 		if (!flow_type_hashable(i))
 			continue;
 
-		info.flow_type = i;
-		err = ops->get_rxnfc(dev, &info, NULL);
-		if (err)
+		if (ops->get_rxfh_fields(dev, &fields))
 			continue;
 
-		err = ethtool_check_xfrm_rxfh(input_xfrm, info.data);
+		err = ethtool_check_xfrm_rxfh(input_xfrm, fields.data);
 		if (err)
 			return err;
 	}
 
 	return 0;
+}
+
+static noinline_for_stack int
+ethtool_set_rxfh_fields(struct net_device *dev, u32 cmd, void __user *useraddr)
+{
+	const struct ethtool_ops *ops = dev->ethtool_ops;
+	struct ethtool_rxfh_fields fields = {};
+	struct ethtool_rxnfc info;
+	size_t info_size = sizeof(info);
+	int rc;
+
+	if (!ops->set_rxfh_fields)
+		return -EOPNOTSUPP;
+
+	rc = ethtool_rxnfc_copy_struct(cmd, &info, &info_size, useraddr);
+	if (rc)
+		return rc;
+
+	if (info.flow_type & FLOW_RSS && info.rss_context &&
+	    !ops->rxfh_per_ctx_fields)
+		return -EINVAL;
+
+	if (ops->get_rxfh) {
+		struct ethtool_rxfh_param rxfh = {};
+
+		rc = ops->get_rxfh(dev, &rxfh);
+		if (rc)
+			return rc;
+
+		rc = ethtool_check_xfrm_rxfh(rxfh.input_xfrm, info.data);
+		if (rc)
+			return rc;
+	}
+
+	fields.data = info.data;
+	fields.flow_type = info.flow_type & ~FLOW_RSS;
+	if (info.flow_type & FLOW_RSS)
+		fields.rss_context = info.rss_context;
+
+	return ops->set_rxfh_fields(dev, &fields, NULL);
+}
+
+static noinline_for_stack int
+ethtool_get_rxfh_fields(struct net_device *dev, u32 cmd, void __user *useraddr)
+{
+	struct ethtool_rxnfc info;
+	size_t info_size = sizeof(info);
+	const struct ethtool_ops *ops = dev->ethtool_ops;
+	struct ethtool_rxfh_fields fields = {};
+	int ret;
+
+	if (!ops->get_rxfh_fields)
+		return -EOPNOTSUPP;
+
+	ret = ethtool_rxnfc_copy_struct(cmd, &info, &info_size, useraddr);
+	if (ret)
+		return ret;
+
+	if (info.flow_type & FLOW_RSS && info.rss_context &&
+	    !ops->rxfh_per_ctx_fields)
+		return -EINVAL;
+
+	fields.flow_type = info.flow_type & ~FLOW_RSS;
+	if (info.flow_type & FLOW_RSS)
+		fields.rss_context = info.rss_context;
+
+	ret = ops->get_rxfh_fields(dev, &fields);
+	if (ret < 0)
+		return ret;
+
+	info.data = fields.data;
+
+	return ethtool_rxnfc_copy_to_user(useraddr, &info, info_size, NULL);
 }
 
 static noinline_for_stack int ethtool_set_rxnfc(struct net_device *dev,
@@ -1086,18 +1158,6 @@ static noinline_for_stack int ethtool_set_rxnfc(struct net_device *dev,
 		if (info.rss_context &&
 		    !xa_load(&dev->ethtool->rss_ctx, info.rss_context))
 			return -EINVAL;
-	}
-
-	if (cmd == ETHTOOL_SRXFH && ops->get_rxfh) {
-		struct ethtool_rxfh_param rxfh = {};
-
-		rc = ops->get_rxfh(dev, &rxfh);
-		if (rc)
-			return rc;
-
-		rc = ethtool_check_xfrm_rxfh(rxfh.input_xfrm, info.data);
-		if (rc)
-			return rc;
 	}
 
 	rc = ops->set_rxnfc(dev, &info);
@@ -1445,7 +1505,7 @@ static noinline_for_stack int ethtool_set_rxfh(struct net_device *dev,
 	u8 *rss_config;
 	int ret;
 
-	if (!ops->get_rxnfc || !ops->set_rxfh)
+	if (!ops->get_rxnfc || !ops->get_rxfh_fields || !ops->set_rxfh)
 		return -EOPNOTSUPP;
 
 	if (ops->get_rxfh_indir_size)
@@ -3339,13 +3399,17 @@ __dev_ethtool(struct net *net, struct ifreq *ifr, void __user *useraddr,
 				       dev->ethtool_ops->set_priv_flags);
 		break;
 	case ETHTOOL_GRXFH:
+		rc = ethtool_get_rxfh_fields(dev, ethcmd, useraddr);
+		break;
+	case ETHTOOL_SRXFH:
+		rc = ethtool_set_rxfh_fields(dev, ethcmd, useraddr);
+		break;
 	case ETHTOOL_GRXRINGS:
 	case ETHTOOL_GRXCLSRLCNT:
 	case ETHTOOL_GRXCLSRULE:
 	case ETHTOOL_GRXCLSRLALL:
 		rc = ethtool_get_rxnfc(dev, ethcmd, useraddr);
 		break;
-	case ETHTOOL_SRXFH:
 	case ETHTOOL_SRXCLSRLDEL:
 	case ETHTOOL_SRXCLSRLINS:
 		rc = ethtool_set_rxnfc(dev, ethcmd, useraddr);
