@@ -1148,8 +1148,8 @@ exit:
 	blk_mq_end_request(req, res);
 }
 
-static void ublk_complete_io_cmd(struct ublk_io *io, struct request *req,
-				 int res, unsigned issue_flags)
+static struct io_uring_cmd *__ublk_prep_compl_io_cmd(struct ublk_io *io,
+						     struct request *req)
 {
 	/* read cmd first because req will overwrite it */
 	struct io_uring_cmd *cmd = io->cmd;
@@ -1164,6 +1164,13 @@ static void ublk_complete_io_cmd(struct ublk_io *io, struct request *req,
 	io->flags &= ~UBLK_IO_FLAG_ACTIVE;
 
 	io->req = req;
+	return cmd;
+}
+
+static void ublk_complete_io_cmd(struct ublk_io *io, struct request *req,
+				 int res, unsigned issue_flags)
+{
+	struct io_uring_cmd *cmd = __ublk_prep_compl_io_cmd(io, req);
 
 	/* tell ublksrv one io request is coming */
 	io_uring_cmd_done(cmd, res, 0, issue_flags);
@@ -1336,9 +1343,8 @@ static void ublk_cmd_list_tw_cb(struct io_uring_cmd *cmd,
 	} while (rq);
 }
 
-static void ublk_queue_cmd_list(struct ublk_io *io, struct rq_list *l)
+static void ublk_queue_cmd_list(struct io_uring_cmd *cmd, struct rq_list *l)
 {
-	struct io_uring_cmd *cmd = io->cmd;
 	struct ublk_uring_cmd_pdu *pdu = ublk_get_uring_cmd_pdu(cmd);
 
 	pdu->req_list = rq_list_peek(l);
@@ -1420,16 +1426,18 @@ static void ublk_queue_rqs(struct rq_list *rqlist)
 {
 	struct rq_list requeue_list = { };
 	struct rq_list submit_list = { };
-	struct ublk_io *io = NULL;
+	struct io_uring_cmd *cmd = NULL;
 	struct request *req;
 
 	while ((req = rq_list_pop(rqlist))) {
 		struct ublk_queue *this_q = req->mq_hctx->driver_data;
-		struct ublk_io *this_io = &this_q->ios[req->tag];
+		struct io_uring_cmd *this_cmd = this_q->ios[req->tag].cmd;
 
-		if (io && io->task != this_io->task && !rq_list_empty(&submit_list))
-			ublk_queue_cmd_list(io, &submit_list);
-		io = this_io;
+		if (cmd && io_uring_cmd_ctx_handle(cmd) !=
+				io_uring_cmd_ctx_handle(this_cmd) &&
+				!rq_list_empty(&submit_list))
+			ublk_queue_cmd_list(cmd, &submit_list);
+		cmd = this_cmd;
 
 		if (ublk_prep_req(this_q, req, true) == BLK_STS_OK)
 			rq_list_add_tail(&submit_list, req);
@@ -1438,7 +1446,7 @@ static void ublk_queue_rqs(struct rq_list *rqlist)
 	}
 
 	if (!rq_list_empty(&submit_list))
-		ublk_queue_cmd_list(io, &submit_list);
+		ublk_queue_cmd_list(cmd, &submit_list);
 	*rqlist = requeue_list;
 }
 
@@ -2148,10 +2156,9 @@ static int ublk_commit_and_fetch(const struct ublk_queue *ubq,
 	return 0;
 }
 
-static bool ublk_get_data(const struct ublk_queue *ubq, struct ublk_io *io)
+static bool ublk_get_data(const struct ublk_queue *ubq, struct ublk_io *io,
+			  struct request *req)
 {
-	struct request *req = io->req;
-
 	/*
 	 * We have handled UBLK_IO_NEED_GET_DATA command,
 	 * so clear UBLK_IO_FLAG_NEED_GET_DATA now and just
@@ -2178,6 +2185,7 @@ static int __ublk_ch_uring_cmd(struct io_uring_cmd *cmd,
 	u32 cmd_op = cmd->cmd_op;
 	unsigned tag = ub_cmd->tag;
 	int ret = -EINVAL;
+	struct request *req;
 
 	pr_devel("%s: received: cmd op %d queue %d tag %d result %d\n",
 			__func__, cmd->cmd_op, ub_cmd->q_id, tag,
@@ -2236,11 +2244,19 @@ static int __ublk_ch_uring_cmd(struct io_uring_cmd *cmd,
 			goto out;
 		break;
 	case UBLK_IO_NEED_GET_DATA:
-		io->addr = ub_cmd->addr;
-		if (!ublk_get_data(ubq, io))
-			return -EIOCBQUEUED;
-
-		return UBLK_IO_RES_OK;
+		/*
+		 * ublk_get_data() may fail and fallback to requeue, so keep
+		 * uring_cmd active first and prepare for handling new requeued
+		 * request
+		 */
+		req = io->req;
+		ublk_fill_io_cmd(io, cmd, ub_cmd->addr);
+		io->flags &= ~UBLK_IO_FLAG_OWNED_BY_SRV;
+		if (likely(ublk_get_data(ubq, io, req))) {
+			__ublk_prep_compl_io_cmd(io, req);
+			return UBLK_IO_RES_OK;
+		}
+		break;
 	default:
 		goto out;
 	}
