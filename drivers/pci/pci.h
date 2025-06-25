@@ -56,9 +56,14 @@ struct pcie_tlp_log;
  */
 #define PCIE_RESET_CONFIG_WAIT_MS	100
 
-/* Parameters for the waiting for link up routine */
-#define PCIE_LINK_WAIT_MAX_RETRIES	10
-#define PCIE_LINK_WAIT_SLEEP_MS		90
+/*
+ * Parameters for waiting for a link to be established. As per PCIe r6.0,
+ * sec 6.6.1, software must allow at least 1.0 s following exit from a
+ * Conventional Reset of a device, before determining that the device is broken.
+ * Therefore LINK_WAIT_MAX_RETRIES * LINK_WAIT_SLEEP_MS should equal 1.0 s.
+ */
+#define PCIE_LINK_WAIT_MAX_RETRIES	100
+#define PCIE_LINK_WAIT_SLEEP_MS		10
 
 /* Message Routing (r[2:0]); PCIe r6.0, sec 2.2.8 */
 #define PCIE_MSG_TYPE_R_RC	0
