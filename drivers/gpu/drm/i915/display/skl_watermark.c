@@ -6,14 +6,14 @@
 #include <linux/debugfs.h>
 
 #include <drm/drm_blend.h>
+#include <drm/drm_file.h>
+#include <drm/drm_print.h>
 
 #include "soc/intel_dram.h"
-
-#include "i915_drv.h"
 #include "i915_reg.h"
+#include "i915_utils.h"
 #include "i9xx_wm.h"
 #include "intel_atomic.h"
-#include "intel_atomic_plane.h"
 #include "intel_bw.h"
 #include "intel_cdclk.h"
 #include "intel_crtc.h"
@@ -27,6 +27,7 @@
 #include "intel_fb.h"
 #include "intel_fixed.h"
 #include "intel_pcode.h"
+#include "intel_plane.h"
 #include "intel_wm.h"
 #include "skl_universal_plane_regs.h"
 #include "skl_watermark.h"
@@ -87,8 +88,6 @@ intel_has_sagv(struct intel_display *display)
 static u32
 intel_sagv_block_time(struct intel_display *display)
 {
-	struct drm_i915_private *i915 = to_i915(display->drm);
-
 	if (DISPLAY_VER(display) >= 14) {
 		u32 val;
 
@@ -99,9 +98,9 @@ intel_sagv_block_time(struct intel_display *display)
 		u32 val = 0;
 		int ret;
 
-		ret = snb_pcode_read(&i915->uncore,
-				     GEN12_PCODE_READ_SAGV_BLOCK_TIME_US,
-				     &val, NULL);
+		ret = intel_pcode_read(display->drm,
+				       GEN12_PCODE_READ_SAGV_BLOCK_TIME_US,
+				       &val, NULL);
 		if (ret) {
 			drm_dbg_kms(display->drm, "Couldn't read SAGV block time!\n");
 			return 0;
@@ -159,7 +158,6 @@ static void intel_sagv_init(struct intel_display *display)
  */
 static void skl_sagv_enable(struct intel_display *display)
 {
-	struct drm_i915_private *i915 = to_i915(display->drm);
 	int ret;
 
 	if (!intel_has_sagv(display))
@@ -169,8 +167,8 @@ static void skl_sagv_enable(struct intel_display *display)
 		return;
 
 	drm_dbg_kms(display->drm, "Enabling SAGV\n");
-	ret = snb_pcode_write(&i915->uncore, GEN9_PCODE_SAGV_CONTROL,
-			      GEN9_SAGV_ENABLE);
+	ret = intel_pcode_write(display->drm, GEN9_PCODE_SAGV_CONTROL,
+				GEN9_SAGV_ENABLE);
 
 	/* We don't need to wait for SAGV when enabling */
 
@@ -192,7 +190,6 @@ static void skl_sagv_enable(struct intel_display *display)
 
 static void skl_sagv_disable(struct intel_display *display)
 {
-	struct drm_i915_private *i915 = to_i915(display->drm);
 	int ret;
 
 	if (!intel_has_sagv(display))
@@ -203,10 +200,9 @@ static void skl_sagv_disable(struct intel_display *display)
 
 	drm_dbg_kms(display->drm, "Disabling SAGV\n");
 	/* bspec says to keep retrying for at least 1 ms */
-	ret = skl_pcode_request(&i915->uncore, GEN9_PCODE_SAGV_CONTROL,
-				GEN9_SAGV_DISABLE,
-				GEN9_SAGV_IS_DISABLED, GEN9_SAGV_IS_DISABLED,
-				1);
+	ret = intel_pcode_request(display->drm, GEN9_PCODE_SAGV_CONTROL,
+				  GEN9_SAGV_DISABLE,
+				  GEN9_SAGV_IS_DISABLED, GEN9_SAGV_IS_DISABLED, 1);
 	/*
 	 * Some skl systems, pre-release machines in particular,
 	 * don't actually have SAGV.
@@ -2680,6 +2676,97 @@ static char enast(bool enable)
 	return enable ? '*' : ' ';
 }
 
+static noinline_for_stack void
+skl_print_plane_changes(struct intel_display *display,
+			struct intel_plane *plane,
+			const struct skl_plane_wm *old_wm,
+			const struct skl_plane_wm *new_wm)
+{
+	drm_dbg_kms(display->drm,
+		    "[PLANE:%d:%s]   level %cwm0,%cwm1,%cwm2,%cwm3,%cwm4,%cwm5,%cwm6,%cwm7,%ctwm,%cswm,%cstwm"
+		    " -> %cwm0,%cwm1,%cwm2,%cwm3,%cwm4,%cwm5,%cwm6,%cwm7,%ctwm,%cswm,%cstwm\n",
+		    plane->base.base.id, plane->base.name,
+		    enast(old_wm->wm[0].enable), enast(old_wm->wm[1].enable),
+		    enast(old_wm->wm[2].enable), enast(old_wm->wm[3].enable),
+		    enast(old_wm->wm[4].enable), enast(old_wm->wm[5].enable),
+		    enast(old_wm->wm[6].enable), enast(old_wm->wm[7].enable),
+		    enast(old_wm->trans_wm.enable),
+		    enast(old_wm->sagv.wm0.enable),
+		    enast(old_wm->sagv.trans_wm.enable),
+		    enast(new_wm->wm[0].enable), enast(new_wm->wm[1].enable),
+		    enast(new_wm->wm[2].enable), enast(new_wm->wm[3].enable),
+		    enast(new_wm->wm[4].enable), enast(new_wm->wm[5].enable),
+		    enast(new_wm->wm[6].enable), enast(new_wm->wm[7].enable),
+		    enast(new_wm->trans_wm.enable),
+		    enast(new_wm->sagv.wm0.enable),
+		    enast(new_wm->sagv.trans_wm.enable));
+
+	drm_dbg_kms(display->drm,
+		    "[PLANE:%d:%s]   lines %c%3d,%c%3d,%c%3d,%c%3d,%c%3d,%c%3d,%c%3d,%c%3d,%c%3d,%c%3d,%c%4d"
+		      " -> %c%3d,%c%3d,%c%3d,%c%3d,%c%3d,%c%3d,%c%3d,%c%3d,%c%3d,%c%3d,%c%4d\n",
+		    plane->base.base.id, plane->base.name,
+		    enast(old_wm->wm[0].ignore_lines), old_wm->wm[0].lines,
+		    enast(old_wm->wm[1].ignore_lines), old_wm->wm[1].lines,
+		    enast(old_wm->wm[2].ignore_lines), old_wm->wm[2].lines,
+		    enast(old_wm->wm[3].ignore_lines), old_wm->wm[3].lines,
+		    enast(old_wm->wm[4].ignore_lines), old_wm->wm[4].lines,
+		    enast(old_wm->wm[5].ignore_lines), old_wm->wm[5].lines,
+		    enast(old_wm->wm[6].ignore_lines), old_wm->wm[6].lines,
+		    enast(old_wm->wm[7].ignore_lines), old_wm->wm[7].lines,
+		    enast(old_wm->trans_wm.ignore_lines), old_wm->trans_wm.lines,
+		    enast(old_wm->sagv.wm0.ignore_lines), old_wm->sagv.wm0.lines,
+		    enast(old_wm->sagv.trans_wm.ignore_lines), old_wm->sagv.trans_wm.lines,
+		    enast(new_wm->wm[0].ignore_lines), new_wm->wm[0].lines,
+		    enast(new_wm->wm[1].ignore_lines), new_wm->wm[1].lines,
+		    enast(new_wm->wm[2].ignore_lines), new_wm->wm[2].lines,
+		    enast(new_wm->wm[3].ignore_lines), new_wm->wm[3].lines,
+		    enast(new_wm->wm[4].ignore_lines), new_wm->wm[4].lines,
+		    enast(new_wm->wm[5].ignore_lines), new_wm->wm[5].lines,
+		    enast(new_wm->wm[6].ignore_lines), new_wm->wm[6].lines,
+		    enast(new_wm->wm[7].ignore_lines), new_wm->wm[7].lines,
+		    enast(new_wm->trans_wm.ignore_lines), new_wm->trans_wm.lines,
+		    enast(new_wm->sagv.wm0.ignore_lines), new_wm->sagv.wm0.lines,
+		    enast(new_wm->sagv.trans_wm.ignore_lines), new_wm->sagv.trans_wm.lines);
+
+	drm_dbg_kms(display->drm,
+		    "[PLANE:%d:%s]  blocks %4d,%4d,%4d,%4d,%4d,%4d,%4d,%4d,%4d,%4d,%5d"
+		    " -> %4d,%4d,%4d,%4d,%4d,%4d,%4d,%4d,%4d,%4d,%5d\n",
+		    plane->base.base.id, plane->base.name,
+		    old_wm->wm[0].blocks, old_wm->wm[1].blocks,
+		    old_wm->wm[2].blocks, old_wm->wm[3].blocks,
+		    old_wm->wm[4].blocks, old_wm->wm[5].blocks,
+		    old_wm->wm[6].blocks, old_wm->wm[7].blocks,
+		    old_wm->trans_wm.blocks,
+		    old_wm->sagv.wm0.blocks,
+		    old_wm->sagv.trans_wm.blocks,
+		    new_wm->wm[0].blocks, new_wm->wm[1].blocks,
+		    new_wm->wm[2].blocks, new_wm->wm[3].blocks,
+		    new_wm->wm[4].blocks, new_wm->wm[5].blocks,
+		    new_wm->wm[6].blocks, new_wm->wm[7].blocks,
+		    new_wm->trans_wm.blocks,
+		    new_wm->sagv.wm0.blocks,
+		    new_wm->sagv.trans_wm.blocks);
+
+	drm_dbg_kms(display->drm,
+		    "[PLANE:%d:%s] min_ddb %4d,%4d,%4d,%4d,%4d,%4d,%4d,%4d,%4d,%4d,%5d"
+		    " -> %4d,%4d,%4d,%4d,%4d,%4d,%4d,%4d,%4d,%4d,%5d\n",
+		    plane->base.base.id, plane->base.name,
+		    old_wm->wm[0].min_ddb_alloc, old_wm->wm[1].min_ddb_alloc,
+		    old_wm->wm[2].min_ddb_alloc, old_wm->wm[3].min_ddb_alloc,
+		    old_wm->wm[4].min_ddb_alloc, old_wm->wm[5].min_ddb_alloc,
+		    old_wm->wm[6].min_ddb_alloc, old_wm->wm[7].min_ddb_alloc,
+		    old_wm->trans_wm.min_ddb_alloc,
+		    old_wm->sagv.wm0.min_ddb_alloc,
+		    old_wm->sagv.trans_wm.min_ddb_alloc,
+		    new_wm->wm[0].min_ddb_alloc, new_wm->wm[1].min_ddb_alloc,
+		    new_wm->wm[2].min_ddb_alloc, new_wm->wm[3].min_ddb_alloc,
+		    new_wm->wm[4].min_ddb_alloc, new_wm->wm[5].min_ddb_alloc,
+		    new_wm->wm[6].min_ddb_alloc, new_wm->wm[7].min_ddb_alloc,
+		    new_wm->trans_wm.min_ddb_alloc,
+		    new_wm->sagv.wm0.min_ddb_alloc,
+		    new_wm->sagv.trans_wm.min_ddb_alloc);
+}
+
 static void
 skl_print_wm_changes(struct intel_atomic_state *state)
 {
@@ -2709,7 +2796,6 @@ skl_print_wm_changes(struct intel_atomic_state *state)
 
 			if (skl_ddb_entry_equal(old, new))
 				continue;
-
 			drm_dbg_kms(display->drm,
 				    "[PLANE:%d:%s] ddb (%4d - %4d) -> (%4d - %4d), size %4d -> %4d\n",
 				    plane->base.base.id, plane->base.name,
@@ -2727,89 +2813,7 @@ skl_print_wm_changes(struct intel_atomic_state *state)
 			if (skl_plane_wm_equals(display, old_wm, new_wm))
 				continue;
 
-			drm_dbg_kms(display->drm,
-				    "[PLANE:%d:%s]   level %cwm0,%cwm1,%cwm2,%cwm3,%cwm4,%cwm5,%cwm6,%cwm7,%ctwm,%cswm,%cstwm"
-				    " -> %cwm0,%cwm1,%cwm2,%cwm3,%cwm4,%cwm5,%cwm6,%cwm7,%ctwm,%cswm,%cstwm\n",
-				    plane->base.base.id, plane->base.name,
-				    enast(old_wm->wm[0].enable), enast(old_wm->wm[1].enable),
-				    enast(old_wm->wm[2].enable), enast(old_wm->wm[3].enable),
-				    enast(old_wm->wm[4].enable), enast(old_wm->wm[5].enable),
-				    enast(old_wm->wm[6].enable), enast(old_wm->wm[7].enable),
-				    enast(old_wm->trans_wm.enable),
-				    enast(old_wm->sagv.wm0.enable),
-				    enast(old_wm->sagv.trans_wm.enable),
-				    enast(new_wm->wm[0].enable), enast(new_wm->wm[1].enable),
-				    enast(new_wm->wm[2].enable), enast(new_wm->wm[3].enable),
-				    enast(new_wm->wm[4].enable), enast(new_wm->wm[5].enable),
-				    enast(new_wm->wm[6].enable), enast(new_wm->wm[7].enable),
-				    enast(new_wm->trans_wm.enable),
-				    enast(new_wm->sagv.wm0.enable),
-				    enast(new_wm->sagv.trans_wm.enable));
-
-			drm_dbg_kms(display->drm,
-				    "[PLANE:%d:%s]   lines %c%3d,%c%3d,%c%3d,%c%3d,%c%3d,%c%3d,%c%3d,%c%3d,%c%3d,%c%3d,%c%4d"
-				      " -> %c%3d,%c%3d,%c%3d,%c%3d,%c%3d,%c%3d,%c%3d,%c%3d,%c%3d,%c%3d,%c%4d\n",
-				    plane->base.base.id, plane->base.name,
-				    enast(old_wm->wm[0].ignore_lines), old_wm->wm[0].lines,
-				    enast(old_wm->wm[1].ignore_lines), old_wm->wm[1].lines,
-				    enast(old_wm->wm[2].ignore_lines), old_wm->wm[2].lines,
-				    enast(old_wm->wm[3].ignore_lines), old_wm->wm[3].lines,
-				    enast(old_wm->wm[4].ignore_lines), old_wm->wm[4].lines,
-				    enast(old_wm->wm[5].ignore_lines), old_wm->wm[5].lines,
-				    enast(old_wm->wm[6].ignore_lines), old_wm->wm[6].lines,
-				    enast(old_wm->wm[7].ignore_lines), old_wm->wm[7].lines,
-				    enast(old_wm->trans_wm.ignore_lines), old_wm->trans_wm.lines,
-				    enast(old_wm->sagv.wm0.ignore_lines), old_wm->sagv.wm0.lines,
-				    enast(old_wm->sagv.trans_wm.ignore_lines), old_wm->sagv.trans_wm.lines,
-				    enast(new_wm->wm[0].ignore_lines), new_wm->wm[0].lines,
-				    enast(new_wm->wm[1].ignore_lines), new_wm->wm[1].lines,
-				    enast(new_wm->wm[2].ignore_lines), new_wm->wm[2].lines,
-				    enast(new_wm->wm[3].ignore_lines), new_wm->wm[3].lines,
-				    enast(new_wm->wm[4].ignore_lines), new_wm->wm[4].lines,
-				    enast(new_wm->wm[5].ignore_lines), new_wm->wm[5].lines,
-				    enast(new_wm->wm[6].ignore_lines), new_wm->wm[6].lines,
-				    enast(new_wm->wm[7].ignore_lines), new_wm->wm[7].lines,
-				    enast(new_wm->trans_wm.ignore_lines), new_wm->trans_wm.lines,
-				    enast(new_wm->sagv.wm0.ignore_lines), new_wm->sagv.wm0.lines,
-				    enast(new_wm->sagv.trans_wm.ignore_lines), new_wm->sagv.trans_wm.lines);
-
-			drm_dbg_kms(display->drm,
-				    "[PLANE:%d:%s]  blocks %4d,%4d,%4d,%4d,%4d,%4d,%4d,%4d,%4d,%4d,%5d"
-				    " -> %4d,%4d,%4d,%4d,%4d,%4d,%4d,%4d,%4d,%4d,%5d\n",
-				    plane->base.base.id, plane->base.name,
-				    old_wm->wm[0].blocks, old_wm->wm[1].blocks,
-				    old_wm->wm[2].blocks, old_wm->wm[3].blocks,
-				    old_wm->wm[4].blocks, old_wm->wm[5].blocks,
-				    old_wm->wm[6].blocks, old_wm->wm[7].blocks,
-				    old_wm->trans_wm.blocks,
-				    old_wm->sagv.wm0.blocks,
-				    old_wm->sagv.trans_wm.blocks,
-				    new_wm->wm[0].blocks, new_wm->wm[1].blocks,
-				    new_wm->wm[2].blocks, new_wm->wm[3].blocks,
-				    new_wm->wm[4].blocks, new_wm->wm[5].blocks,
-				    new_wm->wm[6].blocks, new_wm->wm[7].blocks,
-				    new_wm->trans_wm.blocks,
-				    new_wm->sagv.wm0.blocks,
-				    new_wm->sagv.trans_wm.blocks);
-
-			drm_dbg_kms(display->drm,
-				    "[PLANE:%d:%s] min_ddb %4d,%4d,%4d,%4d,%4d,%4d,%4d,%4d,%4d,%4d,%5d"
-				    " -> %4d,%4d,%4d,%4d,%4d,%4d,%4d,%4d,%4d,%4d,%5d\n",
-				    plane->base.base.id, plane->base.name,
-				    old_wm->wm[0].min_ddb_alloc, old_wm->wm[1].min_ddb_alloc,
-				    old_wm->wm[2].min_ddb_alloc, old_wm->wm[3].min_ddb_alloc,
-				    old_wm->wm[4].min_ddb_alloc, old_wm->wm[5].min_ddb_alloc,
-				    old_wm->wm[6].min_ddb_alloc, old_wm->wm[7].min_ddb_alloc,
-				    old_wm->trans_wm.min_ddb_alloc,
-				    old_wm->sagv.wm0.min_ddb_alloc,
-				    old_wm->sagv.trans_wm.min_ddb_alloc,
-				    new_wm->wm[0].min_ddb_alloc, new_wm->wm[1].min_ddb_alloc,
-				    new_wm->wm[2].min_ddb_alloc, new_wm->wm[3].min_ddb_alloc,
-				    new_wm->wm[4].min_ddb_alloc, new_wm->wm[5].min_ddb_alloc,
-				    new_wm->wm[6].min_ddb_alloc, new_wm->wm[7].min_ddb_alloc,
-				    new_wm->trans_wm.min_ddb_alloc,
-				    new_wm->sagv.wm0.min_ddb_alloc,
-				    new_wm->sagv.trans_wm.min_ddb_alloc);
+			skl_print_plane_changes(display, plane, old_wm, new_wm);
 		}
 	}
 }
@@ -3279,7 +3283,6 @@ static void mtl_read_wm_latency(struct intel_display *display, u16 wm[])
 
 static void skl_read_wm_latency(struct intel_display *display, u16 wm[])
 {
-	struct drm_i915_private *i915 = to_i915(display->drm);
 	int num_levels = display->wm.num_levels;
 	int read_latency = DISPLAY_VER(display) >= 12 ? 3 : 2;
 	int mult = display->platform.dg2 ? 2 : 1;
@@ -3288,7 +3291,7 @@ static void skl_read_wm_latency(struct intel_display *display, u16 wm[])
 
 	/* read the first set of memory latencies[0:3] */
 	val = 0; /* data0 to be programmed to 0 for first set */
-	ret = snb_pcode_read(&i915->uncore, GEN9_PCODE_READ_MEM_LATENCY, &val, NULL);
+	ret = intel_pcode_read(display->drm, GEN9_PCODE_READ_MEM_LATENCY, &val, NULL);
 	if (ret) {
 		drm_err(display->drm, "SKL Mailbox read error = %d\n", ret);
 		return;
@@ -3301,7 +3304,7 @@ static void skl_read_wm_latency(struct intel_display *display, u16 wm[])
 
 	/* read the second set of memory latencies[4:7] */
 	val = 1; /* data0 to be programmed to 1 for second set */
-	ret = snb_pcode_read(&i915->uncore, GEN9_PCODE_READ_MEM_LATENCY, &val, NULL);
+	ret = intel_pcode_read(display->drm, GEN9_PCODE_READ_MEM_LATENCY, &val, NULL);
 	if (ret) {
 		drm_err(display->drm, "SKL Mailbox read error = %d\n", ret);
 		return;
