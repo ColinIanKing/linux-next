@@ -415,7 +415,7 @@ static void test_unmerge_uffd_wp(void)
 	close(uffd);
 	uffd = syscall(__NR_userfaultfd, O_CLOEXEC | O_NONBLOCK);
 	if (uffd < 0) {
-		ksft_test_result_skip("__NR_userfaultfd failed\n");
+		ksft_test_result_fail("__NR_userfaultfd failed\n");
 		goto unmap;
 	}
 
