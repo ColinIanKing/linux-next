@@ -2569,7 +2569,7 @@ static unsigned long alloc_pages_bulk_weighted_interleave(gfp_t gfp,
 	unsigned long node_pages, delta;
 	u8 *weights, weight;
 	unsigned int weight_total = 0;
-	unsigned long rem_pages = nr_pages;
+	unsigned long rem_pages = nr_pages, carryover = 0;
 	nodemask_t nodes;
 	int nnodes, node;
 	int resume_node = MAX_NUMNODES - 1;
@@ -2594,18 +2594,12 @@ static unsigned long alloc_pages_bulk_weighted_interleave(gfp_t gfp,
 	node = me->il_prev;
 	weight = me->il_weight;
 	if (weight && node_isset(node, nodes)) {
-		node_pages = min(rem_pages, weight);
-		nr_allocated = __alloc_pages_bulk(gfp, node, NULL, node_pages,
-						  page_array);
-		page_array += nr_allocated;
-		total_allocated += nr_allocated;
-		/* if that's all the pages, no need to interleave */
 		if (rem_pages <= weight) {
-			me->il_weight -= rem_pages;
-			return total_allocated;
+			node_pages = rem_pages;
+			me->il_weight -= node_pages;
+			goto allocate;
 		}
-		/* Otherwise we adjust remaining pages, continue from there */
-		rem_pages -= weight;
+		carryover = weight;
 	}
 	/* clear active weight in case of an allocation failure */
 	me->il_weight = 0;
@@ -2614,7 +2608,7 @@ static unsigned long alloc_pages_bulk_weighted_interleave(gfp_t gfp,
 	/* create a local copy of node weights to operate on outside rcu */
 	weights = kzalloc(nr_node_ids, GFP_KERNEL);
 	if (!weights)
-		return total_allocated;
+		return 0;
 
 	rcu_read_lock();
 	state = rcu_dereference(wi_state);
@@ -2634,16 +2628,17 @@ static unsigned long alloc_pages_bulk_weighted_interleave(gfp_t gfp,
 	/*
 	 * Calculate rounds/partial rounds to minimize __alloc_pages_bulk calls.
 	 * Track which node weighted interleave should resume from.
+	 * Account for carryover. It is always allocated from the first node.
 	 *
 	 * if (rounds > 0) and (delta == 0), resume_node will always be
 	 * the node following prev_node and its weight.
 	 */
-	rounds = rem_pages / weight_total;
-	delta = rem_pages % weight_total;
+	rounds = (rem_pages - carryover) / weight_total;
+	delta = (rem_pages - carryover) % weight_total;
 	resume_node = next_node_in(prev_node, nodes);
 	resume_weight = weights[resume_node];
+	node = carryover ? prev_node : next_node_in(prev_node, nodes);
 	for (i = 0; i < nnodes; i++) {
-		node = next_node_in(prev_node, nodes);
 		weight = weights[node];
 		/* when delta is depleted, resume from that node */
 		if (delta && delta < weight) {
@@ -2651,12 +2646,14 @@ static unsigned long alloc_pages_bulk_weighted_interleave(gfp_t gfp,
 			resume_weight = weight - delta;
 		}
 		/* Add the node's portion of the delta, if there is one */
-		node_pages = weight * rounds + min(delta, weight);
+		node_pages = weight * rounds + min(delta, weight) + carryover;
 		delta -= min(delta, weight);
+		carryover = 0;
 
 		/* node_pages can be 0 if an allocation fails and rounds == 0 */
 		if (!node_pages)
 			break;
+allocate:
 		nr_allocated = __alloc_pages_bulk(gfp, node, NULL, node_pages,
 						  page_array);
 		page_array += nr_allocated;
@@ -2664,10 +2661,14 @@ static unsigned long alloc_pages_bulk_weighted_interleave(gfp_t gfp,
 		if (total_allocated == nr_pages)
 			break;
 		prev_node = node;
+		node = next_node_in(prev_node, nodes);
 	}
-	me->il_prev = resume_node;
-	me->il_weight = resume_weight;
-	kfree(weights);
+
+	if (weights) {
+		me->il_prev = resume_node;
+		me->il_weight = resume_weight;
+		kfree(weights);
+	}
 	return total_allocated;
 }
 
