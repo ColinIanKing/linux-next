@@ -486,8 +486,7 @@ static void icl_tc_cold_exit(struct intel_display *display)
 	int ret, tries = 0;
 
 	while (1) {
-		ret = snb_pcode_write_timeout(&i915->uncore, ICL_PCODE_EXIT_TCCOLD, 0,
-					      250, 1);
+		ret = intel_pcode_write(display->drm, ICL_PCODE_EXIT_TCCOLD, 0);
 		if (ret != -EAGAIN || ++tries == 3)
 			break;
 		msleep(1);
@@ -829,7 +828,7 @@ static void assert_can_enable_dc5(struct intel_display *display)
 
 	assert_display_rpm_held(display);
 
-	assert_dmc_loaded(display);
+	assert_main_dmc_loaded(display);
 }
 
 void gen9_enable_dc5(struct intel_display *display)
@@ -860,7 +859,7 @@ static void assert_can_enable_dc6(struct intel_display *display)
 		       DC_STATE_EN_UPTO_DC6),
 		      "DC6 already programmed to be enabled.\n");
 
-	assert_dmc_loaded(display);
+	assert_main_dmc_loaded(display);
 }
 
 void skl_enable_dc6(struct intel_display *display)
@@ -1766,7 +1765,7 @@ tgl_tc_cold_request(struct intel_display *display, bool block)
 		 * Spec states that we should timeout the request after 200us
 		 * but the function below will timeout after 500us
 		 */
-		ret = snb_pcode_read(&i915->uncore, TGL_PCODE_TCCOLD, &low_val, &high_val);
+		ret = intel_pcode_read(display->drm, TGL_PCODE_TCCOLD, &low_val, &high_val);
 		if (ret == 0) {
 			if (block &&
 			    (low_val & TGL_PCODE_EXIT_TCCOLD_DATA_L_EXIT_FAILED))
