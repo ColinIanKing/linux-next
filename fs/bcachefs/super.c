@@ -1024,24 +1024,25 @@ static struct bch_fs *bch2_fs_alloc(struct bch_sb *sb, struct bch_opts *opts,
 			goto err;
 	}
 
-#ifdef CONFIG_UNICODE
-	/* Default encoding until we can potentially have more as an option. */
-	c->cf_encoding = utf8_load(BCH_FS_DEFAULT_UTF8_ENCODING);
-	if (IS_ERR(c->cf_encoding)) {
-		printk(KERN_ERR "Cannot load UTF-8 encoding for filesystem. Version: %u.%u.%u",
-			unicode_major(BCH_FS_DEFAULT_UTF8_ENCODING),
-			unicode_minor(BCH_FS_DEFAULT_UTF8_ENCODING),
-			unicode_rev(BCH_FS_DEFAULT_UTF8_ENCODING));
-		ret = -EINVAL;
-		goto err;
-	}
-#else
+#ifndef CONFIG_UNICODE
 	if (c->sb.features & BIT_ULL(BCH_FEATURE_casefolding)) {
 		printk(KERN_ERR "Cannot mount a filesystem with casefolding on a kernel without CONFIG_UNICODE\n");
 		ret = -EINVAL;
 		goto err;
 	}
 #endif
+	if (bch2_fs_casefold_enabled(c)) {
+		/* Default encoding until we can potentially have more as an option. */
+		c->cf_encoding = utf8_load(BCH_FS_DEFAULT_UTF8_ENCODING);
+		if (IS_ERR(c->cf_encoding)) {
+			printk(KERN_ERR "Cannot load UTF-8 encoding for filesystem. Version: %u.%u.%u",
+			       unicode_major(BCH_FS_DEFAULT_UTF8_ENCODING),
+			       unicode_minor(BCH_FS_DEFAULT_UTF8_ENCODING),
+			       unicode_rev(BCH_FS_DEFAULT_UTF8_ENCODING));
+			ret = -EINVAL;
+			goto err;
+		}
+	}
 
 	for (i = 0; i < c->sb.nr_devices; i++) {
 		if (!bch2_member_exists(c->disk_sb.sb, i))
@@ -1160,12 +1161,11 @@ int bch2_fs_start(struct bch_fs *c)
 
 	print_mount_opts(c);
 
-#ifdef CONFIG_UNICODE
-	bch_info(c, "Using encoding defined by superblock: utf8-%u.%u.%u",
-		 unicode_major(BCH_FS_DEFAULT_UTF8_ENCODING),
-		 unicode_minor(BCH_FS_DEFAULT_UTF8_ENCODING),
-		 unicode_rev(BCH_FS_DEFAULT_UTF8_ENCODING));
-#endif
+	if (c->cf_encoding)
+		bch_info(c, "Using encoding defined by superblock: utf8-%u.%u.%u",
+			 unicode_major(BCH_FS_DEFAULT_UTF8_ENCODING),
+			 unicode_minor(BCH_FS_DEFAULT_UTF8_ENCODING),
+			 unicode_rev(BCH_FS_DEFAULT_UTF8_ENCODING));
 
 	if (!bch2_fs_may_start(c))
 		return bch_err_throw(c, insufficient_devices_to_start);
