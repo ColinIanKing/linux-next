@@ -1040,7 +1040,7 @@ static void uffd_poison_test(uffd_test_args_t *targs)
 	unsigned long nr, poison_pages = UFFD_POISON_TEST_NPAGES;
 
 	if (nr_pages < poison_pages) {
-		uffd_test_skip("Too less pages for POISON test");
+		uffd_test_skip("Too few pages for POISON test");
 		return;
 	}
 
