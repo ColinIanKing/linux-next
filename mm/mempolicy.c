@@ -2645,18 +2645,15 @@ static unsigned long alloc_pages_bulk_weighted_interleave(gfp_t gfp,
 	for (i = 0; i < nnodes; i++) {
 		node = next_node_in(prev_node, nodes);
 		weight = weights[node];
-		node_pages = weight * rounds;
-		/* If a delta exists, add this node's portion of the delta */
-		if (delta > weight) {
-			node_pages += weight;
-			delta -= weight;
-		} else if (delta) {
-			/* when delta is depleted, resume from that node */
-			node_pages += delta;
+		/* when delta is depleted, resume from that node */
+		if (delta && delta < weight) {
 			resume_node = node;
 			resume_weight = weight - delta;
-			delta = 0;
 		}
+		/* Add the node's portion of the delta, if there is one */
+		node_pages = weight * rounds + min(delta, weight);
+		delta -= min(delta, weight);
+
 		/* node_pages can be 0 if an allocation fails and rounds == 0 */
 		if (!node_pages)
 			break;
