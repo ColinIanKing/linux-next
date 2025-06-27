@@ -401,7 +401,7 @@ static int __einj_error_trigger(u64 trigger_paddr, u32 type,
 	u32 table_size;
 	int rc = -EIO;
 	struct acpi_generic_address *trigger_param_region = NULL;
-	struct acpi_einj_trigger __iomem *p;
+	struct acpi_einj_trigger __iomem *p = NULL;
 
 	r = request_mem_region(trigger_paddr, sizeof(trigger_tab),
 			       "APEI EINJ Trigger Table");
@@ -826,6 +826,10 @@ static ssize_t error_type_set(struct file *file, const char __user *buf,
 	int rc;
 	u64 val;
 
+	/* Leave the last character for the NUL terminator */
+	if (count > sizeof(einj_buf) - 1)
+		return -EINVAL;
+
 	memset(einj_buf, 0, sizeof(einj_buf));
 	if (copy_from_user(einj_buf, buf, count))
 		return -EFAULT;
@@ -909,7 +913,7 @@ static ssize_t u128_write(struct file *f, const char __user *buf, size_t count, 
 	u8 tmp[COMPONENT_LEN];
 	char byte[3] = {};
 	char *s, *e;
-	size_t c;
+	ssize_t c;
 	long val;
 	int i;
 
