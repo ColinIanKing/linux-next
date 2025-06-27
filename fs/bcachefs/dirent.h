@@ -43,7 +43,7 @@ static inline int bch2_maybe_casefold(struct btree_trans *trans,
 				      const struct bch_hash_info *info,
 				      const struct qstr *str, struct qstr *out_cf)
 {
-	return -EOPNOTSUPP;
+	return bch_err_throw(trans->c, no_casefolding_without_utf8);
 }
 #endif
 
