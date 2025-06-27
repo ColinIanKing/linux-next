@@ -721,13 +721,18 @@ static inline int btrfs_next_item(struct btrfs_root *root, struct btrfs_path *p)
 }
 int btrfs_leaf_free_space(const struct extent_buffer *leaf);
 
-static inline int is_fstree(u64 rootid)
+static inline bool btrfs_is_fstree(u64 rootid)
 {
-	if (rootid == BTRFS_FS_TREE_OBJECTID ||
-	    ((s64)rootid >= (s64)BTRFS_FIRST_FREE_OBJECTID &&
-	      !btrfs_qgroup_level(rootid)))
-		return 1;
-	return 0;
+	if (rootid == BTRFS_FS_TREE_OBJECTID)
+		return true;
+
+	if ((s64)rootid < (s64)BTRFS_FIRST_FREE_OBJECTID)
+		return false;
+
+	if (btrfs_qgroup_level(rootid) != 0)
+		return false;
+
+	return true;
 }
 
 static inline bool btrfs_is_data_reloc_root(const struct btrfs_root *root)

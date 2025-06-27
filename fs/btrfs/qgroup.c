@@ -482,7 +482,7 @@ int btrfs_read_qgroup_config(struct btrfs_fs_info *fs_info)
 			 * during mount before we start doing things like creating
 			 * subvolumes.
 			 */
-			if (is_fstree(qgroup->qgroupid) &&
+			if (btrfs_is_fstree(qgroup->qgroupid) &&
 			    qgroup->qgroupid > tree_root->free_objectid)
 				/*
 				 * Don't need to check against BTRFS_LAST_FREE_OBJECTID,
@@ -1161,11 +1161,6 @@ int btrfs_quota_enable(struct btrfs_fs_info *fs_info,
 
 			qgroup = add_qgroup_rb(fs_info, prealloc, found_key.offset);
 			prealloc = NULL;
-			if (IS_ERR(qgroup)) {
-				ret = PTR_ERR(qgroup);
-				btrfs_abort_transaction(trans, ret);
-				goto out_free_path;
-			}
 			ret = btrfs_sysfs_add_one_qgroup(fs_info, qgroup);
 			if (ret < 0) {
 				btrfs_abort_transaction(trans, ret);
@@ -1878,7 +1873,8 @@ int btrfs_qgroup_cleanup_dropped_subvolume(struct btrfs_fs_info *fs_info, u64 su
 	struct btrfs_trans_handle *trans;
 	int ret;
 
-	if (!is_fstree(subvolid) || !btrfs_qgroup_enabled(fs_info) || !fs_info->quota_root)
+	if (!btrfs_is_fstree(subvolid) || !btrfs_qgroup_enabled(fs_info) ||
+	    !fs_info->quota_root)
 		return 0;
 
 	/*
@@ -2932,7 +2928,7 @@ static int maybe_fs_roots(struct ulist *roots)
 	 * trees.
 	 * If it contains a non-fs tree, it won't be shared with fs/subvol trees.
 	 */
-	return is_fstree(unode->val);
+	return btrfs_is_fstree(unode->val);
 }
 
 int btrfs_qgroup_account_extent(struct btrfs_trans_handle *trans, u64 bytenr,
@@ -3332,6 +3328,9 @@ int btrfs_qgroup_inherit(struct btrfs_trans_handle *trans, u64 srcid,
 	u32 level_size = 0;
 	u64 nums;
 
+	if (!btrfs_qgroup_enabled(fs_info))
+		return 0;
+
 	prealloc = kzalloc(sizeof(*prealloc), GFP_NOFS);
 	if (!prealloc)
 		return -ENOMEM;
@@ -3355,8 +3354,6 @@ int btrfs_qgroup_inherit(struct btrfs_trans_handle *trans, u64 srcid,
 
 	if (!committing)
 		mutex_lock(&fs_info->qgroup_ioctl_lock);
-	if (!btrfs_qgroup_enabled(fs_info))
-		goto out;
 
 	quota_root = fs_info->quota_root;
 	if (!quota_root) {
@@ -3591,7 +3588,7 @@ static int qgroup_reserve(struct btrfs_root *root, u64 num_bytes, bool enforce,
 	int ret = 0;
 	LIST_HEAD(qgroup_list);
 
-	if (!is_fstree(ref_root))
+	if (!btrfs_is_fstree(ref_root))
 		return 0;
 
 	if (num_bytes == 0)
@@ -3651,7 +3648,7 @@ void btrfs_qgroup_free_refroot(struct btrfs_fs_info *fs_info,
 	struct btrfs_qgroup *qgroup;
 	LIST_HEAD(qgroup_list);
 
-	if (!is_fstree(ref_root))
+	if (!btrfs_is_fstree(ref_root))
 		return;
 
 	if (num_bytes == 0)
@@ -4219,7 +4216,7 @@ static int qgroup_reserve_data(struct btrfs_inode *inode,
 	int ret;
 
 	if (btrfs_qgroup_mode(root->fs_info) == BTRFS_QGROUP_MODE_DISABLED ||
-	    !is_fstree(btrfs_root_id(root)) || len == 0)
+	    !btrfs_is_fstree(btrfs_root_id(root)) || len == 0)
 		return 0;
 
 	/* @reserved parameter is mandatory for qgroup */
@@ -4472,7 +4469,7 @@ int btrfs_qgroup_reserve_meta(struct btrfs_root *root, int num_bytes,
 	int ret;
 
 	if (btrfs_qgroup_mode(fs_info) == BTRFS_QGROUP_MODE_DISABLED ||
-	    !is_fstree(btrfs_root_id(root)) || num_bytes == 0)
+	    !btrfs_is_fstree(btrfs_root_id(root)) || num_bytes == 0)
 		return 0;
 
 	BUG_ON(num_bytes != round_down(num_bytes, fs_info->nodesize));
@@ -4517,7 +4514,7 @@ void btrfs_qgroup_free_meta_all_pertrans(struct btrfs_root *root)
 	struct btrfs_fs_info *fs_info = root->fs_info;
 
 	if (btrfs_qgroup_mode(fs_info) == BTRFS_QGROUP_MODE_DISABLED ||
-	    !is_fstree(btrfs_root_id(root)))
+	    !btrfs_is_fstree(btrfs_root_id(root)))
 		return;
 
 	/* TODO: Update trace point to handle such free */
@@ -4533,7 +4530,7 @@ void __btrfs_qgroup_free_meta(struct btrfs_root *root, int num_bytes,
 	struct btrfs_fs_info *fs_info = root->fs_info;
 
 	if (btrfs_qgroup_mode(fs_info) == BTRFS_QGROUP_MODE_DISABLED ||
-	    !is_fstree(btrfs_root_id(root)))
+	    !btrfs_is_fstree(btrfs_root_id(root)))
 		return;
 
 	/*
@@ -4592,7 +4589,7 @@ void btrfs_qgroup_convert_reserved_meta(struct btrfs_root *root, int num_bytes)
 	struct btrfs_fs_info *fs_info = root->fs_info;
 
 	if (btrfs_qgroup_mode(fs_info) == BTRFS_QGROUP_MODE_DISABLED ||
-	    !is_fstree(btrfs_root_id(root)))
+	    !btrfs_is_fstree(btrfs_root_id(root)))
 		return;
 	/* Same as btrfs_qgroup_free_meta_prealloc() */
 	num_bytes = sub_root_meta_rsv(root, num_bytes,
@@ -4818,7 +4815,7 @@ int btrfs_qgroup_trace_subtree_after_cow(struct btrfs_trans_handle *trans,
 
 	if (!btrfs_qgroup_full_accounting(fs_info))
 		return 0;
-	if (!is_fstree(btrfs_root_id(root)) || !root->reloc_root)
+	if (!btrfs_is_fstree(btrfs_root_id(root)) || !root->reloc_root)
 		return 0;
 
 	spin_lock(&blocks->lock);
@@ -4902,7 +4899,7 @@ int btrfs_record_squota_delta(struct btrfs_fs_info *fs_info,
 	if (btrfs_qgroup_mode(fs_info) != BTRFS_QGROUP_MODE_SIMPLE)
 		return 0;
 
-	if (!is_fstree(root))
+	if (!btrfs_is_fstree(root))
 		return 0;
 
 	/* If the extent predates enabling quotas, don't count it. */
