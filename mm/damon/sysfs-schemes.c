@@ -1619,7 +1619,7 @@ struct damos_sysfs_action_name {
 	char *name;
 };
 
-struct damos_sysfs_action_name damos_sysfs_action_names[] = {
+static struct damos_sysfs_action_name damos_sysfs_action_names[] = {
 	{
 		.action = DAMOS_WILLNEED,
 		.name = "willneed",
