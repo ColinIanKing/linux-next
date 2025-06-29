@@ -142,6 +142,8 @@ static struct dentry *ocfs2_lookup(struct inode *dir, struct dentry *dentry,
 
 bail_add:
 	ret = d_splice_alias(inode, dentry);
+	if (IS_ERR(ret))
+		goto bail_unlock;
 
 	if (inode) {
 		/*
@@ -154,13 +156,12 @@ bail_add:
 		 * NOTE: This dentry already has ->d_op set from
 		 * ocfs2_get_parent() and ocfs2_get_dentry()
 		 */
-		if (!IS_ERR_OR_NULL(ret))
-			dentry = ret;
-
-		status = ocfs2_dentry_attach_lock(dentry, inode,
+		status = ocfs2_dentry_attach_lock(ret ? ret : dentry, inode,
 						  OCFS2_I(dir)->ip_blkno);
 		if (status) {
 			mlog_errno(status);
+			if (ret)
+				dput(ret);
 			ret = ERR_PTR(status);
 			goto bail_unlock;
 		}
@@ -1452,8 +1453,8 @@ static int ocfs2_rename(struct mnt_idmap *idmap,
 		newfe = (struct ocfs2_dinode *) newfe_bh->b_data;
 
 		trace_ocfs2_rename_over_existing(
-		     (unsigned long long)newfe_blkno, newfe_bh, newfe_bh ?
-		     (unsigned long long)newfe_bh->b_blocknr : 0ULL);
+		     (unsigned long long)newfe_blkno, newfe_bh,
+		     (unsigned long long)newfe_bh->b_blocknr);
 
 		if (S_ISDIR(new_inode->i_mode) || (new_inode->i_nlink == 1)) {
 			status = ocfs2_prepare_orphan_dir(osb, &orphan_dir,
