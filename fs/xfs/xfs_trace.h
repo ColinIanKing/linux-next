@@ -778,7 +778,6 @@ DEFINE_BUF_EVENT(xfs_buf_iowait_done);
 DEFINE_BUF_EVENT(xfs_buf_delwri_queue);
 DEFINE_BUF_EVENT(xfs_buf_delwri_queued);
 DEFINE_BUF_EVENT(xfs_buf_delwri_split);
-DEFINE_BUF_EVENT(xfs_buf_delwri_pushbuf);
 DEFINE_BUF_EVENT(xfs_buf_get_uncached);
 DEFINE_BUF_EVENT(xfs_buf_item_relse);
 DEFINE_BUF_EVENT(xfs_buf_iodone_async);
@@ -1083,7 +1082,9 @@ DEFINE_INODE_EVENT(xfs_get_acl);
 #endif
 DEFINE_INODE_EVENT(xfs_vm_bmap);
 DEFINE_INODE_EVENT(xfs_file_ioctl);
+#ifdef CONFIG_COMPAT
 DEFINE_INODE_EVENT(xfs_file_compat_ioctl);
+#endif
 DEFINE_INODE_EVENT(xfs_ioctl_setattr);
 DEFINE_INODE_EVENT(xfs_dir_fsync);
 DEFINE_INODE_EVENT(xfs_file_fsync);
@@ -1147,6 +1148,7 @@ DECLARE_EVENT_CLASS(xfs_iref_class,
 		__field(xfs_ino_t, ino)
 		__field(int, count)
 		__field(int, pincount)
+		__field(unsigned long, iflags)
 		__field(unsigned long, caller_ip)
 	),
 	TP_fast_assign(
@@ -1154,13 +1156,15 @@ DECLARE_EVENT_CLASS(xfs_iref_class,
 		__entry->ino = ip->i_ino;
 		__entry->count = atomic_read(&VFS_I(ip)->i_count);
 		__entry->pincount = atomic_read(&ip->i_pincount);
+		__entry->iflags = ip->i_flags;
 		__entry->caller_ip = caller_ip;
 	),
-	TP_printk("dev %d:%d ino 0x%llx count %d pincount %d caller %pS",
+	TP_printk("dev %d:%d ino 0x%llx count %d pincount %d iflags 0x%lx caller %pS",
 		  MAJOR(__entry->dev), MINOR(__entry->dev),
 		  __entry->ino,
 		  __entry->count,
 		  __entry->pincount,
+		  __entry->iflags,
 		  (char *)__entry->caller_ip)
 )
 
@@ -1250,6 +1254,8 @@ DEFINE_IREF_EVENT(xfs_irele);
 DEFINE_IREF_EVENT(xfs_inode_pin);
 DEFINE_IREF_EVENT(xfs_inode_unpin);
 DEFINE_IREF_EVENT(xfs_inode_unpin_nowait);
+DEFINE_IREF_EVENT(xfs_inode_push_pinned);
+DEFINE_IREF_EVENT(xfs_inode_push_stale);
 
 DECLARE_EVENT_CLASS(xfs_namespace_class,
 	TP_PROTO(struct xfs_inode *dp, const struct xfs_name *name),
@@ -1654,6 +1660,8 @@ DEFINE_LOG_ITEM_EVENT(xfs_ail_flushing);
 DEFINE_LOG_ITEM_EVENT(xfs_cil_whiteout_mark);
 DEFINE_LOG_ITEM_EVENT(xfs_cil_whiteout_skip);
 DEFINE_LOG_ITEM_EVENT(xfs_cil_whiteout_unpin);
+DEFINE_LOG_ITEM_EVENT(xlog_ail_insert_abort);
+DEFINE_LOG_ITEM_EVENT(xfs_trans_free_abort);
 
 DECLARE_EVENT_CLASS(xfs_ail_class,
 	TP_PROTO(struct xfs_log_item *lip, xfs_lsn_t old_lsn, xfs_lsn_t new_lsn),
@@ -1859,8 +1867,6 @@ DEFINE_SIMPLE_IO_EVENT(xfs_unwritten_convert);
 DEFINE_SIMPLE_IO_EVENT(xfs_setfilesize);
 DEFINE_SIMPLE_IO_EVENT(xfs_zero_eof);
 DEFINE_SIMPLE_IO_EVENT(xfs_end_io_direct_write);
-DEFINE_SIMPLE_IO_EVENT(xfs_end_io_direct_write_unwritten);
-DEFINE_SIMPLE_IO_EVENT(xfs_end_io_direct_write_append);
 DEFINE_SIMPLE_IO_EVENT(xfs_file_splice_read);
 DEFINE_SIMPLE_IO_EVENT(xfs_zoned_map_blocks);
 
@@ -1892,31 +1898,6 @@ DEFINE_EVENT(xfs_itrunc_class, name, \
 	TP_ARGS(ip, new_size))
 DEFINE_ITRUNC_EVENT(xfs_itruncate_extents_start);
 DEFINE_ITRUNC_EVENT(xfs_itruncate_extents_end);
-
-TRACE_EVENT(xfs_pagecache_inval,
-	TP_PROTO(struct xfs_inode *ip, xfs_off_t start, xfs_off_t finish),
-	TP_ARGS(ip, start, finish),
-	TP_STRUCT__entry(
-		__field(dev_t, dev)
-		__field(xfs_ino_t, ino)
-		__field(xfs_fsize_t, size)
-		__field(xfs_off_t, start)
-		__field(xfs_off_t, finish)
-	),
-	TP_fast_assign(
-		__entry->dev = VFS_I(ip)->i_sb->s_dev;
-		__entry->ino = ip->i_ino;
-		__entry->size = ip->i_disk_size;
-		__entry->start = start;
-		__entry->finish = finish;
-	),
-	TP_printk("dev %d:%d ino 0x%llx disize 0x%llx start 0x%llx finish 0x%llx",
-		  MAJOR(__entry->dev), MINOR(__entry->dev),
-		  __entry->ino,
-		  __entry->size,
-		  __entry->start,
-		  __entry->finish)
-);
 
 TRACE_EVENT(xfs_bunmap,
 	TP_PROTO(struct xfs_inode *ip, xfs_fileoff_t fileoff, xfs_filblks_t len,
@@ -2263,14 +2244,12 @@ DEFINE_EVENT(xfs_alloc_class, name, \
 DEFINE_ALLOC_EVENT(xfs_alloc_exact_done);
 DEFINE_ALLOC_EVENT(xfs_alloc_exact_notfound);
 DEFINE_ALLOC_EVENT(xfs_alloc_exact_error);
-DEFINE_ALLOC_EVENT(xfs_alloc_near_nominleft);
 DEFINE_ALLOC_EVENT(xfs_alloc_near_first);
 DEFINE_ALLOC_EVENT(xfs_alloc_cur);
 DEFINE_ALLOC_EVENT(xfs_alloc_cur_right);
 DEFINE_ALLOC_EVENT(xfs_alloc_cur_left);
 DEFINE_ALLOC_EVENT(xfs_alloc_cur_lookup);
 DEFINE_ALLOC_EVENT(xfs_alloc_cur_lookup_done);
-DEFINE_ALLOC_EVENT(xfs_alloc_near_error);
 DEFINE_ALLOC_EVENT(xfs_alloc_near_noentry);
 DEFINE_ALLOC_EVENT(xfs_alloc_near_busy);
 DEFINE_ALLOC_EVENT(xfs_alloc_size_neither);
@@ -2465,13 +2444,8 @@ DEFINE_ATTR_EVENT(xfs_attr_leaf_toosmall);
 DEFINE_ATTR_EVENT(xfs_attr_node_addname);
 DEFINE_ATTR_EVENT(xfs_attr_node_get);
 DEFINE_ATTR_EVENT(xfs_attr_node_replace);
-DEFINE_ATTR_EVENT(xfs_attr_node_removename);
-
-DEFINE_ATTR_EVENT(xfs_attr_fillstate);
-DEFINE_ATTR_EVENT(xfs_attr_refillstate);
 
 DEFINE_ATTR_EVENT(xfs_attr_rmtval_get);
-DEFINE_ATTR_EVENT(xfs_attr_rmtval_set);
 
 #define DEFINE_DA_EVENT(name) \
 DEFINE_EVENT(xfs_da_class, name, \
@@ -4206,36 +4180,6 @@ DEFINE_INODE_ERROR_EVENT(xfs_reflink_remap_extent_error);
 DEFINE_INODE_IREC_EVENT(xfs_reflink_remap_extent_src);
 DEFINE_INODE_IREC_EVENT(xfs_reflink_remap_extent_dest);
 
-/* dedupe tracepoints */
-DEFINE_DOUBLE_IO_EVENT(xfs_reflink_compare_extents);
-DEFINE_INODE_ERROR_EVENT(xfs_reflink_compare_extents_error);
-
-/* ioctl tracepoints */
-TRACE_EVENT(xfs_ioctl_clone,
-	TP_PROTO(struct inode *src, struct inode *dest),
-	TP_ARGS(src, dest),
-	TP_STRUCT__entry(
-		__field(dev_t, dev)
-		__field(unsigned long, src_ino)
-		__field(loff_t, src_isize)
-		__field(unsigned long, dest_ino)
-		__field(loff_t, dest_isize)
-	),
-	TP_fast_assign(
-		__entry->dev = src->i_sb->s_dev;
-		__entry->src_ino = src->i_ino;
-		__entry->src_isize = i_size_read(src);
-		__entry->dest_ino = dest->i_ino;
-		__entry->dest_isize = i_size_read(dest);
-	),
-	TP_printk("dev %d:%d ino 0x%lx isize 0x%llx -> ino 0x%lx isize 0x%llx",
-		  MAJOR(__entry->dev), MINOR(__entry->dev),
-		  __entry->src_ino,
-		  __entry->src_isize,
-		  __entry->dest_ino,
-		  __entry->dest_isize)
-);
-
 /* unshare tracepoints */
 DEFINE_SIMPLE_IO_EVENT(xfs_reflink_unshare);
 DEFINE_INODE_ERROR_EVENT(xfs_reflink_unshare_error);
@@ -5028,7 +4972,6 @@ DEFINE_ICLOG_EVENT(xlog_iclog_switch);
 DEFINE_ICLOG_EVENT(xlog_iclog_sync);
 DEFINE_ICLOG_EVENT(xlog_iclog_syncing);
 DEFINE_ICLOG_EVENT(xlog_iclog_sync_done);
-DEFINE_ICLOG_EVENT(xlog_iclog_want_sync);
 DEFINE_ICLOG_EVENT(xlog_iclog_wait_on);
 DEFINE_ICLOG_EVENT(xlog_iclog_write);
 
@@ -5077,7 +5020,6 @@ DEFINE_DAS_STATE_EVENT(xfs_attr_sf_addname_return);
 DEFINE_DAS_STATE_EVENT(xfs_attr_set_iter_return);
 DEFINE_DAS_STATE_EVENT(xfs_attr_leaf_addname_return);
 DEFINE_DAS_STATE_EVENT(xfs_attr_node_addname_return);
-DEFINE_DAS_STATE_EVENT(xfs_attr_remove_iter_return);
 DEFINE_DAS_STATE_EVENT(xfs_attr_rmtval_alloc);
 DEFINE_DAS_STATE_EVENT(xfs_attr_rmtval_remove_return);
 DEFINE_DAS_STATE_EVENT(xfs_attr_defer_add);

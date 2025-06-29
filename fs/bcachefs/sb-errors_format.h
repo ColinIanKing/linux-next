@@ -7,6 +7,7 @@ enum bch_fsck_flags {
 	FSCK_CAN_IGNORE		= BIT(1),
 	FSCK_AUTOFIX		= BIT(2),
 	FSCK_ERR_NO_LOG		= BIT(3),
+	FSCK_ERR_SILENT		= BIT(4),
 };
 
 #define BCH_SB_ERRS()									\
@@ -279,7 +280,7 @@ enum bch_fsck_flags {
 	x(root_subvol_missing,					238,	0)		\
 	x(root_dir_missing,					239,	0)		\
 	x(root_inode_not_dir,					240,	0)		\
-	x(dir_loop,						241,	0)		\
+	x(dir_loop,						241,	FSCK_AUTOFIX)	\
 	x(hash_table_key_duplicate,				242,	FSCK_AUTOFIX)	\
 	x(hash_table_key_wrong_offset,				243,	FSCK_AUTOFIX)	\
 	x(unlinked_inode_not_on_deleted_list,			244,	FSCK_AUTOFIX)	\
@@ -296,7 +297,7 @@ enum bch_fsck_flags {
 	x(subvol_root_fs_path_parent_nonzero,			255,	0)		\
 	x(subvol_children_not_set,				256,	0)		\
 	x(subvol_children_bad,					257,	0)		\
-	x(subvol_loop,						258,	0)		\
+	x(subvol_loop,						258,	FSCK_AUTOFIX)	\
 	x(subvol_unreachable,					259,	FSCK_AUTOFIX)	\
 	x(btree_node_bkey_bad_u64s,				260,	0)		\
 	x(btree_node_topology_empty_interior_node,		261,	0)		\
@@ -314,7 +315,7 @@ enum bch_fsck_flags {
 	x(accounting_mismatch,					272,	FSCK_AUTOFIX)	\
 	x(accounting_replicas_not_marked,			273,	0)		\
 	x(accounting_to_invalid_device,				289,	0)		\
-	x(invalid_btree_id,					274,	0)		\
+	x(invalid_btree_id,					274,	FSCK_AUTOFIX)		\
 	x(alloc_key_io_time_bad,				275,	0)		\
 	x(alloc_key_fragmentation_lru_wrong,			276,	FSCK_AUTOFIX)	\
 	x(accounting_key_junk_at_end,				277,	FSCK_AUTOFIX)	\
