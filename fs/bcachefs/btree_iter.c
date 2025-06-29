@@ -645,6 +645,7 @@ static void bch2_trans_revalidate_updates_in_node(struct btree_trans *trans, str
 
 	trans_for_each_update(trans, i)
 		if (!i->cached &&
+		    !i->key_cache_flushing &&
 		    i->level	== b->c.level &&
 		    i->btree_id	== b->c.btree_id &&
 		    bpos_cmp(i->k->k.p, b->data->min_key) >= 0 &&
@@ -2189,7 +2190,7 @@ void btree_trans_peek_prev_journal(struct btree_trans *trans,
 	struct btree_path *path = btree_iter_path(trans, iter);
 	struct bkey_i *next_journal =
 		bch2_btree_journal_peek_prev(trans, iter, search_key,
-				k->k ? k->k->p : path_l(path)->b->key.k.p);
+				k->k ? k->k->p : path_l(path)->b->data->min_key);
 
 	if (next_journal) {
 		iter->k = next_journal->k;
@@ -2288,6 +2289,7 @@ static struct bkey_s_c __bch2_btree_iter_peek(struct btree_trans *trans, struct 
 
 		if (unlikely(iter->flags & BTREE_ITER_with_key_cache) &&
 		    k.k &&
+		    !bkey_deleted(k.k) &&
 		    (k2 = btree_trans_peek_key_cache(trans, iter, k.k->p)).k) {
 			k = k2;
 			if (bkey_err(k)) {
@@ -2580,6 +2582,7 @@ static struct bkey_s_c __bch2_btree_iter_peek_prev(struct btree_trans *trans, st
 
 		if (unlikely(iter->flags & BTREE_ITER_with_key_cache) &&
 		    k.k &&
+		    !bkey_deleted(k.k) &&
 		    (k2 = btree_trans_peek_key_cache(trans, iter, k.k->p)).k) {
 			k = k2;
 			if (bkey_err(k2)) {
@@ -2795,7 +2798,7 @@ struct bkey_s_c bch2_btree_iter_prev(struct btree_trans *trans, struct btree_ite
 struct bkey_s_c bch2_btree_iter_peek_slot(struct btree_trans *trans, struct btree_iter *iter)
 {
 	struct bpos search_key;
-	struct bkey_s_c k;
+	struct bkey_s_c k, k2;
 	int ret;
 
 	bch2_trans_verify_not_unlocked_or_in_restart(trans);
@@ -2854,17 +2857,17 @@ struct bkey_s_c bch2_btree_iter_peek_slot(struct btree_trans *trans, struct btre
 		    (k = btree_trans_peek_slot_journal(trans, iter)).k)
 			goto out;
 
-		if (unlikely(iter->flags & BTREE_ITER_with_key_cache) &&
-		    (k = btree_trans_peek_key_cache(trans, iter, iter->pos)).k) {
-			if (!bkey_err(k))
-				iter->k = *k.k;
-			/* We're not returning a key from iter->path: */
-			goto out;
-		}
-
 		k = bch2_btree_path_peek_slot(btree_iter_path(trans, iter), &iter->k);
 		if (unlikely(!k.k))
 			goto out;
+
+		if (unlikely(iter->flags & BTREE_ITER_with_key_cache) &&
+		    !bkey_deleted(k.k) &&
+		    (k2 = btree_trans_peek_key_cache(trans, iter, iter->pos)).k) {
+			k = k2;
+			if (!bkey_err(k))
+				iter->k = *k.k;
+		}
 
 		if (unlikely(k.k->type == KEY_TYPE_whiteout &&
 			     (iter->flags & BTREE_ITER_filter_snapshots) &&
@@ -3238,32 +3241,30 @@ void *__bch2_trans_kmalloc(struct btree_trans *trans, size_t size, unsigned long
 	}
 
 	EBUG_ON(trans->mem);
+	EBUG_ON(trans->mem_bytes);
+	EBUG_ON(trans->mem_top);
+	EBUG_ON(new_bytes > BTREE_TRANS_MEM_MAX);
+	
+	bool lock_dropped = false;
+	new_mem = allocate_dropping_locks_norelock(trans, lock_dropped, kmalloc(new_bytes, _gfp));
+	if (!new_mem) {
+		new_mem = mempool_alloc(&c->btree_trans_mem_pool, GFP_KERNEL);
+		new_bytes = BTREE_TRANS_MEM_MAX;
+		trans->used_mempool = true;
+	}
 
-	new_mem = kmalloc(new_bytes, GFP_NOWAIT|__GFP_NOWARN);
-	if (unlikely(!new_mem)) {
-		bch2_trans_unlock(trans);
+	EBUG_ON(!new_mem);
 
-		new_mem = kmalloc(new_bytes, GFP_KERNEL);
-		if (!new_mem && new_bytes <= BTREE_TRANS_MEM_MAX) {
-			new_mem = mempool_alloc(&c->btree_trans_mem_pool, GFP_KERNEL);
-			new_bytes = BTREE_TRANS_MEM_MAX;
-			trans->used_mempool = true;
-		}
+	trans->mem = new_mem;
+	trans->mem_bytes = new_bytes;
 
-		EBUG_ON(!new_mem);
-
-		trans->mem = new_mem;
-		trans->mem_bytes = new_bytes;
-
+	if (unlikely(lock_dropped)) {
 		ret = bch2_trans_relock(trans);
 		if (ret)
 			return ERR_PTR(ret);
 	}
 
-	trans->mem = new_mem;
-	trans->mem_bytes = new_bytes;
-
-	p = trans->mem + trans->mem_top;
+	p = trans->mem;
 	trans->mem_top += size;
 	memset(p, 0, size);
 	return p;
@@ -3323,23 +3324,26 @@ u32 bch2_trans_begin(struct btree_trans *trans)
 	trans->restart_count++;
 	trans->mem_top			= 0;
 
-	if (trans->restarted == BCH_ERR_transaction_restart_mem_realloced) {
-		EBUG_ON(!trans->mem || !trans->mem_bytes);
+	if (unlikely(trans->restarted == BCH_ERR_transaction_restart_mem_realloced)) {
 		unsigned new_bytes = trans->realloc_bytes_required;
-		void *new_mem = krealloc(trans->mem, new_bytes, GFP_NOWAIT|__GFP_NOWARN);
-		if (unlikely(!new_mem)) {
-			bch2_trans_unlock(trans);
-			new_mem = krealloc(trans->mem, new_bytes, GFP_KERNEL);
+		EBUG_ON(new_bytes > BTREE_TRANS_MEM_MAX);
+		EBUG_ON(!trans->mem);
+		EBUG_ON(!trans->mem_bytes);
 
-			EBUG_ON(new_bytes > BTREE_TRANS_MEM_MAX);
+		bool lock_dropped = false;
+		void *new_mem = allocate_dropping_locks_norelock(trans, lock_dropped,
+					krealloc(trans->mem, new_bytes, _gfp));
+		(void)lock_dropped;
 
-			if (!new_mem) {
-				new_mem = mempool_alloc(&trans->c->btree_trans_mem_pool, GFP_KERNEL);
-				new_bytes = BTREE_TRANS_MEM_MAX;
-				trans->used_mempool = true;
-				kfree(trans->mem);
-			}
-                }
+		if (!new_mem) {
+			new_mem = mempool_alloc(&trans->c->btree_trans_mem_pool, GFP_KERNEL);
+			new_bytes = BTREE_TRANS_MEM_MAX;
+			trans->used_mempool = true;
+			kfree(trans->mem);
+		}
+
+		EBUG_ON(!new_mem);
+
 		trans->mem = new_mem;
 		trans->mem_bytes = new_bytes;
 	}

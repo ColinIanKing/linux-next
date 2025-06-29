@@ -38,6 +38,7 @@ static int bch2_fsck_rename_dirent(struct btree_trans *trans,
 				   struct bkey_s_c_dirent old,
 				   bool *updated_before_k_pos)
 {
+	struct bch_fs *c = trans->c;
 	struct qstr old_name = bch2_dirent_get_name(old);
 	struct bkey_i_dirent *new = bch2_trans_kmalloc(trans, BKEY_U64s_MAX * sizeof(u64));
 	int ret = PTR_ERR_OR_ZERO(new);
@@ -60,7 +61,7 @@ static int bch2_fsck_rename_dirent(struct btree_trans *trans,
 					sprintf(renamed_buf, "%.*s.fsck_renamed-%u",
 						old_name.len, old_name.name, i));
 
-		ret = bch2_dirent_init_name(new, hash_info, &renamed_name, NULL);
+		ret = bch2_dirent_init_name(c, new, hash_info, &renamed_name, NULL);
 		if (ret)
 			return ret;
 
@@ -79,7 +80,7 @@ static int bch2_fsck_rename_dirent(struct btree_trans *trans,
 	}
 
 	ret = ret ?: bch2_fsck_update_backpointers(trans, s, desc, hash_info, &new->k_i);
-	bch_err_fn(trans->c, ret);
+	bch_err_fn(c, ret);
 	return ret;
 }
 
@@ -203,7 +204,7 @@ int bch2_repair_inode_hash_info(struct btree_trans *trans,
 	}
 
 	ret = bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc) ?:
-		-BCH_ERR_transaction_restart_nested;
+		bch_err_throw(c, transaction_restart_nested);
 err:
 fsck_err:
 	printbuf_exit(&buf);
@@ -291,7 +292,7 @@ int bch2_str_hash_repair_key(struct btree_trans *trans,
 					    BTREE_UPDATE_internal_snapshot_node) ?:
 			bch2_fsck_update_backpointers(trans, s, *desc, hash_info, new) ?:
 			bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc) ?:
-			-BCH_ERR_transaction_restart_commit;
+			bch_err_throw(c, transaction_restart_commit);
 	} else {
 duplicate_entries:
 		ret = hash_pick_winner(trans, *desc, hash_info, k, dup_k);
@@ -325,7 +326,7 @@ duplicate_entries:
 		}
 
 		ret = bch2_trans_commit(trans, NULL, NULL, 0) ?:
-			-BCH_ERR_transaction_restart_commit;
+			bch_err_throw(c, transaction_restart_commit);
 	}
 out:
 fsck_err:
