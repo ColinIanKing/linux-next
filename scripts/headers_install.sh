@@ -44,6 +44,7 @@ scripts/unifdef -U__KERNEL__ -D__EXPORTED_HEADERS__ $TMPFILE > $OUTFILE
 # Remove /* ... */ style comments, and find CONFIG_ references in code
 configs=$(sed -e '
 :comment
+	s://.*::
 	s:/\*[^*][^*]*:/*:
 	s:/\*\*\**\([^/]\):/*\1:
 	t comment
