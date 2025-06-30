@@ -321,8 +321,9 @@ static int mem_repair_create_desc(struct device *dev,
 	for (i = 0; i < MR_MAX_ATTRS; i++) {
 		ctx->mem_repair_dev_attr[i].dev_attr = mem_repair_dev_attr[i];
 		ctx->mem_repair_dev_attr[i].instance = instance;
-		ctx->mem_repair_attrs[i] =
-			&ctx->mem_repair_dev_attr[i].dev_attr.attr;
+
+		sysfs_attr_init(&ctx->mem_repair_dev_attr[i].dev_attr.attr);
+		ctx->mem_repair_attrs[i] = &ctx->mem_repair_dev_attr[i].dev_attr.attr;
 	}
 
 	sprintf(ctx->name, "%s%d", "mem_repair", instance);
