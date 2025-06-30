@@ -625,12 +625,9 @@ void simple_recursive_removal(struct dentry *dentry,
 			inode_lock(inode);
 			if (simple_positive(victim)) {
 				d_invalidate(victim);	// avoid lost mounts
-				if (d_is_dir(victim))
-					fsnotify_rmdir(inode, victim);
-				else
-					fsnotify_unlink(inode, victim);
 				if (callback)
 					callback(victim);
+				fsnotify_delete(inode, d_inode(victim), victim);
 				dput(victim);		// unpin it
 			}
 			if (victim == dentry) {
@@ -2260,3 +2257,28 @@ void stashed_dentry_prune(struct dentry *dentry)
 	 */
 	cmpxchg(stashed, dentry, NULL);
 }
+
+/* parent must be held exclusive */
+struct dentry *simple_start_creating(struct dentry *parent, const char *name)
+{
+	struct dentry *dentry;
+	struct inode *dir = d_inode(parent);
+
+	inode_lock(dir);
+	if (unlikely(IS_DEADDIR(dir))) {
+		inode_unlock(dir);
+		return ERR_PTR(-ENOENT);
+	}
+	dentry = lookup_noperm(&QSTR(name), parent);
+	if (IS_ERR(dentry)) {
+		inode_unlock(dir);
+		return dentry;
+	}
+	if (dentry->d_inode) {
+		dput(dentry);
+		inode_unlock(dir);
+		return ERR_PTR(-EEXIST);
+	}
+	return dentry;
+}
+EXPORT_SYMBOL(simple_start_creating);
