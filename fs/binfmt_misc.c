@@ -675,44 +675,6 @@ static void bm_evict_inode(struct inode *inode)
 }
 
 /**
- * unlink_binfmt_dentry - remove the dentry for the binary type handler
- * @dentry: dentry associated with the binary type handler
- *
- * Do the actual filesystem work to remove a dentry for a registered binary
- * type handler. Since binfmt_misc only allows simple files to be created
- * directly under the root dentry of the filesystem we ensure that we are
- * indeed passed a dentry directly beneath the root dentry, that the inode
- * associated with the root dentry is locked, and that it is a regular file we
- * are asked to remove.
- */
-static void unlink_binfmt_dentry(struct dentry *dentry)
-{
-	struct dentry *parent = dentry->d_parent;
-	struct inode *inode, *parent_inode;
-
-	/* All entries are immediate descendants of the root dentry. */
-	if (WARN_ON_ONCE(dentry->d_sb->s_root != parent))
-		return;
-
-	/* We only expect to be called on regular files. */
-	inode = d_inode(dentry);
-	if (WARN_ON_ONCE(!S_ISREG(inode->i_mode)))
-		return;
-
-	/* The parent inode must be locked. */
-	parent_inode = d_inode(parent);
-	if (WARN_ON_ONCE(!inode_is_locked(parent_inode)))
-		return;
-
-	if (simple_positive(dentry)) {
-		dget(dentry);
-		simple_unlink(parent_inode, dentry);
-		d_delete(dentry);
-		dput(dentry);
-	}
-}
-
-/**
  * remove_binfmt_handler - remove a binary type handler
  * @misc: handle to binfmt_misc instance
  * @e: binary type handler to remove
@@ -729,7 +691,7 @@ static void remove_binfmt_handler(struct binfmt_misc *misc, Node *e)
 	write_lock(&misc->entries_lock);
 	list_del_init(&e->list);
 	write_unlock(&misc->entries_lock);
-	unlink_binfmt_dentry(e->dentry);
+	locked_recursive_removal(e->dentry, NULL);
 }
 
 /* /<entry> */
