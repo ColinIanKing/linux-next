@@ -88,6 +88,7 @@ void btrfs_zone_finish_endio(struct btrfs_fs_info *fs_info, u64 logical,
 void btrfs_schedule_zone_finish_bg(struct btrfs_block_group *bg,
 				   struct extent_buffer *eb);
 void btrfs_clear_data_reloc_bg(struct btrfs_block_group *bg);
+void btrfs_zoned_reserve_data_reloc_bg(struct btrfs_fs_info *fs_info);
 void btrfs_free_zone_cache(struct btrfs_fs_info *fs_info);
 bool btrfs_zoned_should_reclaim(const struct btrfs_fs_info *fs_info);
 void btrfs_zoned_release_data_reloc_bg(struct btrfs_fs_info *fs_info, u64 logical,
@@ -241,6 +242,8 @@ static inline void btrfs_schedule_zone_finish_bg(struct btrfs_block_group *bg,
 
 static inline void btrfs_clear_data_reloc_bg(struct btrfs_block_group *bg) { }
 
+static inline void btrfs_zoned_reserve_data_reloc_bg(struct btrfs_fs_info *fs_info) { }
+
 static inline void btrfs_free_zone_cache(struct btrfs_fs_info *fs_info) { }
 
 static inline bool btrfs_zoned_should_reclaim(const struct btrfs_fs_info *fs_info)
@@ -384,10 +387,8 @@ static inline void btrfs_clear_treelog_bg(struct btrfs_block_group *bg)
 	if (!btrfs_is_zoned(fs_info))
 		return;
 
-	spin_lock(&fs_info->treelog_bg_lock);
-	if (fs_info->treelog_bg == bg->start)
-		fs_info->treelog_bg = 0;
-	spin_unlock(&fs_info->treelog_bg_lock);
+	if (READ_ONCE(fs_info->treelog_bg) == bg->start)
+		WRITE_ONCE(fs_info->treelog_bg, 0);
 }
 
 static inline void btrfs_zoned_data_reloc_lock(struct btrfs_inode *inode)
