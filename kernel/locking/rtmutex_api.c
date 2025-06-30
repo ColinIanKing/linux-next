@@ -25,7 +25,6 @@ static const struct ctl_table rtmutex_sysctl_table[] = {
 
 static int __init init_rtmutex_sysctl(void)
 {
-	printk("registering rtmutex");
 	register_sysctl_init("kernel", rtmutex_sysctl_table);
 	return 0;
 }
