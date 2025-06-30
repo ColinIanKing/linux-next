@@ -4,6 +4,10 @@
 #include <linux/fscrypt.h>
 #include <linux/fileattr.h>
 #include <linux/export.h>
+#include <linux/syscalls.h>
+#include <linux/namei.h>
+
+#include "internal.h"
 
 /**
  * fileattr_fill_xflags - initialize fileattr with xflags
@@ -90,6 +94,19 @@ int vfs_fileattr_get(struct dentry *dentry, struct fileattr *fa)
 }
 EXPORT_SYMBOL(vfs_fileattr_get);
 
+static void fileattr_to_fsx_fileattr(const struct fileattr *fa,
+				     struct fsx_fileattr *fsx)
+{
+	__u32 mask = FS_XFLAGS_MASK;
+
+	memset(fsx, 0, sizeof(struct fsx_fileattr));
+	fsx->fsx_xflags = fa->fsx_xflags & mask;
+	fsx->fsx_extsize = fa->fsx_extsize;
+	fsx->fsx_nextents = fa->fsx_nextents;
+	fsx->fsx_projid = fa->fsx_projid;
+	fsx->fsx_cowextsize = fa->fsx_cowextsize;
+}
+
 /**
  * copy_fsxattr_to_user - copy fsxattr to userspace.
  * @fa:		fileattr pointer
@@ -115,6 +132,23 @@ int copy_fsxattr_to_user(const struct fileattr *fa, struct fsxattr __user *ufa)
 	return 0;
 }
 EXPORT_SYMBOL(copy_fsxattr_to_user);
+
+static int fsx_fileattr_to_fileattr(const struct fsx_fileattr *fsx,
+				    struct fileattr *fa)
+{
+	__u32 mask = FS_XFLAGS_MASK;
+
+	if (fsx->fsx_xflags & ~mask)
+		return -EINVAL;
+
+	fileattr_fill_xflags(fa, fsx->fsx_xflags);
+	fa->fsx_xflags &= ~FS_XFLAG_RDONLY_MASK;
+	fa->fsx_extsize = fsx->fsx_extsize;
+	fa->fsx_projid = fsx->fsx_projid;
+	fa->fsx_cowextsize = fsx->fsx_cowextsize;
+
+	return 0;
+}
 
 static int copy_fsxattr_from_user(struct fileattr *fa,
 				  struct fsxattr __user *ufa)
@@ -344,3 +378,121 @@ int ioctl_fssetxattr(struct file *file, void __user *argp)
 	return err;
 }
 EXPORT_SYMBOL(ioctl_fssetxattr);
+
+SYSCALL_DEFINE5(file_getattr, int, dfd, const char __user *, filename,
+		struct fsx_fileattr __user *, ufsx, size_t, usize,
+		unsigned int, at_flags)
+{
+	struct path filepath __free(path_put) = {};
+	struct filename *name __free(putname) = NULL;
+	unsigned int lookup_flags = 0;
+	struct fsx_fileattr fsx;
+	struct fileattr fa;
+	int error;
+
+	BUILD_BUG_ON(sizeof(struct fsx_fileattr) < FSX_FILEATTR_SIZE_VER0);
+	BUILD_BUG_ON(sizeof(struct fsx_fileattr) != FSX_FILEATTR_SIZE_LATEST);
+
+	if ((at_flags & ~(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH)) != 0)
+		return -EINVAL;
+
+	if (!(at_flags & AT_SYMLINK_NOFOLLOW))
+		lookup_flags |= LOOKUP_FOLLOW;
+
+	if (usize > PAGE_SIZE)
+		return -E2BIG;
+
+	if (usize < FSX_FILEATTR_SIZE_VER0)
+		return -EINVAL;
+
+	name = getname_maybe_null(filename, at_flags);
+	if (IS_ERR(name))
+		return PTR_ERR(name);
+
+	if (!name && dfd >= 0) {
+		CLASS(fd, f)(dfd);
+		if (fd_empty(f))
+			return -EBADF;
+
+		filepath = fd_file(f)->f_path;
+		path_get(&filepath);
+	} else {
+		error = filename_lookup(dfd, name, lookup_flags, &filepath,
+					NULL);
+		if (error)
+			return error;
+	}
+
+	error = vfs_fileattr_get(filepath.dentry, &fa);
+	if (error)
+		return error;
+
+	fileattr_to_fsx_fileattr(&fa, &fsx);
+	error = copy_struct_to_user(ufsx, usize, &fsx,
+				    sizeof(struct fsx_fileattr), NULL);
+
+	return error;
+}
+
+SYSCALL_DEFINE5(file_setattr, int, dfd, const char __user *, filename,
+		struct fsx_fileattr __user *, ufsx, size_t, usize,
+		unsigned int, at_flags)
+{
+	struct path filepath __free(path_put) = {};
+	struct filename *name __free(putname) = NULL;
+	unsigned int lookup_flags = 0;
+	struct fsx_fileattr fsx;
+	struct fileattr fa;
+	int error;
+
+	BUILD_BUG_ON(sizeof(struct fsx_fileattr) < FSX_FILEATTR_SIZE_VER0);
+	BUILD_BUG_ON(sizeof(struct fsx_fileattr) != FSX_FILEATTR_SIZE_LATEST);
+
+	if ((at_flags & ~(AT_SYMLINK_NOFOLLOW | AT_EMPTY_PATH)) != 0)
+		return -EINVAL;
+
+	if (!(at_flags & AT_SYMLINK_NOFOLLOW))
+		lookup_flags |= LOOKUP_FOLLOW;
+
+	if (usize > PAGE_SIZE)
+		return -E2BIG;
+
+	if (usize < FSX_FILEATTR_SIZE_VER0)
+		return -EINVAL;
+
+	error = copy_struct_from_user(&fsx, sizeof(struct fsx_fileattr), ufsx,
+				      usize);
+	if (error)
+		return error;
+
+	error = fsx_fileattr_to_fileattr(&fsx, &fa);
+	if (error)
+		return error;
+
+	name = getname_maybe_null(filename, at_flags);
+	if (IS_ERR(name))
+		return PTR_ERR(name);
+
+	if (!name && dfd >= 0) {
+		CLASS(fd, f)(dfd);
+		if (fd_empty(f))
+			return -EBADF;
+
+		filepath = fd_file(f)->f_path;
+		path_get(&filepath);
+	} else {
+		error = filename_lookup(dfd, name, lookup_flags, &filepath,
+					NULL);
+		if (error)
+			return error;
+	}
+
+	error = mnt_want_write(filepath.mnt);
+	if (!error) {
+		error = vfs_fileattr_set(mnt_idmap(filepath.mnt),
+					 filepath.dentry, &fa);
+		mnt_drop_write(filepath.mnt);
+	}
+
+	return error;
+}
