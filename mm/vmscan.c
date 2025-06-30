@@ -3928,6 +3928,7 @@ static bool try_to_inc_min_seq(struct lruvec *lruvec, int swappiness)
 	int gen, type, zone;
 	bool success = false;
 	struct lru_gen_folio *lrugen = &lruvec->lrugen;
+	int seq_inc_flags[ANON_AND_FILE] = {0};
 	DEFINE_MIN_SEQ(lruvec);
 
 	VM_WARN_ON_ONCE(!seq_is_valid(lruvec));
@@ -3943,10 +3944,19 @@ static bool try_to_inc_min_seq(struct lruvec *lruvec, int swappiness)
 			}
 
 			min_seq[type]++;
+			seq_inc_flags[type] = 1;
 		}
 next:
 		;
 	}
+
+	/*
+	 * If the oldest generation of LRU lists (anonymous and file)
+	 * are not empty, we can directly return false to avoid unnecessary
+	 * checking overhead later.
+	 */
+	if (!seq_inc_flags[LRU_GEN_ANON] && !seq_inc_flags[LRU_GEN_FILE])
+		return success;
 
 	/* see the comment on lru_gen_folio */
 	if (swappiness && swappiness <= MAX_SWAPPINESS) {
