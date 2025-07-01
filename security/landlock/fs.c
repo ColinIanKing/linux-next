@@ -768,7 +768,9 @@ static bool is_access_to_paths_allowed(
 	struct path walker_path;
 	access_mask_t access_masked_parent1, access_masked_parent2;
 	layer_mask_t _layer_masks_child1[LANDLOCK_NUM_ACCESS_FS],
-		_layer_masks_child2[LANDLOCK_NUM_ACCESS_FS];
+		_layer_masks_child2[LANDLOCK_NUM_ACCESS_FS],
+		_layer_masks_parent1_bkp[LANDLOCK_NUM_ACCESS_FS],
+		_layer_masks_parent2_bkp[LANDLOCK_NUM_ACCESS_FS];
 	layer_mask_t(*layer_masks_child1)[LANDLOCK_NUM_ACCESS_FS] = NULL,
 	(*layer_masks_child2)[LANDLOCK_NUM_ACCESS_FS] = NULL;
 
@@ -800,6 +802,8 @@ static bool is_access_to_paths_allowed(
 		access_masked_parent1 = access_masked_parent2 =
 			landlock_union_access_masks(domain).fs;
 		is_dom_check = true;
+		memcpy(&_layer_masks_parent2_bkp, layer_masks_parent2,
+		       sizeof(_layer_masks_parent2_bkp));
 	} else {
 		if (WARN_ON_ONCE(dentry_child1 || dentry_child2))
 			return false;
@@ -807,6 +811,8 @@ static bool is_access_to_paths_allowed(
 		access_masked_parent1 = access_request_parent1;
 		access_masked_parent2 = access_request_parent2;
 		is_dom_check = false;
+		memcpy(&_layer_masks_parent1_bkp, layer_masks_parent1,
+		       sizeof(_layer_masks_parent1_bkp));
 	}
 
 	if (unlikely(dentry_child1)) {
@@ -859,6 +865,14 @@ static bool is_access_to_paths_allowed(
 				     layer_masks_child2,
 				     child2_is_directory))) {
 			/*
+			 * Rewinds walk for disconnected directories before any other state
+			 * change.
+			 */
+			if (unlikely(!path_connected(walker_path.mnt,
+						     walker_path.dentry)))
+				goto reset_to_mount_root;
+
+			/*
 			 * Now, downgrades the remaining checks from domain
 			 * handled accesses to requested accesses.
 			 */
@@ -893,14 +907,42 @@ static bool is_access_to_paths_allowed(
 					  ARRAY_SIZE(*layer_masks_parent2));
 
 		/* Stops when a rule from each layer grants access. */
-		if (allowed_parent1 && allowed_parent2)
+		if (allowed_parent1 && allowed_parent2) {
+			/*
+			 * Rewinds walk for disconnected directories before any other state
+			 * change.
+			 */
+			if (unlikely(!path_connected(walker_path.mnt,
+						     walker_path.dentry)))
+				goto reset_to_mount_root;
+
 			break;
+		}
+
 jump_up:
 		if (walker_path.dentry == walker_path.mnt->mnt_root) {
 			if (follow_up(&walker_path)) {
+				/* Saves known good values. */
+				memcpy(&_layer_masks_parent1_bkp,
+				       layer_masks_parent1,
+				       sizeof(_layer_masks_parent1_bkp));
+				if (layer_masks_parent2)
+					memcpy(&_layer_masks_parent2_bkp,
+					       layer_masks_parent2,
+					       sizeof(_layer_masks_parent2_bkp));
+
 				/* Ignores hidden mount points. */
 				goto jump_up;
 			} else {
+				/*
+				 * Rewinds walk for disconnected directories before any other
+				 * state change.
+				 */
+				if (unlikely(!path_connected(
+					    walker_path.mnt,
+					    walker_path.dentry)))
+					goto reset_to_mount_root;
+
 				/*
 				 * Stops at the real root.  Denies access
 				 * because not all layers have granted access.
@@ -909,20 +951,51 @@ jump_up:
 			}
 		}
 		if (unlikely(IS_ROOT(walker_path.dentry))) {
-			/*
-			 * Stops at disconnected root directories.  Only allows
-			 * access to internal filesystems (e.g. nsfs, which is
-			 * reachable through /proc/<pid>/ns/<namespace>).
-			 */
 			if (walker_path.mnt->mnt_flags & MNT_INTERNAL) {
+				/*
+				 * Stops and allows access when reaching disconnected root
+				 * directories that are part of internal filesystems (e.g. nsfs,
+				 * which is reachable through /proc/<pid>/ns/<namespace>).
+				 */
 				allowed_parent1 = true;
 				allowed_parent2 = true;
+				break;
+			} else {
+				/*
+				 * Ignores current walk in walker_path.mnt when reaching
+				 * disconnected root directories from bind mounts.  Reset the
+				 * collected access rights to the latest mount point (or @path)
+				 * we walked through, and start again from the current root of
+				 * the mount point.  The newly collected access rights will be
+				 * less than or equal to those at open time.
+				 */
+				goto reset_to_mount_root;
 			}
-			break;
 		}
 		parent_dentry = dget_parent(walker_path.dentry);
 		dput(walker_path.dentry);
 		walker_path.dentry = parent_dentry;
+		continue;
+
+reset_to_mount_root:
+		/* Restores latest known good values. */
+		memcpy(layer_masks_parent1, &_layer_masks_parent1_bkp,
+		       sizeof(_layer_masks_parent1_bkp));
+		if (layer_masks_parent2)
+			memcpy(layer_masks_parent2, &_layer_masks_parent2_bkp,
+			       sizeof(_layer_masks_parent2_bkp));
+
+		/*
+		 * Ignores previous results.  They will be computed again with the next
+		 * iteration.
+		 */
+		allowed_parent1 = false;
+		allowed_parent2 = false;
+
+		/* Restarts with the current mount point. */
+		dput(walker_path.dentry);
+		walker_path.dentry = walker_path.mnt->mnt_root;
+		dget(walker_path.dentry);
 	}
 	path_put(&walker_path);
 
@@ -1030,13 +1103,13 @@ static access_mask_t maybe_remove(const struct dentry *const dentry)
  */
 static bool collect_domain_accesses(
 	const struct landlock_ruleset *const domain,
-	const struct dentry *const mnt_root, struct dentry *dir,
+	const struct path *const mnt_dir, struct dentry *dir,
 	layer_mask_t (*const layer_masks_dom)[LANDLOCK_NUM_ACCESS_FS])
 {
-	unsigned long access_dom;
+	access_mask_t access_dom;
 	bool ret = false;
 
-	if (WARN_ON_ONCE(!domain || !mnt_root || !dir || !layer_masks_dom))
+	if (WARN_ON_ONCE(!domain || !mnt_dir || !dir || !layer_masks_dom))
 		return true;
 	if (is_nouser_or_private(dir))
 		return true;
@@ -1053,6 +1126,10 @@ static bool collect_domain_accesses(
 		if (landlock_unmask_layers(find_rule(domain, dir), access_dom,
 					   layer_masks_dom,
 					   ARRAY_SIZE(*layer_masks_dom))) {
+			/* Ignores this walk if we end up in a disconnected directory. */
+			if (unlikely(!path_connected(mnt_dir->mnt, dir)))
+				goto cancel_walk;
+
 			/*
 			 * Stops when all handled accesses are allowed by at
 			 * least one rule in each layer.
@@ -1061,13 +1138,23 @@ static bool collect_domain_accesses(
 			break;
 		}
 
-		/* Stops at the mount point or disconnected root directories. */
-		if (dir == mnt_root || IS_ROOT(dir))
+		/* Stops at the mount point. */
+		if (dir == mnt_dir->dentry)
 			break;
+
+		/* Ignores this walk if we end up in a disconnected root directory. */
+		if (unlikely(IS_ROOT(dir)))
+			goto cancel_walk;
 
 		parent_dentry = dget_parent(dir);
 		dput(dir);
 		dir = parent_dentry;
+		continue;
+
+cancel_walk:
+		landlock_init_layer_masks(domain, LANDLOCK_MASK_ACCESS_FS,
+					  layer_masks_dom, LANDLOCK_KEY_INODE);
+		break;
 	}
 	dput(dir);
 	return ret;
@@ -1198,13 +1285,11 @@ static int current_check_refer_path(struct dentry *const old_dentry,
 						      old_dentry->d_parent;
 
 	/* new_dir->dentry is equal to new_dentry->d_parent */
-	allow_parent1 = collect_domain_accesses(subject->domain, mnt_dir.dentry,
-						old_parent,
-						&layer_masks_parent1);
-	allow_parent2 = collect_domain_accesses(subject->domain, mnt_dir.dentry,
+	allow_parent1 = collect_domain_accesses(
+		subject->domain, &mnt_dir, old_parent, &layer_masks_parent1);
+	allow_parent2 = collect_domain_accesses(subject->domain, &mnt_dir,
 						new_dir->dentry,
 						&layer_masks_parent2);
-
 	if (allow_parent1 && allow_parent2)
 		return 0;
 
