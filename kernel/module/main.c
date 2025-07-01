@@ -2696,9 +2696,8 @@ static int find_module_sections(struct module *mod, struct load_info *info)
 
 static int move_module(struct module *mod, struct load_info *info)
 {
-	int i;
-	enum mod_mem_type t = 0;
-	int ret = -ENOMEM;
+	int i, ret;
+	enum mod_mem_type t = MOD_MEM_NUM_TYPES;
 	bool codetag_section_found = false;
 
 	for_each_mod_mem_type(type) {
@@ -2776,7 +2775,7 @@ static int move_module(struct module *mod, struct load_info *info)
 	return 0;
 out_err:
 	module_memory_restore_rox(mod);
-	for (t--; t >= 0; t--)
+	while (t--)
 		module_memory_free(mod, t);
 	if (codetag_section_found)
 		codetag_free_module_sections(mod);
