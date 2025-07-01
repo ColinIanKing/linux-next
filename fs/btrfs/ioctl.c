@@ -666,13 +666,13 @@ static noinline int create_subvol(struct mnt_idmap *idmap,
 		goto out;
 	}
 
+	btrfs_record_new_subvolume(trans, BTRFS_I(dir));
+
 	ret = btrfs_create_new_inode(trans, &new_inode_args);
 	if (ret) {
 		btrfs_abort_transaction(trans, ret);
 		goto out;
 	}
-
-	btrfs_record_new_subvolume(trans, BTRFS_I(dir));
 
 	d_instantiate_new(dentry, new_inode_args.inode);
 	new_inode_args.inode = NULL;
@@ -841,7 +841,7 @@ free_pending:
 static int btrfs_may_delete(struct mnt_idmap *idmap,
 			    struct inode *dir, struct dentry *victim, int isdir)
 {
-	int error;
+	int ret;
 
 	if (d_really_is_negative(victim))
 		return -ENOENT;
@@ -851,9 +851,9 @@ static int btrfs_may_delete(struct mnt_idmap *idmap,
 		return -EINVAL;
 	audit_inode_child(dir, victim, AUDIT_TYPE_CHILD_DELETE);
 
-	error = inode_permission(idmap, dir, MAY_WRITE | MAY_EXEC);
-	if (error)
-		return error;
+	ret = inode_permission(idmap, dir, MAY_WRITE | MAY_EXEC);
+	if (ret)
+		return ret;
 	if (IS_APPEND(dir))
 		return -EPERM;
 	if (check_sticky(idmap, dir, d_inode(victim)) ||
@@ -892,39 +892,37 @@ static inline int btrfs_may_create(struct mnt_idmap *idmap,
  * sys_mkdirat and vfs_mkdir, but we only do a single component lookup
  * inside this filesystem so it's quite a bit simpler.
  */
-static noinline int btrfs_mksubvol(const struct path *parent,
+static noinline int btrfs_mksubvol(struct dentry *parent,
 				   struct mnt_idmap *idmap,
-				   const char *name, int namelen,
-				   struct btrfs_root *snap_src,
+				   struct qstr *qname, struct btrfs_root *snap_src,
 				   bool readonly,
 				   struct btrfs_qgroup_inherit *inherit)
 {
-	struct inode *dir = d_inode(parent->dentry);
+	struct inode *dir = d_inode(parent);
 	struct btrfs_fs_info *fs_info = inode_to_fs_info(dir);
 	struct dentry *dentry;
-	struct fscrypt_str name_str = FSTR_INIT((char *)name, namelen);
-	int error;
+	struct fscrypt_str name_str = FSTR_INIT((char *)qname->name, qname->len);
+	int ret;
 
-	error = down_write_killable_nested(&dir->i_rwsem, I_MUTEX_PARENT);
-	if (error == -EINTR)
-		return error;
+	ret = down_write_killable_nested(&dir->i_rwsem, I_MUTEX_PARENT);
+	if (ret == -EINTR)
+		return ret;
 
-	dentry = lookup_one(idmap, &QSTR_LEN(name, namelen), parent->dentry);
-	error = PTR_ERR(dentry);
+	dentry = lookup_one(idmap, qname, parent);
+	ret = PTR_ERR(dentry);
 	if (IS_ERR(dentry))
 		goto out_unlock;
 
-	error = btrfs_may_create(idmap, dir, dentry);
-	if (error)
+	ret = btrfs_may_create(idmap, dir, dentry);
+	if (ret)
 		goto out_dput;
 
 	/*
 	 * even if this name doesn't exist, we may get hash collisions.
 	 * check for them now when we can safely fail
 	 */
-	error = btrfs_check_dir_item_collision(BTRFS_I(dir)->root,
-					       dir->i_ino, &name_str);
-	if (error)
+	ret = btrfs_check_dir_item_collision(BTRFS_I(dir)->root, dir->i_ino, &name_str);
+	if (ret)
 		goto out_dput;
 
 	down_read(&fs_info->subvol_sem);
@@ -933,11 +931,11 @@ static noinline int btrfs_mksubvol(const struct path *parent,
 		goto out_up_read;
 
 	if (snap_src)
-		error = create_snapshot(snap_src, dir, dentry, readonly, inherit);
+		ret = create_snapshot(snap_src, dir, dentry, readonly, inherit);
 	else
-		error = create_subvol(idmap, dir, dentry, inherit);
+		ret = create_subvol(idmap, dir, dentry, inherit);
 
-	if (!error)
+	if (!ret)
 		fsnotify_mkdir(dir, dentry);
 out_up_read:
 	up_read(&fs_info->subvol_sem);
@@ -945,12 +943,12 @@ out_dput:
 	dput(dentry);
 out_unlock:
 	btrfs_inode_unlock(BTRFS_I(dir), 0);
-	return error;
+	return ret;
 }
 
-static noinline int btrfs_mksnapshot(const struct path *parent,
+static noinline int btrfs_mksnapshot(struct dentry *parent,
 				   struct mnt_idmap *idmap,
-				   const char *name, int namelen,
+				   struct qstr *qname,
 				   struct btrfs_root *root,
 				   bool readonly,
 				   struct btrfs_qgroup_inherit *inherit)
@@ -977,8 +975,8 @@ static noinline int btrfs_mksnapshot(const struct path *parent,
 
 	btrfs_wait_ordered_extents(root, U64_MAX, NULL);
 
-	ret = btrfs_mksubvol(parent, idmap, name, namelen,
-			     root, readonly, inherit);
+	ret = btrfs_mksubvol(parent, idmap, qname, root, readonly, inherit);
+
 	atomic_dec(&root->snapshot_force_cow);
 out:
 	btrfs_drew_read_unlock(&root->snapshot_lock);
@@ -1169,7 +1167,7 @@ static noinline int btrfs_ioctl_resize(struct file *file,
 	} /* equal, nothing need to do */
 
 	if (ret == 0 && new_size != old_size)
-		btrfs_info_in_rcu(fs_info,
+		btrfs_info(fs_info,
 			"resize device %s (devid %llu) from %llu to %llu",
 			btrfs_dev_name(device), device->devid,
 			old_size, new_size);
@@ -1184,12 +1182,12 @@ out_drop:
 
 static noinline int __btrfs_ioctl_snap_create(struct file *file,
 				struct mnt_idmap *idmap,
-				const char *name, unsigned long fd, int subvol,
+				const char *name, unsigned long fd, bool subvol,
 				bool readonly,
 				struct btrfs_qgroup_inherit *inherit)
 {
-	int namelen;
 	int ret = 0;
+	struct qstr qname = QSTR_INIT(name, strlen(name));
 
 	if (!S_ISDIR(file_inode(file)->i_mode))
 		return -ENOTDIR;
@@ -1198,21 +1196,20 @@ static noinline int __btrfs_ioctl_snap_create(struct file *file,
 	if (ret)
 		goto out;
 
-	namelen = strlen(name);
 	if (strchr(name, '/')) {
 		ret = -EINVAL;
 		goto out_drop_write;
 	}
 
-	if (name[0] == '.' &&
-	   (namelen == 1 || (name[1] == '.' && namelen == 2))) {
+	if (qname.name[0] == '.' &&
+	   (qname.len == 1 || (qname.name[1] == '.' && qname.len == 2))) {
 		ret = -EEXIST;
 		goto out_drop_write;
 	}
 
 	if (subvol) {
-		ret = btrfs_mksubvol(&file->f_path, idmap, name,
-				     namelen, NULL, readonly, inherit);
+		ret = btrfs_mksubvol(file_dentry(file), idmap, &qname, NULL,
+				     readonly, inherit);
 	} else {
 		CLASS(fd, src)(fd);
 		struct inode *src_inode;
@@ -1242,8 +1239,7 @@ static noinline int __btrfs_ioctl_snap_create(struct file *file,
 			 */
 			ret = -EINVAL;
 		} else {
-			ret = btrfs_mksnapshot(&file->f_path, idmap,
-					       name, namelen,
+			ret = btrfs_mksnapshot(file_dentry(file), idmap, &qname,
 					       BTRFS_I(src_inode)->root,
 					       readonly, inherit);
 		}
@@ -1280,7 +1276,7 @@ out:
 }
 
 static noinline int btrfs_ioctl_snap_create_v2(struct file *file,
-					       void __user *arg, int subvol)
+					       void __user *arg, bool subvol)
 {
 	struct btrfs_ioctl_vol_args_v2 *vol_args;
 	int ret;
@@ -2890,7 +2886,7 @@ static long btrfs_ioctl_default_subvol(struct file *file, void __user *argp)
 		ret = PTR_ERR(new_root);
 		goto out;
 	}
-	if (!is_fstree(btrfs_root_id(new_root))) {
+	if (!btrfs_is_fstree(btrfs_root_id(new_root))) {
 		ret = -ENOENT;
 		goto out_free;
 	}
@@ -3833,7 +3829,7 @@ static long btrfs_ioctl_qgroup_create(struct file *file, void __user *arg)
 		goto out;
 	}
 
-	if (sa->create && is_fstree(sa->qgroupid)) {
+	if (sa->create && btrfs_is_fstree(sa->qgroupid)) {
 		ret = -EINVAL;
 		goto out;
 	}
@@ -4200,7 +4196,7 @@ static int btrfs_ioctl_set_fslabel(struct file *file, void __user *arg)
 	}
 
 	spin_lock(&fs_info->super_lock);
-	strcpy(super_block->label, label);
+	strscpy(super_block->label, label);
 	spin_unlock(&fs_info->super_lock);
 	ret = btrfs_commit_transaction(trans);
 
@@ -4659,7 +4655,7 @@ static void btrfs_uring_read_finished(struct io_uring_cmd *cmd, unsigned int iss
 	struct btrfs_uring_priv *priv = bc->priv;
 	struct btrfs_inode *inode = BTRFS_I(file_inode(priv->iocb.ki_filp));
 	struct extent_io_tree *io_tree = &inode->io_tree;
-	unsigned long index;
+	pgoff_t index;
 	u64 cur;
 	size_t page_offset;
 	ssize_t ret;
@@ -4829,7 +4825,8 @@ static int btrfs_uring_encoded_read(struct io_uring_cmd *cmd, unsigned int issue
 #if defined(CONFIG_64BIT) && defined(CONFIG_COMPAT)
 		copy_end = offsetofend(struct btrfs_ioctl_encoded_io_args_32, flags);
 #else
-		return -ENOTTY;
+		ret = -ENOTTY;
+		goto out_acct;
 #endif
 	} else {
 		copy_end = copy_end_kernel;

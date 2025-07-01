@@ -420,6 +420,8 @@ struct btrfs_commit_stats {
 	u64 last_commit_dur;
 	/* The total commit duration in ns */
 	u64 total_commit_dur;
+	/* Start of the last critical section in ns. */
+	u64 critical_section_start_time;
 };
 
 struct btrfs_fs_info {
@@ -737,12 +739,6 @@ struct btrfs_fs_info {
 	/* Holds configuration and tracking. Protected by qgroup_lock. */
 	struct rb_root qgroup_tree;
 	spinlock_t qgroup_lock;
-
-	/*
-	 * Used to avoid frequently calling ulist_alloc()/ulist_free()
-	 * when doing qgroup accounting, it must be protected by qgroup_lock.
-	 */
-	struct ulist *qgroup_ulist;
 
 	/*
 	 * Protect user change for quota operations. If a transaction is needed,

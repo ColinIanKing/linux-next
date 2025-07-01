@@ -214,10 +214,8 @@ void btrfs_describe_block_groups(u64 bg_flags, char *buf, u32 size_buf)
 	u64 flags = bg_flags;
 	u32 size_bp = size_buf;
 
-	if (!flags) {
-		strcpy(bp, "NONE");
+	if (!flags)
 		return;
-	}
 
 #define DESCRIBE_FLAG(flag, desc)						\
 	do {								\
@@ -403,7 +401,8 @@ static struct btrfs_fs_devices *alloc_fs_devices(const u8 *fsid)
 static void btrfs_free_device(struct btrfs_device *device)
 {
 	WARN_ON(!list_empty(&device->post_commit_list));
-	rcu_string_free(device->name);
+	/* No need to call kfree_rcu(), nothing is reading the device name. */
+	kfree(device->name);
 	btrfs_extent_io_tree_release(&device->alloc_state);
 	btrfs_destroy_dev_zone_info(device);
 	kfree(device);
@@ -674,8 +673,8 @@ static int btrfs_open_one_device(struct btrfs_fs_devices *fs_devices,
 	if (btrfs_super_flags(disk_super) & BTRFS_SUPER_FLAG_SEEDING) {
 		if (btrfs_super_incompat_flags(disk_super) &
 		    BTRFS_FEATURE_INCOMPAT_METADATA_UUID) {
-			pr_err(
-		"BTRFS: Invalid seeding and uuid-changed device detected\n");
+			btrfs_err(NULL,
+				  "invalid seeding and uuid-changed device detected");
 			goto error_free_page;
 		}
 
@@ -786,7 +785,7 @@ static noinline struct btrfs_device *device_list_add(const char *path,
 	u64 found_transid = btrfs_super_generation(disk_super);
 	u64 devid = btrfs_stack_device_id(&disk_super->dev_item);
 	dev_t path_devt;
-	int error;
+	int ret;
 	bool same_fsid_diff_dev = false;
 	bool has_metadata_uuid = (btrfs_super_incompat_flags(disk_super) &
 		BTRFS_FEATURE_INCOMPAT_METADATA_UUID);
@@ -798,11 +797,11 @@ static noinline struct btrfs_device *device_list_add(const char *path,
 		return ERR_PTR(-EAGAIN);
 	}
 
-	error = lookup_bdev(path, &path_devt);
-	if (error) {
+	ret = lookup_bdev(path, &path_devt);
+	if (ret) {
 		btrfs_err(NULL, "failed to lookup block device for path %s: %d",
-			  path, error);
-		return ERR_PTR(error);
+			  path, ret);
+		return ERR_PTR(ret);
 	}
 
 	fs_devices = find_fsid_by_device(disk_super, path_devt, &same_fsid_diff_dev);
@@ -819,7 +818,7 @@ static noinline struct btrfs_device *device_list_add(const char *path,
 		if (same_fsid_diff_dev) {
 			generate_random_uuid(fs_devices->fsid);
 			fs_devices->temp_fsid = true;
-		pr_info("BTRFS: device %s (%d:%d) using temp-fsid %pU\n",
+			btrfs_info(NULL, "device %s (%d:%d) using temp-fsid %pU",
 				path, MAJOR(path_devt), MINOR(path_devt),
 				fs_devices->fsid);
 		}
@@ -943,14 +942,14 @@ static noinline struct btrfs_device *device_list_add(const char *path,
 		if (device->bdev) {
 			if (device->devt != path_devt) {
 				mutex_unlock(&fs_devices->device_list_mutex);
-				btrfs_warn_in_rcu(NULL,
+				btrfs_warn(NULL,
 	"duplicate device %s devid %llu generation %llu scanned by %s (%d)",
 						  path, devid, found_transid,
 						  current->comm,
 						  task_pid_nr(current));
 				return ERR_PTR(-EEXIST);
 			}
-			btrfs_info_in_rcu(NULL,
+			btrfs_info(NULL,
 	"devid %llu device path %s changed to %s scanned by %s (%d)",
 					  devid, btrfs_dev_name(device),
 					  path, current->comm,
@@ -962,7 +961,7 @@ static noinline struct btrfs_device *device_list_add(const char *path,
 			mutex_unlock(&fs_devices->device_list_mutex);
 			return ERR_PTR(-ENOMEM);
 		}
-		rcu_string_free(device->name);
+		kfree_rcu(device->name, rcu);
 		rcu_assign_pointer(device->name, name);
 		if (test_bit(BTRFS_DEV_STATE_MISSING, &device->dev_state)) {
 			fs_devices->missing_devices--;
@@ -1473,7 +1472,7 @@ struct btrfs_device *btrfs_scan_one_device(const char *path, blk_mode_t flags,
 
 	devt = file_bdev(bdev_file)->bd_dev;
 	if (btrfs_skip_registration(disk_super, path, devt, mount_arg_dev)) {
-		pr_debug("BTRFS: skip registering single non-seed device %s (%d:%d)\n",
+		btrfs_debug(NULL, "skip registering single non-seed device %s (%d:%d)",
 			  path, MAJOR(devt), MINOR(devt));
 
 		btrfs_free_stale_devices(devt, NULL);
@@ -2204,7 +2203,7 @@ int btrfs_rm_device(struct btrfs_fs_info *fs_info,
 	}
 
 	if (btrfs_pinned_by_swapfile(fs_info, device)) {
-		btrfs_warn_in_rcu(fs_info,
+		btrfs_warn(fs_info,
 		  "cannot remove device %s (devid %llu) due to active swapfile",
 				  btrfs_dev_name(device), device->devid);
 		return -ETXTBSY;
@@ -7706,7 +7705,7 @@ static int update_dev_stat_item(struct btrfs_trans_handle *trans,
 		return -ENOMEM;
 	ret = btrfs_search_slot(trans, dev_root, &key, path, -1, 1);
 	if (ret < 0) {
-		btrfs_warn_in_rcu(fs_info,
+		btrfs_warn(fs_info,
 			"error %d while searching for dev_stats item for device %s",
 				  ret, btrfs_dev_name(device));
 		goto out;
@@ -7717,7 +7716,7 @@ static int update_dev_stat_item(struct btrfs_trans_handle *trans,
 		/* need to delete old one and insert a new one */
 		ret = btrfs_del_item(trans, dev_root, path);
 		if (ret != 0) {
-			btrfs_warn_in_rcu(fs_info,
+			btrfs_warn(fs_info,
 				"delete too small dev_stats item for device %s failed %d",
 					  btrfs_dev_name(device), ret);
 			goto out;
@@ -7731,7 +7730,7 @@ static int update_dev_stat_item(struct btrfs_trans_handle *trans,
 		ret = btrfs_insert_empty_item(trans, dev_root, path,
 					      &key, sizeof(*ptr));
 		if (ret < 0) {
-			btrfs_warn_in_rcu(fs_info,
+			btrfs_warn(fs_info,
 				"insert dev_stats item for device %s failed %d",
 				btrfs_dev_name(device), ret);
 			goto out;
@@ -7794,7 +7793,7 @@ void btrfs_dev_stat_inc_and_print(struct btrfs_device *dev, int index)
 
 	if (!dev->dev_stats_valid)
 		return;
-	btrfs_err_rl_in_rcu(dev->fs_info,
+	btrfs_err_rl(dev->fs_info,
 		"bdev %s errs: wr %u, rd %u, flush %u, corrupt %u, gen %u",
 			   btrfs_dev_name(dev),
 			   btrfs_dev_stat_read(dev, BTRFS_DEV_STAT_WRITE_ERRS),
@@ -7814,7 +7813,7 @@ static void btrfs_dev_stat_print_on_load(struct btrfs_device *dev)
 	if (i == BTRFS_DEV_STAT_VALUES_MAX)
 		return; /* all values == 0, suppress message */
 
-	btrfs_info_in_rcu(dev->fs_info,
+	btrfs_info(dev->fs_info,
 		"bdev %s errs: wr %u, rd %u, flush %u, corrupt %u, gen %u",
 	       btrfs_dev_name(dev),
 	       btrfs_dev_stat_read(dev, BTRFS_DEV_STAT_WRITE_ERRS),
@@ -7938,7 +7937,7 @@ static int verify_one_dev_extent(struct btrfs_fs_info *fs_info,
 	}
 
 	/*
-	 * Very old mkfs.btrfs (before v4.1) will not respect the reserved
+	 * Very old mkfs.btrfs (before v4.15) will not respect the reserved
 	 * space. Although kernel can handle it without problem, better to warn
 	 * the users.
 	 */
