@@ -2227,7 +2227,6 @@ struct dentry *securityfs_create_symlink(const char *name,
 					 const char *target,
 					 const struct inode_operations *iops);
 extern void securityfs_remove(struct dentry *dentry);
-extern void securityfs_recursive_remove(struct dentry *dentry);
 
 #else /* CONFIG_SECURITYFS */
 
@@ -2258,6 +2257,8 @@ static inline void securityfs_remove(struct dentry *dentry)
 {}
 
 #endif
+
+#define securityfs_recursive_remove securityfs_remove
 
 #ifdef CONFIG_BPF_SYSCALL
 union bpf_attr;
