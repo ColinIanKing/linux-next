@@ -16,6 +16,10 @@
 	model = "PHYTEC phyCORE-i.MX93";
 	compatible = "phytec,imx93-phycore-som", "fsl,imx93";
 
+	aliases {
+		ethernet0 = &fec;
+	};
+
 	reserved-memory {
 		ranges;
 		#address-cells = <2>;
@@ -42,6 +46,19 @@
 			linux,default-trigger = "heartbeat";
 		};
 	};
+
+	reg_vdda_1v8: regulator-vdda-1v8 {
+		compatible = "regulator-fixed";
+		regulator-name = "VDDA_1V8";
+		regulator-min-microvolt = <1800000>;
+		regulator-max-microvolt = <1800000>;
+		vin-supply = <&buck5>;
+	};
+};
+
+/* ADC */
+&adc1 {
+	vref-supply = <&reg_vdda_1v8>;
 };
 
 /* Ethernet */
