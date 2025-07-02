@@ -23,6 +23,8 @@ void *ethnl_dump_put(struct sk_buff *skb, struct netlink_callback *cb, u8 cmd);
 void *ethnl_bcastmsg_put(struct sk_buff *skb, u8 cmd);
 void *ethnl_unicast_put(struct sk_buff *skb, u32 portid, u32 seq, u8 cmd);
 int ethnl_multicast(struct sk_buff *skb, struct net_device *dev);
+void ethnl_notify(struct net_device *dev, unsigned int cmd,
+		  const struct ethnl_req_info *req_info);
 
 /**
  * ethnl_strz_size() - calculate attribute length for fixed size string
@@ -337,6 +339,8 @@ int ethnl_sock_priv_set(struct sk_buff *skb, struct net_device *dev, u32 portid,
  *	header is already filled on entry, the rest up to @repdata_offset
  *	is zero initialized. This callback should only modify type specific
  *	request info by parsed attributes from request message.
+ *	Called for both GET and SET. Information parsed for SET will
+ *	be conveyed to the req_info used during NTF generation.
  * @prepare_data:
  *	Retrieve and prepare data needed to compose a reply message. Calls to
  *	ethtool_ops handlers are limited to this callback. Common reply data
@@ -463,7 +467,7 @@ extern const struct nla_policy ethnl_channels_set_policy[ETHTOOL_A_CHANNELS_COMB
 extern const struct nla_policy ethnl_coalesce_get_policy[ETHTOOL_A_COALESCE_HEADER + 1];
 extern const struct nla_policy ethnl_coalesce_set_policy[ETHTOOL_A_COALESCE_MAX + 1];
 extern const struct nla_policy ethnl_pause_get_policy[ETHTOOL_A_PAUSE_STATS_SRC + 1];
-extern const struct nla_policy ethnl_pause_set_policy[ETHTOOL_A_PAUSE_TX + 1];
+extern const struct nla_policy ethnl_pause_set_policy[ETHTOOL_A_PAUSE_STATS_SRC + 1];
 extern const struct nla_policy ethnl_eee_get_policy[ETHTOOL_A_EEE_HEADER + 1];
 extern const struct nla_policy ethnl_eee_set_policy[ETHTOOL_A_EEE_TX_LPI_TIMER + 1];
 extern const struct nla_policy ethnl_tsinfo_get_policy[ETHTOOL_A_TSINFO_MAX + 1];
