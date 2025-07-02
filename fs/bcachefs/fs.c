@@ -722,7 +722,6 @@ static struct dentry *bch2_lookup(struct inode *vdir, struct dentry *dentry,
 	if (IS_ERR(inode))
 		inode = NULL;
 
-#ifdef CONFIG_UNICODE
 	if (!inode && IS_CASEFOLDED(vdir)) {
 		/*
 		 * Do not cache a negative dentry in casefolded directories
@@ -737,7 +736,6 @@ static struct dentry *bch2_lookup(struct inode *vdir, struct dentry *dentry,
 		 */
 		return NULL;
 	}
-#endif
 
 	return d_splice_alias(&inode->v, dentry);
 }
@@ -1694,11 +1692,15 @@ static int bch2_fileattr_set(struct mnt_idmap *idmap,
 
 		s.mask = map_defined(bch_flags_to_xflags);
 		s.flags |= map_flags_rev(bch_flags_to_xflags, fa->fsx_xflags);
-		if (fa->fsx_xflags)
-			return -EOPNOTSUPP;
+		if (fa->fsx_xflags) {
+			ret = bch_err_throw(c, unsupported_fsx_flag);
+			goto err;
+		}
 
-		if (fa->fsx_projid >= U32_MAX)
-			return -EINVAL;
+		if (fa->fsx_projid >= U32_MAX) {
+			ret = bch_err_throw(c, projid_too_big);
+			goto err;
+		}
 
 		/*
 		 * inode fields accessible via the xattr interface are stored with a +1
@@ -1720,8 +1722,10 @@ static int bch2_fileattr_set(struct mnt_idmap *idmap,
 		fa->flags &= ~FS_CASEFOLD_FL;
 
 		s.flags |= map_flags_rev(bch_flags_to_uflags, fa->flags);
-		if (fa->flags)
-			return -EOPNOTSUPP;
+		if (fa->flags) {
+			ret = bch_err_throw(c, unsupported_fa_flag);
+			goto err;
+		}
 	}
 
 	mutex_lock(&inode->ei_update_lock);
@@ -1732,7 +1736,7 @@ static int bch2_fileattr_set(struct mnt_idmap *idmap,
 		bch2_write_inode(c, inode, fssetxattr_inode_update_fn, &s,
 			       ATTR_CTIME);
 	mutex_unlock(&inode->ei_update_lock);
-
+err:
 	return bch2_err_class(ret);
 }
 
@@ -2565,10 +2569,11 @@ got_sb:
 
 	sb->s_shrink->seeks = 0;
 
-#ifdef CONFIG_UNICODE
-	sb->s_encoding = c->cf_encoding;
-#endif
+#if IS_ENABLED(CONFIG_UNICODE)
+	if (!bch2_fs_casefold_enabled(c))
+		sb->s_encoding = c->cf_encoding;
 	generic_set_sb_d_ops(sb);
+#endif
 
 	vinode = bch2_vfs_inode_get(c, BCACHEFS_ROOT_SUBVOL_INUM);
 	ret = PTR_ERR_OR_ZERO(vinode);
