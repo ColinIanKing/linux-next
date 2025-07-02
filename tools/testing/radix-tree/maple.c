@@ -35062,7 +35062,7 @@ void run_check_rcu_slowread(struct maple_tree *mt, struct rcu_test_struct *vals)
 
 	int i;
 	void *(*function)(void *);
-	pthread_t readers[20];
+	pthread_t readers[30];
 	unsigned int index = vals->index;
 
 	mt_set_in_rcu(mt);
@@ -35080,14 +35080,14 @@ void run_check_rcu_slowread(struct maple_tree *mt, struct rcu_test_struct *vals)
 		}
 	}
 
-	usleep(5); /* small yield to ensure all threads are at least started. */
+	usleep(3); /* small yield to ensure all threads are at least started. */
 
 	while (index <= vals->last) {
 		mtree_store(mt, index,
 			    (index % 2 ? vals->entry2 : vals->entry3),
 			    GFP_KERNEL);
 		index++;
-		usleep(5);
+		usleep(2);
 	}
 
 	while (i--)
@@ -35098,6 +35098,7 @@ void run_check_rcu_slowread(struct maple_tree *mt, struct rcu_test_struct *vals)
 	MT_BUG_ON(mt, !vals->seen_entry3);
 	MT_BUG_ON(mt, !vals->seen_both);
 }
+
 static noinline void __init check_rcu_simulated(struct maple_tree *mt)
 {
 	unsigned long i, nr_entries = 1000;
@@ -35254,6 +35255,32 @@ static noinline void __init check_rcu_simulated(struct maple_tree *mt)
 	mas_store_gfp(&mas_writer, xa_mk_value(val), GFP_KERNEL);
 	mas_unlock(&mas_writer);
 	MT_BUG_ON(mt, mas_prev(&mas_reader, 0) != xa_mk_value(val));
+	rcu_read_unlock();
+
+	/* Clear out tree & create one with only root node */
+	mtree_destroy(mt);
+	mt_init_flags(&tree, MT_FLAGS_ALLOC_RANGE | MT_FLAGS_USE_RCU);
+	mas_pause(&mas_writer);
+	mas_lock(&mas_writer);
+	for (i = 0; i <= 5; i++) {
+		mas_writer.index = i * 10;
+		mas_writer.last = i * 10 + 5;
+		mas_store_gfp(&mas_writer, xa_mk_value(i), GFP_KERNEL);
+	}
+	mas_unlock(&mas_writer);
+	target = 10;
+	val = 20;
+	mas_set(&mas_reader, target);
+	rcu_read_lock();
+	MT_BUG_ON(mt, mas_walk(&mas_reader) != xa_mk_value(target/10));
+	MT_BUG_ON(mt, mte_is_leaf(mas_reader.node) != true);
+
+	/* Overwrite the whole range */
+	mas_lock(&mas_writer);
+	mas_set_range(&mas_writer, 0, ULONG_MAX);
+	mas_store_gfp(&mas_writer, xa_mk_value(val), GFP_KERNEL);
+	mas_unlock(&mas_writer);
+	MT_BUG_ON(mt, mas_walk(&mas_reader) != xa_mk_value(val));
 	rcu_read_unlock();
 
 	rcu_unregister_thread();
@@ -35668,6 +35695,18 @@ static noinline void __init check_prealloc(struct maple_tree *mt)
 	allocated = mas_allocated(&mas);
 	height = mas_mt_height(&mas);
 	MT_BUG_ON(mt, allocated != 0);
+
+	/* Chaining multiple preallocations */
+	mt_set_in_rcu(mt);
+	mas_set_range(&mas, 800, 805); /* Slot store, should be 0 allocations */
+	MT_BUG_ON(mt, mas_preallocate(&mas, ptr, GFP_KERNEL) != 0);
+	allocated = mas_allocated(&mas);
+	MT_BUG_ON(mt, allocated != 0);
+	mas.last = 809; /* Node store */
+	MT_BUG_ON(mt, mas_preallocate(&mas, ptr, GFP_KERNEL) != 0);
+	allocated = mas_allocated(&mas);
+	MT_BUG_ON(mt, allocated != 1);
+	mas_store_prealloc(&mas, ptr);
 }
 /* End of preallocation testing */
 
