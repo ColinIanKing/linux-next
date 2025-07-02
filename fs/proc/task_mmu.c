@@ -595,6 +595,7 @@ static int do_procmap_query(struct proc_maps_private *priv, void __user *uarg)
 	char build_id_buf[BUILD_ID_SIZE_MAX], *name_buf = NULL;
 	__u64 usize;
 	int err;
+	size_t name_buf_sz;
 
 	if (copy_from_user(&usize, (void __user *)uarg, sizeof(usize)))
 		return -EFAULT;
@@ -621,11 +622,17 @@ static int do_procmap_query(struct proc_maps_private *priv, void __user *uarg)
 	if (!mm || !mmget_not_zero(mm))
 		return -ESRCH;
 
-	err = query_vma_setup(priv);
-	if (err) {
+	name_buf_sz = min_t(size_t, PATH_MAX, karg.vma_name_size);
+
+	name_buf = kmalloc(name_buf_sz, GFP_KERNEL);
+	if (!name_buf) {
 		mmput(mm);
-		return err;
+		return -ENOMEM;
 	}
+
+	err = query_vma_setup(priv);
+	if (err)
+		goto fail_vma_setup;
 
 	vma = query_matching_vma(priv, karg.query_addr, karg.query_flags);
 	if (IS_ERR(vma)) {
@@ -679,20 +686,12 @@ static int do_procmap_query(struct proc_maps_private *priv, void __user *uarg)
 	}
 
 	if (karg.vma_name_size) {
-		size_t name_buf_sz = min_t(size_t, PATH_MAX, karg.vma_name_size);
 		const struct path *path;
 		const char *name_fmt;
 		size_t name_sz = 0;
 
 		get_vma_name(vma, &path, &name, &name_fmt);
 
-		if (path || name_fmt || name) {
-			name_buf = kmalloc(name_buf_sz, GFP_KERNEL);
-			if (!name_buf) {
-				err = -ENOMEM;
-				goto out;
-			}
-		}
 		if (path) {
 			name = d_path(path, name_buf, name_buf_sz);
 			if (IS_ERR(name)) {
@@ -733,6 +732,7 @@ static int do_procmap_query(struct proc_maps_private *priv, void __user *uarg)
 
 out:
 	query_vma_teardown(priv);
+fail_vma_setup:
 	mmput(mm);
 	kfree(name_buf);
 	return err;
