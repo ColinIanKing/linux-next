@@ -559,3 +559,11 @@ void teardown_sighandler(void)
 	if (sigaction(SIGSEGV, &act, NULL))
 		ksft_exit_fail_perror("sigaction in teardown");
 }
+
+void *sys_mremap(void *old_address, unsigned long old_size,
+		 unsigned long new_size, int flags, void *new_address)
+{
+	return (void *)syscall(__NR_mremap, (unsigned long)old_address,
+			       old_size, new_size, flags,
+			       (unsigned long)new_address);
+}
