@@ -2,5 +2,3 @@
 
 # This now-removed directory used to contain generated files.
 /crypto/
-
-inat-tables.c
