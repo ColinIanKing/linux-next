@@ -345,8 +345,8 @@ static DEVICE_ATTR(request, S_IRUGO | S_IWUSR | S_IWGRP,
 static DEVICE_ATTR(transition_action, S_IRUGO,
 		   tpm_show_ppi_transition_action, NULL);
 static DEVICE_ATTR(response, S_IRUGO, tpm_show_ppi_response, NULL);
-static DEVICE_ATTR(tcg_operations, S_IRUGO, tpm_show_ppi_tcg_operations, NULL);
-static DEVICE_ATTR(vs_operations, S_IRUGO, tpm_show_ppi_vs_operations, NULL);
+static DEVICE_ATTR(tcg_operations, S_IRUSR | S_IRGRP, tpm_show_ppi_tcg_operations, NULL);
+static DEVICE_ATTR(vs_operations, S_IRUSR | S_IRGRP, tpm_show_ppi_vs_operations, NULL);
 
 static struct attribute *ppi_attrs[] = {
 	&dev_attr_version.attr,
