@@ -819,6 +819,7 @@ struct bch_fs {
 	struct work_struct	read_only_work;
 
 	struct bch_dev __rcu	*devs[BCH_SB_MEMBERS_MAX];
+	struct bch_devs_mask	devs_removed;
 
 	struct bch_accounting_mem accounting;
 
@@ -863,9 +864,7 @@ struct bch_fs {
 	DARRAY(enum bcachefs_metadata_version)
 				incompat_versions_requested;
 
-#ifdef CONFIG_UNICODE
 	struct unicode_map	*cf_encoding;
-#endif
 
 	struct bch_sb_handle	disk_sb;
 
@@ -1283,6 +1282,15 @@ static inline bool bch2_discard_opt_enabled(struct bch_fs *c, struct bch_dev *ca
 	return test_bit(BCH_FS_discard_mount_opt_set, &c->flags)
 		? c->opts.discard
 		: ca->mi.discard;
+}
+
+static inline int bch2_fs_casefold_enabled(struct bch_fs *c)
+{
+	if (!IS_ENABLED(CONFIG_UNICODE))
+		return bch_err_throw(c, no_casefolding_without_utf8);
+	if (!c->opts.casefold_disabled)
+		return bch_err_throw(c, casefolding_disabled);
+	return 0;
 }
 
 #endif /* _BCACHEFS_H */

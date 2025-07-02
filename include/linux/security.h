@@ -451,6 +451,10 @@ int security_inode_listxattr(struct dentry *dentry);
 int security_inode_removexattr(struct mnt_idmap *idmap,
 			       struct dentry *dentry, const char *name);
 void security_inode_post_removexattr(struct dentry *dentry, const char *name);
+int security_inode_file_setattr(struct dentry *dentry,
+			      struct fileattr *fa);
+int security_inode_file_getattr(struct dentry *dentry,
+			      struct fileattr *fa);
 int security_inode_need_killpriv(struct dentry *dentry);
 int security_inode_killpriv(struct mnt_idmap *idmap, struct dentry *dentry);
 int security_inode_getsecurity(struct mnt_idmap *idmap,
@@ -1051,6 +1055,18 @@ static inline int security_inode_removexattr(struct mnt_idmap *idmap,
 static inline void security_inode_post_removexattr(struct dentry *dentry,
 						   const char *name)
 { }
+
+static inline int security_inode_file_setattr(struct dentry *dentry,
+					      struct fileattr *fa)
+{
+	return 0;
+}
+
+static inline int security_inode_file_getattr(struct dentry *dentry,
+					      struct fileattr *fa)
+{
+	return 0;
+}
 
 static inline int security_inode_need_killpriv(struct dentry *dentry)
 {
@@ -2211,7 +2227,6 @@ struct dentry *securityfs_create_symlink(const char *name,
 					 const char *target,
 					 const struct inode_operations *iops);
 extern void securityfs_remove(struct dentry *dentry);
-extern void securityfs_recursive_remove(struct dentry *dentry);
 
 #else /* CONFIG_SECURITYFS */
 
@@ -2242,6 +2257,8 @@ static inline void securityfs_remove(struct dentry *dentry)
 {}
 
 #endif
+
+#define securityfs_recursive_remove securityfs_remove
 
 #ifdef CONFIG_BPF_SYSCALL
 union bpf_attr;

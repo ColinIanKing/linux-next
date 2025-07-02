@@ -48,9 +48,7 @@ bch2_hash_info_init(struct bch_fs *c, const struct bch_inode_unpacked *bi)
 	struct bch_hash_info info = {
 		.inum_snapshot	= bi->bi_snapshot,
 		.type		= INODE_STR_HASH(bi),
-#ifdef CONFIG_UNICODE
 		.cf_encoding	= bch2_inode_casefold(c, bi) ? c->cf_encoding : NULL,
-#endif
 		.siphash_key	= { .k0 = bi->bi_hash_seed }
 	};
 
@@ -177,7 +175,7 @@ bch2_hash_lookup_in_snapshot(struct btree_trans *trans,
 	}
 	bch2_trans_iter_exit(trans, iter);
 
-	return bkey_s_c_err(ret ?: -BCH_ERR_ENOENT_str_hash_lookup);
+	return bkey_s_c_err(ret ?: bch_err_throw(trans->c, ENOENT_str_hash_lookup));
 }
 
 static __always_inline struct bkey_s_c
@@ -219,7 +217,7 @@ bch2_hash_hole(struct btree_trans *trans,
 			return 0;
 	bch2_trans_iter_exit(trans, iter);
 
-	return ret ?: -BCH_ERR_ENOSPC_str_hash_create;
+	return ret ?: bch_err_throw(trans->c, ENOSPC_str_hash_create);
 }
 
 static __always_inline
