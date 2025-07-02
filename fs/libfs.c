@@ -62,11 +62,6 @@ int always_delete_dentry(const struct dentry *dentry)
 }
 EXPORT_SYMBOL(always_delete_dentry);
 
-const struct dentry_operations simple_dentry_operations = {
-	.d_delete = always_delete_dentry,
-};
-EXPORT_SYMBOL(simple_dentry_operations);
-
 /*
  * Lookup the data. This is trivial - if the dentry didn't already
  * exist, we know it is negative.  Set d_op to delete negative dentries.
@@ -75,9 +70,11 @@ struct dentry *simple_lookup(struct inode *dir, struct dentry *dentry, unsigned 
 {
 	if (dentry->d_name.len > NAME_MAX)
 		return ERR_PTR(-ENAMETOOLONG);
-	if (!dentry->d_sb->s_d_op)
-		d_set_d_op(dentry, &simple_dentry_operations);
-
+	if (!dentry->d_op && !(dentry->d_flags & DCACHE_DONTCACHE)) {
+		spin_lock(&dentry->d_lock);
+		dentry->d_flags |= DCACHE_DONTCACHE;
+		spin_unlock(&dentry->d_lock);
+	}
 	if (IS_ENABLED(CONFIG_UNICODE) && IS_CASEFOLDED(dir))
 		return NULL;
 
@@ -605,8 +602,9 @@ struct dentry *find_next_child(struct dentry *parent, struct dentry *prev)
 }
 EXPORT_SYMBOL(find_next_child);
 
-void simple_recursive_removal(struct dentry *dentry,
-                              void (*callback)(struct dentry *))
+static void __simple_recursive_removal(struct dentry *dentry,
+                              void (*callback)(struct dentry *),
+			      bool locked)
 {
 	struct dentry *this = dget(dentry);
 	while (true) {
@@ -625,15 +623,13 @@ void simple_recursive_removal(struct dentry *dentry,
 			victim = this;
 			this = this->d_parent;
 			inode = this->d_inode;
-			inode_lock(inode);
+			if (!locked || victim != dentry)
+				inode_lock(inode);
 			if (simple_positive(victim)) {
 				d_invalidate(victim);	// avoid lost mounts
-				if (d_is_dir(victim))
-					fsnotify_rmdir(inode, victim);
-				else
-					fsnotify_unlink(inode, victim);
 				if (callback)
 					callback(victim);
+				fsnotify_delete(inode, d_inode(victim), victim);
 				dput(victim);		// unpin it
 			}
 			if (victim == dentry) {
@@ -641,7 +637,8 @@ void simple_recursive_removal(struct dentry *dentry,
 						      inode_set_ctime_current(inode));
 				if (d_is_dir(dentry))
 					drop_nlink(inode);
-				inode_unlock(inode);
+				if (!locked)
+					inode_unlock(inode);
 				dput(dentry);
 				return;
 			}
@@ -650,7 +647,21 @@ void simple_recursive_removal(struct dentry *dentry,
 		this = child;
 	}
 }
+
+void simple_recursive_removal(struct dentry *dentry,
+                              void (*callback)(struct dentry *))
+{
+	return __simple_recursive_removal(dentry, callback, false);
+}
 EXPORT_SYMBOL(simple_recursive_removal);
+
+/* caller holds parent directory with I_MUTEX_PARENT */
+void locked_recursive_removal(struct dentry *dentry,
+                              void (*callback)(struct dentry *))
+{
+	return __simple_recursive_removal(dentry, callback, true);
+}
+EXPORT_SYMBOL(locked_recursive_removal);
 
 static const struct super_operations simple_super_operations = {
 	.statfs		= simple_statfs,
@@ -684,7 +695,7 @@ static int pseudo_fs_fill_super(struct super_block *s, struct fs_context *fc)
 	s->s_root = d_make_root(root);
 	if (!s->s_root)
 		return -ENOMEM;
-	s->s_d_op = ctx->dops;
+	set_default_d_op(s, ctx->dops);
 	return 0;
 }
 
@@ -1953,22 +1964,22 @@ static const struct dentry_operations generic_encrypted_dentry_ops = {
  * @sb: superblock to be configured
  *
  * Filesystems supporting casefolding and/or fscrypt can call this
- * helper at mount-time to configure sb->s_d_op to best set of dentry
- * operations required for the enabled features. The helper must be
- * called after these have been configured, but before the root dentry
- * is created.
+ * helper at mount-time to configure default dentry_operations to the
+ * best set of dentry operations required for the enabled features.
+ * The helper must be called after these have been configured, but
+ * before the root dentry is created.
  */
 void generic_set_sb_d_ops(struct super_block *sb)
 {
 #if IS_ENABLED(CONFIG_UNICODE)
 	if (sb->s_encoding) {
-		sb->s_d_op = &generic_ci_dentry_ops;
+		set_default_d_op(sb, &generic_ci_dentry_ops);
 		return;
 	}
 #endif
 #ifdef CONFIG_FS_ENCRYPTION
 	if (sb->s_cop) {
-		sb->s_d_op = &generic_encrypted_dentry_ops;
+		set_default_d_op(sb, &generic_encrypted_dentry_ops);
 		return;
 	}
 #endif
@@ -2276,3 +2287,28 @@ void stashed_dentry_prune(struct dentry *dentry)
 	 */
 	cmpxchg(stashed, dentry, NULL);
 }
+
+/* parent must be held exclusive */
+struct dentry *simple_start_creating(struct dentry *parent, const char *name)
+{
+	struct dentry *dentry;
+	struct inode *dir = d_inode(parent);
+
+	inode_lock(dir);
+	if (unlikely(IS_DEADDIR(dir))) {
+		inode_unlock(dir);
+		return ERR_PTR(-ENOENT);
+	}
+	dentry = lookup_noperm(&QSTR(name), parent);
+	if (IS_ERR(dentry)) {
+		inode_unlock(dir);
+		return dentry;
+	}
+	if (dentry->d_inode) {
+		dput(dentry);
+		inode_unlock(dir);
+		return ERR_PTR(-EEXIST);
+	}
+	return dentry;
+}
+EXPORT_SYMBOL(simple_start_creating);
