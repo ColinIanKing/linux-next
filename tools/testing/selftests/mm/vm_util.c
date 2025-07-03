@@ -20,6 +20,9 @@
 unsigned int __page_size;
 unsigned int __page_shift;
 
+volatile sig_atomic_t signal_jump_set;
+sigjmp_buf signal_jmp_buf;
+
 uint64_t pagemap_get_entry(int fd, char *start)
 {
 	const unsigned long pfn = (unsigned long)start / getpagesize();
@@ -523,4 +526,36 @@ int read_sysfs(const char *file_path, unsigned long *val)
 	fclose(f);
 
 	return 0;
+}
+
+static void handle_fatal(int c)
+{
+	if (!signal_jump_set)
+		return;
+
+	siglongjmp(signal_jmp_buf, c);
+}
+
+void setup_sighandler(void)
+{
+	struct sigaction act = {
+		.sa_handler = &handle_fatal,
+		.sa_flags = SA_NODEFER,
+	};
+
+	sigemptyset(&act.sa_mask);
+	if (sigaction(SIGSEGV, &act, NULL))
+		ksft_exit_fail_perror("sigaction in setup");
+}
+
+void teardown_sighandler(void)
+{
+	struct sigaction act = {
+		.sa_handler = SIG_DFL,
+		.sa_flags = SA_NODEFER,
+	};
+
+	sigemptyset(&act.sa_mask);
+	if (sigaction(SIGSEGV, &act, NULL))
+		ksft_exit_fail_perror("sigaction in teardown");
 }
