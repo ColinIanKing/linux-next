@@ -32,6 +32,7 @@ static int sha512_init(struct shash_desc *desc)
 	ctx->count = 0;
 	ctx->sha512.count_hi = 0;
 	ctx->func = CPACF_KIMD_SHA_512;
+	ctx->first_message_part = false;
 
 	return 0;
 }
@@ -97,6 +98,7 @@ static int sha384_init(struct shash_desc *desc)
 	ctx->count = 0;
 	ctx->sha512.count_hi = 0;
 	ctx->func = CPACF_KIMD_SHA_512;
+	ctx->first_message_part = false;
 
 	return 0;
 }
