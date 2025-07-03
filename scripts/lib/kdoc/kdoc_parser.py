@@ -47,7 +47,6 @@ doc_sect = doc_com + \
                 flags=re.I, cache=False)
 
 doc_content = doc_com_body + KernRe(r'(.*)', cache=False)
-doc_block = doc_com + KernRe(r'DOC:\s*(.*)?', cache=False)
 doc_inline_start = KernRe(r'^\s*/\*\*\s*$', cache=False)
 doc_inline_sect = KernRe(r'\s*\*\s*(@\s*[\w][\w\.]*\s*):(.*)', cache=False)
 doc_inline_end = KernRe(r'^\s*\*/\s*$', cache=False)
@@ -60,6 +59,25 @@ export_symbol_ns = KernRe(r'^\s*EXPORT_SYMBOL_NS(_GPL)?\s*\(\s*(\w+)\s*,\s*"\S+"
 
 type_param = KernRe(r"\@(\w*((\.\w+)|(->\w+))*(\.\.\.)?)", cache=False)
 
+#
+# Tests for the beginning of a kerneldoc block in its various forms.
+#
+doc_block = doc_com + KernRe(r'DOC:\s*(.*)?', cache=False)
+doc_begin_data = KernRe(r"^\s*\*?\s*(struct|union|enum|typedef)\b\s*(\w*)", cache = False)
+doc_begin_func = KernRe(str(doc_com) +			# initial " * '
+                        r"(?:\w+\s*\*\s*)?" + 		# type (not captured)
+                        r'(?:define\s+)?' + 		# possible "define" (not captured)
+                        r'(\w+)\s*(?:\(\w*\))?\s*' +	# name and optional "(...)"
+                        r'(?:[-:].*)?$',		# description (not captured)
+                        cache = False)
+
+#
+# A little helper to get rid of excess white space
+#
+multi_space = KernRe(r'\s\s+')
+def trim_whitespace(s):
+    return multi_space.sub(' ', s.strip())
+
 class state:
     """
     State machine enums
@@ -68,40 +86,26 @@ class state:
     # Parser states
     NORMAL        = 0        # normal code
     NAME          = 1        # looking for function name
-    BODY_MAYBE    = 2        # body - or maybe more description
+    DECLARATION   = 2        # We have seen a declaration which might not be done
     BODY          = 3        # the body of the comment
-    BODY_WITH_BLANK_LINE = 4 # the body which has a blank line
+    SPECIAL_SECTION = 4      # doc section ending with a blank line
     PROTO         = 5        # scanning prototype
     DOCBLOCK      = 6        # documentation block
-    INLINE        = 7        # gathering doc outside main block
+    INLINE_NAME   = 7        # gathering doc outside main block
+    INLINE_TEXT   = 8	     # reading the body of inline docs
 
     name = [
         "NORMAL",
         "NAME",
-        "BODY_MAYBE",
+        "DECLARATION",
         "BODY",
-        "BODY_WITH_BLANK_LINE",
+        "SPECIAL_SECTION",
         "PROTO",
         "DOCBLOCK",
-        "INLINE",
+        "INLINE_NAME",
+        "INLINE_TEXT",
     ]
 
-    # Inline documentation state
-    INLINE_NA     = 0 # not applicable ($state != INLINE)
-    INLINE_NAME   = 1 # looking for member name (@foo:)
-    INLINE_TEXT   = 2 # looking for member documentation
-    INLINE_END    = 3 # done
-    INLINE_ERROR  = 4 # error - Comment without header was found.
-                      # Spit a warning as it's not
-                      # proper kernel-doc and ignore the rest.
-
-    inline_name = [
-        "",
-        "_NAME",
-        "_TEXT",
-        "_END",
-        "_ERROR",
-    ]
 
 SECTION_DEFAULT = "Description"  # default section
 
@@ -110,8 +114,7 @@ class KernelEntry:
     def __init__(self, config, ln):
         self.config = config
 
-        self.contents = ""
-        self.function = ""
+        self._contents = []
         self.sectcheck = ""
         self.struct_actual = ""
         self.prototype = ""
@@ -133,9 +136,16 @@ class KernelEntry:
 
         # State flags
         self.brcount = 0
-
-        self.in_doc_sect = False
         self.declaration_start_line = ln + 1
+
+    #
+    # Management of section contents
+    #
+    def add_text(self, text):
+        self._contents.append(text)
+
+    def contents(self):
+        return '\n'.join(self._contents) + '\n'
 
     # TODO: rename to emit_message after removal of kernel-doc.pl
     def emit_msg(self, log_msg, warning=True):
@@ -151,13 +161,27 @@ class KernelEntry:
         self.warnings.append(log_msg)
         return
 
+    #
+    # Begin a new section.
+    #
+    def begin_section(self, line_no, title = SECTION_DEFAULT, dump = False):
+        if dump:
+            self.dump_section(start_new = True)
+        self.section = title
+        self.new_start_line = line_no
+
     def dump_section(self, start_new=True):
         """
         Dumps section contents to arrays/hashes intended for that purpose.
         """
-
+        #
+        # If we have accumulated no contents in the default ("description")
+        # section, don't bother.
+        #
+        if self.section == SECTION_DEFAULT and not self._contents:
+            return
         name = self.section
-        contents = self.contents
+        contents = self.contents()
 
         if type_param.match(name):
             name = type_param.group(1)
@@ -168,20 +192,14 @@ class KernelEntry:
             self.sectcheck += name + " "
             self.new_start_line = 0
 
-        elif name == "@...":
-            name = "..."
-            self.parameterdescs[name] = contents
-            self.sectcheck += name + " "
-            self.parameterdesc_start_lines[name] = self.new_start_line
-            self.new_start_line = 0
-
         else:
             if name in self.sections and self.sections[name] != "":
                 # Only warn on user-specified duplicate section names
                 if name != SECTION_DEFAULT:
                     self.emit_msg(self.new_start_line,
                                   f"duplicate section name '{name}'\n")
-                self.sections[name] += contents
+                # Treat as a new paragraph - add a blank line
+                self.sections[name] += '\n' + contents
             else:
                 self.sections[name] = contents
                 self.sectionlist.append(name)
@@ -192,7 +210,7 @@ class KernelEntry:
 
         if start_new:
             self.section = SECTION_DEFAULT
-            self.contents = ""
+            self._contents = []
 
 
 class KernelDoc:
@@ -203,7 +221,6 @@ class KernelDoc:
 
     # Section names
 
-    section_intro = "Introduction"
     section_context = "Context"
     section_return = "Return"
 
@@ -217,7 +234,6 @@ class KernelDoc:
 
         # Initial state for the state machines
         self.state = state.NORMAL
-        self.inline_doc_state = state.INLINE_NA
 
         # Store entry currently being processed
         self.entry = None
@@ -294,7 +310,6 @@ class KernelDoc:
 
         # State flags
         self.state = state.NORMAL
-        self.inline_doc_state = state.INLINE_NA
 
     def push_parameter(self, ln, decl_type, param, dtype,
                        org_arg, declaration_name):
@@ -1171,17 +1186,26 @@ class KernelDoc:
         with a staticmethod decorator.
         """
 
+        # We support documenting some exported symbols with different
+        # names.  A horrible hack.
+        suffixes = [ '_noprof' ]
+
         # Note: it accepts only one EXPORT_SYMBOL* per line, as having
         # multiple export lines would violate Kernel coding style.
 
         if export_symbol.search(line):
             symbol = export_symbol.group(2)
-            function_set.add(symbol)
-            return
-
-        if export_symbol_ns.search(line):
+        elif export_symbol_ns.search(line):
             symbol = export_symbol_ns.group(2)
-            function_set.add(symbol)
+        else:
+            return False
+        #
+        # Found an export, trim out any special suffixes
+        #
+        for suffix in suffixes:
+            symbol = symbol.removesuffix(suffix)
+        function_set.add(symbol)
+        return True
 
     def process_normal(self, ln, line):
         """
@@ -1193,7 +1217,6 @@ class KernelDoc:
 
         # start a new entry
         self.reset_state(ln)
-        self.entry.in_doc_sect = False
 
         # next line is always the function name
         self.state = state.NAME
@@ -1202,80 +1225,60 @@ class KernelDoc:
         """
         STATE_NAME: Looking for the "name - description" line
         """
-
+        #
+        # Check for a DOC: block and handle them specially.
+        #
         if doc_block.search(line):
-            self.entry.new_start_line = ln
 
             if not doc_block.group(1):
-                self.entry.section = self.section_intro
+                self.entry.begin_section(ln, "Introduction")
             else:
-                self.entry.section = doc_block.group(1)
+                self.entry.begin_section(ln, doc_block.group(1))
 
             self.entry.identifier = self.entry.section
             self.state = state.DOCBLOCK
-            return
-
-        if doc_decl.search(line):
+        #
+        # Otherwise we're looking for a normal kerneldoc declaration line.
+        #
+        elif doc_decl.search(line):
             self.entry.identifier = doc_decl.group(1)
-            self.entry.is_kernel_comment = False
-
-            decl_start = str(doc_com)       # comment block asterisk
-            fn_type = r"(?:\w+\s*\*\s*)?"  # type (for non-functions)
-            parenthesis = r"(?:\(\w*\))?"   # optional parenthesis on function
-            decl_end = r"(?:[-:].*)"         # end of the name part
-
-            # test for pointer declaration type, foo * bar() - desc
-            r = KernRe(fr"^{decl_start}([\w\s]+?){parenthesis}?\s*{decl_end}?$")
-            if r.search(line):
-                self.entry.identifier = r.group(1)
 
             # Test for data declaration
-            r = KernRe(r"^\s*\*?\s*(struct|union|enum|typedef)\b\s*(\w*)")
-            if r.search(line):
-                self.entry.decl_type = r.group(1)
-                self.entry.identifier = r.group(2)
-                self.entry.is_kernel_comment = True
+            if doc_begin_data.search(line):
+                self.entry.decl_type = doc_begin_data.group(1)
+                self.entry.identifier = doc_begin_data.group(2)
+            #
+            # Look for a function description
+            #
+            elif doc_begin_func.search(line):
+                self.entry.identifier = doc_begin_func.group(1)
+                self.entry.decl_type = "function"
+            #
+            # We struck out.
+            #
             else:
-                # Look for foo() or static void foo() - description;
-                # or misspelt identifier
-
-                r1 = KernRe(fr"^{decl_start}{fn_type}(\w+)\s*{parenthesis}\s*{decl_end}?$")
-                r2 = KernRe(fr"^{decl_start}{fn_type}(\w+[^-:]*){parenthesis}\s*{decl_end}$")
-
-                for r in [r1, r2]:
-                    if r.search(line):
-                        self.entry.identifier = r.group(1)
-                        self.entry.decl_type = "function"
-
-                        r = KernRe(r"define\s+")
-                        self.entry.identifier = r.sub("", self.entry.identifier)
-                        self.entry.is_kernel_comment = True
-                        break
-
-            self.entry.identifier = self.entry.identifier.strip(" ")
-
-            self.state = state.BODY
-
-            # if there's no @param blocks need to set up default section here
-            self.entry.section = SECTION_DEFAULT
-            self.entry.new_start_line = ln + 1
-
-            r = KernRe("[-:](.*)")
-            if r.search(line):
-                # strip leading/trailing/multiple spaces
-                self.entry.descr = r.group(1).strip(" ")
-
-                r = KernRe(r"\s+")
-                self.entry.descr = r.sub(" ", self.entry.descr)
-                self.entry.declaration_purpose = self.entry.descr
-                self.state = state.BODY_MAYBE
-            else:
-                self.entry.declaration_purpose = ""
-
-            if not self.entry.is_kernel_comment:
                 self.emit_msg(ln,
                               f"This comment starts with '/**', but isn't a kernel-doc comment. Refer Documentation/doc-guide/kernel-doc.rst\n{line}")
                 self.state = state.NORMAL
+                return
+            #
+            # OK, set up for a new kerneldoc entry.
+            #
+            self.state = state.BODY
+            self.entry.identifier = self.entry.identifier.strip(" ")
+            # if there's no @param blocks need to set up default section here
+            self.entry.begin_section(ln + 1)
+            #
+            # Find the description portion, which *should* be there but
+            # isn't always.
+            # (We should be able to capture this from the previous parsing - someday)
+            #
+            r = KernRe("[-:](.*)")
+            if r.search(line):
+                self.entry.declaration_purpose = trim_whitespace(r.group(1))
+                self.state = state.DECLARATION
+            else:
+                self.entry.declaration_purpose = ""
 
             if not self.entry.declaration_purpose and self.config.wshort_desc:
                 self.emit_msg(ln,
@@ -1290,60 +1293,51 @@ class KernelDoc:
                 self.emit_msg(ln,
                               f"Scanning doc for {self.entry.decl_type} {self.entry.identifier}",
                                   warning=False)
-
-            return
-
+        #
         # Failed to find an identifier. Emit a warning
-        self.emit_msg(ln, f"Cannot find identifier on line:\n{line}")
+        #
+        else:
+            self.emit_msg(ln, f"Cannot find identifier on line:\n{line}")
 
-    def process_body(self, ln, line):
-        """
-        STATE_BODY and STATE_BODY_MAYBE: the bulk of a kerneldoc comment.
-        """
-
-        if self.state == state.BODY_WITH_BLANK_LINE:
-            r = KernRe(r"\s*\*\s?\S")
-            if r.match(line):
-                self.dump_section()
-                self.entry.section = SECTION_DEFAULT
-                self.entry.new_start_line = ln
-                self.entry.contents = ""
-
+    #
+    # Helper function to determine if a new section is being started.
+    #
+    def is_new_section(self, ln, line):
         if doc_sect.search(line):
-            self.entry.in_doc_sect = True
+            self.state = state.BODY
+            #
+            # Pick out the name of our new section, tweaking it if need be.
+            #
             newsection = doc_sect.group(1)
-
-            if newsection.lower() in ["description", "context"]:
-                newsection = newsection.title()
-
-            # Special case: @return is a section, not a param description
-            if newsection.lower() in ["@return", "@returns",
-                                      "return", "returns"]:
+            if newsection.lower() == 'description':
+                newsection = 'Description'
+            elif newsection.lower() == 'context':
+                newsection = 'Context'
+                self.state = state.SPECIAL_SECTION
+            elif newsection.lower() in ["@return", "@returns",
+                                        "return", "returns"]:
                 newsection = "Return"
-
-            # Perl kernel-doc has a check here for contents before sections.
-            # the logic there is always false, as in_doc_sect variable is
-            # always true. So, just don't implement Wcontents_before_sections
-
-            # .title()
+                self.state = state.SPECIAL_SECTION
+            elif newsection[0] == '@':
+                self.state = state.SPECIAL_SECTION
+            #
+            # Initialize the contents, and get the new section going.
+            #
             newcontents = doc_sect.group(2)
             if not newcontents:
                 newcontents = ""
-
-            if self.entry.contents.strip("\n"):
-                self.dump_section()
-
-            self.entry.new_start_line = ln
-            self.entry.section = newsection
+            self.dump_section()
+            self.entry.begin_section(ln, newsection)
             self.entry.leading_space = None
 
-            self.entry.contents = newcontents.lstrip()
-            if self.entry.contents:
-                self.entry.contents += "\n"
+            self.entry.add_text(newcontents.lstrip())
+            return True
+        return False
 
-            self.state = state.BODY
-            return
-
+    #
+    # Helper function to detect (and effect) the end of a kerneldoc comment.
+    #
+    def is_comment_end(self, ln, line):
         if doc_end.search(line):
             self.dump_section()
 
@@ -1356,100 +1350,128 @@ class KernelDoc:
             self.entry.new_start_line = ln + 1
 
             self.state = state.PROTO
+            return True
+        return False
+
+
+    def process_decl(self, ln, line):
+        """
+        STATE_DECLARATION: We've seen the beginning of a declaration
+        """
+        if self.is_new_section(ln, line) or self.is_comment_end(ln, line):
+            return
+        #
+        # Look for anything with the " * " line beginning.
+        #
+        if doc_content.search(line):
+            cont = doc_content.group(1)
+            #
+            # A blank line means that we have moved out of the declaration
+            # part of the comment (without any "special section" parameter
+            # descriptions).
+            #
+            if cont == "":
+                self.state = state.BODY
+            #
+            # Otherwise we have more of the declaration section to soak up.
+            #
+            else:
+                self.entry.declaration_purpose = \
+                    trim_whitespace(self.entry.declaration_purpose + ' ' + cont)
+        else:
+            # Unknown line, ignore
+            self.emit_msg(ln, f"bad line: {line}")
+
+
+    def process_special(self, ln, line):
+        """
+        STATE_SPECIAL_SECTION: a section ending with a blank line
+        """
+        #
+        # If we have hit a blank line (only the " * " marker), then this
+        # section is done.
+        #
+        if KernRe(r"\s*\*\s*$").match(line):
+            self.entry.begin_section(ln, dump = True)
+            self.state = state.BODY
+            return
+        #
+        # Not a blank line, look for the other ways to end the section.
+        #
+        if self.is_new_section(ln, line) or self.is_comment_end(ln, line):
+            return
+        #
+        # OK, we should have a continuation of the text for this section.
+        #
+        if doc_content.search(line):
+            cont = doc_content.group(1)
+            #
+            # If the lines of text after the first in a special section have
+            # leading white space, we need to trim it out or Sphinx will get
+            # confused.  For the second line (the None case), see what we
+            # find there and remember it.
+            #
+            if self.entry.leading_space is None:
+                r = KernRe(r'^(\s+)')
+                if r.match(cont):
+                    self.entry.leading_space = len(r.group(1))
+                else:
+                    self.entry.leading_space = 0
+            #
+            # Otherwise, before trimming any leading chars, be *sure*
+            # that they are white space.  We should maybe warn if this
+            # isn't the case.
+            #
+            for i in range(0, self.entry.leading_space):
+                if cont[i] != " ":
+                    self.entry.leading_space = i
+                    break
+            #
+            # Add the trimmed result to the section and we're done.
+            #
+            self.entry.add_text(cont[self.entry.leading_space:])
+        else:
+            # Unknown line, ignore
+            self.emit_msg(ln, f"bad line: {line}")
+
+    def process_body(self, ln, line):
+        """
+        STATE_BODY: the bulk of a kerneldoc comment.
+        """
+        if self.is_new_section(ln, line) or self.is_comment_end(ln, line):
             return
 
         if doc_content.search(line):
             cont = doc_content.group(1)
+            self.entry.add_text(cont)
+        else:
+            # Unknown line, ignore
+            self.emit_msg(ln, f"bad line: {line}")
 
-            if cont == "":
-                if self.entry.section == self.section_context:
-                    self.dump_section()
+    def process_inline_name(self, ln, line):
+        """STATE_INLINE_NAME: beginning of docbook comments within a prototype."""
 
-                    self.entry.new_start_line = ln
-                    self.state = state.BODY
-                else:
-                    if self.entry.section != SECTION_DEFAULT:
-                        self.state = state.BODY_WITH_BLANK_LINE
-                    else:
-                        self.state = state.BODY
+        if doc_inline_sect.search(line):
+            self.entry.begin_section(ln, doc_inline_sect.group(1))
+            self.entry.add_text(doc_inline_sect.group(2).lstrip())
+            self.state = state.INLINE_TEXT
+        elif doc_inline_end.search(line):
+            self.dump_section()
+            self.state = state.PROTO
+        elif doc_content.search(line):
+            self.emit_msg(ln, f"Incorrect use of kernel-doc format: {line}")
+            self.state = state.PROTO
+        # else ... ??
 
-                    self.entry.contents += "\n"
-
-            elif self.state == state.BODY_MAYBE:
-
-                # Continued declaration purpose
-                self.entry.declaration_purpose = self.entry.declaration_purpose.rstrip()
-                self.entry.declaration_purpose += " " + cont
-
-                r = KernRe(r"\s+")
-                self.entry.declaration_purpose = r.sub(' ',
-                                                       self.entry.declaration_purpose)
-
-            else:
-                if self.entry.section.startswith('@') or        \
-                   self.entry.section == self.section_context:
-                    if self.entry.leading_space is None:
-                        r = KernRe(r'^(\s+)')
-                        if r.match(cont):
-                            self.entry.leading_space = len(r.group(1))
-                        else:
-                            self.entry.leading_space = 0
-
-                    # Double-check if leading space are realy spaces
-                    pos = 0
-                    for i in range(0, self.entry.leading_space):
-                        if cont[i] != " ":
-                            break
-                        pos += 1
-
-                    cont = cont[pos:]
-
-                    # NEW LOGIC:
-                    # In case it is different, update it
-                    if self.entry.leading_space != pos:
-                        self.entry.leading_space = pos
-
-                self.entry.contents += cont + "\n"
-            return
-
-        # Unknown line, ignore
-        self.emit_msg(ln, f"bad line: {line}")
-
-    def process_inline(self, ln, line):
-        """STATE_INLINE: docbook comments within a prototype."""
-
-        if self.inline_doc_state == state.INLINE_NAME and \
-           doc_inline_sect.search(line):
-            self.entry.section = doc_inline_sect.group(1)
-            self.entry.new_start_line = ln
-
-            self.entry.contents = doc_inline_sect.group(2).lstrip()
-            if self.entry.contents != "":
-                self.entry.contents += "\n"
-
-            self.inline_doc_state = state.INLINE_TEXT
-            # Documentation block end */
-            return
+    def process_inline_text(self, ln, line):
+        """STATE_INLINE_TEXT: docbook comments within a prototype."""
 
         if doc_inline_end.search(line):
-            if self.entry.contents not in ["", "\n"]:
-                self.dump_section()
-
+            self.dump_section()
             self.state = state.PROTO
-            self.inline_doc_state = state.INLINE_NA
-            return
-
-        if doc_content.search(line):
-            if self.inline_doc_state == state.INLINE_TEXT:
-                self.entry.contents += doc_content.group(1) + "\n"
-                if not self.entry.contents.strip(" ").rstrip("\n"):
-                    self.entry.contents = ""
-
-            elif self.inline_doc_state == state.INLINE_NAME:
-                self.emit_msg(ln,
-                              f"Incorrect use of kernel-doc format: {line}")
-
-                self.inline_doc_state = state.INLINE_ERROR
+        elif doc_content.search(line):
+            self.entry.add_text(doc_content.group(1))
+        # else ... ??
 
     def syscall_munge(self, ln, proto):         # pylint: disable=W0613
         """
@@ -1620,16 +1642,12 @@ class KernelDoc:
         """STATE_PROTO: reading a function/whatever prototype."""
 
         if doc_inline_oneline.search(line):
-            self.entry.section = doc_inline_oneline.group(1)
-            self.entry.contents = doc_inline_oneline.group(2)
-
-            if self.entry.contents != "":
-                self.entry.contents += "\n"
-                self.dump_section(start_new=False)
+            self.entry.begin_section(ln, doc_inline_oneline.group(1))
+            self.entry.add_text(doc_inline_oneline.group(2))
+            self.dump_section()
 
         elif doc_inline_start.search(line):
-            self.state = state.INLINE
-            self.inline_doc_state = state.INLINE_NAME
+            self.state = state.INLINE_NAME
 
         elif self.entry.decl_type == 'function':
             self.process_proto_function(ln, line)
@@ -1649,7 +1667,7 @@ class KernelDoc:
             self.reset_state(ln)
 
         elif doc_content.search(line):
-            self.entry.contents += doc_content.group(1) + "\n"
+            self.entry.add_text(doc_content.group(1))
 
     def parse_export(self):
         """
@@ -1670,6 +1688,22 @@ class KernelDoc:
 
         return export_table
 
+    #
+    # The state/action table telling us which function to invoke in
+    # each state.
+    #
+    state_actions = {
+        state.NORMAL:			process_normal,
+        state.NAME:			process_name,
+        state.BODY:			process_body,
+        state.DECLARATION:		process_decl,
+        state.SPECIAL_SECTION:		process_special,
+        state.INLINE_NAME:		process_inline_name,
+        state.INLINE_TEXT:		process_inline_text,
+        state.PROTO:			process_proto,
+        state.DOCBLOCK:			process_docblock,
+        }
+
     def parse_kdoc(self):
         """
         Open and process each line of a C source file.
@@ -1680,7 +1714,6 @@ class KernelDoc:
         Besides parsing kernel-doc tags, it also parses export symbols.
         """
 
-        cont = False
         prev = ""
         prev_ln = None
         export_table = set()
@@ -1696,23 +1729,18 @@ class KernelDoc:
                     if self.state == state.PROTO:
                         if line.endswith("\\"):
                             prev += line.rstrip("\\")
-                            cont = True
-
                             if not prev_ln:
                                 prev_ln = ln
-
                             continue
 
-                        if cont:
+                        if prev:
                             ln = prev_ln
                             line = prev + line
                             prev = ""
-                            cont = False
                             prev_ln = None
 
-                    self.config.log.debug("%d %s%s: %s",
+                    self.config.log.debug("%d %s: %s",
                                           ln, state.name[self.state],
-                                          state.inline_name[self.inline_doc_state],
                                           line)
 
                     # This is an optimization over the original script.
@@ -1720,25 +1748,11 @@ class KernelDoc:
                     # it was read twice. Here, we use the already-existing
                     # loop to parse exported symbols as well.
                     #
-                    # TODO: It should be noticed that not all states are
-                    # needed here. On a future cleanup, process export only
-                    # at the states that aren't handling comment markups.
-                    self.process_export(export_table, line)
+                    if (self.state != state.NORMAL) or \
+                       not self.process_export(export_table, line):
+                        # Hand this line to the appropriate state handler
+                        self.state_actions[self.state](self, ln, line)
 
-                    # Hand this line to the appropriate state handler
-                    if self.state == state.NORMAL:
-                        self.process_normal(ln, line)
-                    elif self.state == state.NAME:
-                        self.process_name(ln, line)
-                    elif self.state in [state.BODY, state.BODY_MAYBE,
-                                        state.BODY_WITH_BLANK_LINE]:
-                        self.process_body(ln, line)
-                    elif self.state == state.INLINE:  # scanning for inline parameters
-                        self.process_inline(ln, line)
-                    elif self.state == state.PROTO:
-                        self.process_proto(ln, line)
-                    elif self.state == state.DOCBLOCK:
-                        self.process_docblock(ln, line)
         except OSError:
             self.config.log.error(f"Error: Cannot open file {self.fname}")
 
