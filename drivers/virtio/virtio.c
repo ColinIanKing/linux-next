@@ -127,7 +127,8 @@ static void __virtio_config_changed(struct virtio_device *dev)
 {
 	struct virtio_driver *drv = drv_to_virtio(dev->dev.driver);
 
-	if (!dev->config_core_enabled || dev->config_driver_disabled)
+	if (!dev->config_core_enabled || dev->config_driver_disabled ||
+	    dev->config_transport_disabled)
 		dev->config_change_pending = true;
 	else if (drv && drv->config_changed) {
 		drv->config_changed(dev);
@@ -192,6 +193,20 @@ static void virtio_config_core_enable(struct virtio_device *dev)
 		__virtio_config_changed(dev);
 	spin_unlock_irq(&dev->config_lock);
 }
+
+/**
+ * virtio_config_transport_disable - disable config change reporting by transport
+ * @dev: the device in question
+ *
+ * This must only be called by transport and enabling is not allowed.
+ */
+void virtio_config_transport_disable(struct virtio_device *dev)
+{
+	spin_lock_irq(&dev->config_lock);
+	dev->config_transport_disabled = true;
+	spin_unlock_irq(&dev->config_lock);
+}
+EXPORT_SYMBOL_GPL(virtio_config_transport_disable);
 
 void virtio_add_status(struct virtio_device *dev, unsigned int status)
 {
@@ -530,6 +545,7 @@ int register_virtio_device(struct virtio_device *dev)
 		goto out_ida_remove;
 
 	spin_lock_init(&dev->config_lock);
+	dev->config_transport_disabled = false;
 	dev->config_driver_disabled = false;
 	dev->config_core_enabled = false;
 	dev->config_change_pending = false;
