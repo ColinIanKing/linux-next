@@ -1,0 +1,35 @@
+soc/arm
+
+soc/dt
+	patch
+		arm64: dts: lg: Refactor common LG1312 and LG1313 parts
+		arm64: dts: lg: Add missing PL011 "uartclk"
+		arm64: dts: cavium: thunder2: Add missing PL011 "uartclk"
+	renesas/dt-bindings
+		https://git.kernel.org/pub/scm/linux/kernel/git/geert/renesas-devel tags/renesas-dt-bindings-for-v6.17-tag1
+	renesas/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/geert/renesas-devel tags/renesas-dts-for-v6.17-tag1
+	broadcom/dt
+		https://github.com/Broadcom/stblinux tags/arm-soc/for-6.17/devicetree
+	patch
+		ARM: dts: lpc32xx: Add #pwm-cells property to the two SoC PWMs
+		MAINTAINERS: Switch ASPEED tree to shared BMC repository
+	broadcom/dt64
+		https://github.com/Broadcom/stblinux tags/arm-soc/for-6.17/devicetree-arm64
+
+soc/drivers
+
+soc/defconfig
+
+soc/late
+
+arm/fixes
+	<no branch> (4c46a471be12216347ba707f8eadadbf5d68e698)
+		https://git.kernel.org/pub/scm/linux/kernel/git/sudeep.holla/linux tags/ffa-fixes-6.16
+	<no branch> (8d2c2fa2209e83d0eb10f7330d8a0bbdc1df32ff)
+		https://git.kernel.org/pub/scm/linux/kernel/git/krzk/linux tags/samsung-fixes-6.16
+	<no branch> (312d02adb959ea199372f375ada06e0186f651e4)
+		https://git.kernel.org/pub/scm/linux/kernel/git/jenswi/linux-tee tags/optee-fix-for-v6.16
+	<no branch> (08a0d93c353bd55de8b5fb77b464d89425be0215)
+		https://git.kernel.org/pub/scm/linux/kernel/git/sven/linux tags/apple-soc-fixes-6.16
+
