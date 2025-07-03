@@ -9,8 +9,6 @@
 #include <linux/limits.h>
 #include <linux/userfaultfd.h>
 #include <linux/fs.h>
-#include <setjmp.h>
-#include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,24 +21,6 @@
 #include "vm_util.h"
 
 #include "../pidfd/pidfd.h"
-
-/*
- * Ignore the checkpatch warning, as per the C99 standard, section 7.14.1.1:
- *
- * "If the signal occurs other than as the result of calling the abort or raise
- *  function, the behavior is undefined if the signal handler refers to any
- *  object with static storage duration other than by assigning a value to an
- *  object declared as volatile sig_atomic_t"
- */
-static volatile sig_atomic_t signal_jump_set;
-static sigjmp_buf signal_jmp_buf;
-
-/*
- * Ignore the checkpatch warning, we must read from x but don't want to do
- * anything with it in order to trigger a read page fault. We therefore must use
- * volatile to stop the compiler from optimising this away.
- */
-#define FORCE_READ(x) (*(volatile typeof(x) *)x)
 
 /*
  * How is the test backing the mapping being tested?
@@ -120,14 +100,6 @@ static int userfaultfd(int flags)
 	return syscall(SYS_userfaultfd, flags);
 }
 
-static void handle_fatal(int c)
-{
-	if (!signal_jump_set)
-		return;
-
-	siglongjmp(signal_jmp_buf, c);
-}
-
 static ssize_t sys_process_madvise(int pidfd, const struct iovec *iovec,
 				   size_t n, int advice, unsigned int flags)
 {
@@ -178,29 +150,6 @@ static bool try_write_buf(char *ptr)
 static bool try_read_write_buf(char *ptr)
 {
 	return try_read_buf(ptr) && try_write_buf(ptr);
-}
-
-static void setup_sighandler(void)
-{
-	struct sigaction act = {
-		.sa_handler = &handle_fatal,
-		.sa_flags = SA_NODEFER,
-	};
-
-	sigemptyset(&act.sa_mask);
-	if (sigaction(SIGSEGV, &act, NULL))
-		ksft_exit_fail_perror("sigaction");
-}
-
-static void teardown_sighandler(void)
-{
-	struct sigaction act = {
-		.sa_handler = SIG_DFL,
-		.sa_flags = SA_NODEFER,
-	};
-
-	sigemptyset(&act.sa_mask);
-	sigaction(SIGSEGV, &act, NULL);
 }
 
 static int open_file(const char *prefix, char *path)
