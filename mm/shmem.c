@@ -2274,14 +2274,15 @@ static int shmem_swapin_folio(struct inode *inode, pgoff_t index,
 	pgoff_t offset;
 
 	VM_BUG_ON(!*foliop || !xa_is_value(*foliop));
-	swap = index_entry = radix_to_swp_entry(*foliop);
+	index_entry = radix_to_swp_entry(*foliop);
+	swap = index_entry;
 	*foliop = NULL;
 
-	if (is_poisoned_swp_entry(swap))
+	if (is_poisoned_swp_entry(index_entry))
 		return -EIO;
 
-	si = get_swap_device(swap);
-	order = shmem_confirm_swap(mapping, index, swap);
+	si = get_swap_device(index_entry);
+	order = shmem_confirm_swap(mapping, index, index_entry);
 	if (unlikely(!si)) {
 		if (order < 0)
 			return -EEXIST;
@@ -2291,6 +2292,12 @@ static int shmem_swapin_folio(struct inode *inode, pgoff_t index,
 	if (unlikely(order < 0)) {
 		put_swap_device(si);
 		return -EEXIST;
+	}
+
+	/* index may point to the middle of a large entry, get the sub entry */
+	if (order) {
+		offset = index - round_down(index, 1 << order);
+		swap = swp_entry(swp_type(swap), swp_offset(swap) + offset);
 	}
 
 	/* Look it up and read it in.. */
@@ -2305,8 +2312,10 @@ static int shmem_swapin_folio(struct inode *inode, pgoff_t index,
 
 		/* Skip swapcache for synchronous device. */
 		if (data_race(si->flags & SWP_SYNCHRONOUS_IO)) {
-			folio = shmem_swap_alloc_folio(inode, vma, index, swap, order, gfp);
+			folio = shmem_swap_alloc_folio(inode, vma, index,
+						       index_entry, order, gfp);
 			if (!IS_ERR(folio)) {
+				swap = index_entry;
 				skip_swapcache = true;
 				goto alloced;
 			}
@@ -2320,17 +2329,7 @@ static int shmem_swapin_folio(struct inode *inode, pgoff_t index,
 			if (error == -EEXIST)
 				goto failed;
 		}
-
-		/*
-		 * Now swap device can only swap in order 0 folio, it is
-		 * necessary to recalculate the new swap entry based on
-		 * the offset, as the swapin index might be unalgined.
-		 */
-		if (order) {
-			offset = index - round_down(index, 1 << order);
-			swap = swp_entry(swp_type(swap), swp_offset(swap) + offset);
-		}
-
+		/* Cached swapin with readahead, only supports order 0 */
 		folio = shmem_swapin_cluster(swap, gfp, info, index);
 		if (!folio) {
 			error = -ENOMEM;
