@@ -38,6 +38,7 @@
 #include <asm/cacheflush.h>
 #include <asm/io.h>
 #include <linux/unaligned.h>
+#include <linux/string_choices.h>
 
 #define ATMCI_MAX_NR_SLOTS	2
 
@@ -2248,7 +2249,7 @@ static int atmci_init_slot(struct atmel_mci *host,
 	struct atmel_mci_slot		*slot;
 	int ret;
 
-	mmc = mmc_alloc_host(sizeof(struct atmel_mci_slot), dev);
+	mmc = devm_mmc_alloc_host(dev, sizeof(*slot));
 	if (!mmc)
 		return -ENOMEM;
 
@@ -2264,7 +2265,7 @@ static int atmci_init_slot(struct atmel_mci *host,
 	        "slot[%u]: bus_width=%u, detect_pin=%d, "
 		"detect_is_active_high=%s, wp_pin=%d\n",
 		id, slot_data->bus_width, desc_to_gpio(slot_data->detect_pin),
-		!gpiod_is_active_low(slot_data->detect_pin) ? "true" : "false",
+		str_true_false(!gpiod_is_active_low(slot_data->detect_pin)),
 		desc_to_gpio(slot_data->wp_pin));
 
 	mmc->ops = &atmci_ops;
@@ -2321,10 +2322,8 @@ static int atmci_init_slot(struct atmel_mci *host,
 	host->slot[id] = slot;
 	mmc_regulator_get_supply(mmc);
 	ret = mmc_add_host(mmc);
-	if (ret) {
-		mmc_free_host(mmc);
+	if (ret)
 		return ret;
-	}
 
 	if (slot->detect_pin) {
 		timer_setup(&slot->detect_timer, atmci_detect_change, 0);
@@ -2362,7 +2361,6 @@ static void atmci_cleanup_slot(struct atmel_mci_slot *slot,
 	}
 
 	slot->host->slot[id] = NULL;
-	mmc_free_host(slot->mmc);
 }
 
 static int atmci_configure_dma(struct atmel_mci *host)
