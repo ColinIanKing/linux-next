@@ -22,6 +22,8 @@
 #include <signal.h>
 #include <sys/ioctl.h>
 #include <linux/time64.h>
+#include <pthread.h>
+#include <fcntl.h>
 
 #include "vsock_test_zerocopy.h"
 #include "timeout.h"
@@ -1718,16 +1720,27 @@ static void test_stream_msgzcopy_leak_zcskb_server(const struct test_opts *opts)
 
 #define MAX_PORT_RETRIES	24	/* net/vmw_vsock/af_vsock.c */
 
-/* Test attempts to trigger a transport release for an unbound socket. This can
- * lead to a reference count mishandling.
- */
-static void test_stream_transport_uaf_client(const struct test_opts *opts)
+static bool test_stream_transport_uaf(int cid)
 {
 	int sockets[MAX_PORT_RETRIES];
 	struct sockaddr_vm addr;
-	int fd, i, alen;
+	socklen_t alen;
+	int fd, i, c;
+	bool ret;
 
-	fd = vsock_bind(VMADDR_CID_ANY, VMADDR_PORT_ANY, SOCK_STREAM);
+	/* Probe for a transport by attempting a local CID bind. Unavailable
+	 * transport (or more specifically: an unsupported transport/CID
+	 * combination) results in EADDRNOTAVAIL, other errnos are fatal.
+	 */
+	fd = vsock_bind_try(cid, VMADDR_PORT_ANY, SOCK_STREAM);
+	if (fd < 0) {
+		if (errno != EADDRNOTAVAIL) {
+			perror("Unexpected bind() errno");
+			exit(EXIT_FAILURE);
+		}
+
+		return false;
+	}
 
 	alen = sizeof(addr);
 	if (getsockname(fd, (struct sockaddr *)&addr, &alen)) {
@@ -1735,38 +1748,83 @@ static void test_stream_transport_uaf_client(const struct test_opts *opts)
 		exit(EXIT_FAILURE);
 	}
 
+	/* Drain the autobind pool; see __vsock_bind_connectible(). */
 	for (i = 0; i < MAX_PORT_RETRIES; ++i)
-		sockets[i] = vsock_bind(VMADDR_CID_ANY, ++addr.svm_port,
-					SOCK_STREAM);
+		sockets[i] = vsock_bind(cid, ++addr.svm_port, SOCK_STREAM);
 
 	close(fd);
-	fd = socket(AF_VSOCK, SOCK_STREAM, 0);
+
+	/* Setting SOCK_NONBLOCK makes connect() return soon after
+	 * (re-)assigning the transport. We are not connecting to anything
+	 * anyway, so there is no point entering the main loop in
+	 * vsock_connect(); waiting for timeout, checking for signals, etc.
+	 */
+	fd = socket(AF_VSOCK, SOCK_STREAM | SOCK_NONBLOCK, 0);
 	if (fd < 0) {
 		perror("socket");
 		exit(EXIT_FAILURE);
 	}
 
-	if (!vsock_connect_fd(fd, addr.svm_cid, addr.svm_port)) {
-		perror("Unexpected connect() #1 success");
+	/* Assign transport, while failing to autobind. Autobind pool was
+	 * drained, so EADDRNOTAVAIL coming from __vsock_bind_connectible() is
+	 * expected.
+	 *
+	 * One exception is ENODEV which is thrown by vsock_assign_transport(),
+	 * i.e. before vsock_auto_bind(), when the only transport loaded is
+	 * vhost.
+	 */
+	if (!connect(fd, (struct sockaddr *)&addr, alen)) {
+		fprintf(stderr, "Unexpected connect() success\n");
+		exit(EXIT_FAILURE);
+	}
+	if (errno == ENODEV && cid == VMADDR_CID_HOST) {
+		ret = false;
+		goto cleanup;
+	}
+	if (errno != EADDRNOTAVAIL) {
+		perror("Unexpected connect() errno");
 		exit(EXIT_FAILURE);
 	}
 
-	/* Vulnerable system may crash now. */
-	if (!vsock_connect_fd(fd, VMADDR_CID_HOST, VMADDR_PORT_ANY)) {
-		perror("Unexpected connect() #2 success");
-		exit(EXIT_FAILURE);
+	/* Reassign transport, triggering old transport release and
+	 * (potentially) unbinding of an unbound socket.
+	 *
+	 * Vulnerable system may crash now.
+	 */
+	for (c = VMADDR_CID_HYPERVISOR; c <= VMADDR_CID_HOST + 1; ++c) {
+		if (c != cid) {
+			addr.svm_cid = c;
+			(void)connect(fd, (struct sockaddr *)&addr, alen);
+		}
 	}
 
+	ret = true;
+cleanup:
 	close(fd);
 	while (i--)
 		close(sockets[i]);
 
-	control_writeln("DONE");
+	return ret;
 }
 
-static void test_stream_transport_uaf_server(const struct test_opts *opts)
+/* Test attempts to trigger a transport release for an unbound socket. This can
+ * lead to a reference count mishandling.
+ */
+static void test_stream_transport_uaf_client(const struct test_opts *opts)
 {
-	control_expectln("DONE");
+	bool tested = false;
+	int cid, tr;
+
+	for (cid = VMADDR_CID_HYPERVISOR; cid <= VMADDR_CID_HOST + 1; ++cid)
+		tested |= test_stream_transport_uaf(cid);
+
+	tr = get_transports();
+	if (!tr)
+		fprintf(stderr, "No transports detected\n");
+	else if (tr == TRANSPORT_VIRTIO)
+		fprintf(stderr, "Setup unsupported: sole virtio transport\n");
+	else if (!tested)
+		fprintf(stderr, "No transports tested\n");
 }
 
 static void test_stream_connect_retry_client(const struct test_opts *opts)
@@ -1809,6 +1867,169 @@ static void test_stream_connect_retry_server(const struct test_opts *opts)
 
 	vsock_wait_remote_close(fd);
 	close(fd);
+}
+
+#define TRANSPORT_CHANGE_TIMEOUT 2 /* seconds */
+
+static void *test_stream_transport_change_thread(void *vargp)
+{
+	pid_t *pid = (pid_t *)vargp;
+	int ret;
+
+	ret = pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, NULL);
+	if (ret) {
+		fprintf(stderr, "pthread_setcanceltype: %d\n", ret);
+		exit(EXIT_FAILURE);
+	}
+
+	while (true) {
+		if (kill(*pid, SIGUSR1) < 0) {
+			perror("kill");
+			exit(EXIT_FAILURE);
+		}
+	}
+	return NULL;
+}
+
+static void test_transport_change_signal_handler(int signal)
+{
+	/* We need a custom handler for SIGUSR1 as the default one terminates the process. */
+}
+
+static void test_stream_transport_change_client(const struct test_opts *opts)
+{
+	__sighandler_t old_handler;
+	pid_t pid = getpid();
+	pthread_t thread_id;
+	time_t tout;
+	int ret, tr;
+
+	tr = get_transports();
+
+	/* Print a warning if there is a G2H transport loaded.
+	 * This is on a best effort basis because VMCI can be either G2H and H2G, and there is
+	 * no easy way to understand it.
+	 * The bug we are testing only appears when G2H transports are not loaded.
+	 * This is because `vsock_assign_transport`, when using CID 0, assigns a G2H transport
+	 * to vsk->transport. If none is available it is set to NULL, causing the null-ptr-deref.
+	 */
+	if (tr & TRANSPORTS_G2H)
+		fprintf(stderr, "G2H Transport detected. This test will not fail.\n");
+
+	old_handler = signal(SIGUSR1, test_transport_change_signal_handler);
+	if (old_handler == SIG_ERR) {
+		perror("signal");
+		exit(EXIT_FAILURE);
+	}
+
+	ret = pthread_create(&thread_id, NULL, test_stream_transport_change_thread, &pid);
+	if (ret) {
+		fprintf(stderr, "pthread_create: %d\n", ret);
+		exit(EXIT_FAILURE);
+	}
+
+	control_expectln("LISTENING");
+
+	tout = current_nsec() + TRANSPORT_CHANGE_TIMEOUT * NSEC_PER_SEC;
+	do {
+		struct sockaddr_vm sa = {
+			.svm_family = AF_VSOCK,
+			.svm_cid = opts->peer_cid,
+			.svm_port = opts->peer_port,
+		};
+		int s;
+
+		s = socket(AF_VSOCK, SOCK_STREAM, 0);
+		if (s < 0) {
+			perror("socket");
+			exit(EXIT_FAILURE);
+		}
+
+		ret = connect(s, (struct sockaddr *)&sa, sizeof(sa));
+		/* The connect can fail due to signals coming from the thread,
+		 * or because the receiver connection queue is full.
+		 * Ignoring also the latter case because there is no way
+		 * of synchronizing client's connect and server's accept when
+		 * connect(s) are constantly being interrupted by signals.
+		 */
+		if (ret == -1 && (errno != EINTR && errno != ECONNRESET)) {
+			perror("connect");
+			exit(EXIT_FAILURE);
+		}
+
+		/* Set CID to 0 cause a transport change. */
+		sa.svm_cid = 0;
+
+		/* Ignore return value since it can fail or not.
+		 * If the previous connect is interrupted while the
+		 * connection request is already sent, the second
+		 * connect() will wait for the response.
+		 */
+		connect(s, (struct sockaddr *)&sa, sizeof(sa));
+
+		close(s);
+
+		control_writeulong(CONTROL_CONTINUE);
+
+	} while (current_nsec() < tout);
+
+	control_writeulong(CONTROL_DONE);
+
+	ret = pthread_cancel(thread_id);
+	if (ret) {
+		fprintf(stderr, "pthread_cancel: %d\n", ret);
+		exit(EXIT_FAILURE);
+	}
+
+	ret = pthread_join(thread_id, NULL);
+	if (ret) {
+		fprintf(stderr, "pthread_join: %d\n", ret);
+		exit(EXIT_FAILURE);
+	}
+
+	if (signal(SIGUSR1, old_handler) == SIG_ERR) {
+		perror("signal");
+		exit(EXIT_FAILURE);
+	}
+}
+
+static void test_stream_transport_change_server(const struct test_opts *opts)
+{
+	int s = vsock_stream_listen(VMADDR_CID_ANY, opts->peer_port);
+
+	/* Set the socket to be nonblocking because connects that have been interrupted
+	 * (EINTR) can fill the receiver's accept queue anyway, leading to connect failure.
+	 * As of today (6.15) in such situation there is no way to understand, from the
+	 * client side, if the connection has been queued in the server or not.
+	 */
+	if (fcntl(s, F_SETFL, fcntl(s, F_GETFL, 0) | O_NONBLOCK) < 0) {
+		perror("fcntl");
+		exit(EXIT_FAILURE);
+	}
+	control_writeln("LISTENING");
+
+	while (control_readulong() == CONTROL_CONTINUE) {
+		/* Must accept the connection, otherwise the `listen`
+		 * queue will fill up and new connections will fail.
+		 * There can be more than one queued connection,
+		 * clear them all.
+		 */
+		while (true) {
+			int client = accept(s, NULL, NULL);
+
+			if (client < 0) {
+				if (errno == EAGAIN)
+					break;
+
+				perror("accept");
+				exit(EXIT_FAILURE);
+			}
+
+			close(client);
+		}
+	}
+
+	close(s);
 }
 
 static void test_stream_linger_client(const struct test_opts *opts)
@@ -2034,7 +2255,6 @@ static struct test_case test_cases[] = {
 	{
 		.name = "SOCK_STREAM transport release use-after-free",
 		.run_client = test_stream_transport_uaf_client,
-		.run_server = test_stream_transport_uaf_server,
 	},
 	{
 		.name = "SOCK_STREAM retry failed connect()",
@@ -2050,6 +2270,11 @@ static struct test_case test_cases[] = {
 		.name = "SOCK_STREAM SO_LINGER close() on unread",
 		.run_client = test_stream_nolinger_client,
 		.run_server = test_stream_nolinger_server,
+	},
+	{
+		.name = "SOCK_STREAM transport change null-ptr-deref",
+		.run_client = test_stream_transport_change_client,
+		.run_server = test_stream_transport_change_server,
 	},
 	{},
 };
