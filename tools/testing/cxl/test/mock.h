@@ -26,6 +26,9 @@ struct cxl_mock_ops {
 	int (*devm_cxl_enumerate_decoders)(
 		struct cxl_hdm *hdm, struct cxl_endpoint_dvsec_info *info);
 	void (*cxl_endpoint_parse_cdat)(struct cxl_port *port);
+	int (*hmat_get_extended_linear_cache_size)(struct resource *backing_res,
+						   int nid,
+						   resource_size_t *size);
 };
 
 void register_cxl_mock_ops(struct cxl_mock_ops *ops);

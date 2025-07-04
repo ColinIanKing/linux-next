@@ -421,6 +421,11 @@ struct cxl_switch_decoder {
 struct cxl_root_decoder;
 typedef u64 (*cxl_hpa_to_spa_fn)(struct cxl_root_decoder *cxlrd, u64 hpa);
 
+struct cxl_rd_ops {
+	int (*get_extended_linear_cache_size)(struct resource *backing_res,
+					      int nid, resource_size_t *size);
+};
+
 /**
  * struct cxl_root_decoder - Static platform CXL address decoder
  * @res: host / parent resource for region allocations
@@ -429,6 +434,7 @@ typedef u64 (*cxl_hpa_to_spa_fn)(struct cxl_root_decoder *cxlrd, u64 hpa);
  * @platform_data: platform specific configuration data
  * @range_lock: sync region autodiscovery by address range
  * @qos_class: QoS performance class cookie
+ * @ops: root decoder specific operations
  * @cxlsd: base cxl switch decoder
  */
 struct cxl_root_decoder {
@@ -438,6 +444,7 @@ struct cxl_root_decoder {
 	void *platform_data;
 	struct mutex range_lock;
 	int qos_class;
+	const struct cxl_rd_ops *ops;
 	struct cxl_switch_decoder cxlsd;
 };
 
@@ -776,7 +783,8 @@ bool is_root_decoder(struct device *dev);
 bool is_switch_decoder(struct device *dev);
 bool is_endpoint_decoder(struct device *dev);
 struct cxl_root_decoder *cxl_root_decoder_alloc(struct cxl_port *port,
-						unsigned int nr_targets);
+						unsigned int nr_targets,
+						const struct cxl_rd_ops *ops);
 struct cxl_switch_decoder *cxl_switch_decoder_alloc(struct cxl_port *port,
 						    unsigned int nr_targets);
 int cxl_decoder_add(struct cxl_decoder *cxld, int *target_map);
@@ -816,7 +824,7 @@ int cxl_dvsec_rr_decode(struct cxl_dev_state *cxlds,
 
 bool is_cxl_region(struct device *dev);
 
-extern struct bus_type cxl_bus_type;
+extern const struct bus_type cxl_bus_type;
 
 struct cxl_driver {
 	const char *name;
