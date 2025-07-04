@@ -2327,33 +2327,28 @@ static int shmem_swapin_folio(struct inode *inode, pgoff_t index,
 			count_vm_event(PGMAJFAULT);
 			count_memcg_event_mm(fault_mm, PGMAJFAULT);
 		}
-		/* Skip swapcache for synchronous device. */
 		if (data_race(si->flags & SWP_SYNCHRONOUS_IO)) {
+			/* Direct mTHP swapin skipping swap cache & readhaed */
 			folio = shmem_swapin_direct(inode, vma, index, swap,
 						    index_entry, order, gfp);
-			if (!IS_ERR(folio)) {
+			if (IS_ERR(folio)) {
+				error = PTR_ERR(folio);
+				folio = NULL;
+				goto failed;
+			} else {
 				if (folio_test_large(folio))
 					swap = index_entry;
 				skip_swapcache = true;
-				goto alloced;
 			}
-
-			/*
-			 * Direct swapin handled order 0 fallback already,
-			 * if it failed, abort.
-			 */
-			error = PTR_ERR(folio);
-			folio = NULL;
-			goto failed;
-		}
-		/* Cached swapin with readahead, only supports order 0 */
-		folio = shmem_swapin_cluster(swap, gfp, info, index);
-		if (!folio) {
-			error = -ENOMEM;
-			goto failed;
+		} else {
+			/* Cached swapin with readhaed, only supports order 0 */
+			folio = shmem_swapin_cluster(swap, gfp, info, index);
+			if (!folio) {
+				error = -ENOMEM;
+				goto failed;
+			}
 		}
 	}
-alloced:
 	if (order > folio_order(folio)) {
 		/*
 		 * Swapin may get smaller folios due to various reasons:
