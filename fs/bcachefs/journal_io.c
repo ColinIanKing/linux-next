@@ -1245,6 +1245,8 @@ noinline_for_stack
 static void bch2_journal_print_checksum_error(struct bch_fs *c, struct journal_replay *j)
 {
 	struct printbuf buf = PRINTBUF;
+	bch2_log_msg_start(c, &buf);
+
 	enum bch_csum_type csum_type = JSET_CSUM_TYPE(&j->j);
 	bool have_good = false;
 
@@ -1272,6 +1274,28 @@ static void bch2_journal_print_checksum_error(struct bch_fs *c, struct journal_r
 	printbuf_exit(&buf);
 }
 
+struct u64_range bch2_journal_entry_missing_range(struct bch_fs *c, u64 start, u64 end)
+{
+	BUG_ON(start > end);
+
+	if (start == end)
+		return (struct u64_range) {};
+
+	start = bch2_journal_seq_next_nonblacklisted(c, start);
+	if (start >= end)
+		return (struct u64_range) {};
+
+	struct u64_range missing = {
+		.start	= start,
+		.end	= min(end, bch2_journal_seq_next_blacklisted(c, start)),
+	};
+
+	if (missing.start == missing.end)
+		return (struct u64_range) {};
+
+	return missing;
+}
+
 noinline_for_stack
 static int bch2_journal_check_for_missing(struct bch_fs *c, u64 start_seq, u64 end_seq)
 {
@@ -1280,6 +1304,7 @@ static int bch2_journal_check_for_missing(struct bch_fs *c, u64 start_seq, u64 e
 
 	struct genradix_iter radix_iter;
 	struct journal_replay *i, **_i, *prev = NULL;
+	/* Sequence number we expect to find next, to check for missing entries */
 	u64 seq = start_seq;
 
 	genradix_for_each(&c->journal_entries, radix_iter, _i) {
@@ -1290,43 +1315,31 @@ static int bch2_journal_check_for_missing(struct bch_fs *c, u64 start_seq, u64 e
 
 		BUG_ON(seq > le64_to_cpu(i->j.seq));
 
-		while (seq < le64_to_cpu(i->j.seq)) {
-			while (seq < le64_to_cpu(i->j.seq) &&
-			       bch2_journal_seq_is_blacklisted(c, seq, false))
-				seq++;
+		struct u64_range missing;
 
-			if (seq == le64_to_cpu(i->j.seq))
-				break;
-
-			u64 missing_start = seq;
-
-			while (seq < le64_to_cpu(i->j.seq) &&
-			       !bch2_journal_seq_is_blacklisted(c, seq, false))
-				seq++;
-
-			u64 missing_end = seq - 1;
-
+		while ((missing = bch2_journal_entry_missing_range(c, seq, le64_to_cpu(i->j.seq))).start) {
 			printbuf_reset(&buf);
 			prt_printf(&buf, "journal entries %llu-%llu missing! (replaying %llu-%llu)",
-				   missing_start, missing_end,
+				   missing.start, missing.end - 1,
 				   start_seq, end_seq);
 
-			prt_printf(&buf, "\nprev at ");
 			if (prev) {
+				prt_printf(&buf, "\n%llu at ", le64_to_cpu(prev->j.seq));
 				bch2_journal_ptrs_to_text(&buf, c, prev);
 				prt_printf(&buf, " size %zu", vstruct_sectors(&prev->j, c->block_bits));
-			} else
-				prt_printf(&buf, "(none)");
+			}
 
-			prt_printf(&buf, "\nnext at ");
+			prt_printf(&buf, "\n%llu at ", le64_to_cpu(i->j.seq));
 			bch2_journal_ptrs_to_text(&buf, c, i);
 			prt_printf(&buf, ", continue?");
 
 			fsck_err(c, journal_entries_missing, "%s", buf.buf);
+
+			seq = missing.end;
 		}
 
 		prev = i;
-		seq++;
+		seq = le64_to_cpu(i->j.seq) + 1;
 	}
 fsck_err:
 	printbuf_exit(&buf);
