@@ -2014,7 +2014,7 @@ static void damos_set_effective_quota(struct damos_quota *quota)
 static void damos_trace_esz(struct damon_ctx *c, struct damos *s,
 		struct damos_quota *quota)
 {
-	unsigned int cidx = 0, sidx;
+	unsigned int cidx = 0, sidx = 0;
 	struct damos *siter;
 
 	damon_for_each_scheme(siter, c) {
