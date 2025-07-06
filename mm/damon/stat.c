@@ -118,8 +118,12 @@ static int damon_stat_enabled_store(
 		 */
 		return 0;
 
-	if (enabled)
-		return damon_stat_start();
+	if (enabled) {
+		err = damon_stat_start();
+		if (err)
+			enabled = false;
+		return err;
+	}
 	damon_stat_stop();
 	return 0;
 }
@@ -133,6 +137,9 @@ static int __init damon_stat_init(void)
 	/* probably set via command line */
 	if (enabled)
 		err = damon_stat_start();
+
+	if (err && enabled)
+		enabled = false;
 	return err;
 }
 
