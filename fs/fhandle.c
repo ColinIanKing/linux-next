@@ -171,11 +171,7 @@ SYSCALL_DEFINE5(name_to_handle_at, int, dfd, const char __user *, name,
 static int get_path_from_fd(int fd, struct path *root)
 {
 	if (fd == AT_FDCWD) {
-		struct fs_struct *fs = current->fs;
-		spin_lock(&fs->lock);
-		*root = fs->pwd;
-		path_get(root);
-		spin_unlock(&fs->lock);
+		get_fs_pwd(current->fs, root);
 	} else {
 		CLASS(fd, f)(fd);
 		if (fd_empty(f))
