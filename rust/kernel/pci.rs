@@ -5,7 +5,6 @@
 //! C header: [`include/linux/pci.h`](srctree/include/linux/pci.h)
 
 use crate::{
-    alloc::flags::*,
     bindings, container_of, device,
     device_id::RawDeviceId,
     devres::Devres,
@@ -68,7 +67,7 @@ impl<T: Driver + 'static> Adapter<T> {
         // INVARIANT: `pdev` is valid for the duration of `probe_callback()`.
         let pdev = unsafe { &*pdev.cast::<Device<device::Core>>() };
 
-        // SAFETY: `DeviceId` is a `#[repr(transparent)` wrapper of `struct pci_device_id` and
+        // SAFETY: `DeviceId` is a `#[repr(transparent)]` wrapper of `struct pci_device_id` and
         // does not add additional invariants, so it's safe to transmute.
         let id = unsafe { &*id.cast::<DeviceId>() };
         let info = T::ID_TABLE.info(id.index());
@@ -162,7 +161,7 @@ impl DeviceId {
 }
 
 // SAFETY:
-// * `DeviceId` is a `#[repr(transparent)` wrapper of `pci_device_id` and does not add
+// * `DeviceId` is a `#[repr(transparent)]` wrapper of `pci_device_id` and does not add
 //   additional invariants, so it's safe to transmute to `RawType`.
 // * `DRIVER_DATA_OFFSET` is the offset to the `driver_data` field.
 unsafe impl RawDeviceId for DeviceId {
@@ -398,19 +397,20 @@ impl Device {
 impl Device<device::Bound> {
     /// Mapps an entire PCI-BAR after performing a region-request on it. I/O operation bound checks
     /// can be performed on compile time for offsets (plus the requested type size) < SIZE.
-    pub fn iomap_region_sized<const SIZE: usize>(
-        &self,
+    pub fn iomap_region_sized<'a, const SIZE: usize>(
+        &'a self,
         bar: u32,
-        name: &CStr,
-    ) -> Result<Devres<Bar<SIZE>>> {
-        let bar = Bar::<SIZE>::new(self, bar, name)?;
-        let devres = Devres::new(self.as_ref(), bar, GFP_KERNEL)?;
-
-        Ok(devres)
+        name: &'a CStr,
+    ) -> impl PinInit<Devres<Bar<SIZE>>, Error> + 'a {
+        Devres::new(self.as_ref(), Bar::<SIZE>::new(self, bar, name))
     }
 
     /// Mapps an entire PCI-BAR after performing a region-request on it.
-    pub fn iomap_region(&self, bar: u32, name: &CStr) -> Result<Devres<Bar>> {
+    pub fn iomap_region<'a>(
+        &'a self,
+        bar: u32,
+        name: &'a CStr,
+    ) -> impl PinInit<Devres<Bar>, Error> + 'a {
         self.iomap_region_sized::<0>(bar, name)
     }
 }
