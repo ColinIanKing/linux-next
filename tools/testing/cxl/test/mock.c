@@ -78,6 +78,25 @@ int __wrap_acpi_table_parse_cedt(enum acpi_cedt_type id,
 }
 EXPORT_SYMBOL_NS_GPL(__wrap_acpi_table_parse_cedt, "ACPI");
 
+int __wrap_hmat_get_extended_linear_cache_size(struct resource *res,
+					       int nid,
+					       resource_size_t *size)
+{
+	int index;
+	struct cxl_mock_ops *ops = get_cxl_mock_ops(&index);
+	int rc;
+
+	if (ops)
+		rc = ops->hmat_get_extended_linear_cache_size(res, nid, size);
+	else
+		rc = hmat_get_extended_linear_cache_size(res, nid, size);
+
+	put_cxl_mock_ops(index);
+
+	return rc;
+}
+EXPORT_SYMBOL_NS_GPL(__wrap_hmat_get_extended_linear_cache_size, "CXL");
+
 acpi_status __wrap_acpi_evaluate_integer(acpi_handle handle,
 					 acpi_string pathname,
 					 struct acpi_object_list *arguments,

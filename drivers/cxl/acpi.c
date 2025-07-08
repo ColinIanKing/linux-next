@@ -335,6 +335,17 @@ static int add_or_reset_cxl_resource(struct resource *parent, struct resource *r
 	return rc;
 }
 
+static int cxl_acpi_get_extended_linear_cache_size(struct resource *backing_res,
+						   int nid,
+						   resource_size_t *size)
+{
+	return hmat_get_extended_linear_cache_size(backing_res, nid, size);
+}
+
+static const struct cxl_rd_ops acpi_rd_ops = {
+	.get_extended_linear_cache_size = cxl_acpi_get_extended_linear_cache_size,
+};
+
 DEFINE_FREE(put_cxlrd, struct cxl_root_decoder *,
 	    if (!IS_ERR_OR_NULL(_T)) put_device(&_T->cxlsd.cxld.dev))
 DEFINE_FREE(del_cxl_resource, struct resource *, if (_T) del_cxl_resource(_T))
@@ -373,7 +384,7 @@ static int __cxl_parse_cfmws(struct acpi_cedt_cfmws *cfmws,
 		return rc;
 
 	struct cxl_root_decoder *cxlrd __free(put_cxlrd) =
-		cxl_root_decoder_alloc(root_port, ways);
+		cxl_root_decoder_alloc(root_port, ways, &acpi_rd_ops);
 
 	if (IS_ERR(cxlrd))
 		return PTR_ERR(cxlrd);
