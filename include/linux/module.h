@@ -14,6 +14,7 @@
 #include <linux/buildid.h>
 #include <linux/compiler.h>
 #include <linux/cache.h>
+#include <linux/cleanup.h>
 #include <linux/kmod.h>
 #include <linux/init.h>
 #include <linux/elf.h>
@@ -249,8 +250,8 @@ struct module_kobject *lookup_or_create_module_kobject(const char *name);
 #ifdef MODULE
 /* Creates an alias so file2alias.c can find device table. */
 #define MODULE_DEVICE_TABLE(type, name)					\
-extern typeof(name) __mod_device_table__##type##__##name		\
-  __attribute__ ((unused, alias(__stringify(name))))
+static typeof(name) __mod_device_table__##type##__##name		\
+  __attribute__ ((used, alias(__stringify(name))))
 #else  /* !MODULE */
 #define MODULE_DEVICE_TABLE(type, name)
 #endif
@@ -1018,5 +1019,8 @@ static inline unsigned long find_kallsyms_symbol_value(struct module *mod,
 }
 
 #endif  /* CONFIG_MODULES && CONFIG_KALLSYMS */
+
+/* Define __free(module_put) macro for struct module *. */
+DEFINE_FREE(module_put, struct module *, if (_T) module_put(_T))
 
 #endif /* _LINUX_MODULE_H */

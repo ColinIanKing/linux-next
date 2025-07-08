@@ -51,6 +51,7 @@
 #include <linux/workqueue.h>
 #include <linux/sort.h>
 #include <linux/io.h> /* vmap_page_range() */
+#include <linux/fs_context.h>
 
 #include <asm/setup.h> /* COMMAND_LINE_SIZE */
 
@@ -120,6 +121,7 @@ static int tracing_disabled = 1;
 
 cpumask_var_t __read_mostly	tracing_buffer_mask;
 
+#define MAX_TRACER_SIZE		100
 /*
  * ftrace_dump_on_oops - variable to dump ftrace buffer on oops
  *
@@ -142,7 +144,40 @@ cpumask_var_t __read_mostly	tracing_buffer_mask;
 char ftrace_dump_on_oops[MAX_TRACER_SIZE] = "0";
 
 /* When set, tracing will stop when a WARN*() is hit */
-int __disable_trace_on_warning;
+static int __disable_trace_on_warning;
+
+int tracepoint_printk_sysctl(const struct ctl_table *table, int write,
+			     void *buffer, size_t *lenp, loff_t *ppos);
+static const struct ctl_table trace_sysctl_table[] = {
+	{
+		.procname	= "ftrace_dump_on_oops",
+		.data		= &ftrace_dump_on_oops,
+		.maxlen		= MAX_TRACER_SIZE,
+		.mode		= 0644,
+		.proc_handler	= proc_dostring,
+	},
+	{
+		.procname	= "traceoff_on_warning",
+		.data		= &__disable_trace_on_warning,
+		.maxlen		= sizeof(__disable_trace_on_warning),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec,
+	},
+	{
+		.procname	= "tracepoint_printk",
+		.data		= &tracepoint_printk,
+		.maxlen		= sizeof(tracepoint_printk),
+		.mode		= 0644,
+		.proc_handler	= tracepoint_printk_sysctl,
+	},
+};
+
+static int __init init_trace_sysctls(void)
+{
+	register_sysctl_init("kernel", trace_sysctl_table);
+	return 0;
+}
+subsys_initcall(init_trace_sysctls);
 
 #ifdef CONFIG_TRACE_EVAL_MAP_FILE
 /* Map of enums to their values, for "eval_map" file */
@@ -6677,6 +6712,22 @@ static int tracing_wait_pipe(struct file *filp)
 	return 1;
 }
 
+static bool update_last_data_if_empty(struct trace_array *tr)
+{
+	if (!(tr->flags & TRACE_ARRAY_FL_LAST_BOOT))
+		return false;
+
+	if (!ring_buffer_empty(tr->array_buffer.buffer))
+		return false;
+
+	/*
+	 * If the buffer contains the last boot data and all per-cpu
+	 * buffers are empty, reset it from the kernel side.
+	 */
+	update_last_data(tr);
+	return true;
+}
+
 /*
  * Consumer reader.
  */
@@ -6708,6 +6759,9 @@ tracing_read_pipe(struct file *filp, char __user *ubuf,
 	}
 
 waitagain:
+	if (update_last_data_if_empty(iter->tr))
+		return 0;
+
 	sret = tracing_wait_pipe(filp);
 	if (sret <= 0)
 		return sret;
@@ -8286,6 +8340,9 @@ tracing_buffers_read(struct file *filp, char __user *ubuf,
 
 	if (ret < 0) {
 		if (trace_empty(iter) && !iter->closed) {
+			if (update_last_data_if_empty(iter->tr))
+				return 0;
+
 			if ((filp->f_flags & O_NONBLOCK))
 				return -EAGAIN;
 
@@ -8625,10 +8682,6 @@ static int tracing_buffers_mmap(struct file *filp, struct vm_area_struct *vma)
 
 	/* A memmap'ed buffer is not supported for user space mmap */
 	if (iter->tr->flags & TRACE_ARRAY_FL_MEMMAP)
-		return -ENODEV;
-
-	/* Currently the boot mapped buffer is not supported for mmap */
-	if (iter->tr->flags & TRACE_ARRAY_FL_BOOT)
 		return -ENODEV;
 
 	ret = get_snapshot_map(iter->tr);
@@ -10207,6 +10260,8 @@ static struct vfsmount *trace_automount(struct dentry *mntpt, void *ingore)
 {
 	struct vfsmount *mnt;
 	struct file_system_type *type;
+	struct fs_context *fc;
+	int ret;
 
 	/*
 	 * To maintain backward compatibility for tools that mount
@@ -10216,12 +10271,20 @@ static struct vfsmount *trace_automount(struct dentry *mntpt, void *ingore)
 	type = get_fs_type("tracefs");
 	if (!type)
 		return NULL;
-	mnt = vfs_submount(mntpt, type, "tracefs", NULL);
-	put_filesystem(type);
-	if (IS_ERR(mnt))
-		return NULL;
-	mntget(mnt);
 
+	fc = fs_context_for_submount(type, mntpt);
+	put_filesystem(type);
+	if (IS_ERR(fc))
+		return ERR_CAST(fc);
+
+	ret = vfs_parse_fs_string(fc, "source",
+				  "tracefs", strlen("tracefs"));
+	if (!ret)
+		mnt = fc_mount(fc);
+	else
+		mnt = ERR_PTR(ret);
+
+	put_fs_context(fc);
 	return mnt;
 }
 
