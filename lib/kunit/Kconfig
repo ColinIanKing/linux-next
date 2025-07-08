@@ -100,4 +100,17 @@ config KUNIT_UML_PCI
 	help
 	  Enables the PCI subsystem on UML for use by KUnit tests.
 
+config KUNIT_DEFAULT_TIMEOUT
+	int "Default value of the timeout module parameter"
+	default 300
+	help
+	  Sets the default timeout, in seconds, for Kunit test cases. This value
+	  is further multiplied by a factor determined by the assigned speed
+	  setting: 1x for `DEFAULT`, 3x for `KUNIT_SPEED_SLOW`, and 12x for
+	  `KUNIT_SPEED_VERY_SLOW`. This allows slower tests on slower machines
+	  sufficient time to complete.
+
+	  If unsure, the default timeout of 300 seconds is suitable for most
+	  cases.
+
 endif # KUNIT
