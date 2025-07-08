@@ -15550,6 +15550,7 @@ F:	drivers/net/ethernet/mellanox/mlx4/en_*
 MELLANOX ETHERNET DRIVER (mlx5e)
 M:	Saeed Mahameed <saeedm@nvidia.com>
 M:	Tariq Toukan <tariqt@nvidia.com>
+M:	Mark Bloch <mbloch@nvidia.com>
 L:	netdev@vger.kernel.org
 S:	Maintained
 W:	https://www.nvidia.com/networking/
@@ -15619,6 +15620,7 @@ MELLANOX MLX5 core VPI driver
 M:	Saeed Mahameed <saeedm@nvidia.com>
 M:	Leon Romanovsky <leonro@nvidia.com>
 M:	Tariq Toukan <tariqt@nvidia.com>
+M:	Mark Bloch <mbloch@nvidia.com>
 L:	netdev@vger.kernel.org
 L:	linux-rdma@vger.kernel.org
 S:	Maintained
@@ -21192,7 +21194,7 @@ M:	Lad Prabhakar <prabhakar.mahadev-lad.rj@bp.renesas.com>
 L:	netdev@vger.kernel.org
 L:	linux-renesas-soc@vger.kernel.org
 S:	Maintained
-F:	Documentation/devicetree/bindings/net/renesas,r9a09g057-gbeth.yaml
+F:	Documentation/devicetree/bindings/net/renesas,rzv2h-gbeth.yaml
 F:	drivers/net/ethernet/stmicro/stmmac/dwmac-renesas-gbeth.c
 
 RENESAS RZ/V2H(P) USB2PHY PORT RESET DRIVER
@@ -22328,6 +22330,17 @@ M:	Jim Cromie <jim.cromie@gmail.com>
 S:	Maintained
 F:	drivers/clocksource/scx200_hrt.c
 
+SDCA LIBRARY AND CLASS DRIVER
+M:	Charles Keepax <ckeepax@opensource.cirrus.com>
+M:	Maciej Strozek <mstrozek@opensource.cirrus.com>
+R:	Bard Liao <yung-chuan.liao@linux.intel.com>
+R:	Pierre-Louis Bossart <pierre-louis.bossart@linux.dev>
+L:	linux-sound@vger.kernel.org
+L:	patches@opensource.cirrus.com
+S:	Maintained
+F:	include/sound/sdca*
+F:	sound/soc/sdca/*
+
 SDRICOH_CS MMC/SD HOST CONTROLLER INTERFACE DRIVER
 M:	Sascha Sommer <saschasommer@freenet.de>
 L:	sdricohcs-devel@lists.sourceforge.net (subscribers-only)
@@ -22580,9 +22593,11 @@ S:	Maintained
 F:	drivers/misc/sgi-xp/
 
 SHARED MEMORY COMMUNICATIONS (SMC) SOCKETS
+M:	D. Wythe <alibuda@linux.alibaba.com>
+M:	Dust Li <dust.li@linux.alibaba.com>
+M:	Sidraya Jayagond <sidraya@linux.ibm.com>
 M:	Wenjia Zhang <wenjia@linux.ibm.com>
-M:	Jan Karcher <jaka@linux.ibm.com>
-R:	D. Wythe <alibuda@linux.alibaba.com>
+R:	Mahanta Jambigi <mjambigi@linux.ibm.com>
 R:	Tony Lu <tonylu@linux.alibaba.com>
 R:	Wen Gu <guwen@linux.alibaba.com>
 L:	linux-rdma@vger.kernel.org
