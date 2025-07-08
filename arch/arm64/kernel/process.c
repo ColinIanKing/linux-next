@@ -288,7 +288,9 @@ static void flush_gcs(void)
 	if (!system_supports_gcs())
 		return;
 
-	gcs_free(current);
+	current->thread.gcspr_el0 = 0;
+	current->thread.gcs_base = 0;
+	current->thread.gcs_size = 0;
 	current->thread.gcs_el0_mode = 0;
 	write_sysreg_s(GCSCRE0_EL1_nTR, SYS_GCSCRE0_EL1);
 	write_sysreg_s(0, SYS_GCSPR_EL0);
@@ -849,9 +851,13 @@ long set_tagged_addr_ctrl(struct task_struct *task, unsigned long arg)
 	if (is_compat_thread(ti))
 		return -EINVAL;
 
-	if (system_supports_mte())
+	if (system_supports_mte()) {
 		valid_mask |= PR_MTE_TCF_SYNC | PR_MTE_TCF_ASYNC \
 			| PR_MTE_TAG_MASK;
+
+		if (cpus_have_cap(ARM64_MTE_STORE_ONLY))
+			valid_mask |= PR_MTE_STORE_ONLY;
+	}
 
 	if (arg & ~valid_mask)
 		return -EINVAL;
