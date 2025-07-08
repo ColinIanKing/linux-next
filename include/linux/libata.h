@@ -144,7 +144,6 @@ enum {
 	ATA_DFLAG_DEVSLP	= (1 << 27), /* device supports Device Sleep */
 	ATA_DFLAG_ACPI_DISABLED = (1 << 28), /* ACPI for the device is disabled */
 	ATA_DFLAG_D_SENSE	= (1 << 29), /* Descriptor sense requested */
-	ATA_DFLAG_ZAC		= (1 << 30), /* ZAC device */
 
 	ATA_DFLAG_FEATURES_MASK	= (ATA_DFLAG_TRUSTED | ATA_DFLAG_DA |	\
 				   ATA_DFLAG_DEVSLP | ATA_DFLAG_NCQ_SEND_RECV | \
@@ -500,16 +499,28 @@ enum ata_completion_errors {
 };
 
 /*
- * Link power management policy: If you alter this, you also need to
- * alter libata-sata.c (for the ascii descriptions)
+ * Link Power Management (LPM) policies.
+ *
+ * The default LPM policy to use for a device link is defined using these values
+ * with the CONFIG_SATA_MOBILE_LPM_POLICY config option and applied through the
+ * target_lpm_policy field of struct ata_port.
+ *
+ * If you alter this, you also need to alter the policy names used with the
+ * sysfs attribute link_power_management_policy defined in libata-sata.c.
  */
 enum ata_lpm_policy {
+	/* Keep firmware settings */
 	ATA_LPM_UNKNOWN,
+	/* No power savings (maximum performance) */
 	ATA_LPM_MAX_POWER,
+	/* HIPM (Partial) */
 	ATA_LPM_MED_POWER,
-	ATA_LPM_MED_POWER_WITH_DIPM, /* Med power + DIPM as win IRST does */
-	ATA_LPM_MIN_POWER_WITH_PARTIAL, /* Min Power + partial and slumber */
-	ATA_LPM_MIN_POWER, /* Min power + no partial (slumber only) */
+	/* HIPM (Partial) and DIPM (Partial and Slumber) */
+	ATA_LPM_MED_POWER_WITH_DIPM,
+	/* HIPM (Partial and DevSleep) and DIPM (Partial and Slumber) */
+	ATA_LPM_MIN_POWER_WITH_PARTIAL,
+	/* HIPM (Slumber and DevSleep) and DIPM (Partial and Slumber) */
+	ATA_LPM_MIN_POWER,
 };
 
 enum ata_lpm_hints {
@@ -749,6 +760,9 @@ struct ata_device {
 		u16		id[ATA_ID_WORDS]; /* IDENTIFY xxx DEVICE data */
 		u32		gscr[SATA_PMP_GSCR_DWORDS]; /* PMP GSCR block */
 	} ____cacheline_aligned;
+
+	/* General Purpose Log Directory log page */
+	u8			gp_log_dir[ATA_SECT_SIZE] ____cacheline_aligned;
 
 	/* DEVSLP Timing Variables from Identify Device Data Log */
 	u8			devslp_timing[ATA_LOG_DEVSLP_SIZE];
@@ -1204,7 +1218,7 @@ extern int ata_ncq_prio_enabled(struct ata_port *ap, struct scsi_device *sdev,
 extern int ata_ncq_prio_enable(struct ata_port *ap, struct scsi_device *sdev,
 			       bool enable);
 extern struct ata_device *ata_dev_pair(struct ata_device *adev);
-extern int ata_do_set_mode(struct ata_link *link, struct ata_device **r_failed_dev);
+int ata_set_mode(struct ata_link *link, struct ata_device **r_failed_dev);
 extern void ata_scsi_port_error_handler(struct Scsi_Host *host, struct ata_port *ap);
 extern void ata_scsi_cmd_error_handler(struct Scsi_Host *host, struct ata_port *ap, struct list_head *eh_q);
 
