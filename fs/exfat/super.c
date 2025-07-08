@@ -172,7 +172,7 @@ int exfat_force_shutdown(struct super_block *sb, u32 flags)
 	return 0;
 }
 
-static void exfat_shutdown(struct super_block *sb)
+static void exfat_remove_bdev(struct super_block *sb, struct block_device *bdev)
 {
 	exfat_force_shutdown(sb, EXFAT_GOING_DOWN_NOSYNC);
 }
@@ -202,7 +202,7 @@ static const struct super_operations exfat_sops = {
 	.put_super	= exfat_put_super,
 	.statfs		= exfat_statfs,
 	.show_options	= exfat_show_options,
-	.shutdown	= exfat_shutdown,
+	.remove_bdev	= exfat_remove_bdev,
 };
 
 enum {

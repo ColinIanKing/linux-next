@@ -2640,7 +2640,7 @@ restore_opts:
 	return err;
 }
 
-static void f2fs_shutdown(struct super_block *sb)
+static void f2fs_remove_bdev(struct super_block *sb, struct block_device *bdev)
 {
 	f2fs_do_shutdown(F2FS_SB(sb), F2FS_GOING_DOWN_NOSYNC, false, false);
 }
@@ -3264,7 +3264,7 @@ static const struct super_operations f2fs_sops = {
 	.unfreeze_fs	= f2fs_unfreeze,
 	.statfs		= f2fs_statfs,
 	.remount_fs	= f2fs_remount,
-	.shutdown	= f2fs_shutdown,
+	.remove_bdev	= f2fs_remove_bdev,
 };
 
 #ifdef CONFIG_FS_ENCRYPTION
