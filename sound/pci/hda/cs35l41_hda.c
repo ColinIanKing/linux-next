@@ -93,47 +93,36 @@ module_param(firmware_autostart, bool, 0444);
 MODULE_PARM_DESC(firmware_autostart, "Allow automatic firmware download on boot"
 			     "(0=Disable, 1=Enable) (default=1); ");
 
+static const char channel_name[3] = { 'L', 'R', 'C' };
+
 static const struct reg_sequence cs35l41_hda_config[] = {
 	{ CS35L41_PLL_CLK_CTRL,		0x00000430 }, // 3072000Hz, BCLK Input, PLL_REFCLK_EN = 1
 	{ CS35L41_DSP_CLK_CTRL,		0x00000003 }, // DSP CLK EN
 	{ CS35L41_GLOBAL_CLK_CTRL,	0x00000003 }, // GLOBAL_FS = 48 kHz
-	{ CS35L41_SP_ENABLES,		0x00010000 }, // ASP_RX1_EN = 1
 	{ CS35L41_SP_RATE_CTRL,		0x00000021 }, // ASP_BCLK_FREQ = 3.072 MHz
 	{ CS35L41_SP_FORMAT,		0x20200200 }, // 32 bits RX/TX slots, I2S, clk consumer
-	{ CS35L41_SP_HIZ_CTRL,		0x00000002 }, // Hi-Z unused
 	{ CS35L41_SP_TX_WL,		0x00000018 }, // 24 cycles/slot
 	{ CS35L41_SP_RX_WL,		0x00000018 }, // 24 cycles/slot
-	{ CS35L41_DAC_PCM1_SRC,		0x00000008 }, // DACPCM1_SRC = ASPRX1
 	{ CS35L41_ASP_TX1_SRC,		0x00000018 }, // ASPTX1 SRC = VMON
 	{ CS35L41_ASP_TX2_SRC,		0x00000019 }, // ASPTX2 SRC = IMON
-	{ CS35L41_ASP_TX3_SRC,		0x00000032 }, // ASPTX3 SRC = ERRVOL
-	{ CS35L41_ASP_TX4_SRC,		0x00000033 }, // ASPTX4 SRC = CLASSH_TGT
-	{ CS35L41_DSP1_RX1_SRC,		0x00000008 }, // DSP1RX1 SRC = ASPRX1
-	{ CS35L41_DSP1_RX2_SRC,		0x00000009 }, // DSP1RX2 SRC = ASPRX2
 	{ CS35L41_DSP1_RX3_SRC,         0x00000018 }, // DSP1RX3 SRC = VMON
 	{ CS35L41_DSP1_RX4_SRC,         0x00000019 }, // DSP1RX4 SRC = IMON
+};
+
+static const struct reg_sequence cs35l41_hda_config_no_dsp[] = {
+	{ CS35L41_SP_HIZ_CTRL,		0x00000002 }, // Hi-Z unused
+	{ CS35L41_DAC_PCM1_SRC,		0x00000008 }, // DACPCM1_SRC = ASPRX1
+	{ CS35L41_ASP_TX3_SRC,		0x00000000 }, // ASPTX3 SRC = ZERO FILL
+	{ CS35L41_ASP_TX4_SRC,		0x00000000 }, // ASPTX4 SRC = ZERO FILL
 	{ CS35L41_DSP1_RX5_SRC,         0x00000020 }, // DSP1RX5 SRC = ERRVOL
+	{ CS35L41_DSP1_RX6_SRC,         0x00000021 }, // DSP1RX6 SRC = CLASSH_TGT
 };
 
 static const struct reg_sequence cs35l41_hda_config_dsp[] = {
-	{ CS35L41_PLL_CLK_CTRL,		0x00000430 }, // 3072000Hz, BCLK Input, PLL_REFCLK_EN = 1
-	{ CS35L41_DSP_CLK_CTRL,		0x00000003 }, // DSP CLK EN
-	{ CS35L41_GLOBAL_CLK_CTRL,	0x00000003 }, // GLOBAL_FS = 48 kHz
-	{ CS35L41_SP_ENABLES,		0x00010001 }, // ASP_RX1_EN = 1, ASP_TX1_EN = 1
-	{ CS35L41_SP_RATE_CTRL,		0x00000021 }, // ASP_BCLK_FREQ = 3.072 MHz
-	{ CS35L41_SP_FORMAT,		0x20200200 }, // 32 bits RX/TX slots, I2S, clk consumer
 	{ CS35L41_SP_HIZ_CTRL,		0x00000003 }, // Hi-Z unused/disabled
-	{ CS35L41_SP_TX_WL,		0x00000018 }, // 24 cycles/slot
-	{ CS35L41_SP_RX_WL,		0x00000018 }, // 24 cycles/slot
 	{ CS35L41_DAC_PCM1_SRC,		0x00000032 }, // DACPCM1_SRC = DSP1TX1
-	{ CS35L41_ASP_TX1_SRC,		0x00000018 }, // ASPTX1 SRC = VMON
-	{ CS35L41_ASP_TX2_SRC,		0x00000019 }, // ASPTX2 SRC = IMON
 	{ CS35L41_ASP_TX3_SRC,		0x00000028 }, // ASPTX3 SRC = VPMON
 	{ CS35L41_ASP_TX4_SRC,		0x00000029 }, // ASPTX4 SRC = VBSTMON
-	{ CS35L41_DSP1_RX1_SRC,		0x00000008 }, // DSP1RX1 SRC = ASPRX1
-	{ CS35L41_DSP1_RX2_SRC,		0x00000008 }, // DSP1RX2 SRC = ASPRX1
-	{ CS35L41_DSP1_RX3_SRC,         0x00000018 }, // DSP1RX3 SRC = VMON
-	{ CS35L41_DSP1_RX4_SRC,         0x00000019 }, // DSP1RX4 SRC = IMON
 	{ CS35L41_DSP1_RX6_SRC,         0x00000029 }, // DSP1RX6 SRC = VBSTMON
 };
 
@@ -657,6 +646,41 @@ static void cs35l41_irq_release(struct cs35l41_hda *cs35l41)
 	cs35l41->irq_errors = 0;
 }
 
+static void cs35l41_update_mixer(struct cs35l41_hda *cs35l41)
+{
+	struct regmap *reg = cs35l41->regmap;
+	unsigned int asp_en = 0;
+	unsigned int dsp1rx2_src = 0;
+
+	regmap_multi_reg_write(reg, cs35l41_hda_config, ARRAY_SIZE(cs35l41_hda_config));
+
+	if (cs35l41->cs_dsp.running) {
+		asp_en |= CS35L41_ASP_TX1_EN_MASK; // ASP_TX1_EN = 1
+		regmap_multi_reg_write(reg, cs35l41_hda_config_dsp,
+				       ARRAY_SIZE(cs35l41_hda_config_dsp));
+		if (cs35l41->hw_cfg.bst_type == CS35L41_INT_BOOST)
+			regmap_write(reg, CS35L41_DSP1_RX5_SRC, CS35L41_INPUT_SRC_VPMON);
+		else
+			regmap_write(reg, CS35L41_DSP1_RX5_SRC, CS35L41_INPUT_SRC_VBSTMON);
+	} else {
+		regmap_multi_reg_write(reg, cs35l41_hda_config_no_dsp,
+				       ARRAY_SIZE(cs35l41_hda_config_no_dsp));
+	}
+
+	if (cs35l41->hw_cfg.spk_pos == CS35L41_CENTER) {
+		asp_en |= CS35L41_ASP_RX2_EN_MASK; // ASP_RX2_EN = 1
+		dsp1rx2_src = 0x00000009; // DSP1RX2 SRC = ASPRX2
+	} else {
+		dsp1rx2_src = 0x00000008; // DSP1RX2 SRC = ASPRX1
+	}
+
+	asp_en |= CS35L41_ASP_RX1_EN_MASK; // ASP_RX1_EN = 1
+
+	regmap_write(reg, CS35L41_SP_ENABLES, asp_en);
+	regmap_write(reg, CS35L41_DSP1_RX1_SRC, 0x00000008); // DSP1RX1 SRC = ASPRX1
+	regmap_write(reg, CS35L41_DSP1_RX2_SRC, dsp1rx2_src);
+}
+
 static void cs35l41_hda_play_start(struct device *dev)
 {
 	struct cs35l41_hda *cs35l41 = dev_get_drvdata(dev);
@@ -671,19 +695,13 @@ static void cs35l41_hda_play_start(struct device *dev)
 
 	cs35l41->playback_started = true;
 
+	cs35l41_update_mixer(cs35l41);
+
 	if (cs35l41->cs_dsp.running) {
-		regmap_multi_reg_write(reg, cs35l41_hda_config_dsp,
-				       ARRAY_SIZE(cs35l41_hda_config_dsp));
-		if (cs35l41->hw_cfg.bst_type == CS35L41_INT_BOOST)
-			regmap_write(reg, CS35L41_DSP1_RX5_SRC, CS35L41_INPUT_SRC_VPMON);
-		else
-			regmap_write(reg, CS35L41_DSP1_RX5_SRC, CS35L41_INPUT_SRC_VBSTMON);
 		regmap_update_bits(reg, CS35L41_PWR_CTRL2,
 				   CS35L41_VMON_EN_MASK | CS35L41_IMON_EN_MASK,
 				   1 << CS35L41_VMON_EN_SHIFT | 1 << CS35L41_IMON_EN_SHIFT);
 		cs35l41_set_cspl_mbox_cmd(cs35l41->dev, reg, CSPL_MBOX_CMD_RESUME);
-	} else {
-		regmap_multi_reg_write(reg, cs35l41_hda_config, ARRAY_SIZE(cs35l41_hda_config));
 	}
 	regmap_update_bits(reg, CS35L41_PWR_CTRL2, CS35L41_AMP_EN_MASK, 1 << CS35L41_AMP_EN_SHIFT);
 	if (cs35l41->hw_cfg.bst_type == CS35L41_EXT_BOOST)
@@ -818,7 +836,6 @@ static void cs35l41_hda_playback_hook(struct device *dev, int action)
 		 * Playback must be finished for all amps before we start runtime suspend.
 		 * This ensures no amps are playing back when we start putting them to sleep.
 		 */
-		pm_runtime_mark_last_busy(dev);
 		pm_runtime_put_autosuspend(dev);
 		break;
 	default:
@@ -841,21 +858,30 @@ static void cs35l41_hda_post_playback_hook(struct device *dev, int action)
 	}
 }
 
-static int cs35l41_hda_channel_map(struct device *dev, unsigned int tx_num, unsigned int *tx_slot,
-				    unsigned int rx_num, unsigned int *rx_slot)
+static int cs35l41_hda_channel_map(struct cs35l41_hda *cs35l41)
 {
-	struct cs35l41_hda *cs35l41 = dev_get_drvdata(dev);
-	static const char * const channel_name[] = { "L", "R" };
+	unsigned int tx_num = 0;
+	unsigned int *tx_slot = NULL;
+	unsigned int rx_num;
+	unsigned int *rx_slot;
+	unsigned int mono = 0;
 
 	if (!cs35l41->amp_name) {
-		if (*rx_slot >= ARRAY_SIZE(channel_name))
+		if (cs35l41->hw_cfg.spk_pos >= ARRAY_SIZE(channel_name))
 			return -EINVAL;
 
-		cs35l41->amp_name = devm_kasprintf(cs35l41->dev, GFP_KERNEL, "%s%d",
-						   channel_name[*rx_slot], cs35l41->channel_index);
+		cs35l41->amp_name = devm_kasprintf(cs35l41->dev, GFP_KERNEL, "%c%d",
+						   channel_name[cs35l41->hw_cfg.spk_pos],
+						   cs35l41->channel_index);
 		if (!cs35l41->amp_name)
 			return -ENOMEM;
 	}
+
+	rx_num = 1;
+	if (cs35l41->hw_cfg.spk_pos == CS35L41_CENTER)
+		rx_slot = &mono;
+	else
+		rx_slot = &cs35l41->hw_cfg.spk_pos;
 
 	return cs35l41_set_channels(cs35l41->dev, cs35l41->regmap, tx_num, tx_slot, rx_num,
 				    rx_slot);
@@ -1257,7 +1283,6 @@ static void cs35l41_fw_load_work(struct work_struct *work)
 	cs35l41->fw_request_ongoing = false;
 	mutex_unlock(&cs35l41->fw_mutex);
 
-	pm_runtime_mark_last_busy(cs35l41->dev);
 	pm_runtime_put_autosuspend(cs35l41->dev);
 }
 
@@ -1488,14 +1513,13 @@ static int cs35l41_hda_bind(struct device *dev, struct device *master, void *mas
 		dev_warn(dev, "Unable to create device link\n");
 	unlock_system_sleep(sleep_flags);
 
-	pm_runtime_mark_last_busy(dev);
 	pm_runtime_put_autosuspend(dev);
 
 	dev_info(cs35l41->dev,
 		 "CS35L41 Bound - SSID: %s, BST: %d, VSPK: %d, CH: %c, FW EN: %d, SPKID: %d\n",
 		 cs35l41->acpi_subsystem_id, cs35l41->hw_cfg.bst_type,
 		 cs35l41->hw_cfg.gpio1.func == CS35l41_VSPK_SWITCH,
-		 cs35l41->hw_cfg.spk_pos ? 'R' : 'L',
+		 channel_name[cs35l41->hw_cfg.spk_pos],
 		 cs35l41->cs_dsp.running, cs35l41->speaker_id);
 
 	return ret;
@@ -1709,7 +1733,7 @@ static int cs35l41_hda_apply_properties(struct cs35l41_hda *cs35l41)
 	if (using_irq)
 		cs35l41_configure_interrupt(cs35l41, irq_pol);
 
-	return cs35l41_hda_channel_map(cs35l41->dev, 0, NULL, 1, &hw_cfg->spk_pos);
+	return cs35l41_hda_channel_map(cs35l41);
 }
 
 int cs35l41_get_speaker_id(struct device *dev, int amp_index, int num_amps, int fixed_gpio_id)
@@ -2009,7 +2033,6 @@ int cs35l41_hda_probe(struct device *dev, const char *device_name, int id, int i
 
 	pm_runtime_set_autosuspend_delay(cs35l41->dev, 3000);
 	pm_runtime_use_autosuspend(cs35l41->dev);
-	pm_runtime_mark_last_busy(cs35l41->dev);
 	pm_runtime_set_active(cs35l41->dev);
 	pm_runtime_get_noresume(cs35l41->dev);
 	pm_runtime_enable(cs35l41->dev);
@@ -2085,3 +2108,5 @@ MODULE_IMPORT_NS("SND_SOC_CS_AMP_LIB");
 MODULE_AUTHOR("Lucas Tanure, Cirrus Logic Inc, <tanureal@opensource.cirrus.com>");
 MODULE_LICENSE("GPL");
 MODULE_IMPORT_NS("FW_CS_DSP");
+MODULE_FIRMWARE("cirrus/cs35l41-*.wmfw");
+MODULE_FIRMWARE("cirrus/cs35l41-*.bin");
