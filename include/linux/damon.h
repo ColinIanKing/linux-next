@@ -450,7 +450,7 @@ struct damos_access_pattern {
 /**
  * struct damos - Represents a Data Access Monitoring-based Operation Scheme.
  * @pattern:		Access pattern of target regions.
- * @action:		&damo_action to be applied to the target regions.
+ * @action:		&damos_action to be applied to the target regions.
  * @apply_interval_us:	The time between applying the @action.
  * @quota:		Control the aggressiveness of this scheme.
  * @wmarks:		Watermarks for automated (in)activation of this scheme.
@@ -656,7 +656,7 @@ struct damon_call_control {
  * struct damon_intervals_goal - Monitoring intervals auto-tuning goal.
  *
  * @access_bp:		Access events observation ratio to achieve in bp.
- * @aggrs:		Number of aggregations to acheive @access_bp within.
+ * @aggrs:		Number of aggregations to achieve @access_bp within.
  * @min_sample_us:	Minimum resulting sampling interval in microseconds.
  * @max_sample_us:	Maximum resulting sampling interval in microseconds.
  *
@@ -934,6 +934,7 @@ static inline unsigned int damon_max_nr_accesses(const struct damon_attrs *attrs
 
 int damon_start(struct damon_ctx **ctxs, int nr_ctxs, bool exclusive);
 int damon_stop(struct damon_ctx **ctxs, int nr_ctxs);
+bool damon_is_running(struct damon_ctx *ctx);
 
 int damon_call(struct damon_ctx *ctx, struct damon_call_control *control);
 int damos_walk(struct damon_ctx *ctx, struct damos_walk_control *control);
