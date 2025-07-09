@@ -25,6 +25,7 @@ pfnmap
 protection_keys
 protection_keys_32
 protection_keys_64
+process_madv
 madv_populate
 uffd-stress
 uffd-unit-tests
@@ -38,9 +39,6 @@ map_fixed_noreplace
 write_to_hugetlbfs
 hmm-tests
 memfd_secret
-hugetlb_dio
-pkey_sighandler_tests_32
-pkey_sighandler_tests_64
 soft-dirty
 split_huge_page_test
 ksm_tests
