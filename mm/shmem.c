@@ -4183,7 +4183,7 @@ static const char *shmem_get_link(struct dentry *dentry, struct inode *inode,
 
 #ifdef CONFIG_TMPFS_XATTR
 
-static int shmem_fileattr_get(struct dentry *dentry, struct fileattr *fa)
+static int shmem_fileattr_get(struct dentry *dentry, struct file_kattr *fa)
 {
 	struct shmem_inode_info *info = SHMEM_I(d_inode(dentry));
 
@@ -4193,7 +4193,7 @@ static int shmem_fileattr_get(struct dentry *dentry, struct fileattr *fa)
 }
 
 static int shmem_fileattr_set(struct mnt_idmap *idmap,
-			      struct dentry *dentry, struct fileattr *fa)
+			      struct dentry *dentry, struct file_kattr *fa)
 {
 	struct inode *inode = d_inode(dentry);
 	struct shmem_inode_info *info = SHMEM_I(inode);
@@ -4980,7 +4980,6 @@ static void shmem_put_super(struct super_block *sb)
 static const struct dentry_operations shmem_ci_dentry_ops = {
 	.d_hash = generic_ci_d_hash,
 	.d_compare = generic_ci_d_compare,
-	.d_delete = always_delete_dentry,
 };
 #endif
 
@@ -5028,7 +5027,7 @@ static int shmem_fill_super(struct super_block *sb, struct fs_context *fc)
 
 	if (ctx->encoding) {
 		sb->s_encoding = ctx->encoding;
-		sb->s_d_op = &shmem_ci_dentry_ops;
+		set_default_d_op(sb, &shmem_ci_dentry_ops);
 		if (ctx->strict_encoding)
 			sb->s_encoding_flags = SB_ENC_STRICT_MODE_FL;
 	}
@@ -5037,6 +5036,7 @@ static int shmem_fill_super(struct super_block *sb, struct fs_context *fc)
 #else
 	sb->s_flags |= SB_NOUSER;
 #endif /* CONFIG_TMPFS */
+	sb->s_d_flags |= DCACHE_DONTCACHE;
 	sbinfo->max_blocks = ctx->blocks;
 	sbinfo->max_inodes = ctx->inodes;
 	sbinfo->free_ispace = sbinfo->max_inodes * BOGO_INODE_SIZE;

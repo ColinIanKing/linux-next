@@ -819,6 +819,7 @@ struct bch_fs {
 	struct work_struct	read_only_work;
 
 	struct bch_dev __rcu	*devs[BCH_SB_MEMBERS_MAX];
+	struct bch_devs_mask	devs_removed;
 
 	struct bch_accounting_mem accounting;
 
@@ -1283,13 +1284,13 @@ static inline bool bch2_discard_opt_enabled(struct bch_fs *c, struct bch_dev *ca
 		: ca->mi.discard;
 }
 
-static inline bool bch2_fs_casefold_enabled(struct bch_fs *c)
+static inline int bch2_fs_casefold_enabled(struct bch_fs *c)
 {
-#ifdef CONFIG_UNICODE
-	return !c->opts.casefold_disabled;
-#else
-	return false;
-#endif
+	if (!IS_ENABLED(CONFIG_UNICODE))
+		return bch_err_throw(c, no_casefolding_without_utf8);
+	if (c->opts.casefold_disabled)
+		return bch_err_throw(c, casefolding_disabled);
+	return 0;
 }
 
 #endif /* _BCACHEFS_H */

@@ -47,22 +47,27 @@ enum bch_trans_commit_flags {
 
 void bch2_trans_commit_flags_to_text(struct printbuf *, enum bch_trans_commit_flags);
 
-int bch2_btree_delete_at(struct btree_trans *, struct btree_iter *, unsigned);
-int bch2_btree_delete(struct btree_trans *, enum btree_id, struct bpos, unsigned);
+int bch2_btree_delete_at(struct btree_trans *, struct btree_iter *,
+			 enum btree_iter_update_trigger_flags);
+int bch2_btree_delete(struct btree_trans *, enum btree_id, struct bpos,
+		      enum btree_iter_update_trigger_flags);
 
 int bch2_btree_insert_nonextent(struct btree_trans *, enum btree_id,
 				struct bkey_i *, enum btree_iter_update_trigger_flags);
 
 int bch2_btree_insert_trans(struct btree_trans *, enum btree_id, struct bkey_i *,
 			enum btree_iter_update_trigger_flags);
-int bch2_btree_insert(struct bch_fs *, enum btree_id, struct bkey_i *, struct
-		disk_reservation *, int flags, enum
-		btree_iter_update_trigger_flags iter_flags);
+int bch2_btree_insert(struct bch_fs *, enum btree_id, struct bkey_i *,
+		      struct disk_reservation *,
+		      enum bch_trans_commit_flags,
+		      enum btree_iter_update_trigger_flags);
 
 int bch2_btree_delete_range_trans(struct btree_trans *, enum btree_id,
-				  struct bpos, struct bpos, unsigned, u64 *);
+				  struct bpos, struct bpos,
+				  enum btree_iter_update_trigger_flags, u64 *);
 int bch2_btree_delete_range(struct bch_fs *, enum btree_id,
-			    struct bpos, struct bpos, unsigned, u64 *);
+			    struct bpos, struct bpos,
+			    enum btree_iter_update_trigger_flags, u64 *);
 
 int bch2_btree_bit_mod_iter(struct btree_trans *, struct btree_iter *, bool);
 int bch2_btree_bit_mod(struct btree_trans *, enum btree_id, struct bpos, bool);
@@ -137,19 +142,27 @@ static inline void *btree_trans_subbuf_top(struct btree_trans *trans,
 
 void *__bch2_trans_subbuf_alloc(struct btree_trans *,
 				struct btree_trans_subbuf *,
-				unsigned);
+				unsigned, ulong);
+
+static inline void *
+bch2_trans_subbuf_alloc_ip(struct btree_trans *trans,
+			   struct btree_trans_subbuf *buf,
+			   unsigned u64s, ulong ip)
+{
+	if (buf->u64s + u64s > buf->size)
+		return __bch2_trans_subbuf_alloc(trans, buf, u64s, ip);
+
+	void *p = btree_trans_subbuf_top(trans, buf);
+	buf->u64s += u64s;
+	return p;
+}
 
 static inline void *
 bch2_trans_subbuf_alloc(struct btree_trans *trans,
 			struct btree_trans_subbuf *buf,
 			unsigned u64s)
 {
-	if (buf->u64s + u64s > buf->size)
-		return __bch2_trans_subbuf_alloc(trans, buf, u64s);
-
-	void *p = btree_trans_subbuf_top(trans, buf);
-	buf->u64s += u64s;
-	return p;
+	return bch2_trans_subbuf_alloc_ip(trans, buf, u64s, _THIS_IP_);
 }
 
 static inline struct jset_entry *btree_trans_journal_entries_start(struct btree_trans *trans)
@@ -163,9 +176,15 @@ static inline struct jset_entry *btree_trans_journal_entries_top(struct btree_tr
 }
 
 static inline struct jset_entry *
+bch2_trans_jset_entry_alloc_ip(struct btree_trans *trans, unsigned u64s, ulong ip)
+{
+	return bch2_trans_subbuf_alloc_ip(trans, &trans->journal_entries, u64s, ip);
+}
+
+static inline struct jset_entry *
 bch2_trans_jset_entry_alloc(struct btree_trans *trans, unsigned u64s)
 {
-	return bch2_trans_subbuf_alloc(trans, &trans->journal_entries, u64s);
+	return bch2_trans_jset_entry_alloc_ip(trans, u64s, _THIS_IP_);
 }
 
 int bch2_btree_insert_clone_trans(struct btree_trans *, enum btree_id, struct bkey_i *);
@@ -212,7 +231,7 @@ static inline int __must_check bch2_trans_update_buffered(struct btree_trans *tr
 
 void bch2_trans_commit_hook(struct btree_trans *,
 			    struct btree_trans_commit_hook *);
-int __bch2_trans_commit(struct btree_trans *, unsigned);
+int __bch2_trans_commit(struct btree_trans *, enum bch_trans_commit_flags);
 
 int bch2_trans_log_str(struct btree_trans *, const char *);
 int bch2_trans_log_msg(struct btree_trans *, struct printbuf *);
@@ -256,6 +275,13 @@ static inline int bch2_trans_commit(struct btree_trans *trans,
 	for (struct btree_insert_entry *_i = (_trans)->updates;		\
 	     (_i) < (_trans)->updates + (_trans)->nr_updates;		\
 	     (_i)++)
+
+static inline bool bch2_trans_has_updates(struct btree_trans *trans)
+{
+	return trans->nr_updates ||
+		trans->journal_entries.u64s ||
+		trans->accounting.u64s;
+}
 
 static inline void bch2_trans_reset_updates(struct btree_trans *trans)
 {

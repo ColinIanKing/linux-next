@@ -50,19 +50,17 @@ void bch2_io_failures_to_text(struct printbuf *out,
 			      struct bch_io_failures *failed)
 {
 	static const char * const error_types[] = {
-		"io", "checksum", "ec reconstruct", NULL
+		"btree validate", "io", "checksum", "ec reconstruct", NULL
 	};
 
 	for (struct bch_dev_io_failures *f = failed->devs;
 	     f < failed->devs + failed->nr;
 	     f++) {
 		unsigned errflags =
-			((!!f->failed_io)	<< 0) |
-			((!!f->failed_csum_nr)	<< 1) |
-			((!!f->failed_ec)	<< 2);
-
-		if (!errflags)
-			continue;
+			((!!f->failed_btree_validate)	<< 0) |
+			((!!f->failed_io)		<< 1) |
+			((!!f->failed_csum_nr)		<< 2) |
+			((!!f->failed_ec)		<< 3);
 
 		bch2_printbuf_make_room(out, 1024);
 		out->atomic++;
@@ -77,7 +75,9 @@ void bch2_io_failures_to_text(struct printbuf *out,
 
 		prt_char(out, ' ');
 
-		if (is_power_of_2(errflags)) {
+		if (!errflags) {
+			prt_str(out, "no error - confused");
+		} else if (is_power_of_2(errflags)) {
 			prt_bitflags(out, error_types, errflags);
 			prt_str(out, " error");
 		} else {
@@ -1023,6 +1023,18 @@ bool bch2_bkey_has_target(struct bch_fs *c, struct bkey_s_c k, unsigned target)
 	return false;
 }
 
+bool bch2_bkey_in_target(struct bch_fs *c, struct bkey_s_c k, unsigned target)
+{
+	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
+
+	guard(rcu)();
+	bkey_for_each_ptr(ptrs, ptr)
+		if (!bch2_dev_in_target(c, ptr->dev, target))
+			return false;
+
+	return true;
+}
+
 bool bch2_bkey_matches_ptr(struct bch_fs *c, struct bkey_s_c k,
 			   struct bch_extent_ptr m, u64 offset)
 {
@@ -1512,7 +1524,7 @@ int bch2_bkey_ptrs_validate(struct bch_fs *c, struct bkey_s_c k,
 			const struct bch_extent_rebalance *r = &entry->rebalance;
 
 			if (!bch2_compression_opt_valid(r->compression)) {
-				struct bch_compression_opt opt = __bch2_compression_decode(r->compression);
+				union bch_compression_opt opt = { .value = r->compression };
 				prt_printf(err, "invalid compression opt %u:%u",
 					   opt.type, opt.level);
 				return bch_err_throw(c, invalid_bkey);
