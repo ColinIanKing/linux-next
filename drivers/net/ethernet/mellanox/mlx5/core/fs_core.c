@@ -3247,6 +3247,7 @@ init_rdma_transport_rx_root_ns_one(struct mlx5_flow_steering *steering,
 {
 	struct mlx5_flow_root_namespace *root_ns;
 	struct fs_prio *prio;
+	int ret;
 	int i;
 
 	steering->rdma_transport_rx_root_ns[vport_idx] =
@@ -3258,11 +3259,17 @@ init_rdma_transport_rx_root_ns_one(struct mlx5_flow_steering *steering,
 
 	for (i = 0; i < MLX5_RDMA_TRANSPORT_BYPASS_PRIO; i++) {
 		prio = fs_create_prio(&root_ns->ns, i, 1);
-		if (IS_ERR(prio))
-			return PTR_ERR(prio);
+		if (IS_ERR(prio)) {
+			ret = PTR_ERR(prio);
+			goto err;
+		}
 	}
 	set_prio_attrs(root_ns);
 	return 0;
+
+err:
+	cleanup_root_ns(root_ns);
+	return ret;
 }
 
 static int
@@ -3271,6 +3278,7 @@ init_rdma_transport_tx_root_ns_one(struct mlx5_flow_steering *steering,
 {
 	struct mlx5_flow_root_namespace *root_ns;
 	struct fs_prio *prio;
+	int ret;
 	int i;
 
 	steering->rdma_transport_tx_root_ns[vport_idx] =
@@ -3282,11 +3290,17 @@ init_rdma_transport_tx_root_ns_one(struct mlx5_flow_steering *steering,
 
 	for (i = 0; i < MLX5_RDMA_TRANSPORT_BYPASS_PRIO; i++) {
 		prio = fs_create_prio(&root_ns->ns, i, 1);
-		if (IS_ERR(prio))
-			return PTR_ERR(prio);
+		if (IS_ERR(prio)) {
+			ret = PTR_ERR(prio);
+			goto err;
+		}
 	}
 	set_prio_attrs(root_ns);
 	return 0;
+
+err:
+	cleanup_root_ns(root_ns);
+	return ret;
 }
 
 static int init_rdma_transport_rx_root_ns(struct mlx5_flow_steering *steering)
@@ -3933,6 +3947,8 @@ int mlx5_fs_core_alloc(struct mlx5_core_dev *dev)
 
 	if (mlx5_fs_dr_is_supported(dev))
 		steering->mode = MLX5_FLOW_STEERING_MODE_SMFS;
+	else if (mlx5_fs_hws_is_supported(dev))
+		steering->mode = MLX5_FLOW_STEERING_MODE_HMFS;
 	else
 		steering->mode = MLX5_FLOW_STEERING_MODE_DMFS;
 
