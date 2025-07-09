@@ -156,9 +156,6 @@ dma_addr_t dma_map_phys(struct device *dev, phys_addr_t phys, size_t size,
 		enum dma_data_direction dir, unsigned long attrs)
 {
 	const struct dma_map_ops *ops = get_dma_ops(dev);
-	struct page *page = phys_to_page(phys);
-	size_t offset = offset_in_page(page);
-	bool is_pfn_valid = true;
 	dma_addr_t addr;
 
 	BUG_ON(!valid_dma_direction(dir));
@@ -172,6 +169,10 @@ dma_addr_t dma_map_phys(struct device *dev, phys_addr_t phys, size_t size,
 	else if (use_dma_iommu(dev))
 		addr = iommu_dma_map_phys(dev, phys, size, dir, attrs);
 	else {
+		struct page *page = phys_to_page(phys);
+		size_t offset = offset_in_page(phys);
+		bool is_pfn_valid = true;
+
 		if (IS_ENABLED(CONFIG_DMA_API_DEBUG))
 			is_pfn_valid = pfn_valid(PHYS_PFN(phys));
 
