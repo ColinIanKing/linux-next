@@ -9,14 +9,12 @@
 #include <linux/types.h>
 #include <linux/tracepoint.h>
 
-TRACE_EVENT_CONDITION(damos_esz,
+TRACE_EVENT(damos_esz,
 
 	TP_PROTO(unsigned int context_idx, unsigned int scheme_idx,
-		unsigned long esz, bool do_trace),
+		unsigned long esz),
 
-	TP_ARGS(context_idx, scheme_idx, esz, do_trace),
-
-	TP_CONDITION(do_trace),
+	TP_ARGS(context_idx, scheme_idx, esz),
 
 	TP_STRUCT__entry(
 		__field(unsigned int, context_idx)

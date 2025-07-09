@@ -2022,7 +2022,7 @@ static void damos_trace_esz(struct damon_ctx *c, struct damos *s,
 			break;
 		sidx++;
 	}
-	trace_damos_esz(cidx, sidx, quota->esz, true);
+	trace_damos_esz(cidx, sidx, quota->esz);
 }
 
 static void damos_adjust_quota(struct damon_ctx *c, struct damos *s)
