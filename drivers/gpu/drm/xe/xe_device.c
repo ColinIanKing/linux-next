@@ -44,9 +44,9 @@
 #include "xe_hw_engine_group.h"
 #include "xe_hwmon.h"
 #include "xe_irq.h"
-#include "xe_memirq.h"
 #include "xe_mmio.h"
 #include "xe_module.h"
+#include "xe_nvm.h"
 #include "xe_oa.h"
 #include "xe_observation.h"
 #include "xe_pat.h"
@@ -784,44 +784,14 @@ int xe_device_probe(struct xe_device *xe)
 	if (err)
 		return err;
 
-	err = xe_ttm_sys_mgr_init(xe);
-	if (err)
-		return err;
-
 	for_each_gt(gt, xe, id) {
 		err = xe_gt_init_early(gt);
 		if (err)
 			return err;
-
-		/*
-		 * Only after this point can GT-specific MMIO operations
-		 * (including things like communication with the GuC)
-		 * be performed.
-		 */
-		xe_gt_mmio_init(gt);
-
-		if (IS_SRIOV_VF(xe)) {
-			xe_guc_comm_init_early(&gt->uc.guc);
-			err = xe_gt_sriov_vf_bootstrap(gt);
-			if (err)
-				return err;
-			err = xe_gt_sriov_vf_query_config(gt);
-			if (err)
-				return err;
-		}
 	}
 
 	for_each_tile(tile, xe, id) {
 		err = xe_ggtt_init_early(tile->mem.ggtt);
-		if (err)
-			return err;
-		err = xe_memirq_init(&tile->memirq);
-		if (err)
-			return err;
-	}
-
-	for_each_gt(gt, xe, id) {
-		err = xe_gt_init_hwconfig(gt);
 		if (err)
 			return err;
 	}
@@ -850,6 +820,14 @@ int xe_device_probe(struct xe_device *xe)
 		if (err)
 			return err;
 	}
+
+	/*
+	 * Allow allocations only now to ensure xe_display_init_early()
+	 * is the first to allocate, always.
+	 */
+	err = xe_ttm_sys_mgr_init(xe);
+	if (err)
+		return err;
 
 	/* Allocate and map stolen after potential VRAM resize */
 	err = xe_ttm_stolen_mgr_init(xe);
@@ -881,6 +859,8 @@ int xe_device_probe(struct xe_device *xe)
 		if (err)
 			return err;
 	}
+
+	xe_nvm_init(xe);
 
 	err = xe_heci_gsc_init(xe);
 	if (err)
@@ -938,6 +918,8 @@ err_unregister_display:
 void xe_device_remove(struct xe_device *xe)
 {
 	xe_display_unregister(xe);
+
+	xe_nvm_fini(xe);
 
 	drm_dev_unplug(&xe->drm);
 
