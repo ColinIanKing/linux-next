@@ -30,6 +30,7 @@ void bch2_btree_node_update_key_early(struct btree_trans *, enum btree_id, unsig
 void bch2_btree_cache_cannibalize_unlock(struct btree_trans *);
 int bch2_btree_cache_cannibalize_lock(struct btree_trans *, struct closure *);
 
+void __btree_node_data_free(struct btree *);
 struct btree *__bch2_btree_node_mem_alloc(struct bch_fs *);
 struct btree *bch2_btree_node_mem_alloc(struct btree_trans *, bool);
 
@@ -152,5 +153,16 @@ void __bch2_btree_pos_to_text(struct printbuf *, struct bch_fs *,
 void bch2_btree_pos_to_text(struct printbuf *, struct bch_fs *, const struct btree *);
 void bch2_btree_node_to_text(struct printbuf *, struct bch_fs *, const struct btree *);
 void bch2_btree_cache_to_text(struct printbuf *, const struct btree_cache *);
+
+#define trace_btree_node(_c, _b, event)				\
+do {								\
+	if (trace_##event##_enabled()) {			\
+		CLASS(printbuf, buf)();				\
+		printbuf_indent_add(&buf, 2);			\
+		bch2_btree_pos_to_text(&buf, c, b);		\
+		trace_##event(c, buf.buf);			\
+	}							\
+	count_event(c, event);					\
+} while (0);
 
 #endif /* _BCACHEFS_BTREE_CACHE_H */
