@@ -1329,18 +1329,22 @@ static int zynqmp_r5_cluster_init(struct zynqmp_r5_cluster *cluster)
 
 	/*
 	 * Number of cores is decided by number of child nodes of
-	 * r5f subsystem node in dts. If Split mode is used in dts
-	 * 2 child nodes are expected.
+	 * r5f subsystem node in dts.
+	 * In split mode maximum two child nodes are expected.
+	 * However, only single core can be enabled too.
+	 * Driver can handle following configuration in split mode:
+	 * 1) core0 enabled, core1 disabled
+	 * 2) core0 disabled, core1 enabled
+	 * 3) core0 and core1 both are enabled.
+	 * For now, no more than two cores are expected per cluster
+	 * in split mode.
 	 * In lockstep mode if two child nodes are available,
 	 * only use first child node and consider it as core0
 	 * and ignore core1 dt node.
 	 */
 	core_count = of_get_available_child_count(dev_node);
-	if (core_count == 0) {
+	if (core_count == 0 || core_count > 2) {
 		dev_err(dev, "Invalid number of r5 cores %d", core_count);
-		return -EINVAL;
-	} else if (cluster_mode == SPLIT_MODE && core_count != 2) {
-		dev_err(dev, "Invalid number of r5 cores for split mode\n");
 		return -EINVAL;
 	} else if (cluster_mode == LOCKSTEP_MODE && core_count == 2) {
 		dev_warn(dev, "Only r5 core0 will be used\n");
@@ -1464,6 +1468,45 @@ static void zynqmp_r5_cluster_exit(void *data)
 }
 
 /*
+ * zynqmp_r5_remoteproc_shutdown()
+ * Follow shutdown sequence in case of kexec call.
+ *
+ * @pdev: domain platform device for cluster
+ *
+ * Return: None.
+ */
+static void zynqmp_r5_remoteproc_shutdown(struct platform_device *pdev)
+{
+	const char *rproc_state_str = NULL;
+	struct zynqmp_r5_cluster *cluster;
+	struct zynqmp_r5_core *r5_core;
+	struct rproc *rproc;
+	int i, ret = 0;
+
+	cluster = platform_get_drvdata(pdev);
+
+	for (i = 0; i < cluster->core_count; i++) {
+		r5_core = cluster->r5_cores[i];
+		rproc = r5_core->rproc;
+
+		if (rproc->state == RPROC_RUNNING) {
+			ret = rproc_shutdown(rproc);
+			rproc_state_str = "shutdown";
+		} else if (rproc->state == RPROC_ATTACHED) {
+			ret = rproc_detach(rproc);
+			rproc_state_str = "detach";
+		} else {
+			ret = 0;
+		}
+
+		if (ret) {
+			dev_err(cluster->dev, "failed to %s rproc %d\n",
+				rproc_state_str, rproc->index);
+		}
+	}
+}
+
+/*
  * zynqmp_r5_remoteproc_probe()
  * parse device-tree, initialize hardware and allocate required resources
  * and remoteproc ops
@@ -1524,6 +1567,7 @@ static struct platform_driver zynqmp_r5_remoteproc_driver = {
 		.name = "zynqmp_r5_remoteproc",
 		.of_match_table = zynqmp_r5_remoteproc_match,
 	},
+	.shutdown = zynqmp_r5_remoteproc_shutdown,
 };
 module_platform_driver(zynqmp_r5_remoteproc_driver);
 
