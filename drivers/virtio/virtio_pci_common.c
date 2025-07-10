@@ -594,6 +594,51 @@ const struct cpumask *vp_get_vq_affinity(struct virtio_device *vdev, int index)
 				    vp_dev->vqs[index]->msix_vector);
 }
 
+/* Report disconnect to the driver. */
+static void virtio_pci_disconnect_work(struct work_struct *work)
+{
+	struct pci_dev *pci_dev = container_of(work, struct pci_dev,
+					       disconnect_work);
+	struct virtio_pci_device *vp_dev = pci_get_drvdata(pci_dev);
+	struct virtio_device *vdev = &vp_dev->vdev;
+	struct virtio_driver *drv = drv_to_virtio(vdev->dev.driver);
+
+	if (!pci_test_and_clear_disconnect_enable(pci_dev))
+		return;
+
+        virtio_config_transport_disable(vdev);
+	virtio_break_device(vdev);
+
+	vp_synchronize_vectors(vdev);
+
+	drv->disconnect(&vp_dev->vdev);
+}
+
+void virtio_pci_enable_disconnect(struct virtio_device *vdev)
+{
+	struct virtio_pci_device *vp_dev = to_vp_device(vdev);
+	struct pci_dev *pci_dev = vp_dev->pci_dev;
+	struct virtio_driver *drv = drv_to_virtio(vdev->dev.driver);
+
+	if (!drv->disconnect)
+		return;
+
+	INIT_WORK(&pci_dev->disconnect_work, virtio_pci_disconnect_work);
+	pci_set_disconnect_work(pci_dev);
+}
+
+void virtio_pci_disable_disconnect(struct virtio_device *vdev)
+{
+	struct virtio_pci_device *vp_dev = to_vp_device(vdev);
+	struct pci_dev *pci_dev = vp_dev->pci_dev;
+	struct virtio_driver *drv = drv_to_virtio(vdev->dev.driver);
+
+	if (!drv->disconnect)
+		return;
+
+	pci_clear_disconnect_work(pci_dev);
+}
+
 #ifdef CONFIG_PM_SLEEP
 static int virtio_pci_freeze(struct device *dev)
 {
