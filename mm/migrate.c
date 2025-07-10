@@ -161,7 +161,9 @@ static void putback_movable_ops_page(struct page *page)
 
 /**
  * migrate_movable_ops_page - migrate an isolated movable_ops page
- * @page: The isolated page.
+ * @dst: The destination page.
+ * @src: The source page.
+ * @mode: The migration mode.
  *
  * Migrate an isolated movable_ops page.
  *
