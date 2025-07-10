@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-only
+menu "SoundWire (SDCA)"
 
 config SND_SOC_SDCA
 	tristate
@@ -9,3 +10,16 @@ config SND_SOC_SDCA
 
 config SND_SOC_SDCA_OPTIONAL
 	def_tristate SND_SOC_SDCA || !SND_SOC_SDCA
+
+config SND_SOC_SDCA_HID
+	tristate "SDCA HID support"
+	depends on SND_SOC_SDCA && HID
+
+config SND_SOC_SDCA_IRQ
+	tristate
+	select REGMAP
+	select REGMAP_IRQ
+	help
+	  This option enables support for SDCA IRQs.
+
+endmenu
