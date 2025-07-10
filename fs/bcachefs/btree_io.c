@@ -24,7 +24,14 @@
 #include "super-io.h"
 #include "trace.h"
 
+#include <linux/moduleparam.h>
 #include <linux/sched/mm.h>
+
+#ifdef CONFIG_BCACHEFS_DEBUG
+static unsigned bch2_btree_read_corrupt_ratio;
+module_param_named(btree_read_corrupt_ratio, bch2_btree_read_corrupt_ratio, uint, 0644);
+MODULE_PARM_DESC(btree_read_corrupt_ratio, "");
+#endif
 
 static void bch2_btree_node_header_to_text(struct printbuf *out, struct btree_node *bn)
 {
@@ -568,9 +575,9 @@ static int __btree_err(int ret,
 		bch2_mark_btree_validate_failure(failed, ca->dev_idx);
 
 		struct extent_ptr_decoded pick;
-		have_retry = !bch2_bkey_pick_read_device(c,
+		have_retry = bch2_bkey_pick_read_device(c,
 					bkey_i_to_s_c(&b->key),
-					failed, &pick, -1);
+					failed, &pick, -1) == 1;
 	}
 
 	if (!have_retry && ret == -BCH_ERR_btree_node_read_err_want_retry)
@@ -615,7 +622,6 @@ static int __btree_err(int ret,
 			goto out;
 		case -BCH_ERR_btree_node_read_err_bad_node:
 			prt_str(&out, ", ");
-			ret = __bch2_topology_error(c, &out);
 			break;
 		}
 
@@ -644,7 +650,6 @@ static int __btree_err(int ret,
 		goto out;
 	case -BCH_ERR_btree_node_read_err_bad_node:
 		prt_str(&out, ", ");
-		ret = __bch2_topology_error(c, &out);
 		break;
 	}
 print:
@@ -1408,7 +1413,7 @@ static void btree_node_read_work(struct work_struct *work)
 		ret = bch2_bkey_pick_read_device(c,
 					bkey_i_to_s_c(&b->key),
 					&failed, &rb->pick, -1);
-		if (ret) {
+		if (ret <= 0) {
 			set_btree_node_read_error(b);
 			break;
 		}
@@ -1438,6 +1443,11 @@ start:
 			bch2_mark_io_failure(&failed, &rb->pick, false);
 			continue;
 		}
+
+		memset(&bio->bi_iter, 0, sizeof(bio->bi_iter));
+		bio->bi_iter.bi_size	= btree_buf_bytes(b);
+
+		bch2_maybe_corrupt_bio(bio, bch2_btree_read_corrupt_ratio);
 
 		ret = bch2_btree_node_read_done(c, ca, b, &failed, &buf);
 		if (ret == -BCH_ERR_btree_node_read_err_want_retry ||
@@ -1798,7 +1808,7 @@ void bch2_btree_node_read(struct btree_trans *trans, struct btree *b,
 	struct bio *bio;
 	int ret;
 
-	trace_and_count(c, btree_node_read, trans, b);
+	trace_btree_node(c, b, btree_node_read);
 
 	if (static_branch_unlikely(&bch2_verify_all_btree_replicas) &&
 	    !btree_node_read_all_replicas(c, b, sync))
@@ -2532,7 +2542,17 @@ do_write:
 	    c->opts.nochanges)
 		goto err;
 
-	trace_and_count(c, btree_node_write, b, bytes_to_write, sectors_to_write);
+	if (trace_btree_node_write_enabled()) {
+		CLASS(printbuf, buf)();
+		printbuf_indent_add(&buf, 2);
+		prt_printf(&buf, "offset %u sectors %u bytes %u\n",
+			   b->written,
+			   sectors_to_write,
+			   bytes_to_write);
+		bch2_btree_pos_to_text(&buf, c, b);
+		trace_btree_node_write(c, buf.buf);
+	}
+	count_event(c, btree_node_write);
 
 	wbio = container_of(bio_alloc_bioset(NULL,
 				buf_pages(data, sectors_to_write << 9),
