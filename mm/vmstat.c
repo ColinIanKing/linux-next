@@ -1365,8 +1365,6 @@ const char * const vmstat_text[] = {
 	[I(NUMA_HINT_FAULTS)]			= "numa_hint_faults",
 	[I(NUMA_HINT_FAULTS_LOCAL)]		= "numa_hint_faults_local",
 	[I(NUMA_PAGE_MIGRATE)]			= "numa_pages_migrated",
-	[I(NUMA_TASK_MIGRATE)]			= "numa_task_migrated",
-	[I(NUMA_TASK_SWAP)]			= "numa_task_swapped",
 #endif
 #ifdef CONFIG_MIGRATION
 	[I(PGMIGRATE_SUCCESS)]			= "pgmigrate_success",
