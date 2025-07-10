@@ -3324,6 +3324,17 @@ static struct file *do_async_mmap_readahead(struct vm_fault *vmf,
 		return fpin;
 
 	mmap_miss = READ_ONCE(ra->mmap_miss);
+	if (unlikely(!folio_test_uptodate(folio) &&
+		     folio_test_workingset(folio))) {
+		/*
+		 * If there are signs of thrashing, take a big step
+		 * towards disabling readahead.
+		 */
+		mmap_miss += MMAP_LOTSAMISS / 2;
+		mmap_miss = min(mmap_miss, MMAP_LOTSAMISS * 10);
+		WRITE_ONCE(ra->mmap_miss, mmap_miss);
+		return fpin;
+	}
 	if (mmap_miss)
 		WRITE_ONCE(ra->mmap_miss, --mmap_miss);
 
