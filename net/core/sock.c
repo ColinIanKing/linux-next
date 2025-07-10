@@ -602,7 +602,7 @@ struct dst_entry *__sk_dst_check(struct sock *sk, u32 cookie)
 {
 	struct dst_entry *dst = __sk_dst_get(sk);
 
-	if (dst && dst->obsolete &&
+	if (dst && READ_ONCE(dst->obsolete) &&
 	    INDIRECT_CALL_INET(dst->ops->check, ip6_dst_check, ipv4_dst_check,
 			       dst, cookie) == NULL) {
 		sk_tx_queue_clear(sk);
@@ -620,7 +620,7 @@ struct dst_entry *sk_dst_check(struct sock *sk, u32 cookie)
 {
 	struct dst_entry *dst = sk_dst_get(sk);
 
-	if (dst && dst->obsolete &&
+	if (dst && READ_ONCE(dst->obsolete) &&
 	    INDIRECT_CALL_INET(dst->ops->check, ip6_dst_check, ipv4_dst_check,
 			       dst, cookie) == NULL) {
 		sk_dst_reset(sk);
@@ -818,12 +818,10 @@ EXPORT_SYMBOL(sock_set_priority);
 
 void sock_set_sndtimeo(struct sock *sk, s64 secs)
 {
-	lock_sock(sk);
 	if (secs && secs < MAX_SCHEDULE_TIMEOUT / HZ - 1)
 		WRITE_ONCE(sk->sk_sndtimeo, secs * HZ);
 	else
 		WRITE_ONCE(sk->sk_sndtimeo, MAX_SCHEDULE_TIMEOUT);
-	release_sock(sk);
 }
 EXPORT_SYMBOL(sock_set_sndtimeo);
 
@@ -836,14 +834,6 @@ static void __sock_set_timestamps(struct sock *sk, bool val, bool new, bool ns)
 		sock_enable_timestamp(sk, SOCK_TIMESTAMP);
 	}
 }
-
-void sock_enable_timestamps(struct sock *sk)
-{
-	lock_sock(sk);
-	__sock_set_timestamps(sk, true, false, true);
-	release_sock(sk);
-}
-EXPORT_SYMBOL(sock_enable_timestamps);
 
 void sock_set_timestamp(struct sock *sk, int optname, bool valbool)
 {
@@ -1295,6 +1285,14 @@ int sk_setsockopt(struct sock *sk, int level, int optname,
 	case SO_DEVMEM_DONTNEED:
 		return sock_devmem_dontneed(sk, optval, optlen);
 #endif
+	case SO_SNDTIMEO_OLD:
+	case SO_SNDTIMEO_NEW:
+		return sock_set_timeout(&sk->sk_sndtimeo, optval,
+					optlen, optname == SO_SNDTIMEO_OLD);
+	case SO_RCVTIMEO_OLD:
+	case SO_RCVTIMEO_NEW:
+		return sock_set_timeout(&sk->sk_rcvtimeo, optval,
+					optlen, optname == SO_RCVTIMEO_OLD);
 	}
 
 	sockopt_lock_sock(sk);
@@ -1450,18 +1448,6 @@ set_sndbuf:
 			WRITE_ONCE(sk->sk_rcvlowat, val ? : 1);
 		break;
 		}
-	case SO_RCVTIMEO_OLD:
-	case SO_RCVTIMEO_NEW:
-		ret = sock_set_timeout(&sk->sk_rcvtimeo, optval,
-				       optlen, optname == SO_RCVTIMEO_OLD);
-		break;
-
-	case SO_SNDTIMEO_OLD:
-	case SO_SNDTIMEO_NEW:
-		ret = sock_set_timeout(&sk->sk_sndtimeo, optval,
-				       optlen, optname == SO_SNDTIMEO_OLD);
-		break;
-
 	case SO_ATTACH_FILTER: {
 		struct sock_fprog fprog;
 
@@ -2602,8 +2588,8 @@ static u32 sk_dst_gso_max_size(struct sock *sk, struct dst_entry *dst)
 		   !ipv6_addr_v4mapped(&sk->sk_v6_rcv_saddr));
 #endif
 	/* pairs with the WRITE_ONCE() in netif_set_gso(_ipv4)_max_size() */
-	max_size = is_ipv6 ? READ_ONCE(dst->dev->gso_max_size) :
-			READ_ONCE(dst->dev->gso_ipv4_max_size);
+	max_size = is_ipv6 ? READ_ONCE(dst_dev(dst)->gso_max_size) :
+			READ_ONCE(dst_dev(dst)->gso_ipv4_max_size);
 	if (max_size > GSO_LEGACY_MAX_SIZE && !sk_is_tcp(sk))
 		max_size = GSO_LEGACY_MAX_SIZE;
 
@@ -2614,7 +2600,7 @@ void sk_setup_caps(struct sock *sk, struct dst_entry *dst)
 {
 	u32 max_segs = 1;
 
-	sk->sk_route_caps = dst->dev->features;
+	sk->sk_route_caps = dst_dev(dst)->features;
 	if (sk_is_tcp(sk)) {
 		struct inet_connection_sock *icsk = inet_csk(sk);
 
@@ -2632,7 +2618,7 @@ void sk_setup_caps(struct sock *sk, struct dst_entry *dst)
 			sk->sk_route_caps |= NETIF_F_SG | NETIF_F_HW_CSUM;
 			sk->sk_gso_max_size = sk_dst_gso_max_size(sk, dst);
 			/* pairs with the WRITE_ONCE() in netif_set_gso_max_segs() */
-			max_segs = max_t(u32, READ_ONCE(dst->dev->gso_max_segs), 1);
+			max_segs = max_t(u32, READ_ONCE(dst_dev(dst)->gso_max_segs), 1);
 		}
 	}
 	sk->sk_gso_max_segs = max_segs;
@@ -2787,17 +2773,6 @@ void sock_pfree(struct sk_buff *skb)
 }
 EXPORT_SYMBOL(sock_pfree);
 #endif /* CONFIG_INET */
-
-kuid_t sock_i_uid(struct sock *sk)
-{
-	kuid_t uid;
-
-	read_lock_bh(&sk->sk_callback_lock);
-	uid = sk->sk_socket ? SOCK_INODE(sk->sk_socket)->i_uid : GLOBAL_ROOT_UID;
-	read_unlock_bh(&sk->sk_callback_lock);
-	return uid;
-}
-EXPORT_SYMBOL(sock_i_uid);
 
 unsigned long __sock_i_ino(struct sock *sk)
 {

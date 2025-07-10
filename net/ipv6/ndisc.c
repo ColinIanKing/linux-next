@@ -377,24 +377,25 @@ static int ndisc_constructor(struct neighbour *neigh)
 static int pndisc_constructor(struct pneigh_entry *n)
 {
 	struct in6_addr *addr = (struct in6_addr *)&n->key;
-	struct in6_addr maddr;
 	struct net_device *dev = n->dev;
+	struct in6_addr maddr;
 
-	if (!dev || !__in6_dev_get(dev))
+	if (!dev)
 		return -EINVAL;
+
 	addrconf_addr_solict_mult(addr, &maddr);
-	ipv6_dev_mc_inc(dev, &maddr);
-	return 0;
+	return ipv6_dev_mc_inc(dev, &maddr);
 }
 
 static void pndisc_destructor(struct pneigh_entry *n)
 {
 	struct in6_addr *addr = (struct in6_addr *)&n->key;
-	struct in6_addr maddr;
 	struct net_device *dev = n->dev;
+	struct in6_addr maddr;
 
-	if (!dev || !__in6_dev_get(dev))
+	if (!dev)
 		return;
+
 	addrconf_addr_solict_mult(addr, &maddr);
 	ipv6_dev_mc_dec(dev, &maddr);
 }
@@ -473,6 +474,7 @@ void ndisc_send_skb(struct sk_buff *skb, const struct in6_addr *daddr,
 {
 	struct icmp6hdr *icmp6h = icmp6_hdr(skb);
 	struct dst_entry *dst = skb_dst(skb);
+	struct net_device *dev;
 	struct inet6_dev *idev;
 	struct net *net;
 	struct sock *sk;
@@ -507,11 +509,12 @@ void ndisc_send_skb(struct sk_buff *skb, const struct in6_addr *daddr,
 
 	ip6_nd_hdr(skb, saddr, daddr, READ_ONCE(inet6_sk(sk)->hop_limit), skb->len);
 
-	idev = __in6_dev_get(dst->dev);
+	dev = dst_dev(dst);
+	idev = __in6_dev_get(dev);
 	IP6_INC_STATS(net, idev, IPSTATS_MIB_OUTREQUESTS);
 
 	err = NF_HOOK(NFPROTO_IPV6, NF_INET_LOCAL_OUT,
-		      net, sk, skb, NULL, dst->dev,
+		      net, sk, skb, NULL, dev,
 		      dst_output);
 	if (!err) {
 		ICMP6MSGOUT_INC_STATS(net, idev, type);
