@@ -2,6 +2,7 @@
 // Copyright(c) 2021 Intel Corporation. All rights reserved.
 
 #include <linux/platform_device.h>
+#include <linux/memory_hotplug.h>
 #include <linux/genalloc.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
@@ -469,6 +470,44 @@ static bool is_mock_port(struct device *dev);
 struct cxl_cedt_context {
 	struct device *dev;
 };
+
+static int match_root_decoder_by_range(struct device *dev, const void *data)
+{
+	struct cxl_root_decoder *cxlrd;
+	const struct range *r2 = data;
+	const struct range *r1;
+
+	if (!is_root_decoder(dev))
+		return 0;
+
+	cxlrd = to_cxl_root_decoder(dev);
+	r1 = &cxlrd->cxlsd.cxld.hpa_range;
+	return range_contains(r1, r2);
+}
+
+static int mock_hmat_get_extended_linear_cache_size(struct resource *backing_res,
+						    int nid, resource_size_t *size)
+{
+	struct range backing_range = {
+		.start = backing_res->start,
+		.end = backing_res->end,
+	};
+	struct cxl_decoder *cxld;
+	struct cxl_port *port;
+
+	struct device *dev __free(put_device) =
+		bus_find_device(&cxl_bus_type, NULL, &backing_range,
+				match_root_decoder_by_range);
+	if (!dev)
+		return -ENODEV;
+
+	cxld = to_cxl_decoder(dev);
+	port = to_cxl_port(cxld->dev.parent);
+	if (is_mock_dev(port->uport_dev))
+		return -EOPNOTSUPP;
+
+	return hmat_get_extended_linear_cache_size(backing_res, nid, size);
+}
 
 static int mock_acpi_table_parse_cedt(enum acpi_cedt_type id,
 				      acpi_tbl_entry_handler_arg handler_arg,
@@ -1039,6 +1078,8 @@ static struct cxl_mock_ops cxl_mock_ops = {
 	.devm_cxl_add_passthrough_decoder = mock_cxl_add_passthrough_decoder,
 	.devm_cxl_enumerate_decoders = mock_cxl_enumerate_decoders,
 	.cxl_endpoint_parse_cdat = mock_cxl_endpoint_parse_cdat,
+	.hmat_get_extended_linear_cache_size =
+		mock_hmat_get_extended_linear_cache_size,
 	.list = LIST_HEAD_INIT(cxl_mock_ops.list),
 };
 
@@ -1328,6 +1369,7 @@ err_mem:
 static __init int cxl_test_init(void)
 {
 	int rc, i;
+	struct range mappable;
 
 	cxl_acpi_test();
 	cxl_core_test();
@@ -1342,8 +1384,11 @@ static __init int cxl_test_init(void)
 		rc = -ENOMEM;
 		goto err_gen_pool_create;
 	}
+	mappable = mhp_get_pluggable_range(true);
 
-	rc = gen_pool_add(cxl_mock_pool, iomem_resource.end + 1 - SZ_64G,
+	rc = gen_pool_add(cxl_mock_pool,
+			  min(iomem_resource.end + 1 - SZ_64G,
+			      mappable.end + 1 - SZ_64G),
 			  SZ_64G, NUMA_NO_NODE);
 	if (rc)
 		goto err_gen_pool_add;
