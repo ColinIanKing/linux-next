@@ -57,6 +57,7 @@
 #include <linux/rculist_nulls.h>
 #include <linux/random.h>
 #include <linux/mmu_notifier.h>
+#include <linux/parser.h>
 
 #include <asm/tlbflush.h>
 #include <asm/div64.h>
@@ -93,10 +94,8 @@ struct scan_control {
 	unsigned long	anon_cost;
 	unsigned long	file_cost;
 
-#ifdef CONFIG_MEMCG
 	/* Swappiness value for proactive reclaim. Always use sc_swappiness()! */
 	int *proactive_swappiness;
-#endif
 
 	/* Can active folios be deactivated as part of reclaim? */
 #define DEACTIVATE_ANON 1
@@ -120,7 +119,7 @@ struct scan_control {
 	/* Has cache_trim_mode failed at least once? */
 	unsigned int cache_trim_mode_failed:1;
 
-	/* Proactive reclaim invoked by userspace through memory.reclaim */
+	/* Proactive reclaim invoked by userspace */
 	unsigned int proactive:1;
 
 	/*
@@ -1659,9 +1658,11 @@ unsigned int reclaim_clean_pages_from_list(struct zone *zone,
 	unsigned int noreclaim_flag;
 
 	list_for_each_entry_safe(folio, next, folio_list, lru) {
+		/* TODO: these pages should not even appear in this list. */
+		if (page_has_movable_ops(&folio->page))
+			continue;
 		if (!folio_test_hugetlb(folio) && folio_is_file_lru(folio) &&
-		    !folio_test_dirty(folio) && !__folio_test_movable(folio) &&
-		    !folio_test_unevictable(folio)) {
+		    !folio_test_dirty(folio) && !folio_test_unevictable(folio)) {
 			folio_clear_active(folio);
 			list_move(&folio->lru, &clean_folios);
 		}
@@ -3929,6 +3930,7 @@ static bool try_to_inc_min_seq(struct lruvec *lruvec, int swappiness)
 	int gen, type, zone;
 	bool success = false;
 	struct lru_gen_folio *lrugen = &lruvec->lrugen;
+	int seq_inc_flags[ANON_AND_FILE] = {0};
 	DEFINE_MIN_SEQ(lruvec);
 
 	VM_WARN_ON_ONCE(!seq_is_valid(lruvec));
@@ -3944,10 +3946,19 @@ static bool try_to_inc_min_seq(struct lruvec *lruvec, int swappiness)
 			}
 
 			min_seq[type]++;
+			seq_inc_flags[type] = 1;
 		}
 next:
 		;
 	}
+
+	/*
+	 * If the oldest generation of LRU lists (anonymous and file)
+	 * are not empty, we can directly return false to avoid unnecessary
+	 * checking overhead later.
+	 */
+	if (!seq_inc_flags[LRU_GEN_ANON] && !seq_inc_flags[LRU_GEN_FILE])
+		return success;
 
 	/* see the comment on lru_gen_folio */
 	if (swappiness && swappiness <= MAX_SWAPPINESS) {
@@ -6720,6 +6731,15 @@ unsigned long try_to_free_mem_cgroup_pages(struct mem_cgroup *memcg,
 
 	return nr_reclaimed;
 }
+#else
+unsigned long try_to_free_mem_cgroup_pages(struct mem_cgroup *memcg,
+					   unsigned long nr_pages,
+					   gfp_t gfp_mask,
+					   unsigned int reclaim_options,
+					   int *swappiness)
+{
+	return 0;
+}
 #endif
 
 static void kswapd_age_node(struct pglist_data *pgdat, struct scan_control *sc)
@@ -7614,12 +7634,54 @@ static unsigned long node_pagecache_reclaimable(struct pglist_data *pgdat)
 /*
  * Try to free up some pages from this node through reclaim.
  */
-static int __node_reclaim(struct pglist_data *pgdat, gfp_t gfp_mask, unsigned int order)
+static unsigned long __node_reclaim(struct pglist_data *pgdat, gfp_t gfp_mask,
+				    unsigned long nr_pages,
+				    struct scan_control *sc)
 {
-	/* Minimum pages needed in order to stay on node */
-	const unsigned long nr_pages = 1 << order;
 	struct task_struct *p = current;
 	unsigned int noreclaim_flag;
+	unsigned long pflags;
+
+	trace_mm_vmscan_node_reclaim_begin(pgdat->node_id, sc->order,
+					   sc->gfp_mask);
+
+	cond_resched();
+	psi_memstall_enter(&pflags);
+	delayacct_freepages_start();
+	fs_reclaim_acquire(sc->gfp_mask);
+	/*
+	 * We need to be able to allocate from the reserves for RECLAIM_UNMAP
+	 */
+	noreclaim_flag = memalloc_noreclaim_save();
+	set_task_reclaim_state(p, &sc->reclaim_state);
+
+	if (node_pagecache_reclaimable(pgdat) > pgdat->min_unmapped_pages ||
+	    node_page_state_pages(pgdat, NR_SLAB_RECLAIMABLE_B) > pgdat->min_slab_pages) {
+		/*
+		 * Free memory by calling shrink node with increasing
+		 * priorities until we have enough memory freed.
+		 */
+		do {
+			shrink_node(pgdat, sc);
+		} while (sc->nr_reclaimed < nr_pages && --sc->priority >= 0);
+	}
+
+	set_task_reclaim_state(p, NULL);
+	memalloc_noreclaim_restore(noreclaim_flag);
+	fs_reclaim_release(sc->gfp_mask);
+	delayacct_freepages_end();
+	psi_memstall_leave(&pflags);
+
+	trace_mm_vmscan_node_reclaim_end(sc->nr_reclaimed);
+
+	return sc->nr_reclaimed;
+}
+
+int node_reclaim(struct pglist_data *pgdat, gfp_t gfp_mask, unsigned int order)
+{
+	int ret;
+	/* Minimum pages needed in order to stay on node */
+	const unsigned long nr_pages = 1 << order;
 	struct scan_control sc = {
 		.nr_to_reclaim = max(nr_pages, SWAP_CLUSTER_MAX),
 		.gfp_mask = current_gfp_context(gfp_mask),
@@ -7630,46 +7692,6 @@ static int __node_reclaim(struct pglist_data *pgdat, gfp_t gfp_mask, unsigned in
 		.may_swap = 1,
 		.reclaim_idx = gfp_zone(gfp_mask),
 	};
-	unsigned long pflags;
-
-	trace_mm_vmscan_node_reclaim_begin(pgdat->node_id, order,
-					   sc.gfp_mask);
-
-	cond_resched();
-	psi_memstall_enter(&pflags);
-	delayacct_freepages_start();
-	fs_reclaim_acquire(sc.gfp_mask);
-	/*
-	 * We need to be able to allocate from the reserves for RECLAIM_UNMAP
-	 */
-	noreclaim_flag = memalloc_noreclaim_save();
-	set_task_reclaim_state(p, &sc.reclaim_state);
-
-	if (node_pagecache_reclaimable(pgdat) > pgdat->min_unmapped_pages ||
-	    node_page_state_pages(pgdat, NR_SLAB_RECLAIMABLE_B) > pgdat->min_slab_pages) {
-		/*
-		 * Free memory by calling shrink node with increasing
-		 * priorities until we have enough memory freed.
-		 */
-		do {
-			shrink_node(pgdat, &sc);
-		} while (sc.nr_reclaimed < nr_pages && --sc.priority >= 0);
-	}
-
-	set_task_reclaim_state(p, NULL);
-	memalloc_noreclaim_restore(noreclaim_flag);
-	fs_reclaim_release(sc.gfp_mask);
-	psi_memstall_leave(&pflags);
-	delayacct_freepages_end();
-
-	trace_mm_vmscan_node_reclaim_end(sc.nr_reclaimed);
-
-	return sc.nr_reclaimed >= nr_pages;
-}
-
-int node_reclaim(struct pglist_data *pgdat, gfp_t gfp_mask, unsigned int order)
-{
-	int ret;
 
 	/*
 	 * Node reclaim reclaims unmapped file backed pages and
@@ -7704,7 +7726,7 @@ int node_reclaim(struct pglist_data *pgdat, gfp_t gfp_mask, unsigned int order)
 	if (test_and_set_bit_lock(PGDAT_RECLAIM_LOCKED, &pgdat->flags))
 		return NODE_RECLAIM_NOSCAN;
 
-	ret = __node_reclaim(pgdat, gfp_mask, order);
+	ret = __node_reclaim(pgdat, gfp_mask, nr_pages, &sc) >= nr_pages;
 	clear_bit_unlock(PGDAT_RECLAIM_LOCKED, &pgdat->flags);
 
 	if (ret)
@@ -7714,6 +7736,114 @@ int node_reclaim(struct pglist_data *pgdat, gfp_t gfp_mask, unsigned int order)
 
 	return ret;
 }
+
+enum {
+	MEMORY_RECLAIM_SWAPPINESS = 0,
+	MEMORY_RECLAIM_SWAPPINESS_MAX,
+	MEMORY_RECLAIM_NULL,
+};
+static const match_table_t tokens = {
+	{ MEMORY_RECLAIM_SWAPPINESS, "swappiness=%d"},
+	{ MEMORY_RECLAIM_SWAPPINESS_MAX, "swappiness=max"},
+	{ MEMORY_RECLAIM_NULL, NULL },
+};
+
+int user_proactive_reclaim(char *buf,
+			   struct mem_cgroup *memcg, pg_data_t *pgdat)
+{
+	unsigned int nr_retries = MAX_RECLAIM_RETRIES;
+	unsigned long nr_to_reclaim, nr_reclaimed = 0;
+	int swappiness = -1;
+	char *old_buf, *start;
+	substring_t args[MAX_OPT_ARGS];
+	gfp_t gfp_mask = GFP_KERNEL;
+
+	if (!buf || (!memcg && !pgdat))
+		return -EINVAL;
+
+	buf = strstrip(buf);
+
+	old_buf = buf;
+	nr_to_reclaim = memparse(buf, &buf) / PAGE_SIZE;
+	if (buf == old_buf)
+		return -EINVAL;
+
+	buf = strstrip(buf);
+
+	while ((start = strsep(&buf, " ")) != NULL) {
+		if (!strlen(start))
+			continue;
+		switch (match_token(start, tokens, args)) {
+		case MEMORY_RECLAIM_SWAPPINESS:
+			if (match_int(&args[0], &swappiness))
+				return -EINVAL;
+			if (swappiness < MIN_SWAPPINESS ||
+			    swappiness > MAX_SWAPPINESS)
+				return -EINVAL;
+			break;
+		case MEMORY_RECLAIM_SWAPPINESS_MAX:
+			swappiness = SWAPPINESS_ANON_ONLY;
+			break;
+		default:
+			return -EINVAL;
+		}
+	}
+
+	while (nr_reclaimed < nr_to_reclaim) {
+		/* Will converge on zero, but reclaim enforces a minimum */
+		unsigned long batch_size = (nr_to_reclaim - nr_reclaimed) / 4;
+		unsigned long reclaimed;
+
+		if (signal_pending(current))
+			return -EINTR;
+
+		/*
+		 * This is the final attempt, drain percpu lru caches in the
+		 * hope of introducing more evictable pages.
+		 */
+		if (!nr_retries)
+			lru_add_drain_all();
+
+		if (memcg) {
+			unsigned int reclaim_options;
+
+			reclaim_options = MEMCG_RECLAIM_MAY_SWAP |
+					  MEMCG_RECLAIM_PROACTIVE;
+			reclaimed = try_to_free_mem_cgroup_pages(memcg,
+						 batch_size, gfp_mask,
+						 reclaim_options,
+						 swappiness == -1 ? NULL : &swappiness);
+		} else {
+			struct scan_control sc = {
+				.gfp_mask = current_gfp_context(gfp_mask),
+				.reclaim_idx = gfp_zone(gfp_mask),
+				.proactive_swappiness = swappiness == -1 ? NULL : &swappiness,
+				.priority = DEF_PRIORITY,
+				.may_writepage = !laptop_mode,
+				.nr_to_reclaim = max(batch_size, SWAP_CLUSTER_MAX),
+				.may_unmap = 1,
+				.may_swap = 1,
+				.proactive = 1,
+			};
+
+			if (test_and_set_bit_lock(PGDAT_RECLAIM_LOCKED,
+						  &pgdat->flags))
+				return -EAGAIN;
+
+			reclaimed = __node_reclaim(pgdat, gfp_mask,
+						   batch_size, &sc);
+			clear_bit_unlock(PGDAT_RECLAIM_LOCKED, &pgdat->flags);
+		}
+
+		if (!reclaimed && !nr_retries--)
+			return -EAGAIN;
+
+		nr_reclaimed += reclaimed;
+	}
+
+	return 0;
+}
+
 #endif
 
 /**
@@ -7761,3 +7891,26 @@ void check_move_unevictable_folios(struct folio_batch *fbatch)
 	}
 }
 EXPORT_SYMBOL_GPL(check_move_unevictable_folios);
+
+#if defined(CONFIG_SYSFS) && defined(CONFIG_NUMA)
+static ssize_t reclaim_store(struct device *dev,
+			     struct device_attribute *attr,
+			     const char *buf, size_t count)
+{
+	int ret, nid = dev->id;
+
+	ret = user_proactive_reclaim((char *)buf, NULL, NODE_DATA(nid));
+	return ret ? -EAGAIN : count;
+}
+
+static DEVICE_ATTR_WO(reclaim);
+int reclaim_register_node(struct node *node)
+{
+	return device_create_file(&node->dev, &dev_attr_reclaim);
+}
+
+void reclaim_unregister_node(struct node *node)
+{
+	return device_remove_file(&node->dev, &dev_attr_reclaim);
+}
+#endif

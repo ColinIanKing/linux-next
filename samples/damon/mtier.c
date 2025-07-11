@@ -12,6 +12,11 @@
 #include <linux/kernel.h>
 #include <linux/module.h>
 
+#ifdef MODULE_PARAM_PREFIX
+#undef MODULE_PARAM_PREFIX
+#endif
+#define MODULE_PARAM_PREFIX "damon_sample_mtier."
+
 static unsigned long node0_start_addr __read_mostly;
 module_param(node0_start_addr, ulong, 0600);
 
@@ -23,6 +28,12 @@ module_param(node1_start_addr, ulong, 0600);
 
 static unsigned long node1_end_addr __read_mostly;
 module_param(node1_end_addr, ulong, 0600);
+
+static unsigned long node0_mem_used_bp __read_mostly = 9970;
+module_param(node0_mem_used_bp, ulong, 0600);
+
+static unsigned long node0_mem_free_bp __read_mostly = 50;
+module_param(node0_mem_free_bp, ulong, 0600);
 
 static int damon_sample_mtier_enable_store(
 		const char *val, const struct kernel_param *kp);
@@ -112,7 +123,7 @@ static struct damon_ctx *damon_sample_mtier_build_ctx(bool promote)
 	quota_goal = damos_new_quota_goal(
 			promote ? DAMOS_QUOTA_NODE_MEM_USED_BP :
 			DAMOS_QUOTA_NODE_MEM_FREE_BP,
-			promote ? 9970 : 50);
+			promote ? node0_mem_used_bp : node0_mem_free_bp);
 	if (!quota_goal)
 		goto free_out;
 	quota_goal->nid = 0;
@@ -151,6 +162,8 @@ static void damon_sample_mtier_stop(void)
 	damon_destroy_ctx(ctxs[1]);
 }
 
+static bool init_called;
+
 static int damon_sample_mtier_enable_store(
 		const char *val, const struct kernel_param *kp)
 {
@@ -176,6 +189,14 @@ static int damon_sample_mtier_enable_store(
 
 static int __init damon_sample_mtier_init(void)
 {
+	int err = 0;
+
+	init_called = true;
+	if (enable) {
+		err = damon_sample_mtier_start();
+		if (err)
+			enable = false;
+	}
 	return 0;
 }
 
