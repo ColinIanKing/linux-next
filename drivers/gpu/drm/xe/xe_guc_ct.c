@@ -85,6 +85,7 @@ struct g2h_fence {
 	u16 error;
 	u16 hint;
 	u16 reason;
+	bool cancel;
 	bool retry;
 	bool fail;
 	bool done;
@@ -101,6 +102,13 @@ static void g2h_fence_init(struct g2h_fence *g2h_fence, u32 *response_buffer)
 	g2h_fence->retry = false;
 	g2h_fence->done = false;
 	g2h_fence->seqno = ~0x0;
+}
+
+static void g2h_fence_cancel(struct g2h_fence *g2h_fence)
+{
+	g2h_fence->cancel = true;
+	g2h_fence->fail = true;
+	g2h_fence->done = true;
 }
 
 static bool g2h_fence_needs_alloc(struct g2h_fence *g2h_fence)
@@ -209,12 +217,10 @@ static void primelockdep(struct xe_guc_ct *ct)
 	fs_reclaim_release(GFP_KERNEL);
 }
 
-int xe_guc_ct_init(struct xe_guc_ct *ct)
+int xe_guc_ct_init_noalloc(struct xe_guc_ct *ct)
 {
 	struct xe_device *xe = ct_to_xe(ct);
 	struct xe_gt *gt = ct_to_gt(ct);
-	struct xe_tile *tile = gt_to_tile(gt);
-	struct xe_bo *bo;
 	int err;
 
 	xe_gt_assert(gt, !(guc_ct_size() % PAGE_SIZE));
@@ -240,6 +246,23 @@ int xe_guc_ct_init(struct xe_guc_ct *ct)
 
 	primelockdep(ct);
 
+	err = drmm_add_action_or_reset(&xe->drm, guc_ct_fini, ct);
+	if (err)
+		return err;
+
+	xe_gt_assert(gt, ct->state == XE_GUC_CT_STATE_NOT_INITIALIZED);
+	ct->state = XE_GUC_CT_STATE_DISABLED;
+	return 0;
+}
+ALLOW_ERROR_INJECTION(xe_guc_ct_init_noalloc, ERRNO); /* See xe_pci_probe() */
+
+int xe_guc_ct_init(struct xe_guc_ct *ct)
+{
+	struct xe_device *xe = ct_to_xe(ct);
+	struct xe_gt *gt = ct_to_gt(ct);
+	struct xe_tile *tile = gt_to_tile(gt);
+	struct xe_bo *bo;
+
 	bo = xe_managed_bo_create_pin_map(xe, tile, guc_ct_size(),
 					  XE_BO_FLAG_SYSTEM |
 					  XE_BO_FLAG_GGTT |
@@ -249,13 +272,6 @@ int xe_guc_ct_init(struct xe_guc_ct *ct)
 		return PTR_ERR(bo);
 
 	ct->bo = bo;
-
-	err = drmm_add_action_or_reset(&xe->drm, guc_ct_fini, ct);
-	if (err)
-		return err;
-
-	xe_gt_assert(gt, ct->state == XE_GUC_CT_STATE_NOT_INITIALIZED);
-	ct->state = XE_GUC_CT_STATE_DISABLED;
 	return 0;
 }
 ALLOW_ERROR_INJECTION(xe_guc_ct_init, ERRNO); /* See xe_pci_probe() */
@@ -376,9 +392,13 @@ static int guc_ct_control_toggle(struct xe_guc_ct *ct, bool enable)
 	return ret > 0 ? -EPROTO : ret;
 }
 
-static void xe_guc_ct_set_state(struct xe_guc_ct *ct,
+static void guc_ct_change_state(struct xe_guc_ct *ct,
 				enum xe_guc_ct_state state)
 {
+	struct xe_gt *gt = ct_to_gt(ct);
+	struct g2h_fence *g2h_fence;
+	unsigned long idx;
+
 	mutex_lock(&ct->lock);		/* Serialise dequeue_one_g2h() */
 	spin_lock_irq(&ct->fast_lock);	/* Serialise CT fast-path */
 
@@ -390,7 +410,19 @@ static void xe_guc_ct_set_state(struct xe_guc_ct *ct,
 	ct->g2h_outstanding = 0;
 	ct->state = state;
 
+	xe_gt_dbg(gt, "GuC CT communication channel %s\n",
+		  state == XE_GUC_CT_STATE_STOPPED ? "stopped" :
+		  str_enabled_disabled(state == XE_GUC_CT_STATE_ENABLED));
+
 	spin_unlock_irq(&ct->fast_lock);
+
+	/* cancel all in-flight send-recv requests */
+	xa_for_each(&ct->fence_lookup, idx, g2h_fence)
+		g2h_fence_cancel(g2h_fence);
+
+	/* make sure guc_ct_send_recv() will see g2h_fence changes */
+	smp_mb();
+	wake_up_all(&ct->g2h_fence_wq);
 
 	/*
 	 * Lockdep doesn't like this under the fast lock and he destroy only
@@ -445,7 +477,7 @@ int xe_guc_ct_enable(struct xe_guc_ct *ct)
 
 	xe_gt_assert(gt, !xe_guc_ct_enabled(ct));
 
-	xe_map_memset(xe, &ct->bo->vmap, 0, 0, ct->bo->size);
+	xe_map_memset(xe, &ct->bo->vmap, 0, 0, xe_bo_size(ct->bo));
 	guc_ct_ctb_h2g_init(xe, &ct->ctbs.h2g, &ct->bo->vmap);
 	guc_ct_ctb_g2h_init(xe, &ct->ctbs.g2h, &ct->bo->vmap);
 
@@ -461,11 +493,10 @@ int xe_guc_ct_enable(struct xe_guc_ct *ct)
 	if (err)
 		goto err_out;
 
-	xe_guc_ct_set_state(ct, XE_GUC_CT_STATE_ENABLED);
+	guc_ct_change_state(ct, XE_GUC_CT_STATE_ENABLED);
 
 	smp_mb();
 	wake_up_all(&ct->wq);
-	xe_gt_dbg(gt, "GuC CT communication channel enabled\n");
 
 	if (ct_needs_safe_mode(ct))
 		ct_enter_safe_mode(ct);
@@ -506,7 +537,7 @@ static void stop_g2h_handler(struct xe_guc_ct *ct)
  */
 void xe_guc_ct_disable(struct xe_guc_ct *ct)
 {
-	xe_guc_ct_set_state(ct, XE_GUC_CT_STATE_DISABLED);
+	guc_ct_change_state(ct, XE_GUC_CT_STATE_DISABLED);
 	ct_exit_safe_mode(ct);
 	stop_g2h_handler(ct);
 }
@@ -522,7 +553,7 @@ void xe_guc_ct_stop(struct xe_guc_ct *ct)
 	if (!xe_guc_ct_initialized(ct))
 		return;
 
-	xe_guc_ct_set_state(ct, XE_GUC_CT_STATE_STOPPED);
+	guc_ct_change_state(ct, XE_GUC_CT_STATE_STOPPED);
 	stop_g2h_handler(ct);
 }
 
@@ -1085,6 +1116,11 @@ retry_same_fence:
 		goto retry;
 	}
 	if (g2h_fence.fail) {
+		if (g2h_fence.cancel) {
+			xe_gt_dbg(gt, "H2G request %#x canceled!\n", action[0]);
+			ret = -ECANCELED;
+			goto unlock;
+		}
 		xe_gt_err(gt, "H2G request %#x failed: error %#x hint %#x\n",
 			  action[0], g2h_fence.error, g2h_fence.hint);
 		ret = -EIO;
@@ -1093,6 +1129,7 @@ retry_same_fence:
 	if (ret > 0)
 		ret = response_buffer ? g2h_fence.response_len : g2h_fence.response_data;
 
+unlock:
 	mutex_unlock(&ct->lock);
 
 	return ret;
@@ -1899,7 +1936,7 @@ static struct xe_guc_ct_snapshot *guc_ct_snapshot_alloc(struct xe_guc_ct *ct, bo
 		return NULL;
 
 	if (ct->bo && want_ctb) {
-		snapshot->ctb_size = ct->bo->size;
+		snapshot->ctb_size = xe_bo_size(ct->bo);
 		snapshot->ctb = kmalloc(snapshot->ctb_size, atomic ? GFP_ATOMIC : GFP_KERNEL);
 	}
 
