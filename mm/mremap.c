@@ -69,7 +69,6 @@ struct vma_remap_struct {
 	enum mremap_type remap_type;	/* expand, shrink, etc. */
 	bool mmap_locked;		/* Is mm currently write-locked? */
 	unsigned long charged;		/* If VM_ACCOUNT, # pages to account. */
-	bool seen_vma;			/* Is >1 VMA being moved? */
 	bool vmi_needs_reset;		/* Was the VMA iterator invalidated? */
 };
 
@@ -1188,6 +1187,7 @@ static int copy_vma_and_data(struct vma_remap_struct *vrm,
 		*new_vma_ptr = NULL;
 		return -ENOMEM;
 	}
+	/* By merging, we may have invalidated any iterator in use. */
 	if (vma != vrm->vma)
 		vrm->vmi_needs_reset = true;
 
@@ -1805,10 +1805,10 @@ static unsigned long remap_move(struct vma_remap_struct *vrm)
 	unsigned long start = vrm->addr;
 	unsigned long end = vrm->addr + vrm->old_len;
 	unsigned long new_addr = vrm->new_addr;
+	bool allowed = true, seen_vma = false;
 	unsigned long target_addr = new_addr;
 	unsigned long res = -EFAULT;
 	unsigned long last_end;
-	bool allowed = true;
 	VMA_ITERATOR(vmi, current->mm, start);
 
 	/*
@@ -1826,7 +1826,7 @@ static unsigned long remap_move(struct vma_remap_struct *vrm)
 			return -EFAULT;
 
 		/* No gap permitted at the start of the range. */
-		if (!vrm->seen_vma && start < vma->vm_start)
+		if (!seen_vma && start < vma->vm_start)
 			return -EFAULT;
 
 		/*
@@ -1844,7 +1844,7 @@ static unsigned long remap_move(struct vma_remap_struct *vrm)
 		 *
 		 * So we map B' at A'->vm_end + X, and C' at B'->vm_end + Y.
 		 */
-		offset = vrm->seen_vma ? vma->vm_start - last_end : 0;
+		offset = seen_vma ? vma->vm_start - last_end : 0;
 		last_end = vma->vm_end;
 
 		vrm->vma = vma;
@@ -1853,7 +1853,7 @@ static unsigned long remap_move(struct vma_remap_struct *vrm)
 		vrm->old_len = vrm->new_len = len;
 
 		allowed = vma_multi_allowed(vma);
-		if (vrm->seen_vma && !allowed)
+		if (seen_vma && !allowed)
 			return -EFAULT;
 
 		res_vma = check_prep_vma(vrm);
@@ -1862,7 +1862,7 @@ static unsigned long remap_move(struct vma_remap_struct *vrm)
 		if (IS_ERR_VALUE(res_vma))
 			return res_vma;
 
-		if (!vrm->seen_vma) {
+		if (!seen_vma) {
 			VM_WARN_ON_ONCE(allowed && res_vma != new_addr);
 			res = res_vma;
 		}
@@ -1876,7 +1876,7 @@ static unsigned long remap_move(struct vma_remap_struct *vrm)
 			vma_iter_reset(&vmi);
 			vrm->vmi_needs_reset = false;
 		}
-		vrm->seen_vma = true;
+		seen_vma = true;
 		target_addr = res_vma + vrm->new_len;
 	}
 
