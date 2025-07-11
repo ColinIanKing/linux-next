@@ -376,7 +376,7 @@ EXPORT_SYMBOL_GPL(rcu_momentary_eqs);
  */
 static int rcu_is_cpu_rrupt_from_idle(void)
 {
-	long nesting;
+	long nmi_nesting = ct_nmi_nesting();
 
 	/*
 	 * Usually called from the tick; but also used from smp_function_call()
@@ -388,21 +388,28 @@ static int rcu_is_cpu_rrupt_from_idle(void)
 	/* Check for counter underflows */
 	RCU_LOCKDEP_WARN(ct_nesting() < 0,
 			 "RCU nesting counter underflow!");
-	RCU_LOCKDEP_WARN(ct_nmi_nesting() <= 0,
-			 "RCU nmi_nesting counter underflow/zero!");
 
-	/* Are we at first interrupt nesting level? */
-	nesting = ct_nmi_nesting();
-	if (nesting > 1)
+	/* Non-idle interrupt or nested idle interrupt */
+	if (nmi_nesting > 1)
 		return false;
 
 	/*
-	 * If we're not in an interrupt, we must be in the idle task!
+	 * Non nested idle interrupt (interrupting section where RCU
+	 * wasn't watching).
 	 */
-	WARN_ON_ONCE(!nesting && !is_idle_task(current));
+	if (nmi_nesting == 1)
+		return true;
 
-	/* Does CPU appear to be idle from an RCU standpoint? */
-	return ct_nesting() == 0;
+	/* Not in an interrupt */
+	if (!nmi_nesting) {
+		RCU_LOCKDEP_WARN(!in_task() || !is_idle_task(current),
+				 "RCU nmi_nesting counter not in idle task!");
+		return !rcu_is_watching_curr_cpu();
+	}
+
+	RCU_LOCKDEP_WARN(1, "RCU nmi_nesting counter underflow/zero!");
+
+	return false;
 }
 
 #define DEFAULT_RCU_BLIMIT (IS_ENABLED(CONFIG_RCU_STRICT_GRACE_PERIOD) ? 1000 : 10)
@@ -1624,8 +1631,10 @@ static void rcu_sr_put_wait_head(struct llist_node *node)
 	atomic_set_release(&sr_wn->inuse, 0);
 }
 
-/* Disabled by default. */
-static int rcu_normal_wake_from_gp;
+/* Enable rcu_normal_wake_from_gp automatically on small systems. */
+#define WAKE_FROM_GP_CPU_THRESHOLD 16
+
+static int rcu_normal_wake_from_gp = -1;
 module_param(rcu_normal_wake_from_gp, int, 0644);
 static struct workqueue_struct *sync_wq;
 
@@ -3242,7 +3251,7 @@ static void synchronize_rcu_normal(void)
 
 	trace_rcu_sr_normal(rcu_state.name, &rs.head, TPS("request"));
 
-	if (!READ_ONCE(rcu_normal_wake_from_gp)) {
+	if (READ_ONCE(rcu_normal_wake_from_gp) < 1) {
 		wait_rcu_gp(call_rcu_hurry);
 		goto trace_complete_out;
 	}
@@ -4850,6 +4859,12 @@ void __init rcu_init(void)
 
 	sync_wq = alloc_workqueue("sync_wq", WQ_MEM_RECLAIM, 0);
 	WARN_ON(!sync_wq);
+
+	/* Respect if explicitly disabled via a boot parameter. */
+	if (rcu_normal_wake_from_gp < 0) {
+		if (num_possible_cpus() <= WAKE_FROM_GP_CPU_THRESHOLD)
+			rcu_normal_wake_from_gp = 1;
+	}
 
 	/* Fill in default value for rcutree.qovld boot parameter. */
 	/* -After- the rcu_node ->lock fields are initialized! */
