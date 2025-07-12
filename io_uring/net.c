@@ -530,9 +530,19 @@ static inline bool io_send_finish(struct io_kiocb *req,
 
 	/* Otherwise stop bundle and use the current result. */
 finish:
+	if (req->flags & REQ_F_POLL_TRIGGERED)
+		cflags |= IORING_CQE_F_SOCK_FULL;
 	io_req_set_res(req, sel->val, cflags);
 	sel->val = IOU_COMPLETE;
 	return true;
+}
+
+static int io_send_complete(struct io_kiocb *req, int ret, unsigned cflags)
+{
+	if (req->flags & REQ_F_POLL_TRIGGERED)
+		cflags |= IORING_CQE_F_SOCK_FULL;
+	io_req_set_res(req, ret, cflags);
+	return IOU_COMPLETE;
 }
 
 int io_sendmsg(struct io_kiocb *req, unsigned int issue_flags)
@@ -580,8 +590,7 @@ int io_sendmsg(struct io_kiocb *req, unsigned int issue_flags)
 		ret += sr->done_io;
 	else if (sr->done_io)
 		ret = sr->done_io;
-	io_req_set_res(req, ret, 0);
-	return IOU_COMPLETE;
+	return io_send_complete(req, ret, 0);
 }
 
 static int io_send_select_buffer(struct io_kiocb *req, unsigned int issue_flags,
@@ -1516,8 +1525,7 @@ int io_send_zc(struct io_kiocb *req, unsigned int issue_flags)
 		zc->notif = NULL;
 		io_req_msg_cleanup(req, 0);
 	}
-	io_req_set_res(req, ret, IORING_CQE_F_MORE);
-	return IOU_COMPLETE;
+	return io_send_complete(req, ret, IORING_CQE_F_MORE);
 }
 
 int io_sendmsg_zc(struct io_kiocb *req, unsigned int issue_flags)
@@ -1586,8 +1594,7 @@ int io_sendmsg_zc(struct io_kiocb *req, unsigned int issue_flags)
 		sr->notif = NULL;
 		io_req_msg_cleanup(req, 0);
 	}
-	io_req_set_res(req, ret, IORING_CQE_F_MORE);
-	return IOU_COMPLETE;
+	return io_send_complete(req, ret, IORING_CQE_F_MORE);
 }
 
 void io_sendrecv_fail(struct io_kiocb *req)
