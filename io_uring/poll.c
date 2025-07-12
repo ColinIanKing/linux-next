@@ -419,6 +419,7 @@ static int io_poll_wake(struct wait_queue_entry *wait, unsigned mode, int sync,
 				req->flags &= ~REQ_F_DOUBLE_POLL;
 			else
 				req->flags &= ~REQ_F_SINGLE_POLL;
+			req->flags |= REQ_F_POLL_TRIGGERED;
 		}
 		__io_poll_execute(req, mask);
 	}
