@@ -521,6 +521,7 @@ enum {
 	REQ_F_HAS_METADATA_BIT,
 	REQ_F_IMPORT_BUFFER_BIT,
 	REQ_F_SQE_COPIED_BIT,
+	REQ_F_POLL_TRIGGERED_BIT,
 
 	/* not a real bit, just to check we're not overflowing the space */
 	__REQ_F_LAST_BIT,
@@ -612,6 +613,8 @@ enum {
 	REQ_F_IMPORT_BUFFER	= IO_REQ_FLAG(REQ_F_IMPORT_BUFFER_BIT),
 	/* ->sqe_copy() has been called, if necessary */
 	REQ_F_SQE_COPIED	= IO_REQ_FLAG(REQ_F_SQE_COPIED_BIT),
+	/* poll was triggered at least once for this request */
+	REQ_F_POLL_TRIGGERED	= IO_REQ_FLAG(REQ_F_POLL_TRIGGERED_BIT),
 };
 
 struct io_tw_req {
