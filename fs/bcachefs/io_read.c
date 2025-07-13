@@ -166,6 +166,7 @@ static noinline void promote_free(struct bch_read_bio *rbio)
 	BUG_ON(ret);
 
 	async_object_list_del(c, promote, op->list_idx);
+	async_object_list_del(c, rbio, rbio->list_idx);
 
 	bch2_data_update_exit(&op->write);
 
@@ -349,16 +350,27 @@ static struct bch_read_bio *promote_alloc(struct btree_trans *trans,
 
 	return promote;
 nopromote:
-	trace_io_read_nopromote(c, ret);
+	if (trace_io_read_nopromote_enabled()) {
+		CLASS(printbuf, buf)();
+		printbuf_indent_add_nextline(&buf, 2);
+		prt_printf(&buf, "%s\n", bch2_err_str(ret));
+		bch2_bkey_val_to_text(&buf, c, k);
+
+		trace_io_read_nopromote(c, buf.buf);
+	}
+	count_event(c, io_read_nopromote);
+
 	return NULL;
 }
 
-void bch2_promote_op_to_text(struct printbuf *out, struct promote_op *op)
+void bch2_promote_op_to_text(struct printbuf *out,
+			     struct bch_fs *c,
+			     struct promote_op *op)
 {
 	if (!op->write.read_done) {
 		prt_printf(out, "parent read: %px\n", op->write.rbio.parent);
 		printbuf_indent_add(out, 2);
-		bch2_read_bio_to_text(out, op->write.rbio.parent);
+		bch2_read_bio_to_text(out, c, op->write.rbio.parent);
 		printbuf_indent_sub(out, 2);
 	}
 
@@ -456,6 +468,10 @@ static void bch2_rbio_done(struct bch_read_bio *rbio)
 	if (rbio->start_time)
 		bch2_time_stats_update(&rbio->c->times[BCH_TIME_data_read],
 				       rbio->start_time);
+#ifdef CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS
+	if (rbio->list_idx)
+		async_object_list_del(rbio->c, rbio, rbio->list_idx);
+#endif
 	bio_endio(&rbio->bio);
 }
 
@@ -1472,18 +1488,33 @@ static const char * const bch2_read_bio_flags[] = {
 	NULL
 };
 
-void bch2_read_bio_to_text(struct printbuf *out, struct bch_read_bio *rbio)
+void bch2_read_bio_to_text(struct printbuf *out,
+			   struct bch_fs *c,
+			   struct bch_read_bio *rbio)
 {
+	if (!out->nr_tabstops)
+		printbuf_tabstop_push(out, 20);
+
+	bch2_read_err_msg(c, out, rbio, rbio->read_pos);
+	prt_newline(out);
+
+	/* Are we in a retry? */
+
+	printbuf_indent_add(out, 2);
+
 	u64 now = local_clock();
-	prt_printf(out, "start_time:\t%llu\n", rbio->start_time ? now - rbio->start_time : 0);
-	prt_printf(out, "submit_time:\t%llu\n", rbio->submit_time ? now - rbio->submit_time : 0);
+	prt_printf(out, "start_time:\t");
+	bch2_pr_time_units(out, max_t(s64, 0, now - rbio->start_time));
+	prt_newline(out);
+
+	prt_printf(out, "submit_time:\t");
+	bch2_pr_time_units(out, max_t(s64, 0, now - rbio->submit_time));
+	prt_newline(out);
 
 	if (!rbio->split)
 		prt_printf(out, "end_io:\t%ps\n", rbio->end_io);
 	else
 		prt_printf(out, "parent:\t%px\n", rbio->parent);
-
-	prt_printf(out, "bi_end_io:\t%ps\n", rbio->bio.bi_end_io);
 
 	prt_printf(out, "promote:\t%u\n",	rbio->promote);
 	prt_printf(out, "bounce:\t%u\n",	rbio->bounce);
@@ -1503,6 +1534,7 @@ void bch2_read_bio_to_text(struct printbuf *out, struct bch_read_bio *rbio)
 	prt_newline(out);
 
 	bch2_bio_to_text(out, &rbio->bio);
+	printbuf_indent_sub(out, 2);
 }
 
 void bch2_fs_io_read_exit(struct bch_fs *c)

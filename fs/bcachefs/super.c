@@ -103,9 +103,32 @@ const char * const bch2_dev_write_refs[] = {
 };
 #undef x
 
-static void __bch2_print_str(struct bch_fs *c, const char *prefix,
-			     const char *str)
+static bool should_print_loglevel(struct bch_fs *c, const char *fmt)
 {
+	unsigned loglevel_opt = c->loglevel ?: c->opts.verbose ? 7: 6;
+
+	bool have_soh = fmt[0] == KERN_SOH[0];
+	bool have_loglevel = have_soh && fmt[1] >= '0' && fmt[1] <= '9';
+
+	unsigned loglevel = have_loglevel
+		? fmt[1] - '0'
+		: c->prev_loglevel;
+
+	if (have_loglevel)
+		c->prev_loglevel = loglevel;
+
+	return loglevel <= loglevel_opt;
+}
+
+void bch2_print_str(struct bch_fs *c, const char *prefix, const char *str)
+{
+	if (!should_print_loglevel(c, prefix))
+		return;
+
+#ifndef __KERNEL__
+	prefix = "";
+#endif
+
 #ifdef __KERNEL__
 	struct stdio_redirect *stdio = bch2_fs_stdio_redirect(c);
 
@@ -114,12 +137,7 @@ static void __bch2_print_str(struct bch_fs *c, const char *prefix,
 		return;
 	}
 #endif
-	bch2_print_string_as_lines(KERN_ERR, str);
-}
-
-void bch2_print_str(struct bch_fs *c, const char *prefix, const char *str)
-{
-	__bch2_print_str(c, prefix, str);
+	bch2_print_string_as_lines(prefix, str);
 }
 
 __printf(2, 0)
@@ -149,6 +167,14 @@ void bch2_print_opts(struct bch_opts *opts, const char *fmt, ...)
 
 void __bch2_print(struct bch_fs *c, const char *fmt, ...)
 {
+	if (!should_print_loglevel(c, fmt))
+		return;
+
+#ifndef __KERNEL__
+	if (fmt[0] == KERN_SOH[0])
+		fmt += 2;
+#endif
+
 	struct stdio_redirect *stdio = bch2_fs_stdio_redirect(c);
 
 	va_list args;
@@ -585,7 +611,7 @@ static void __bch2_fs_free(struct bch_fs *c)
 	for (unsigned i = 0; i < BCH_TIME_STAT_NR; i++)
 		bch2_time_stats_exit(&c->times[i]);
 
-#ifdef CONFIG_UNICODE
+#if IS_ENABLED(CONFIG_UNICODE)
 	utf8_unload(c->cf_encoding);
 #endif
 
@@ -1024,8 +1050,8 @@ static struct bch_fs *bch2_fs_alloc(struct bch_sb *sb, struct bch_opts *opts,
 			goto err;
 	}
 
-#ifdef CONFIG_UNICODE
-	if (bch2_fs_casefold_enabled(c)) {
+#if IS_ENABLED(CONFIG_UNICODE)
+	if (!bch2_fs_casefold_enabled(c)) {
 		/* Default encoding until we can potentially have more as an option. */
 		c->cf_encoding = utf8_load(BCH_FS_DEFAULT_UTF8_ENCODING);
 		if (IS_ERR(c->cf_encoding)) {
@@ -1066,6 +1092,8 @@ static struct bch_fs *bch2_fs_alloc(struct bch_sb *sb, struct bch_opts *opts,
 
 	if (ret)
 		goto err;
+
+	c->recovery_task = current;
 out:
 	return c;
 err:
@@ -1208,7 +1236,6 @@ int bch2_fs_start(struct bch_fs *c)
 	bch2_recalc_capacity(c);
 	up_write(&c->state_lock);
 
-	c->recovery_task = current;
 	ret = BCH_SB_INITIALIZED(c->disk_sb.sb)
 		? bch2_fs_recovery(c)
 		: bch2_fs_initialize(c);
@@ -1974,21 +2001,25 @@ int bch2_dev_add(struct bch_fs *c, const char *path)
 	ca->disk_sb.sb->dev_idx	= dev_idx;
 	bch2_dev_attach(c, ca, dev_idx);
 
+	set_bit(ca->dev_idx, c->online_devs.d);
+
 	if (BCH_MEMBER_GROUP(&dev_mi)) {
 		ret = __bch2_dev_group_set(c, ca, label.buf);
 		bch_err_msg(c, ret, "creating new label");
-		if (ret)
-			goto err_unlock;
+		if (ret) {
+			mutex_unlock(&c->sb_lock);
+			goto err_late;
+		}
 	}
 
 	bch2_write_super(c);
 	mutex_unlock(&c->sb_lock);
 
-	if (test_bit(BCH_FS_started, &c->flags)) {
-		ret = bch2_dev_usage_init(ca, false);
-		if (ret)
-			goto err_late;
+	ret = bch2_dev_usage_init(ca, false);
+	if (ret)
+		goto err_late;
 
+	if (test_bit(BCH_FS_started, &c->flags)) {
 		ret = bch2_trans_mark_dev_sb(c, ca, BTREE_TRIGGER_transactional);
 		bch_err_msg(ca, ret, "marking new superblock");
 		if (ret)
@@ -2526,6 +2557,8 @@ static int bch2_param_get_static_key_t(char *buffer, const struct kernel_param *
 	return sprintf(buffer, "%c\n", static_key_enabled(key) ? 'N' : 'Y');
 }
 
+/* this is unused in userspace - silence the warning */
+__maybe_unused
 static const struct kernel_param_ops bch2_param_ops_static_key_t = {
 	.flags = KERNEL_PARAM_OPS_FL_NOARG,
 	.set = bch2_param_set_static_key_t,

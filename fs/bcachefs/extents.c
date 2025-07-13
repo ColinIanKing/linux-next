@@ -1023,6 +1023,18 @@ bool bch2_bkey_has_target(struct bch_fs *c, struct bkey_s_c k, unsigned target)
 	return false;
 }
 
+bool bch2_bkey_in_target(struct bch_fs *c, struct bkey_s_c k, unsigned target)
+{
+	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
+
+	guard(rcu)();
+	bkey_for_each_ptr(ptrs, ptr)
+		if (!bch2_dev_in_target(c, ptr->dev, target))
+			return false;
+
+	return true;
+}
+
 bool bch2_bkey_matches_ptr(struct bch_fs *c, struct bkey_s_c k,
 			   struct bch_extent_ptr m, u64 offset)
 {
@@ -1512,7 +1524,7 @@ int bch2_bkey_ptrs_validate(struct bch_fs *c, struct bkey_s_c k,
 			const struct bch_extent_rebalance *r = &entry->rebalance;
 
 			if (!bch2_compression_opt_valid(r->compression)) {
-				struct bch_compression_opt opt = __bch2_compression_decode(r->compression);
+				union bch_compression_opt opt = { .value = r->compression };
 				prt_printf(err, "invalid compression opt %u:%u",
 					   opt.type, opt.level);
 				return bch_err_throw(c, invalid_bkey);
