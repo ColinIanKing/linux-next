@@ -407,6 +407,7 @@ struct damos *damon_new_scheme(struct damos_access_pattern *pattern,
 	scheme->wmarks = *wmarks;
 	scheme->wmarks.activated = true;
 
+	scheme->migrate_dests = (struct damos_migrate_dests){};
 	scheme->target_nid = target_nid;
 
 	return scheme;
@@ -449,6 +450,9 @@ void damon_destroy_scheme(struct damos *s)
 
 	damos_for_each_filter_safe(f, next, s)
 		damos_destroy_filter(f);
+
+	kfree(s->migrate_dests.node_id_arr);
+	kfree(s->migrate_dests.weight_arr);
 	damon_del_scheme(s);
 	damon_free_scheme(s);
 }
@@ -939,6 +943,41 @@ static void damos_set_filters_default_reject(struct damos *s)
 		damos_filters_default_reject(&s->ops_filters);
 }
 
+static int damos_commit_dests(struct damos *dst, struct damos *src)
+{
+	struct damos_migrate_dests *dst_dests, *src_dests;
+
+	dst_dests = &dst->migrate_dests;
+	src_dests = &src->migrate_dests;
+
+	if (dst_dests->nr_dests != src_dests->nr_dests) {
+		kfree(dst_dests->node_id_arr);
+		kfree(dst_dests->weight_arr);
+
+		dst_dests->node_id_arr = kmalloc_array(src_dests->nr_dests,
+			sizeof(*dst_dests->node_id_arr), GFP_KERNEL);
+		if (!dst_dests->node_id_arr) {
+			dst_dests->weight_arr = NULL;
+			return -ENOMEM;
+		}
+
+		dst_dests->weight_arr = kmalloc_array(src_dests->nr_dests,
+			sizeof(*dst_dests->weight_arr), GFP_KERNEL);
+		if (!dst_dests->weight_arr) {
+			/* ->node_id_arr will be freed by scheme destruction */
+			return -ENOMEM;
+		}
+	}
+
+	dst_dests->nr_dests = src_dests->nr_dests;
+	for (int i = 0; i < src_dests->nr_dests; i++) {
+		dst_dests->node_id_arr[i] = src_dests->node_id_arr[i];
+		dst_dests->weight_arr[i] = src_dests->weight_arr[i];
+	}
+
+	return 0;
+}
+
 static int damos_commit_filters(struct damos *dst, struct damos *src)
 {
 	int err;
@@ -978,6 +1017,11 @@ static int damos_commit(struct damos *dst, struct damos *src)
 		return err;
 
 	dst->wmarks = src->wmarks;
+	dst->target_nid = src->target_nid;
+
+	err = damos_commit_dests(dst, src);
+	if (err)
+		return err;
 
 	err = damos_commit_filters(dst, src);
 	return err;
@@ -1311,7 +1355,13 @@ int damon_stop(struct damon_ctx **ctxs, int nr_ctxs)
 	return err;
 }
 
-static bool damon_is_running(struct damon_ctx *ctx)
+/**
+ * damon_is_running() - Returns if a given DAMON context is running.
+ * @ctx:	The DAMON context to see if running.
+ *
+ * Return: true if @ctx is running, false otherwise.
+ */
+bool damon_is_running(struct damon_ctx *ctx)
 {
 	bool running;
 
@@ -1490,6 +1540,7 @@ static void kdamond_tune_intervals(struct damon_ctx *c)
 			new_attrs.sample_interval);
 	new_attrs.aggr_interval = new_attrs.sample_interval *
 		c->attrs.aggr_samples;
+	trace_damon_monitor_intervals_tune(new_attrs.sample_interval);
 	damon_set_attrs(c, &new_attrs);
 }
 
@@ -2010,12 +2061,26 @@ static void damos_set_effective_quota(struct damos_quota *quota)
 	quota->esz = esz;
 }
 
+static void damos_trace_esz(struct damon_ctx *c, struct damos *s,
+		struct damos_quota *quota)
+{
+	unsigned int cidx = 0, sidx = 0;
+	struct damos *siter;
+
+	damon_for_each_scheme(siter, c) {
+		if (siter == s)
+			break;
+		sidx++;
+	}
+	trace_damos_esz(cidx, sidx, quota->esz);
+}
+
 static void damos_adjust_quota(struct damon_ctx *c, struct damos *s)
 {
 	struct damos_quota *quota = &s->quota;
 	struct damon_target *t;
 	struct damon_region *r;
-	unsigned long cumulated_sz;
+	unsigned long cumulated_sz, cached_esz;
 	unsigned int score, max_score = 0;
 
 	if (!quota->ms && !quota->sz && list_empty(&quota->goals))
@@ -2029,7 +2094,11 @@ static void damos_adjust_quota(struct damon_ctx *c, struct damos *s)
 		quota->total_charged_sz += quota->charged_sz;
 		quota->charged_from = jiffies;
 		quota->charged_sz = 0;
+		if (trace_damos_esz_enabled())
+			cached_esz = quota->esz;
 		damos_set_effective_quota(quota);
+		if (trace_damos_esz_enabled() && quota->esz != cached_esz)
+			damos_trace_esz(c, s, quota);
 	}
 
 	if (!c->ops.get_scheme_score)

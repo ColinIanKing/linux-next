@@ -415,7 +415,7 @@ extern unsigned long try_to_free_pages(struct zonelist *zonelist, int order,
 #define MIN_SWAPPINESS 0
 #define MAX_SWAPPINESS 200
 
-/* Just recliam from anon folios in proactive memory reclaim */
+/* Just reclaim from anon folios in proactive memory reclaim */
 #define SWAPPINESS_ANON_ONLY (MAX_SWAPPINESS + 1)
 
 extern unsigned long try_to_free_mem_cgroup_pages(struct mem_cgroup *memcg,
@@ -430,6 +430,22 @@ extern unsigned long mem_cgroup_shrink_node(struct mem_cgroup *mem,
 extern unsigned long shrink_all_memory(unsigned long nr_pages);
 extern int vm_swappiness;
 long remove_mapping(struct address_space *mapping, struct folio *folio);
+
+#if defined(CONFIG_SYSFS) && defined(CONFIG_NUMA)
+extern int reclaim_register_node(struct node *node);
+extern void reclaim_unregister_node(struct node *node);
+
+#else
+
+static inline int reclaim_register_node(struct node *node)
+{
+	return 0;
+}
+
+static inline void reclaim_unregister_node(struct node *node)
+{
+}
+#endif /* CONFIG_SYSFS && CONFIG_NUMA */
 
 #ifdef CONFIG_NUMA
 extern int sysctl_min_unmapped_ratio;

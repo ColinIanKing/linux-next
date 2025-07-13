@@ -2167,13 +2167,13 @@ static inline int folio_expected_ref_count(const struct folio *folio)
 	const int order = folio_order(folio);
 	int ref_count = 0;
 
-	if (WARN_ON_ONCE(folio_test_slab(folio)))
+	if (WARN_ON_ONCE(page_has_type(&folio->page) && !folio_test_hugetlb(folio)))
 		return 0;
 
 	if (folio_test_anon(folio)) {
 		/* One reference per page from the swapcache. */
 		ref_count += folio_test_swapcache(folio) << order;
-	} else if (!((unsigned long)folio->mapping & PAGE_MAPPING_FLAGS)) {
+	} else {
 		/* One reference per page from the pagecache. */
 		ref_count += !!folio->mapping << order;
 		/* One reference from PG_private. */
@@ -4059,14 +4059,14 @@ unsigned long wp_shared_mapping_range(struct address_space *mapping,
 #endif
 
 #ifdef CONFIG_ANON_VMA_NAME
-int madvise_set_anon_name(struct mm_struct *mm, unsigned long start,
-			  unsigned long len_in,
-			  struct anon_vma_name *anon_name);
+int set_anon_vma_name(unsigned long addr, unsigned long size,
+		      const char __user *uname);
 #else
-static inline int
-madvise_set_anon_name(struct mm_struct *mm, unsigned long start,
-		      unsigned long len_in, struct anon_vma_name *anon_name) {
-	return 0;
+static inline
+int set_anon_vma_name(unsigned long addr, unsigned long size,
+		      const char __user *uname)
+{
+	return -EINVAL;
 }
 #endif
 
