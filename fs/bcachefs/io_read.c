@@ -45,36 +45,71 @@ MODULE_PARM_DESC(poison_extents_on_checksum_error,
 
 #ifndef CONFIG_BCACHEFS_NO_LATENCY_ACCT
 
+static inline u32 bch2_dev_congested_read(struct bch_dev *ca, u64 now)
+{
+	s64 congested = atomic_read(&ca->congested);
+	u64 last = READ_ONCE(ca->congested_last);
+	if (time_after64(now, last))
+		congested -= (now - last) >> 12;
+
+	return clamp(congested, 0LL, CONGESTED_MAX);
+}
+
 static bool bch2_target_congested(struct bch_fs *c, u16 target)
 {
 	const struct bch_devs_mask *devs;
 	unsigned d, nr = 0, total = 0;
-	u64 now = local_clock(), last;
-	s64 congested;
-	struct bch_dev *ca;
-
-	if (!target)
-		return false;
+	u64 now = local_clock();
 
 	guard(rcu)();
 	devs = bch2_target_to_mask(c, target) ?:
 		&c->rw_devs[BCH_DATA_user];
 
 	for_each_set_bit(d, devs->d, BCH_SB_MEMBERS_MAX) {
-		ca = rcu_dereference(c->devs[d]);
+		struct bch_dev *ca = rcu_dereference(c->devs[d]);
 		if (!ca)
 			continue;
 
-		congested = atomic_read(&ca->congested);
-		last = READ_ONCE(ca->congested_last);
-		if (time_after64(now, last))
-			congested -= (now - last) >> 12;
-
-		total += max(congested, 0LL);
+		total += bch2_dev_congested_read(ca, now);
 		nr++;
 	}
 
 	return get_random_u32_below(nr * CONGESTED_MAX) < total;
+}
+
+void bch2_dev_congested_to_text(struct printbuf *out, struct bch_dev *ca)
+{
+	printbuf_tabstop_push(out, 32);
+
+	prt_printf(out, "current:\t%u%%\n",
+		   bch2_dev_congested_read(ca, local_clock()) *
+		   100 / CONGESTED_MAX);
+
+	prt_printf(out, "raw:\t%i/%u\n", atomic_read(&ca->congested), CONGESTED_MAX);
+
+	prt_printf(out, "last io over threshold:\t");
+	bch2_pr_time_units(out, local_clock() - ca->congested_last);
+	prt_newline(out);
+
+	prt_printf(out, "read latency threshold:\t");
+	bch2_pr_time_units(out,
+			   ca->io_latency[READ].quantiles.entries[QUANTILE_IDX(1)].m << 2);
+	prt_newline(out);
+
+	prt_printf(out, "median read latency:\t");
+	bch2_pr_time_units(out,
+			   ca->io_latency[READ].quantiles.entries[QUANTILE_IDX(7)].m);
+	prt_newline(out);
+
+	prt_printf(out, "write latency threshold:\t");
+	bch2_pr_time_units(out,
+			   ca->io_latency[WRITE].quantiles.entries[QUANTILE_IDX(1)].m << 3);
+	prt_newline(out);
+
+	prt_printf(out, "median write latency:\t");
+	bch2_pr_time_units(out,
+			   ca->io_latency[WRITE].quantiles.entries[QUANTILE_IDX(7)].m);
+	prt_newline(out);
 }
 
 #else
@@ -136,22 +171,32 @@ static inline int should_promote(struct bch_fs *c, struct bkey_s_c k,
 	if (!have_io_error(failed)) {
 		BUG_ON(!opts.promote_target);
 
-		if (!(flags & BCH_READ_may_promote))
+		if (!(flags & BCH_READ_may_promote)) {
+			count_event(c, io_read_nopromote_may_not);
 			return bch_err_throw(c, nopromote_may_not);
+		}
 
-		if (bch2_bkey_has_target(c, k, opts.promote_target))
+		if (bch2_bkey_has_target(c, k, opts.promote_target)) {
+			count_event(c, io_read_nopromote_already_promoted);
 			return bch_err_throw(c, nopromote_already_promoted);
+		}
 
-		if (bkey_extent_is_unwritten(k))
+		if (bkey_extent_is_unwritten(k)) {
+			count_event(c, io_read_nopromote_unwritten);
 			return bch_err_throw(c, nopromote_unwritten);
+		}
 
-		if (bch2_target_congested(c, opts.promote_target))
+		if (bch2_target_congested(c, opts.promote_target)) {
+			count_event(c, io_read_nopromote_congested);
 			return bch_err_throw(c, nopromote_congested);
+		}
 	}
 
 	if (rhashtable_lookup_fast(&c->promote_table, &pos,
-				   bch_promote_params))
+				   bch_promote_params)) {
+		count_event(c, io_read_nopromote_in_flight);
 		return bch_err_throw(c, nopromote_in_flight);
+	}
 
 	return 0;
 }
@@ -166,6 +211,7 @@ static noinline void promote_free(struct bch_read_bio *rbio)
 	BUG_ON(ret);
 
 	async_object_list_del(c, promote, op->list_idx);
+	async_object_list_del(c, rbio, rbio->list_idx);
 
 	bch2_data_update_exit(&op->write);
 
@@ -349,16 +395,27 @@ static struct bch_read_bio *promote_alloc(struct btree_trans *trans,
 
 	return promote;
 nopromote:
-	trace_io_read_nopromote(c, ret);
+	if (trace_io_read_nopromote_enabled()) {
+		CLASS(printbuf, buf)();
+		printbuf_indent_add_nextline(&buf, 2);
+		prt_printf(&buf, "%s\n", bch2_err_str(ret));
+		bch2_bkey_val_to_text(&buf, c, k);
+
+		trace_io_read_nopromote(c, buf.buf);
+	}
+	count_event(c, io_read_nopromote);
+
 	return NULL;
 }
 
-void bch2_promote_op_to_text(struct printbuf *out, struct promote_op *op)
+void bch2_promote_op_to_text(struct printbuf *out,
+			     struct bch_fs *c,
+			     struct promote_op *op)
 {
 	if (!op->write.read_done) {
 		prt_printf(out, "parent read: %px\n", op->write.rbio.parent);
 		printbuf_indent_add(out, 2);
-		bch2_read_bio_to_text(out, op->write.rbio.parent);
+		bch2_read_bio_to_text(out, c, op->write.rbio.parent);
 		printbuf_indent_sub(out, 2);
 	}
 
@@ -456,6 +513,10 @@ static void bch2_rbio_done(struct bch_read_bio *rbio)
 	if (rbio->start_time)
 		bch2_time_stats_update(&rbio->c->times[BCH_TIME_data_read],
 				       rbio->start_time);
+#ifdef CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS
+	if (rbio->list_idx)
+		async_object_list_del(rbio->c, rbio, rbio->list_idx);
+#endif
 	bio_endio(&rbio->bio);
 }
 
@@ -1472,18 +1533,33 @@ static const char * const bch2_read_bio_flags[] = {
 	NULL
 };
 
-void bch2_read_bio_to_text(struct printbuf *out, struct bch_read_bio *rbio)
+void bch2_read_bio_to_text(struct printbuf *out,
+			   struct bch_fs *c,
+			   struct bch_read_bio *rbio)
 {
+	if (!out->nr_tabstops)
+		printbuf_tabstop_push(out, 20);
+
+	bch2_read_err_msg(c, out, rbio, rbio->read_pos);
+	prt_newline(out);
+
+	/* Are we in a retry? */
+
+	printbuf_indent_add(out, 2);
+
 	u64 now = local_clock();
-	prt_printf(out, "start_time:\t%llu\n", rbio->start_time ? now - rbio->start_time : 0);
-	prt_printf(out, "submit_time:\t%llu\n", rbio->submit_time ? now - rbio->submit_time : 0);
+	prt_printf(out, "start_time:\t");
+	bch2_pr_time_units(out, max_t(s64, 0, now - rbio->start_time));
+	prt_newline(out);
+
+	prt_printf(out, "submit_time:\t");
+	bch2_pr_time_units(out, max_t(s64, 0, now - rbio->submit_time));
+	prt_newline(out);
 
 	if (!rbio->split)
 		prt_printf(out, "end_io:\t%ps\n", rbio->end_io);
 	else
 		prt_printf(out, "parent:\t%px\n", rbio->parent);
-
-	prt_printf(out, "bi_end_io:\t%ps\n", rbio->bio.bi_end_io);
 
 	prt_printf(out, "promote:\t%u\n",	rbio->promote);
 	prt_printf(out, "bounce:\t%u\n",	rbio->bounce);
@@ -1503,6 +1579,7 @@ void bch2_read_bio_to_text(struct printbuf *out, struct bch_read_bio *rbio)
 	prt_newline(out);
 
 	bch2_bio_to_text(out, &rbio->bio);
+	printbuf_indent_sub(out, 2);
 }
 
 void bch2_fs_io_read_exit(struct bch_fs *c)
