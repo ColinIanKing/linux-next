@@ -675,7 +675,7 @@ void bch2_data_update_inflight_to_text(struct printbuf *out, struct data_update 
 	if (!m->read_done) {
 		prt_printf(out, "read:\n");
 		printbuf_indent_add(out, 2);
-		bch2_read_bio_to_text(out, &m->rbio);
+		bch2_read_bio_to_text(out, m->op.c, &m->rbio);
 	} else {
 		prt_printf(out, "write:\n");
 		printbuf_indent_add(out, 2);
@@ -783,6 +783,9 @@ static int can_write_extent(struct bch_fs *c, struct data_update *m)
 	darray_for_each(m->op.devs_have, i)
 		__clear_bit(*i, devs.d);
 
+	CLASS(printbuf, buf)();
+	buf.atomic++;
+
 	guard(rcu)();
 
 	unsigned nr_replicas = 0, i;
@@ -794,7 +797,11 @@ static int can_write_extent(struct bch_fs *c, struct data_update *m)
 		struct bch_dev_usage usage;
 		bch2_dev_usage_read_fast(ca, &usage);
 
-		if (!dev_buckets_free(ca, usage, m->op.watermark))
+		u64 nr_free = dev_buckets_free(ca, usage, m->op.watermark);
+
+		prt_printf(&buf, "%s=%llu ", ca->name, nr_free);
+
+		if (!nr_free)
 			continue;
 
 		nr_replicas += ca->mi.durability;
@@ -802,8 +809,10 @@ static int can_write_extent(struct bch_fs *c, struct data_update *m)
 			break;
 	}
 
-	if (!nr_replicas)
+	if (!nr_replicas) {
+		trace_data_update_done_no_rw_devs(c, buf.buf);
 		return bch_err_throw(c, data_update_done_no_rw_devs);
+	}
 	if (nr_replicas < m->op.nr_replicas)
 		return bch_err_throw(c, insufficient_devices);
 	return 0;

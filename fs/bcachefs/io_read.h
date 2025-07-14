@@ -147,7 +147,7 @@ static inline void bch2_read_extent(struct btree_trans *trans,
 	int ret = __bch2_read_extent(trans, rbio, rbio->bio.bi_iter, read_pos,
 				     data_btree, k, offset_into_extent, NULL, flags, -1);
 	/* __bch2_read_extent only returns errors if BCH_READ_in_retry is set */
-	WARN(ret, "unhandled error from __bch2_read_extent()");
+	WARN(ret, "unhandled error from __bch2_read_extent(): %s", bch2_err_str(ret));
 }
 
 int __bch2_read(struct btree_trans *, struct bch_read_bio *, struct bvec_iter,
@@ -207,8 +207,8 @@ static inline struct bch_read_bio *rbio_init(struct bio *bio,
 }
 
 struct promote_op;
-void bch2_promote_op_to_text(struct printbuf *, struct promote_op *);
-void bch2_read_bio_to_text(struct printbuf *, struct bch_read_bio *);
+void bch2_promote_op_to_text(struct printbuf *, struct bch_fs *, struct promote_op *);
+void bch2_read_bio_to_text(struct printbuf *, struct bch_fs *, struct bch_read_bio *);
 
 void bch2_fs_io_read_exit(struct bch_fs *);
 int bch2_fs_io_read_init(struct bch_fs *);
