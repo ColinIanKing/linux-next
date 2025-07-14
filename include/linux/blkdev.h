@@ -116,10 +116,11 @@ enum blk_integrity_checksum {
 struct blk_integrity {
 	unsigned char				flags;
 	enum blk_integrity_checksum		csum_type;
-	unsigned char				tuple_size;
+	unsigned char				metadata_size;
 	unsigned char				pi_offset;
 	unsigned char				interval_exp;
 	unsigned char				tag_size;
+	unsigned char				pi_tuple_size;
 };
 
 typedef unsigned int __bitwise blk_mode_t;
@@ -388,6 +389,9 @@ struct queue_limits {
 	unsigned int		max_user_discard_sectors;
 	unsigned int		max_secure_erase_sectors;
 	unsigned int		max_write_zeroes_sectors;
+	unsigned int		max_wzeroes_unmap_sectors;
+	unsigned int		max_hw_wzeroes_unmap_sectors;
+	unsigned int		max_user_wzeroes_unmap_sectors;
 	unsigned int		max_hw_zone_append_sectors;
 	unsigned int		max_zone_append_sectors;
 	unsigned int		discard_granularity;
@@ -1047,6 +1051,7 @@ static inline void blk_queue_disable_secure_erase(struct request_queue *q)
 static inline void blk_queue_disable_write_zeroes(struct request_queue *q)
 {
 	q->limits.max_write_zeroes_sectors = 0;
+	q->limits.max_wzeroes_unmap_sectors = 0;
 }
 
 /*
@@ -1381,6 +1386,12 @@ bdev_max_secure_erase_sectors(struct block_device *bdev)
 static inline unsigned int bdev_write_zeroes_sectors(struct block_device *bdev)
 {
 	return bdev_limits(bdev)->max_write_zeroes_sectors;
+}
+
+static inline unsigned int
+bdev_write_zeroes_unmap_sectors(struct block_device *bdev)
+{
+	return bdev_limits(bdev)->max_wzeroes_unmap_sectors;
 }
 
 static inline bool bdev_nonrot(struct block_device *bdev)
