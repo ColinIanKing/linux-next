@@ -161,8 +161,8 @@ static int madvise_update_vma(vm_flags_t new_flags,
 		return 0;
 
 	if (set_new_anon_name)
-		vma = vma_modify_flags_name(&vmi, madv_behavior->prev, vma,
-			range->start, range->end, new_flags, anon_name);
+		vma = vma_modify_name(&vmi, madv_behavior->prev, vma,
+			range->start, range->end, anon_name);
 	else
 		vma = vma_modify_flags(&vmi, madv_behavior->prev, vma,
 			range->start, range->end, new_flags);
