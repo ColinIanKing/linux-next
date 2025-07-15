@@ -513,11 +513,11 @@ static int __bch2_fs_read_write(struct bch_fs *c, bool early)
 
 	ret = bch2_fs_init_rw(c);
 	if (ret)
-		goto err;
+		return ret;
 
 	ret = bch2_sb_members_v2_init(c);
 	if (ret)
-		goto err;
+		return ret;
 
 	clear_bit(BCH_FS_clean_shutdown, &c->flags);
 
@@ -544,7 +544,12 @@ static int __bch2_fs_read_write(struct bch_fs *c, bool early)
 
 	ret = bch2_fs_mark_dirty(c);
 	if (ret)
-		goto err;
+		return ret;
+
+	/*
+	 * Don't jump to our error path, and call bch2_fs_read_only(), unless we
+	 * successfully marked the filesystem dirty
+	 */
 
 	ret = bch2_journal_reclaim_start(&c->journal);
 	if (ret)
