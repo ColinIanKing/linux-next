@@ -80,6 +80,7 @@ xe-y += xe_bb.o \
 	xe_mmio.o \
 	xe_mocs.o \
 	xe_module.o \
+	xe_nvm.o \
 	xe_oa.o \
 	xe_observation.o \
 	xe_pat.o \
@@ -124,6 +125,7 @@ xe-y += xe_bb.o \
 	xe_wait_user_fence.o \
 	xe_wopcm.o
 
+xe-$(CONFIG_I2C)	+= xe_i2c.o
 xe-$(CONFIG_HMM_MIRROR) += xe_hmm.o
 xe-$(CONFIG_DRM_XE_GPUSVM) += xe_svm.o
 
@@ -139,7 +141,8 @@ xe-y += \
 	xe_guc_relay.o \
 	xe_memirq.o \
 	xe_sriov.o \
-	xe_sriov_vf.o
+	xe_sriov_vf.o \
+	xe_tile_sriov_vf.o
 
 xe-$(CONFIG_PCI_IOV) += \
 	xe_gt_sriov_pf.o \
@@ -204,7 +207,6 @@ xe-$(CONFIG_DRM_XE_DISPLAY) += \
 	i915-display/icl_dsi.o \
 	i915-display/intel_alpm.o \
 	i915-display/intel_atomic.o \
-	i915-display/intel_atomic_plane.o \
 	i915-display/intel_audio.o \
 	i915-display/intel_backlight.o \
 	i915-display/intel_bios.o \
@@ -254,6 +256,7 @@ xe-$(CONFIG_DRM_XE_DISPLAY) += \
 	i915-display/intel_fbc.o \
 	i915-display/intel_fdi.o \
 	i915-display/intel_fifo_underrun.o \
+	i915-display/intel_flipq.o \
 	i915-display/intel_frontbuffer.o \
 	i915-display/intel_global_state.o \
 	i915-display/intel_gmbus.o \
@@ -270,6 +273,7 @@ xe-$(CONFIG_DRM_XE_DISPLAY) += \
 	i915-display/intel_modeset_verify.o \
 	i915-display/intel_panel.o \
 	i915-display/intel_pfit.o \
+	i915-display/intel_plane.o \
 	i915-display/intel_pmdemand.o \
 	i915-display/intel_pch.o \
 	i915-display/intel_pps.o \

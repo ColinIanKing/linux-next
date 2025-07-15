@@ -80,7 +80,7 @@ static struct xe_lmtt_pt *lmtt_pt_alloc(struct xe_lmtt *lmtt, unsigned int level
 	lmtt_assert(lmtt, xe_bo_is_vram(bo));
 	lmtt_debug(lmtt, "level=%u addr=%#llx\n", level, (u64)xe_bo_main_addr(bo, XE_PAGE_SIZE));
 
-	xe_map_memset(lmtt_to_xe(lmtt), &bo->vmap, 0, 0, bo->size);
+	xe_map_memset(lmtt_to_xe(lmtt), &bo->vmap, 0, 0, xe_bo_size(bo));
 
 	pt->level = level;
 	pt->bo = bo;
@@ -397,11 +397,11 @@ static void lmtt_insert_bo(struct xe_lmtt *lmtt, unsigned int vfid, struct xe_bo
 	u64 addr, vram_offset;
 
 	lmtt_assert(lmtt, IS_ALIGNED(start, page_size));
-	lmtt_assert(lmtt, IS_ALIGNED(bo->size, page_size));
+	lmtt_assert(lmtt, IS_ALIGNED(xe_bo_size(bo), page_size));
 	lmtt_assert(lmtt, xe_bo_is_vram(bo));
 
 	vram_offset = vram_region_gpu_offset(bo->ttm.resource);
-	xe_res_first(bo->ttm.resource, 0, bo->size, &cur);
+	xe_res_first(bo->ttm.resource, 0, xe_bo_size(bo), &cur);
 	while (cur.remaining) {
 		addr = xe_res_dma(&cur);
 		addr += vram_offset; /* XXX */
