@@ -259,13 +259,6 @@ void lru_note_cost_unlock_irq(struct lruvec *lruvec, bool file,
 	for (;;) {
 		unsigned long lrusize;
 
-		/*
-		 * Hold lruvec->lru_lock is safe here, since
-		 * 1) The pinned lruvec in reclaim, or
-		 * 2) From a pre-LRU page during refault (which also holds the
-		 *    rcu lock, so would be safe even if the page was on the LRU
-		 *    and could move simultaneously to a new lruvec).
-		 */
 		/* Record cost event */
 		if (file)
 			lruvec->file_cost += cost;
