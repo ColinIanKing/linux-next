@@ -1147,16 +1147,14 @@ static int bch2_set_nr_journal_buckets_iter(struct bch_dev *ca, unsigned nr,
 		if (ret)
 			break;
 
-		if (!new_fs) {
-			ret = bch2_trans_run(c,
-				bch2_trans_mark_metadata_bucket(trans, ca,
-						ob[nr_got]->bucket, BCH_DATA_journal,
-						ca->mi.bucket_size, BTREE_TRIGGER_transactional));
-			if (ret) {
-				bch2_open_bucket_put(c, ob[nr_got]);
-				bch_err_msg(c, ret, "marking new journal buckets");
-				break;
-			}
+		ret = bch2_trans_run(c,
+			bch2_trans_mark_metadata_bucket(trans, ca,
+					ob[nr_got]->bucket, BCH_DATA_journal,
+					ca->mi.bucket_size, BTREE_TRIGGER_transactional));
+		if (ret) {
+			bch2_open_bucket_put(c, ob[nr_got]);
+			bch_err_msg(c, ret, "marking new journal buckets");
+			break;
 		}
 
 		bu[nr_got] = ob[nr_got]->bucket;
@@ -1226,7 +1224,7 @@ err_unblock:
 		mutex_unlock(&c->sb_lock);
 	}
 
-	if (ret && !new_fs)
+	if (ret)
 		for (i = 0; i < nr_got; i++)
 			bch2_trans_run(c,
 				bch2_trans_mark_metadata_bucket(trans, ca,
@@ -1589,7 +1587,7 @@ void bch2_dev_journal_exit(struct bch_dev *ca)
 	struct journal_device *ja = &ca->journal;
 
 	for (unsigned i = 0; i < ARRAY_SIZE(ja->bio); i++) {
-		kfree(ja->bio[i]);
+		kvfree(ja->bio[i]);
 		ja->bio[i] = NULL;
 	}
 
@@ -1626,7 +1624,16 @@ int bch2_dev_journal_init(struct bch_dev *ca, struct bch_sb *sb)
 	unsigned nr_bvecs = DIV_ROUND_UP(JOURNAL_ENTRY_SIZE_MAX, PAGE_SIZE);
 
 	for (unsigned i = 0; i < ARRAY_SIZE(ja->bio); i++) {
-		ja->bio[i] = kzalloc(struct_size(ja->bio[i], bio.bi_inline_vecs,
+		/*
+		 * kvzalloc() is not what we want to be using here:
+		 * JOURNAL_ENTRY_SIZE_MAX is probably quite a bit bigger than it
+		 * needs to be.
+		 *
+		 * But changing that will require performance testing -
+		 * performance can be sensitive to anything that affects journal
+		 * pipelining.
+		 */
+		ja->bio[i] = kvzalloc(struct_size(ja->bio[i], bio.bi_inline_vecs,
 				     nr_bvecs), GFP_KERNEL);
 		if (!ja->bio[i])
 			return bch_err_throw(c, ENOMEM_dev_journal_init);

@@ -1188,36 +1188,17 @@ int bch2_fs_initialize(struct bch_fs *c)
 	for_each_member_device(c, ca) {
 		m = bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx);
 		SET_BCH_MEMBER_FREESPACE_INITIALIZED(m, false);
-		ca->mi = bch2_mi_to_cpu(m);
 	}
+
+	bch2_sb_members_to_cpu(c);
 
 	bch2_write_super(c);
 	mutex_unlock(&c->sb_lock);
 
 	set_bit(BCH_FS_btree_running, &c->flags);
-	set_bit(BCH_FS_may_go_rw, &c->flags);
 
 	for (unsigned i = 0; i < BTREE_ID_NR; i++)
 		bch2_btree_root_alloc_fake(c, i, 0);
-
-	ret = bch2_fs_journal_alloc(c);
-	if (ret)
-		goto err;
-
-	/*
-	 * journal_res_get() will crash if called before this has
-	 * set up the journal.pin FIFO and journal.cur pointer:
-	 */
-	ret = bch2_fs_journal_start(&c->journal, 1, 1);
-	if (ret)
-		goto err;
-
-	ret = bch2_fs_read_write_early(c);
-	if (ret)
-		goto err;
-
-	set_bit(BCH_FS_accounting_replay_done, &c->flags);
-	bch2_journal_set_replay_done(&c->journal);
 
 	for_each_member_device(c, ca) {
 		ret = bch2_dev_usage_init(ca, false);
@@ -1234,6 +1215,27 @@ int bch2_fs_initialize(struct bch_fs *c)
 	bch_verbose(c, "marking superblocks");
 	ret = bch2_trans_mark_dev_sbs(c);
 	bch_err_msg(c, ret, "marking superblocks");
+	if (ret)
+		goto err;
+
+	ret = bch2_fs_journal_alloc(c);
+	if (ret)
+		goto err;
+
+	/*
+	 * journal_res_get() will crash if called before this has
+	 * set up the journal.pin FIFO and journal.cur pointer:
+	 */
+	ret = bch2_fs_journal_start(&c->journal, 1, 1);
+	if (ret)
+		goto err;
+
+	set_bit(BCH_FS_may_go_rw, &c->flags);
+	ret = bch2_fs_read_write_early(c);
+	if (ret)
+		goto err;
+
+	ret = bch2_journal_replay(c);
 	if (ret)
 		goto err;
 

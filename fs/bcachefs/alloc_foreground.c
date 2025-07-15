@@ -269,7 +269,7 @@ static struct open_bucket *try_alloc_bucket(struct btree_trans *trans,
 		return NULL;
 
 	u8 gen;
-	int ret = bch2_check_discard_freespace_key(trans, freespace_iter, &gen, true);
+	int ret = bch2_check_discard_freespace_key_async(trans, freespace_iter, &gen);
 	if (ret < 0)
 		return ERR_PTR(ret);
 	if (ret)
@@ -511,7 +511,8 @@ again:
 	bch2_dev_usage_read_fast(ca, &req->usage);
 	avail = dev_buckets_free(ca, req->usage, req->watermark);
 
-	if (req->usage.buckets[BCH_DATA_need_discard] > avail)
+	if (req->usage.buckets[BCH_DATA_need_discard] >
+	    min(avail, ca->mi.nbuckets >> 7))
 		bch2_dev_do_discards(ca);
 
 	if (req->usage.buckets[BCH_DATA_need_gc_gens] > avail)

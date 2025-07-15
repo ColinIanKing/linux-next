@@ -21,7 +21,7 @@ static const struct min_heap_callbacks callbacks = {
 
 void bch2_io_timer_add(struct io_clock *clock, struct io_timer *timer)
 {
-	spin_lock(&clock->timer_lock);
+	guard(spinlock)(&clock->timer_lock);
 
 	if (time_after_eq64((u64) atomic64_read(&clock->now), timer->expire)) {
 		spin_unlock(&clock->timer_lock);
@@ -31,24 +31,20 @@ void bch2_io_timer_add(struct io_clock *clock, struct io_timer *timer)
 
 	for (size_t i = 0; i < clock->timers.nr; i++)
 		if (clock->timers.data[i] == timer)
-			goto out;
+			return;
 
 	BUG_ON(!min_heap_push(&clock->timers, &timer, &callbacks, NULL));
-out:
-	spin_unlock(&clock->timer_lock);
 }
 
 void bch2_io_timer_del(struct io_clock *clock, struct io_timer *timer)
 {
-	spin_lock(&clock->timer_lock);
+	guard(spinlock)(&clock->timer_lock);
 
 	for (size_t i = 0; i < clock->timers.nr; i++)
 		if (clock->timers.data[i] == timer) {
 			min_heap_del(&clock->timers, i, &callbacks, NULL);
-			break;
+			return;
 		}
-
-	spin_unlock(&clock->timer_lock);
 }
 
 struct io_clock_wait {
@@ -133,28 +129,27 @@ void __bch2_increment_clock(struct io_clock *clock, u64 sectors)
 	struct io_timer *timer;
 	u64 now = atomic64_add_return(sectors, &clock->now);
 
-	spin_lock(&clock->timer_lock);
+	guard(spinlock)(&clock->timer_lock);
+
 	while ((timer = get_expired_timer(clock, now)))
 		timer->fn(timer);
-	spin_unlock(&clock->timer_lock);
 }
 
 void bch2_io_timers_to_text(struct printbuf *out, struct io_clock *clock)
 {
-	out->atomic++;
-	spin_lock(&clock->timer_lock);
 	u64 now = atomic64_read(&clock->now);
 
 	printbuf_tabstop_push(out, 40);
 	prt_printf(out, "current time:\t%llu\n", now);
+
+	guard(printbuf_atomic)(out);
+	guard(spinlock)(&clock->timer_lock);
 
 	for (unsigned i = 0; i < clock->timers.nr; i++)
 		prt_printf(out, "%ps %ps:\t%llu\n",
 		       clock->timers.data[i]->fn,
 		       clock->timers.data[i]->fn2,
 		       clock->timers.data[i]->expire);
-	spin_unlock(&clock->timer_lock);
-	--out->atomic;
 }
 
 void bch2_io_clock_exit(struct io_clock *clock)
