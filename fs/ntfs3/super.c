@@ -762,9 +762,9 @@ static int ntfs_show_options(struct seq_file *m, struct dentry *root)
 }
 
 /*
- * ntfs_shutdown - super_operations::shutdown
+ * ntfs_remove_bdev - super_operations::remove_bdev
  */
-static void ntfs_shutdown(struct super_block *sb)
+static void ntfs_remove_bdev(struct super_block *sb, struct block_device *bdev)
 {
 	set_bit(NTFS_FLAGS_SHUTDOWN_BIT, &ntfs_sb(sb)->flags);
 }
@@ -821,7 +821,7 @@ static const struct super_operations ntfs_sops = {
 	.put_super = ntfs_put_super,
 	.statfs = ntfs_statfs,
 	.show_options = ntfs_show_options,
-	.shutdown = ntfs_shutdown,
+	.remove_bdev = ntfs_remove_bdev,
 	.sync_fs = ntfs_sync_fs,
 	.write_inode = ntfs3_write_inode,
 };
@@ -1223,7 +1223,8 @@ static int ntfs_fill_super(struct super_block *sb, struct fs_context *fc)
 	sb->s_export_op = &ntfs_export_ops;
 	sb->s_time_gran = NTFS_TIME_GRAN; // 100 nsec
 	sb->s_xattr = ntfs_xattr_handlers;
-	sb->s_d_op = options->nocase ? &ntfs_dentry_ops : NULL;
+	if (options->nocase)
+		set_default_d_op(sb, &ntfs_dentry_ops);
 
 	options->nls = ntfs_load_nls(options->nls_name);
 	if (IS_ERR(options->nls)) {
