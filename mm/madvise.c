@@ -108,7 +108,8 @@ void anon_vma_name_free(struct kref *kref)
 
 struct anon_vma_name *anon_vma_name(struct vm_area_struct *vma)
 {
-	mmap_assert_locked(vma->vm_mm);
+	if (!rwsem_is_locked(&vma->vm_mm->mmap_lock))
+		vma_assert_locked(vma);
 
 	return vma->anon_name;
 }
@@ -343,14 +344,12 @@ static inline bool can_do_file_pageout(struct vm_area_struct *vma)
 
 static inline int madvise_folio_pte_batch(unsigned long addr, unsigned long end,
 					  struct folio *folio, pte_t *ptep,
-					  pte_t pte, bool *any_young,
-					  bool *any_dirty)
+					  pte_t *ptentp)
 {
-	const fpb_t fpb_flags = FPB_IGNORE_DIRTY | FPB_IGNORE_SOFT_DIRTY;
 	int max_nr = (end - addr) / PAGE_SIZE;
 
-	return folio_pte_batch(folio, addr, ptep, pte, max_nr, fpb_flags, NULL,
-			       any_young, any_dirty);
+	return folio_pte_batch_flags(folio, NULL, ptep, ptentp, max_nr,
+				     FPB_MERGE_YOUNG_DIRTY);
 }
 
 static int madvise_cold_or_pageout_pte_range(pmd_t *pmd,
@@ -488,13 +487,7 @@ restart:
 		 * next pte in the range.
 		 */
 		if (folio_test_large(folio)) {
-			bool any_young;
-
-			nr = madvise_folio_pte_batch(addr, end, folio, pte,
-						     ptent, &any_young, NULL);
-			if (any_young)
-				ptent = pte_mkyoung(ptent);
-
+			nr = madvise_folio_pte_batch(addr, end, folio, pte, &ptent);
 			if (nr < folio_nr_pages(folio)) {
 				int err;
 
@@ -724,11 +717,7 @@ static int madvise_free_pte_range(pmd_t *pmd, unsigned long addr,
 		 * next pte in the range.
 		 */
 		if (folio_test_large(folio)) {
-			bool any_young, any_dirty;
-
-			nr = madvise_folio_pte_batch(addr, end, folio, pte,
-						     ptent, &any_young, &any_dirty);
-
+			nr = madvise_folio_pte_batch(addr, end, folio, pte, &ptent);
 			if (nr < folio_nr_pages(folio)) {
 				int err;
 
@@ -753,11 +742,6 @@ static int madvise_free_pte_range(pmd_t *pmd, unsigned long addr,
 					nr = 0;
 				continue;
 			}
-
-			if (any_young)
-				ptent = pte_mkyoung(ptent);
-			if (any_dirty)
-				ptent = pte_mkdirty(ptent);
 		}
 
 		if (folio_test_swapcache(folio) || folio_test_dirty(folio)) {
