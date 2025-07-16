@@ -152,9 +152,10 @@ struct virtio_admin_cmd {
 struct virtio_device {
 	int index;
 	bool failed;
-	bool config_core_enabled;
-	bool config_driver_disabled;
-	bool config_change_pending;
+	u8 config_core_enabled:1;
+	u8 config_driver_disabled:1;
+	u8 config_transport_disabled:1;
+	u8 config_change_pending:1;
 	spinlock_t config_lock;
 	spinlock_t vqs_list_lock;
 	struct device dev;
@@ -188,6 +189,7 @@ void virtio_config_changed(struct virtio_device *dev);
 void virtio_config_driver_disable(struct virtio_device *dev);
 void virtio_config_driver_enable(struct virtio_device *dev);
 
+void virtio_config_transport_disable(struct virtio_device *dev);
 #ifdef CONFIG_PM_SLEEP
 int virtio_device_freeze(struct virtio_device *dev);
 int virtio_device_restore(struct virtio_device *dev);
@@ -215,6 +217,8 @@ size_t virtio_max_dma_size(const struct virtio_device *vdev);
  * @scan: optional function to call after successful probe; intended
  *    for virtio-scsi to invoke a scan.
  * @remove: the function to call when a device is removed.
+ * @disconnect: the function to call on disconnect (surprise removal),
+ *    before remove.
  * @config_changed: optional function to call when the device configuration
  *    changes; may be called in interrupt context.
  * @freeze: optional function to call during suspend/hibernation.
@@ -236,6 +240,7 @@ struct virtio_driver {
 	int (*validate)(struct virtio_device *dev);
 	int (*probe)(struct virtio_device *dev);
 	void (*scan)(struct virtio_device *dev);
+	void (*disconnect)(struct virtio_device *dev);
 	void (*remove)(struct virtio_device *dev);
 	void (*config_changed)(struct virtio_device *dev);
 	int (*freeze)(struct virtio_device *dev);
