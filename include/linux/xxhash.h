@@ -177,6 +177,9 @@ struct xxh64_state {
  */
 void xxh32_reset(struct xxh32_state *state, uint32_t seed);
 
+#if 0
+/* Currently unused, feel free to uncomment them if you use them. */
+
 /**
  * xxh32_update() - hash the data given and update the xxh32 state
  *
@@ -202,6 +205,7 @@ int xxh32_update(struct xxh32_state *state, const void *input, size_t length);
  * Return: The xxh32 hash stored in the state.
  */
 uint32_t xxh32_digest(const struct xxh32_state *state);
+#endif
 
 /**
  * xxh64_reset() - reset the xxh64 state to start a new hashing operation

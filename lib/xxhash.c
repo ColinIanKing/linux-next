@@ -267,6 +267,7 @@ void xxh64_reset(struct xxh64_state *statePtr, const uint64_t seed)
 }
 EXPORT_SYMBOL(xxh64_reset);
 
+#if 0
 int xxh32_update(struct xxh32_state *state, const void *input, const size_t len)
 {
 	const uint8_t *p = (const uint8_t *)input;
@@ -373,6 +374,7 @@ uint32_t xxh32_digest(const struct xxh32_state *state)
 	return h32;
 }
 EXPORT_SYMBOL(xxh32_digest);
+#endif
 
 int xxh64_update(struct xxh64_state *state, const void *input, const size_t len)
 {
