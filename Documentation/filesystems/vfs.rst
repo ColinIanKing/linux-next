@@ -515,8 +515,8 @@ As of kernel 2.6.22, the following members are defined:
 		struct posix_acl * (*get_acl)(struct mnt_idmap *, struct dentry *, int);
 	        int (*set_acl)(struct mnt_idmap *, struct dentry *, struct posix_acl *, int);
 		int (*fileattr_set)(struct mnt_idmap *idmap,
-				    struct dentry *dentry, struct fileattr *fa);
-		int (*fileattr_get)(struct dentry *dentry, struct fileattr *fa);
+				    struct dentry *dentry, struct file_kattr *fa);
+		int (*fileattr_get)(struct dentry *dentry, struct file_kattr *fa);
 	        struct offset_ctx *(*get_offset_ctx)(struct inode *inode);
 	};
 
@@ -758,8 +758,9 @@ process is more complicated and uses write_begin/write_end or
 dirty_folio to write data into the address_space, and
 writepages to writeback data to storage.
 
-Adding and removing pages to/from an address_space is protected by the
-inode's i_mutex.
+Removing pages from an address_space requires holding the inode's i_rwsem
+exclusively, while adding pages to the address_space requires holding the
+inode's i_mapping->invalidate_lock exclusively.
 
 When data is written to a page, the PG_Dirty flag should be set.  It
 typically remains set until writepages asks for it to be written.  This
@@ -822,10 +823,10 @@ cache in your filesystem.  The following members are defined:
 		int (*writepages)(struct address_space *, struct writeback_control *);
 		bool (*dirty_folio)(struct address_space *, struct folio *);
 		void (*readahead)(struct readahead_control *);
-		int (*write_begin)(struct file *, struct address_space *mapping,
+		int (*write_begin)(const struct kiocb *, struct address_space *mapping,
 				   loff_t pos, unsigned len,
-				struct page **pagep, void **fsdata);
-		int (*write_end)(struct file *, struct address_space *mapping,
+				   struct page **pagep, void **fsdata);
+		int (*write_end)(const struct kiocb *, struct address_space *mapping,
 				 loff_t pos, unsigned len, unsigned copied,
 				 struct folio *folio, void *fsdata);
 		sector_t (*bmap)(struct address_space *, sector_t);
