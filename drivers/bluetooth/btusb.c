@@ -515,6 +515,11 @@ static const struct usb_device_id quirks_table[] = {
 	/* Realtek 8851BE Bluetooth devices */
 	{ USB_DEVICE(0x0bda, 0xb850), .driver_info = BTUSB_REALTEK },
 	{ USB_DEVICE(0x13d3, 0x3600), .driver_info = BTUSB_REALTEK },
+	{ USB_DEVICE(0x13d3, 0x3601), .driver_info = BTUSB_REALTEK },
+
+	/* Realtek 8851BU Bluetooth devices */
+	{ USB_DEVICE(0x3625, 0x010b), .driver_info = BTUSB_REALTEK |
+						     BTUSB_WIDEBAND_SPEECH },
 
 	/* Realtek 8852AE Bluetooth devices */
 	{ USB_DEVICE(0x0bda, 0x2852), .driver_info = BTUSB_REALTEK |
@@ -564,6 +569,8 @@ static const struct usb_device_id quirks_table[] = {
 	{ USB_DEVICE(0x13d3, 0x3572), .driver_info = BTUSB_REALTEK |
 						     BTUSB_WIDEBAND_SPEECH },
 	{ USB_DEVICE(0x13d3, 0x3591), .driver_info = BTUSB_REALTEK |
+						     BTUSB_WIDEBAND_SPEECH },
+	{ USB_DEVICE(0x13d3, 0x3618), .driver_info = BTUSB_REALTEK |
 						     BTUSB_WIDEBAND_SPEECH },
 	{ USB_DEVICE(0x0489, 0xe123), .driver_info = BTUSB_REALTEK |
 						     BTUSB_WIDEBAND_SPEECH },
@@ -705,6 +712,8 @@ static const struct usb_device_id quirks_table[] = {
 						     BTUSB_WIDEBAND_SPEECH },
 	{ USB_DEVICE(0x0489, 0xe139), .driver_info = BTUSB_MEDIATEK |
 						     BTUSB_WIDEBAND_SPEECH },
+	{ USB_DEVICE(0x0489, 0xe14e), .driver_info = BTUSB_MEDIATEK |
+						     BTUSB_WIDEBAND_SPEECH },
 	{ USB_DEVICE(0x0489, 0xe14f), .driver_info = BTUSB_MEDIATEK |
 						     BTUSB_WIDEBAND_SPEECH },
 	{ USB_DEVICE(0x0489, 0xe150), .driver_info = BTUSB_MEDIATEK |
@@ -724,6 +733,8 @@ static const struct usb_device_id quirks_table[] = {
 	{ USB_DEVICE(0x13d3, 0x3628), .driver_info = BTUSB_MEDIATEK |
 						     BTUSB_WIDEBAND_SPEECH },
 	{ USB_DEVICE(0x13d3, 0x3630), .driver_info = BTUSB_MEDIATEK |
+						     BTUSB_WIDEBAND_SPEECH },
+	{ USB_DEVICE(0x2c7c, 0x7009), .driver_info = BTUSB_MEDIATEK |
 						     BTUSB_WIDEBAND_SPEECH },
 
 	/* Additional Realtek 8723AE Bluetooth devices */
@@ -2472,18 +2483,18 @@ static int btusb_setup_csr(struct hci_dev *hdev)
 		 * Probably will need to be expanded in the future;
 		 * without these the controller will lock up.
 		 */
-		set_bit(HCI_QUIRK_BROKEN_STORED_LINK_KEY, &hdev->quirks);
-		set_bit(HCI_QUIRK_BROKEN_ERR_DATA_REPORTING, &hdev->quirks);
-		set_bit(HCI_QUIRK_BROKEN_FILTER_CLEAR_ALL, &hdev->quirks);
-		set_bit(HCI_QUIRK_NO_SUSPEND_NOTIFIER, &hdev->quirks);
-		set_bit(HCI_QUIRK_BROKEN_READ_VOICE_SETTING, &hdev->quirks);
-		set_bit(HCI_QUIRK_BROKEN_READ_PAGE_SCAN_TYPE, &hdev->quirks);
+		hci_set_quirk(hdev, HCI_QUIRK_BROKEN_STORED_LINK_KEY);
+		hci_set_quirk(hdev, HCI_QUIRK_BROKEN_ERR_DATA_REPORTING);
+		hci_set_quirk(hdev, HCI_QUIRK_BROKEN_FILTER_CLEAR_ALL);
+		hci_set_quirk(hdev, HCI_QUIRK_NO_SUSPEND_NOTIFIER);
+		hci_set_quirk(hdev, HCI_QUIRK_BROKEN_READ_VOICE_SETTING);
+		hci_set_quirk(hdev, HCI_QUIRK_BROKEN_READ_PAGE_SCAN_TYPE);
 
 		/* Clear the reset quirk since this is not an actual
 		 * early Bluetooth 1.1 device from CSR.
 		 */
-		clear_bit(HCI_QUIRK_RESET_ON_CLOSE, &hdev->quirks);
-		clear_bit(HCI_QUIRK_SIMULTANEOUS_DISCOVERY, &hdev->quirks);
+		hci_clear_quirk(hdev, HCI_QUIRK_RESET_ON_CLOSE);
+		hci_clear_quirk(hdev, HCI_QUIRK_SIMULTANEOUS_DISCOVERY);
 
 		/*
 		 * Special workaround for these BT 4.0 chip clones, and potentially more:
@@ -2594,12 +2605,12 @@ static int btusb_send_frame_intel(struct hci_dev *hdev, struct sk_buff *skb)
 			else
 				urb = alloc_ctrl_urb(hdev, skb);
 
-			/* When the 0xfc01 command is issued to boot into
-			 * the operational firmware, it will actually not
-			 * send a command complete event. To keep the flow
+			/* When the BTINTEL_HCI_OP_RESET command is issued to
+			 * boot into the operational firmware, it will actually
+			 * not send a command complete event. To keep the flow
 			 * control working inject that event here.
 			 */
-			if (opcode == 0xfc01)
+			if (opcode == BTINTEL_HCI_OP_RESET)
 				inject_cmd_complete(hdev, opcode);
 		} else {
 			urb = alloc_ctrl_urb(hdev, skb);
@@ -3494,7 +3505,7 @@ static int btusb_setup_qca(struct hci_dev *hdev)
 	/* Mark HCI_OP_ENHANCED_SETUP_SYNC_CONN as broken as it doesn't seem to
 	 * work with the likes of HSP/HFP mSBC.
 	 */
-	set_bit(HCI_QUIRK_BROKEN_ENHANCED_SETUP_SYNC_CONN, &hdev->quirks);
+	hci_set_quirk(hdev, HCI_QUIRK_BROKEN_ENHANCED_SETUP_SYNC_CONN);
 
 	return 0;
 }
@@ -3792,6 +3803,8 @@ static int btusb_hci_drv_supported_altsettings(struct hci_dev *hdev, void *data,
 
 	/* There are at most 7 alt (0 - 6) */
 	rp = kmalloc(sizeof(*rp) + 7, GFP_KERNEL);
+	if (!rp)
+		return -ENOMEM;
 
 	rp->num = 0;
 	if (!drvdata->isoc)
@@ -4008,10 +4021,10 @@ static int btusb_probe(struct usb_interface *intf,
 	}
 #endif
 	if (id->driver_info & BTUSB_CW6622)
-		set_bit(HCI_QUIRK_BROKEN_STORED_LINK_KEY, &hdev->quirks);
+		hci_set_quirk(hdev, HCI_QUIRK_BROKEN_STORED_LINK_KEY);
 
 	if (id->driver_info & BTUSB_BCM2045)
-		set_bit(HCI_QUIRK_BROKEN_STORED_LINK_KEY, &hdev->quirks);
+		hci_set_quirk(hdev, HCI_QUIRK_BROKEN_STORED_LINK_KEY);
 
 	if (id->driver_info & BTUSB_BCM92035)
 		hdev->setup = btusb_setup_bcm92035;
@@ -4068,8 +4081,8 @@ static int btusb_probe(struct usb_interface *intf,
 		hdev->reset = btmtk_reset_sync;
 		hdev->set_bdaddr = btmtk_set_bdaddr;
 		hdev->send = btusb_send_frame_mtk;
-		set_bit(HCI_QUIRK_BROKEN_ENHANCED_SETUP_SYNC_CONN, &hdev->quirks);
-		set_bit(HCI_QUIRK_NON_PERSISTENT_SETUP, &hdev->quirks);
+		hci_set_quirk(hdev, HCI_QUIRK_BROKEN_ENHANCED_SETUP_SYNC_CONN);
+		hci_set_quirk(hdev, HCI_QUIRK_NON_PERSISTENT_SETUP);
 		data->recv_acl = btmtk_usb_recv_acl;
 		data->suspend = btmtk_usb_suspend;
 		data->resume = btmtk_usb_resume;
@@ -4077,20 +4090,20 @@ static int btusb_probe(struct usb_interface *intf,
 	}
 
 	if (id->driver_info & BTUSB_SWAVE) {
-		set_bit(HCI_QUIRK_FIXUP_INQUIRY_MODE, &hdev->quirks);
-		set_bit(HCI_QUIRK_BROKEN_LOCAL_COMMANDS, &hdev->quirks);
+		hci_set_quirk(hdev, HCI_QUIRK_FIXUP_INQUIRY_MODE);
+		hci_set_quirk(hdev, HCI_QUIRK_BROKEN_LOCAL_COMMANDS);
 	}
 
 	if (id->driver_info & BTUSB_INTEL_BOOT) {
 		hdev->manufacturer = 2;
-		set_bit(HCI_QUIRK_RAW_DEVICE, &hdev->quirks);
+		hci_set_quirk(hdev, HCI_QUIRK_RAW_DEVICE);
 	}
 
 	if (id->driver_info & BTUSB_ATH3012) {
 		data->setup_on_usb = btusb_setup_qca;
 		hdev->set_bdaddr = btusb_set_bdaddr_ath3012;
-		set_bit(HCI_QUIRK_SIMULTANEOUS_DISCOVERY, &hdev->quirks);
-		set_bit(HCI_QUIRK_STRICT_DUPLICATE_FILTER, &hdev->quirks);
+		hci_set_quirk(hdev, HCI_QUIRK_SIMULTANEOUS_DISCOVERY);
+		hci_set_quirk(hdev, HCI_QUIRK_STRICT_DUPLICATE_FILTER);
 	}
 
 	if (id->driver_info & BTUSB_QCA_ROME) {
@@ -4098,7 +4111,7 @@ static int btusb_probe(struct usb_interface *intf,
 		hdev->shutdown = btusb_shutdown_qca;
 		hdev->set_bdaddr = btusb_set_bdaddr_ath3012;
 		hdev->reset = btusb_qca_reset;
-		set_bit(HCI_QUIRK_SIMULTANEOUS_DISCOVERY, &hdev->quirks);
+		hci_set_quirk(hdev, HCI_QUIRK_SIMULTANEOUS_DISCOVERY);
 		btusb_check_needs_reset_resume(intf);
 	}
 
@@ -4112,7 +4125,7 @@ static int btusb_probe(struct usb_interface *intf,
 		hdev->shutdown = btusb_shutdown_qca;
 		hdev->set_bdaddr = btusb_set_bdaddr_wcn6855;
 		hdev->reset = btusb_qca_reset;
-		set_bit(HCI_QUIRK_SIMULTANEOUS_DISCOVERY, &hdev->quirks);
+		hci_set_quirk(hdev, HCI_QUIRK_SIMULTANEOUS_DISCOVERY);
 		hci_set_msft_opcode(hdev, 0xFD70);
 	}
 
@@ -4140,35 +4153,35 @@ static int btusb_probe(struct usb_interface *intf,
 
 	if (id->driver_info & BTUSB_ACTIONS_SEMI) {
 		/* Support is advertised, but not implemented */
-		set_bit(HCI_QUIRK_BROKEN_ERR_DATA_REPORTING, &hdev->quirks);
-		set_bit(HCI_QUIRK_BROKEN_READ_TRANSMIT_POWER, &hdev->quirks);
-		set_bit(HCI_QUIRK_BROKEN_SET_RPA_TIMEOUT, &hdev->quirks);
-		set_bit(HCI_QUIRK_BROKEN_EXT_SCAN, &hdev->quirks);
-		set_bit(HCI_QUIRK_BROKEN_READ_ENC_KEY_SIZE, &hdev->quirks);
-		set_bit(HCI_QUIRK_BROKEN_EXT_CREATE_CONN, &hdev->quirks);
-		set_bit(HCI_QUIRK_BROKEN_WRITE_AUTH_PAYLOAD_TIMEOUT, &hdev->quirks);
+		hci_set_quirk(hdev, HCI_QUIRK_BROKEN_ERR_DATA_REPORTING);
+		hci_set_quirk(hdev, HCI_QUIRK_BROKEN_READ_TRANSMIT_POWER);
+		hci_set_quirk(hdev, HCI_QUIRK_BROKEN_SET_RPA_TIMEOUT);
+		hci_set_quirk(hdev, HCI_QUIRK_BROKEN_EXT_SCAN);
+		hci_set_quirk(hdev, HCI_QUIRK_BROKEN_READ_ENC_KEY_SIZE);
+		hci_set_quirk(hdev, HCI_QUIRK_BROKEN_EXT_CREATE_CONN);
+		hci_set_quirk(hdev, HCI_QUIRK_BROKEN_WRITE_AUTH_PAYLOAD_TIMEOUT);
 	}
 
 	if (!reset)
-		set_bit(HCI_QUIRK_RESET_ON_CLOSE, &hdev->quirks);
+		hci_set_quirk(hdev, HCI_QUIRK_RESET_ON_CLOSE);
 
 	if (force_scofix || id->driver_info & BTUSB_WRONG_SCO_MTU) {
 		if (!disable_scofix)
-			set_bit(HCI_QUIRK_FIXUP_BUFFER_SIZE, &hdev->quirks);
+			hci_set_quirk(hdev, HCI_QUIRK_FIXUP_BUFFER_SIZE);
 	}
 
 	if (id->driver_info & BTUSB_BROKEN_ISOC)
 		data->isoc = NULL;
 
 	if (id->driver_info & BTUSB_WIDEBAND_SPEECH)
-		set_bit(HCI_QUIRK_WIDEBAND_SPEECH_SUPPORTED, &hdev->quirks);
+		hci_set_quirk(hdev, HCI_QUIRK_WIDEBAND_SPEECH_SUPPORTED);
 
 	if (id->driver_info & BTUSB_INVALID_LE_STATES)
-		set_bit(HCI_QUIRK_BROKEN_LE_STATES, &hdev->quirks);
+		hci_set_quirk(hdev, HCI_QUIRK_BROKEN_LE_STATES);
 
 	if (id->driver_info & BTUSB_DIGIANSWER) {
 		data->cmdreq_type = USB_TYPE_VENDOR;
-		set_bit(HCI_QUIRK_RESET_ON_CLOSE, &hdev->quirks);
+		hci_set_quirk(hdev, HCI_QUIRK_RESET_ON_CLOSE);
 	}
 
 	if (id->driver_info & BTUSB_CSR) {
@@ -4177,10 +4190,10 @@ static int btusb_probe(struct usb_interface *intf,
 
 		/* Old firmware would otherwise execute USB reset */
 		if (bcdDevice < 0x117)
-			set_bit(HCI_QUIRK_RESET_ON_CLOSE, &hdev->quirks);
+			hci_set_quirk(hdev, HCI_QUIRK_RESET_ON_CLOSE);
 
 		/* This must be set first in case we disable it for fakes */
-		set_bit(HCI_QUIRK_SIMULTANEOUS_DISCOVERY, &hdev->quirks);
+		hci_set_quirk(hdev, HCI_QUIRK_SIMULTANEOUS_DISCOVERY);
 
 		/* Fake CSR devices with broken commands */
 		if (le16_to_cpu(udev->descriptor.idVendor)  == 0x0a12 &&
@@ -4193,7 +4206,7 @@ static int btusb_probe(struct usb_interface *intf,
 
 		/* New sniffer firmware has crippled HCI interface */
 		if (le16_to_cpu(udev->descriptor.bcdDevice) > 0x997)
-			set_bit(HCI_QUIRK_RAW_DEVICE, &hdev->quirks);
+			hci_set_quirk(hdev, HCI_QUIRK_RAW_DEVICE);
 	}
 
 	if (id->driver_info & BTUSB_INTEL_BOOT) {
