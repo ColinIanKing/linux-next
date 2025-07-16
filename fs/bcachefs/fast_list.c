@@ -115,22 +115,21 @@ int fast_list_add(struct fast_list *l, void *item)
 void fast_list_remove(struct fast_list *l, unsigned idx)
 {
 	u32 entries[16], nr = 0;
-	unsigned long flags;
 
 	if (!idx)
 		return;
 
 	*genradix_ptr_inlined(&l->items, idx) = NULL;
 
-	local_irq_save(flags);
-	struct fast_list_pcpu *lp = this_cpu_ptr(l->buffer);
+	scoped_guard(irqsave) {
+		struct fast_list_pcpu *lp = this_cpu_ptr(l->buffer);
 
-	if (unlikely(lp->nr == ARRAY_SIZE(lp->entries)))
-		while (nr < ARRAY_SIZE(entries))
-			entries[nr++] = lp->entries[--lp->nr];
+		if (unlikely(lp->nr == ARRAY_SIZE(lp->entries)))
+			while (nr < ARRAY_SIZE(entries))
+				entries[nr++] = lp->entries[--lp->nr];
 
-	lp->entries[lp->nr++] = idx;
-	local_irq_restore(flags);
+		lp->entries[lp->nr++] = idx;
+	}
 
 	if (unlikely(nr))
 		while (nr)
@@ -139,8 +138,21 @@ void fast_list_remove(struct fast_list *l, unsigned idx)
 
 void fast_list_exit(struct fast_list *l)
 {
-	/* XXX: warn if list isn't empty */
-	free_percpu(l->buffer);
+	if (l->buffer) {
+		int cpu;
+		for_each_possible_cpu(cpu) {
+			struct fast_list_pcpu *lp = per_cpu_ptr(l->buffer, cpu);
+
+			while (lp->nr)
+				ida_free(&l->slots_allocated, lp->entries[--lp->nr]);
+		}
+
+		free_percpu(l->buffer);
+	}
+
+	WARN(ida_find_first(&l->slots_allocated) >= 0,
+	     "fast_list still has objects on exit\n");
+
 	ida_destroy(&l->slots_allocated);
 	genradix_free(&l->items);
 }
