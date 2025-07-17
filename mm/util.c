@@ -1198,10 +1198,12 @@ static void set_ps_flags(struct page_snapshot *ps, const struct folio *folio,
  * Create a snapshot of the page and store both its struct page and struct
  * folio representations in @ps.
  *
- * Note that creating a faithful snapshot may fail if the compound
- * state of the page keeps changing (e.g., due to a folio split). In
- * this case, ps->faithful is set to false, and the snapshot assumes
- * that @page refers to a single page.
+ * A snapshot is marked as "faithful" if the compound state of @page was
+ * stable and allowed safe reconstruction of the folio representation. In
+ * rare cases where this is not possible (e.g. due to folio splitting),
+ * snapshot_page() falls back to treating @page as a single page and the
+ * snapshot is marked as "unfaithful". The snapshot_page_is_faithful()
+ * helper can be used to check for this condition.
  */
 void snapshot_page(struct page_snapshot *ps, const struct page *page)
 {
