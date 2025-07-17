@@ -20,7 +20,9 @@
 #include "xe_pm.h"
 #include "xe_pxp_debugfs.h"
 #include "xe_sriov.h"
+#include "xe_sriov_pf.h"
 #include "xe_step.h"
+#include "xe_wa.h"
 
 #ifdef CONFIG_DRM_XE_DEBUG
 #include "xe_bo_evict.h"
@@ -82,9 +84,28 @@ static int sriov_info(struct seq_file *m, void *data)
 	return 0;
 }
 
+static int workarounds(struct xe_device *xe, struct drm_printer *p)
+{
+	xe_pm_runtime_get(xe);
+	xe_wa_device_dump(xe, p);
+	xe_pm_runtime_put(xe);
+
+	return 0;
+}
+
+static int workaround_info(struct seq_file *m, void *data)
+{
+	struct xe_device *xe = node_to_xe(m->private);
+	struct drm_printer p = drm_seq_file_printer(m);
+
+	workarounds(xe, &p);
+	return 0;
+}
+
 static const struct drm_info_list debugfs_list[] = {
 	{"info", info, 0},
 	{ .name = "sriov_info", .show = sriov_info, },
+	{ .name = "workarounds", .show = workaround_info, },
 };
 
 static int forcewake_open(struct inode *inode, struct file *file)
@@ -226,14 +247,33 @@ static const struct file_operations atomic_svm_timeslice_ms_fops = {
 	.write = atomic_svm_timeslice_ms_set,
 };
 
+static void create_tile_debugfs(struct xe_tile *tile, struct dentry *root)
+{
+	char name[8];
+
+	snprintf(name, sizeof(name), "tile%u", tile->id);
+	tile->debugfs = debugfs_create_dir(name, root);
+	if (IS_ERR(tile->debugfs))
+		return;
+
+	/*
+	 * Store the xe_tile pointer as private data of the tile/ directory
+	 * node so other tile specific attributes under that directory may
+	 * refer to it by looking at its parent node private data.
+	 */
+	tile->debugfs->d_inode->i_private = tile;
+}
+
 void xe_debugfs_register(struct xe_device *xe)
 {
 	struct ttm_device *bdev = &xe->ttm;
 	struct drm_minor *minor = xe->drm.primary;
 	struct dentry *root = minor->debugfs_root;
 	struct ttm_resource_manager *man;
+	struct xe_tile *tile;
 	struct xe_gt *gt;
 	u32 mem_type;
+	u8 tile_id;
 	u8 id;
 
 	drm_debugfs_create_files(debugfs_list,
@@ -267,10 +307,16 @@ void xe_debugfs_register(struct xe_device *xe)
 	if (man)
 		ttm_resource_manager_create_debugfs(man, root, "stolen_mm");
 
+	for_each_tile(tile, xe, tile_id)
+		create_tile_debugfs(tile, root);
+
 	for_each_gt(gt, xe, id)
 		xe_gt_debugfs_register(gt);
 
 	xe_pxp_debugfs_register(xe->pxp);
 
 	fault_create_debugfs_attr("fail_gt_reset", root, &gt_reset_failure);
+
+	if (IS_SRIOV_PF(xe))
+		xe_sriov_pf_debugfs_register(xe, root);
 }
