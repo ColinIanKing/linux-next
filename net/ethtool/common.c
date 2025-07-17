@@ -707,7 +707,9 @@ static u32 ethtool_get_max_rxfh_channel(struct net_device *dev)
 	if (!rxfh.indir)
 		return U32_MAX;
 
+	mutex_lock(&dev->ethtool->rss_lock);
 	ret = dev->ethtool_ops->get_rxfh(dev, &rxfh);
+	mutex_unlock(&dev->ethtool->rss_lock);
 	if (ret) {
 		current_max = U32_MAX;
 		goto out_free;
@@ -809,6 +811,8 @@ int ethtool_check_ops(const struct ethtool_ops *ops)
 	if (WARN_ON(ops->set_coalesce && !ops->supported_coalesce_params))
 		return -EINVAL;
 	if (WARN_ON(ops->rxfh_max_num_contexts == 1))
+		return -EINVAL;
+	if (WARN_ON(ops->supported_input_xfrm && !ops->get_rxfh_fields))
 		return -EINVAL;
 	/* NOTE: sufficiently insane drivers may swap ethtool_ops at runtime,
 	 * the fact that ops are checked at registration time does not
