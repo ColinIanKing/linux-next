@@ -27,12 +27,12 @@ struct btrfs_failed_bio {
 };
 
 /* Is this a data path I/O that needs storage layer checksum and repair? */
-static inline bool is_data_bbio(struct btrfs_bio *bbio)
+static inline bool is_data_bbio(const struct btrfs_bio *bbio)
 {
 	return bbio->inode && is_data_inode(bbio->inode);
 }
 
-static bool bbio_has_ordered_extent(struct btrfs_bio *bbio)
+static bool bbio_has_ordered_extent(const struct btrfs_bio *bbio)
 {
 	return is_data_bbio(bbio) && btrfs_op(&bbio->bio) == BTRFS_MAP_WRITE;
 }
@@ -93,6 +93,8 @@ static struct btrfs_bio *btrfs_split_bio(struct btrfs_fs_info *fs_info,
 		refcount_inc(&orig_bbio->ordered->refs);
 		bbio->ordered = orig_bbio->ordered;
 	}
+	if (btrfs_bio_csum_search_commit_root(orig_bbio))
+		btrfs_bio_set_csum_search_commit_root(bbio);
 	atomic_inc(&orig_bbio->pending_ios);
 	return bbio;
 }
@@ -134,14 +136,14 @@ void btrfs_bio_end_io(struct btrfs_bio *bbio, blk_status_t status)
 	}
 }
 
-static int next_repair_mirror(struct btrfs_failed_bio *fbio, int cur_mirror)
+static int next_repair_mirror(const struct btrfs_failed_bio *fbio, int cur_mirror)
 {
 	if (cur_mirror == fbio->num_copies)
 		return cur_mirror + 1 - fbio->num_copies;
 	return cur_mirror + 1;
 }
 
-static int prev_repair_mirror(struct btrfs_failed_bio *fbio, int cur_mirror)
+static int prev_repair_mirror(const struct btrfs_failed_bio *fbio, int cur_mirror)
 {
 	if (cur_mirror == 1)
 		return fbio->num_copies;
@@ -164,12 +166,6 @@ static void btrfs_end_repair_bio(struct btrfs_bio *repair_bbio,
 	struct btrfs_fs_info *fs_info = inode->root->fs_info;
 	struct bio_vec *bv = bio_first_bvec_all(&repair_bbio->bio);
 	int mirror = repair_bbio->mirror_num;
-
-	/*
-	 * We can only trigger this for data bio, which doesn't support larger
-	 * folios yet.
-	 */
-	ASSERT(folio_order(page_folio(bv->bv_page)) == 0);
 
 	if (repair_bbio->bio.bi_status ||
 	    !btrfs_data_csum_ok(repair_bbio, dev, 0, bv)) {
@@ -301,7 +297,7 @@ static void btrfs_check_read_bio(struct btrfs_bio *bbio, struct btrfs_device *de
 		btrfs_bio_end_io(bbio, bbio->bio.bi_status);
 }
 
-static void btrfs_log_dev_io_error(struct bio *bio, struct btrfs_device *dev)
+static void btrfs_log_dev_io_error(const struct bio *bio, struct btrfs_device *dev)
 {
 	if (!dev || !dev->bdev)
 		return;
@@ -316,8 +312,8 @@ static void btrfs_log_dev_io_error(struct bio *bio, struct btrfs_device *dev)
 		btrfs_dev_stat_inc_and_print(dev, BTRFS_DEV_STAT_FLUSH_ERRS);
 }
 
-static struct workqueue_struct *btrfs_end_io_wq(struct btrfs_fs_info *fs_info,
-						struct bio *bio)
+static struct workqueue_struct *btrfs_end_io_wq(const struct btrfs_fs_info *fs_info,
+						const struct bio *bio)
 {
 	if (bio->bi_opf & REQ_META)
 		return fs_info->endio_meta_workers;
@@ -439,7 +435,7 @@ static void btrfs_submit_dev_bio(struct btrfs_device *dev, struct bio *bio)
 		ASSERT(btrfs_dev_is_sequential(dev, physical));
 		bio->bi_iter.bi_sector = zone_start >> SECTOR_SHIFT;
 	}
-	btrfs_debug_in_rcu(dev->fs_info,
+	btrfs_debug(dev->fs_info,
 	"%s: rw %d 0x%x, sector=%llu, dev=%lu (%s id %llu), size=%u",
 		__func__, bio_op(bio), bio->bi_opf, bio->bi_iter.bi_sector,
 		(unsigned long)dev->bdev->bd_dev, btrfs_dev_name(dev),
@@ -485,6 +481,14 @@ static void btrfs_submit_mirrored_bio(struct btrfs_io_context *bioc, int dev_nr)
 static void btrfs_submit_bio(struct bio *bio, struct btrfs_io_context *bioc,
 			     struct btrfs_io_stripe *smap, int mirror_num)
 {
+	/*
+	 * It is important to clear the bits we used in bio->bi_flags.
+	 * Because bio->bi_flags belongs to the block layer, we should
+	 * avoid leaving stray bits set when we transfer ownership of
+	 * the bio by submitting it.
+	 */
+	btrfs_bio_clear_csum_search_commit_root(btrfs_bio(bio));
+
 	if (!bioc) {
 		/* Single mirror read/write fast path. */
 		btrfs_bio(bio)->mirror_num = mirror_num;
@@ -845,7 +849,7 @@ int btrfs_repair_io_failure(struct btrfs_fs_info *fs_info, u64 ino, u64 start,
 		goto out_bio_uninit;
 	}
 
-	btrfs_info_rl_in_rcu(fs_info,
+	btrfs_info_rl(fs_info,
 		"read error corrected: ino %llu off %llu (dev %s sector %llu)",
 			     ino, start, btrfs_dev_name(smap.dev),
 			     smap.physical >> SECTOR_SHIFT);
