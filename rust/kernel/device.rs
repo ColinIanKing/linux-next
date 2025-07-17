@@ -6,13 +6,14 @@
 
 use crate::{
     bindings,
-    str::CStr,
-    types::{ARef, Opaque},
+    types::{ARef, ForeignOwnable, Opaque},
 };
 use core::{fmt, marker::PhantomData, ptr};
 
 #[cfg(CONFIG_PRINTK)]
 use crate::c_str;
+
+pub mod property;
 
 /// A reference-counted device.
 ///
@@ -58,6 +59,53 @@ impl Device {
     pub unsafe fn get_device(ptr: *mut bindings::device) -> ARef<Self> {
         // SAFETY: By the safety requirements ptr is valid
         unsafe { Self::as_ref(ptr) }.into()
+    }
+}
+
+impl Device<CoreInternal> {
+    /// Store a pointer to the bound driver's private data.
+    pub fn set_drvdata(&self, data: impl ForeignOwnable) {
+        // SAFETY: By the type invariants, `self.as_raw()` is a valid pointer to a `struct device`.
+        unsafe { bindings::dev_set_drvdata(self.as_raw(), data.into_foreign().cast()) }
+    }
+
+    /// Take ownership of the private data stored in this [`Device`].
+    ///
+    /// # Safety
+    ///
+    /// - Must only be called once after a preceding call to [`Device::set_drvdata`].
+    /// - The type `T` must match the type of the `ForeignOwnable` previously stored by
+    ///   [`Device::set_drvdata`].
+    pub unsafe fn drvdata_obtain<T: ForeignOwnable>(&self) -> T {
+        // SAFETY: By the type invariants, `self.as_raw()` is a valid pointer to a `struct device`.
+        let ptr = unsafe { bindings::dev_get_drvdata(self.as_raw()) };
+
+        // SAFETY:
+        // - By the safety requirements of this function, `ptr` comes from a previous call to
+        //   `into_foreign()`.
+        // - `dev_get_drvdata()` guarantees to return the same pointer given to `dev_set_drvdata()`
+        //   in `into_foreign()`.
+        unsafe { T::from_foreign(ptr.cast()) }
+    }
+
+    /// Borrow the driver's private data bound to this [`Device`].
+    ///
+    /// # Safety
+    ///
+    /// - Must only be called after a preceding call to [`Device::set_drvdata`] and before
+    ///   [`Device::drvdata_obtain`].
+    /// - The type `T` must match the type of the `ForeignOwnable` previously stored by
+    ///   [`Device::set_drvdata`].
+    pub unsafe fn drvdata_borrow<T: ForeignOwnable>(&self) -> T::Borrowed<'_> {
+        // SAFETY: By the type invariants, `self.as_raw()` is a valid pointer to a `struct device`.
+        let ptr = unsafe { bindings::dev_get_drvdata(self.as_raw()) };
+
+        // SAFETY:
+        // - By the safety requirements of this function, `ptr` comes from a previous call to
+        //   `into_foreign()`.
+        // - `dev_get_drvdata()` guarantees to return the same pointer given to `dev_set_drvdata()`
+        //   in `into_foreign()`.
+        unsafe { T::borrow(ptr.cast()) }
     }
 }
 
@@ -203,10 +251,19 @@ impl<Ctx: DeviceContext> Device<Ctx> {
         };
     }
 
-    /// Checks if property is present or not.
-    pub fn property_present(&self, name: &CStr) -> bool {
-        // SAFETY: By the invariant of `CStr`, `name` is null-terminated.
-        unsafe { bindings::device_property_present(self.as_raw().cast_const(), name.as_char_ptr()) }
+    /// Obtain the [`FwNode`](property::FwNode) corresponding to this [`Device`].
+    pub fn fwnode(&self) -> Option<&property::FwNode> {
+        // SAFETY: `self` is valid.
+        let fwnode_handle = unsafe { bindings::__dev_fwnode(self.as_raw()) };
+        if fwnode_handle.is_null() {
+            return None;
+        }
+        // SAFETY: `fwnode_handle` is valid. Its lifetime is tied to `&self`. We
+        // return a reference instead of an `ARef<FwNode>` because `dev_fwnode()`
+        // doesn't increment the refcount. It is safe to cast from a
+        // `struct fwnode_handle*` to a `*const FwNode` because `FwNode` is
+        // defined as a `#[repr(transparent)]` wrapper around `fwnode_handle`.
+        Some(unsafe { &*fwnode_handle.cast() })
     }
 }
 
@@ -251,6 +308,10 @@ pub struct Normal;
 /// any of the bus callbacks, such as `probe()`.
 pub struct Core;
 
+/// Semantically the same as [`Core`] but reserved for internal usage of the corresponding bus
+/// abstraction.
+pub struct CoreInternal;
+
 /// The [`Bound`] context is the context of a bus specific device reference when it is guaranteed to
 /// be bound for the duration of its lifetime.
 pub struct Bound;
@@ -260,11 +321,13 @@ mod private {
 
     impl Sealed for super::Bound {}
     impl Sealed for super::Core {}
+    impl Sealed for super::CoreInternal {}
     impl Sealed for super::Normal {}
 }
 
 impl DeviceContext for Bound {}
 impl DeviceContext for Core {}
+impl DeviceContext for CoreInternal {}
 impl DeviceContext for Normal {}
 
 /// # Safety
@@ -306,6 +369,13 @@ macro_rules! impl_device_context_deref {
         // `__impl_device_context_deref!`.
         ::kernel::__impl_device_context_deref!(unsafe {
             $device,
+            $crate::device::CoreInternal => $crate::device::Core
+        });
+
+        // SAFETY: This macro has the exact same safety requirement as
+        // `__impl_device_context_deref!`.
+        ::kernel::__impl_device_context_deref!(unsafe {
+            $device,
             $crate::device::Core => $crate::device::Bound
         });
 
@@ -335,6 +405,7 @@ macro_rules! __impl_device_context_into_aref {
 #[macro_export]
 macro_rules! impl_device_context_into_aref {
     ($device:tt) => {
+        ::kernel::__impl_device_context_into_aref!($crate::device::CoreInternal, $device);
         ::kernel::__impl_device_context_into_aref!($crate::device::Core, $device);
         ::kernel::__impl_device_context_into_aref!($crate::device::Bound, $device);
     };
