@@ -61,7 +61,7 @@ static ssize_t fn ## _to_text(struct printbuf *,			\
 static ssize_t fn ## _show(struct kobject *kobj, struct attribute *attr,\
 			   char *buf)					\
 {									\
-	struct printbuf out = PRINTBUF;					\
+	CLASS(printbuf, out)();						\
 	ssize_t ret = fn ## _to_text(&out, kobj, attr);			\
 									\
 	if (out.pos && out.buf[out.pos - 1] != '\n')			\
@@ -74,7 +74,6 @@ static ssize_t fn ## _show(struct kobject *kobj, struct attribute *attr,\
 		ret = min_t(size_t, out.pos, PAGE_SIZE - 1);		\
 		memcpy(buf, out.buf, ret);				\
 	}								\
-	printbuf_exit(&out);						\
 	return bch2_err_class(ret);					\
 }									\
 									\
@@ -170,7 +169,9 @@ read_attribute(io_latency_read);
 read_attribute(io_latency_write);
 read_attribute(io_latency_stats_read);
 read_attribute(io_latency_stats_write);
+#ifndef CONFIG_BCACHEFS_NO_LATENCY_ACCT
 read_attribute(congested);
+#endif
 
 read_attribute(btree_write_stats);
 
@@ -231,14 +232,13 @@ static size_t bch2_btree_cache_size(struct bch_fs *c)
 	size_t ret = 0;
 	struct btree *b;
 
-	mutex_lock(&bc->lock);
+	guard(mutex)(&bc->lock);
 	list_for_each_entry(b, &bc->live[0].list, list)
 		ret += btree_buf_bytes(b);
 	list_for_each_entry(b, &bc->live[1].list, list)
 		ret += btree_buf_bytes(b);
 	list_for_each_entry(b, &bc->freeable, list)
 		ret += btree_buf_bytes(b);
-	mutex_unlock(&bc->lock);
 	return ret;
 }
 
@@ -451,9 +451,8 @@ STORE(bch2_fs)
 		closure_wake_up(&c->freelist_wait);
 
 	if (attr == &sysfs_trigger_recalc_capacity) {
-		down_read(&c->state_lock);
+		guard(rwsem_read)(&c->state_lock);
 		bch2_recalc_capacity(c);
-		up_read(&c->state_lock);
 	}
 
 	if (attr == &sysfs_trigger_delete_dead_snapshots)
@@ -830,9 +829,10 @@ SHOW(bch2_dev)
 	if (attr == &sysfs_io_latency_stats_write)
 		bch2_time_stats_to_text(out, &ca->io_latency[WRITE].stats);
 
-	sysfs_printf(congested,			"%u%%",
-		     clamp(atomic_read(&ca->congested), 0, CONGESTED_MAX)
-		     * 100 / CONGESTED_MAX);
+#ifndef CONFIG_BCACHEFS_NO_LATENCY_ACCT
+	if (attr == &sysfs_congested)
+		bch2_dev_congested_to_text(out, ca);
+#endif
 
 	if (attr == &sysfs_alloc_debug)
 		bch2_dev_alloc_debug_to_text(out, ca);
@@ -900,7 +900,9 @@ struct attribute *bch2_dev_files[] = {
 	&sysfs_io_latency_write,
 	&sysfs_io_latency_stats_read,
 	&sysfs_io_latency_stats_write,
+#ifndef CONFIG_BCACHEFS_NO_LATENCY_ACCT
 	&sysfs_congested,
+#endif
 
 	/* debug: */
 	&sysfs_alloc_debug,
