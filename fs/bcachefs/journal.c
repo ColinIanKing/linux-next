@@ -1088,6 +1088,8 @@ static struct journal_buf *__bch2_next_write_buffer_flush_journal_buf(struct jou
 			ret = journal_state_count(s, idx & JOURNAL_STATE_BUF_MASK) > open
 				? ERR_PTR(-EAGAIN)
 				: buf;
+			if (!ret)
+				smp_mb();
 			break;
 		}
 	}
