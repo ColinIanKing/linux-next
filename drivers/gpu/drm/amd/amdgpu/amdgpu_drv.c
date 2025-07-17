@@ -144,6 +144,7 @@ enum AMDGPU_DEBUG_MASK {
 	AMDGPU_DEBUG_DISABLE_GPU_RING_RESET = BIT(6),
 	AMDGPU_DEBUG_SMU_POOL = BIT(7),
 	AMDGPU_DEBUG_VM_USERPTR = BIT(8),
+	AMDGPU_DEBUG_DISABLE_RAS_CE_LOG = BIT(9)
 };
 
 unsigned int amdgpu_vram_limit = UINT_MAX;
@@ -2278,6 +2279,11 @@ static void amdgpu_init_debug_options(struct amdgpu_device *adev)
 		pr_info("debug: VM mode debug for userptr is enabled\n");
 		adev->debug_vm_userptr = true;
 	}
+
+	if (amdgpu_debug_mask & AMDGPU_DEBUG_DISABLE_RAS_CE_LOG) {
+		pr_info("debug: disable kernel logs of correctable errors\n");
+		adev->debug_disable_ce_logs = true;
+	}
 }
 
 static unsigned long amdgpu_fix_asic_type(struct pci_dev *pdev, unsigned long flags)
@@ -2321,7 +2327,7 @@ static int amdgpu_pci_probe(struct pci_dev *pdev,
 		amdgpu_aspm = 0;
 
 	if (amdgpu_virtual_display ||
-	    amdgpu_device_asic_has_dc_support(flags & AMD_ASIC_MASK))
+	    amdgpu_device_asic_has_dc_support(pdev, flags & AMD_ASIC_MASK))
 		supports_atomic = true;
 
 	if ((flags & AMD_EXP_HW_SUPPORT) && !amdgpu_exp_hw_support) {
@@ -2451,10 +2457,10 @@ retry_init:
 
 	if (adev->pm.rpm_mode != AMDGPU_RUNPM_NONE) {
 		/* only need to skip on ATPX */
-		if (amdgpu_device_supports_px(ddev))
+		if (amdgpu_device_supports_px(adev))
 			dev_pm_set_driver_flags(ddev->dev, DPM_FLAG_NO_DIRECT_COMPLETE);
 		/* we want direct complete for BOCO */
-		if (amdgpu_device_supports_boco(ddev))
+		if (amdgpu_device_supports_boco(adev))
 			dev_pm_set_driver_flags(ddev->dev, DPM_FLAG_SMART_PREPARE |
 						DPM_FLAG_SMART_SUSPEND |
 						DPM_FLAG_MAY_SKIP_RESUME);
@@ -2487,9 +2493,9 @@ retry_init:
 		 * into D0 state. Then there will be a PMFW-aware D-state
 		 * transition(D0->D3) on runpm suspend.
 		 */
-		if (amdgpu_device_supports_baco(ddev) &&
+		if (amdgpu_device_supports_baco(adev) &&
 		    !(adev->flags & AMD_IS_APU) &&
-		    (adev->asic_type >= CHIP_NAVI10))
+		    adev->asic_type >= CHIP_NAVI10)
 			amdgpu_get_secondary_funcs(adev);
 	}
 
@@ -2554,8 +2560,7 @@ static int amdgpu_pmops_prepare(struct device *dev)
 	/* Return a positive number here so
 	 * DPM_FLAG_SMART_SUSPEND works properly
 	 */
-	if (amdgpu_device_supports_boco(drm_dev) &&
-	    pm_runtime_suspended(dev))
+	if (amdgpu_device_supports_boco(adev) && pm_runtime_suspended(dev))
 		return 1;
 
 	/* if we will not support s3 or s2i for the device
@@ -2570,7 +2575,7 @@ static int amdgpu_pmops_prepare(struct device *dev)
 
 static void amdgpu_pmops_complete(struct device *dev)
 {
-	/* nothing to do */
+	amdgpu_device_complete(dev_get_drvdata(dev));
 }
 
 static int amdgpu_pmops_suspend(struct device *dev)
@@ -2828,7 +2833,7 @@ static int amdgpu_pmops_runtime_suspend(struct device *dev)
 		/* nothing to do */
 	} else if ((adev->pm.rpm_mode == AMDGPU_RUNPM_BACO) ||
 			(adev->pm.rpm_mode == AMDGPU_RUNPM_BAMACO)) {
-		amdgpu_device_baco_enter(drm_dev);
+		amdgpu_device_baco_enter(adev);
 	}
 
 	dev_dbg(&pdev->dev, "asic/device is runtime suspended\n");
@@ -2869,7 +2874,7 @@ static int amdgpu_pmops_runtime_resume(struct device *dev)
 		pci_set_master(pdev);
 	} else if ((adev->pm.rpm_mode == AMDGPU_RUNPM_BACO) ||
 			(adev->pm.rpm_mode == AMDGPU_RUNPM_BAMACO)) {
-		amdgpu_device_baco_exit(drm_dev);
+		amdgpu_device_baco_exit(adev);
 	}
 	ret = amdgpu_device_resume(drm_dev, false);
 	if (ret) {
@@ -3107,10 +3112,6 @@ static int __init amdgpu_init(void)
 	if (r)
 		goto error_sync;
 
-	r = amdgpu_fence_slab_init();
-	if (r)
-		goto error_fence;
-
 	r = amdgpu_userq_fence_slab_init();
 	if (r)
 		goto error_fence;
@@ -3145,7 +3146,6 @@ static void __exit amdgpu_exit(void)
 	amdgpu_unregister_atpx_handler();
 	amdgpu_acpi_release();
 	amdgpu_sync_fini();
-	amdgpu_fence_slab_fini();
 	amdgpu_userq_fence_slab_fini();
 	mmu_notifier_synchronize();
 	amdgpu_xcp_drv_release();

@@ -30,12 +30,11 @@
 #define TEST_VM_OPS_ERROR
 #endif
 
-#if IS_ENABLED(CONFIG_DRM_XE_DISPLAY)
-#include "intel_display_core.h"
-#include "intel_display_device.h"
-#endif
-
+struct dram_info;
+struct intel_display;
+struct intel_dg_nvm_dev;
 struct xe_ggtt;
+struct xe_i2c;
 struct xe_pat_ops;
 struct xe_pxp;
 
@@ -108,7 +107,7 @@ struct xe_vram_region {
 	void __iomem *mapping;
 	/** @ttm: VRAM TTM manager */
 	struct xe_ttm_vram_mgr ttm;
-#if IS_ENABLED(CONFIG_DRM_XE_DEVMEM_MIRROR)
+#if IS_ENABLED(CONFIG_DRM_XE_PAGEMAP)
 	/** @pagemap: Used to remap device memory as ZONE_DEVICE */
 	struct dev_pagemap pagemap;
 	/**
@@ -296,6 +295,8 @@ struct xe_device {
 		u8 vram_flags;
 		/** @info.tile_count: Number of tiles */
 		u8 tile_count;
+		/** @info.max_gt_per_tile: Number of GT IDs allocated to each tile */
+		u8 max_gt_per_tile;
 		/** @info.gt_count: Total number of GTs for entire device */
 		u8 gt_count;
 		/** @info.vm_max_level: Max VM level */
@@ -319,6 +320,8 @@ struct xe_device {
 		u8 has_fan_control:1;
 		/** @info.has_flat_ccs: Whether flat CCS metadata is used */
 		u8 has_flat_ccs:1;
+		/** @info.has_gsc_nvm: Device has gsc non-volatile memory */
+		u8 has_gsc_nvm:1;
 		/** @info.has_heci_cscfi: device has heci cscfi */
 		u8 has_heci_cscfi:1;
 		/** @info.has_heci_gscfi: device has heci gscfi */
@@ -502,6 +505,10 @@ struct xe_device {
 		const struct xe_pat_table_entry *table;
 		/** @pat.n_entries: Number of PAT entries */
 		int n_entries;
+		/** @pat.ats_entry: PAT entry for PCIe ATS responses */
+		const struct xe_pat_table_entry *pat_ats;
+		/** @pat.pta_entry: PAT entry for page table accesses */
+		const struct xe_pat_table_entry *pat_pta;
 		u32 idx[__XE_CACHE_LEVEL_COUNT];
 	} pat;
 
@@ -548,6 +555,9 @@ struct xe_device {
 	/** @heci_gsc: graphics security controller */
 	struct xe_heci_gsc heci_gsc;
 
+	/** @nvm: discrete graphics non-volatile memory */
+	struct intel_dg_nvm_dev *nvm;
+
 	/** @oa: oa observation subsystem */
 	struct xe_oa oa;
 
@@ -576,12 +586,26 @@ struct xe_device {
 	/** @pmu: performance monitoring unit */
 	struct xe_pmu pmu;
 
+	/** @i2c: I2C host controller */
+	struct xe_i2c *i2c;
+
+	/** @atomic_svm_timeslice_ms: Atomic SVM fault timeslice MS */
+	u32 atomic_svm_timeslice_ms;
+
 #ifdef TEST_VM_OPS_ERROR
 	/**
 	 * @vm_inject_error_position: inject errors at different places in VM
 	 * bind IOCTL based on this value
 	 */
 	u8 vm_inject_error_position;
+#endif
+
+#if IS_ENABLED(CONFIG_TRACE_GPU_MEM)
+	/**
+	 * @global_total_pages: global GPU page usage tracked for gpu_mem
+	 * tracepoints
+	 */
+	atomic64_t global_total_pages;
 #endif
 
 	/* private: */
@@ -593,27 +617,9 @@ struct xe_device {
 	 * drm_i915_private during build. After cleanup these should go away,
 	 * migrating to the right sub-structs
 	 */
-	struct intel_display display;
+	struct intel_display *display;
 
-	struct dram_info {
-		bool wm_lv_0_adjust_needed;
-		u8 num_channels;
-		bool symmetric_memory;
-		enum intel_dram_type {
-			INTEL_DRAM_UNKNOWN,
-			INTEL_DRAM_DDR3,
-			INTEL_DRAM_DDR4,
-			INTEL_DRAM_LPDDR3,
-			INTEL_DRAM_LPDDR4,
-			INTEL_DRAM_DDR5,
-			INTEL_DRAM_LPDDR5,
-			INTEL_DRAM_GDDR,
-			INTEL_DRAM_GDDR_ECC,
-			__INTEL_DRAM_TYPE_MAX,
-		} type;
-		u8 num_qgv_points;
-		u8 num_psf_gv_points;
-	} dram_info;
+	const struct dram_info *dram_info;
 
 	/*
 	 * edram size in MB.
