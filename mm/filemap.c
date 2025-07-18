@@ -2584,8 +2584,9 @@ static int filemap_get_pages(struct kiocb *iocb, size_t count,
 	unsigned int flags;
 	int err = 0;
 
-	/* "last_index" is the index of the page beyond the end of the read */
-	last_index = DIV_ROUND_UP(iocb->ki_pos + count, PAGE_SIZE);
+	/* "last_index" is the index of the folio beyond the end of the read */
+	last_index = round_up(iocb->ki_pos + count,
+			mapping_min_folio_nrbytes(mapping)) >> PAGE_SHIFT;
 retry:
 	if (fatal_signal_pending(current))
 		return -EINTR;
@@ -3324,6 +3325,17 @@ static struct file *do_async_mmap_readahead(struct vm_fault *vmf,
 		return fpin;
 
 	mmap_miss = READ_ONCE(ra->mmap_miss);
+	if (unlikely(!folio_test_uptodate(folio) &&
+		     folio_test_workingset(folio))) {
+		/*
+		 * If there are signs of thrashing, take a big step
+		 * towards disabling readahead.
+		 */
+		mmap_miss += MMAP_LOTSAMISS / 2;
+		mmap_miss = min(mmap_miss, MMAP_LOTSAMISS * 10);
+		WRITE_ONCE(ra->mmap_miss, mmap_miss);
+		return fpin;
+	}
 	if (mmap_miss)
 		WRITE_ONCE(ra->mmap_miss, --mmap_miss);
 
