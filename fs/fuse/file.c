@@ -1159,7 +1159,6 @@ static ssize_t fuse_fill_write_pages(struct fuse_io_args *ia,
 	num = min(iov_iter_count(ii), fc->max_write);
 
 	ap->args.in_pages = true;
-	ap->descs[0].offset = offset;
 
 	while (num && ap->num_folios < max_folios) {
 		size_t tmp;
@@ -2201,10 +2200,13 @@ out:
  * It's worthy to make sure that space is reserved on disk for the write,
  * but how to implement it without killing performance need more thinking.
  */
-static int fuse_write_begin(struct file *file, struct address_space *mapping,
-		loff_t pos, unsigned len, struct folio **foliop, void **fsdata)
+static int fuse_write_begin(const struct kiocb *iocb,
+			    struct address_space *mapping,
+			    loff_t pos, unsigned len, struct folio **foliop,
+			    void **fsdata)
 {
 	pgoff_t index = pos >> PAGE_SHIFT;
+	struct file *file = iocb->ki_filp;
 	struct fuse_conn *fc = get_fuse_conn(file_inode(file));
 	struct folio *folio;
 	loff_t fsize;
@@ -2244,9 +2246,10 @@ error:
 	return err;
 }
 
-static int fuse_write_end(struct file *file, struct address_space *mapping,
-		loff_t pos, unsigned len, unsigned copied,
-		struct folio *folio, void *fsdata)
+static int fuse_write_end(const struct kiocb *iocb,
+			  struct address_space *mapping,
+			  loff_t pos, unsigned len, unsigned copied,
+			  struct folio *folio, void *fsdata)
 {
 	struct inode *inode = folio->mapping->host;
 

@@ -65,10 +65,10 @@ void erofs_init_metabuf(struct erofs_buf *buf, struct super_block *sb)
 }
 
 void *erofs_read_metabuf(struct erofs_buf *buf, struct super_block *sb,
-			 erofs_off_t offset, bool need_kmap)
+			 erofs_off_t offset)
 {
 	erofs_init_metabuf(buf, sb);
-	return erofs_bread(buf, offset, need_kmap);
+	return erofs_bread(buf, offset, true);
 }
 
 int erofs_map_blocks(struct inode *inode, struct erofs_map_blocks *map)
@@ -118,7 +118,7 @@ int erofs_map_blocks(struct inode *inode, struct erofs_map_blocks *map)
 	pos = ALIGN(erofs_iloc(inode) + vi->inode_isize +
 		    vi->xattr_isize, unit) + unit * chunknr;
 
-	idx = erofs_read_metabuf(&buf, sb, pos, true);
+	idx = erofs_read_metabuf(&buf, sb, pos);
 	if (IS_ERR(idx)) {
 		err = PTR_ERR(idx);
 		goto out;
@@ -269,6 +269,16 @@ static int erofs_iomap_begin(struct inode *inode, loff_t offset, loff_t length,
 	if (ret < 0)
 		return ret;
 
+	iomap->offset = map.m_la;
+	iomap->length = map.m_llen;
+	iomap->flags = 0;
+	iomap->private = NULL;
+	if (!(map.m_flags & EROFS_MAP_MAPPED)) {
+		iomap->type = IOMAP_HOLE;
+		iomap->addr = IOMAP_NULL_ADDR;
+		return 0;
+	}
+
 	mdev = (struct erofs_map_dev) {
 		.m_deviceid = map.m_deviceid,
 		.m_pa = map.m_pa,
@@ -277,38 +287,27 @@ static int erofs_iomap_begin(struct inode *inode, loff_t offset, loff_t length,
 	if (ret)
 		return ret;
 
-	iomap->offset = map.m_la;
 	if (flags & IOMAP_DAX)
 		iomap->dax_dev = mdev.m_dif->dax_dev;
 	else
 		iomap->bdev = mdev.m_bdev;
-	iomap->length = map.m_llen;
-	iomap->flags = 0;
-	iomap->private = NULL;
 
-	if (!(map.m_flags & EROFS_MAP_MAPPED)) {
-		iomap->type = IOMAP_HOLE;
-		iomap->addr = IOMAP_NULL_ADDR;
-		if (!iomap->length)
-			iomap->length = length;
-		return 0;
-	}
+	iomap->addr = mdev.m_dif->fsoff + mdev.m_pa;
+	if (flags & IOMAP_DAX)
+		iomap->addr += mdev.m_dif->dax_part_off;
 
 	if (map.m_flags & EROFS_MAP_META) {
 		void *ptr;
 		struct erofs_buf buf = __EROFS_BUF_INITIALIZER;
 
 		iomap->type = IOMAP_INLINE;
-		ptr = erofs_read_metabuf(&buf, sb, mdev.m_pa, true);
+		ptr = erofs_read_metabuf(&buf, sb, mdev.m_pa);
 		if (IS_ERR(ptr))
 			return PTR_ERR(ptr);
 		iomap->inline_data = ptr;
 		iomap->private = buf.base;
 	} else {
 		iomap->type = IOMAP_MAPPED;
-		iomap->addr = mdev.m_dif->fsoff + mdev.m_pa;
-		if (flags & IOMAP_DAX)
-			iomap->addr += mdev.m_dif->dax_part_off;
 	}
 	return 0;
 }
@@ -420,20 +419,20 @@ static const struct vm_operations_struct erofs_dax_vm_ops = {
 	.huge_fault	= erofs_dax_huge_fault,
 };
 
-static int erofs_file_mmap(struct file *file, struct vm_area_struct *vma)
+static int erofs_file_mmap_prepare(struct vm_area_desc *desc)
 {
-	if (!IS_DAX(file_inode(file)))
-		return generic_file_readonly_mmap(file, vma);
+	if (!IS_DAX(file_inode(desc->file)))
+		return generic_file_readonly_mmap_prepare(desc);
 
-	if ((vma->vm_flags & VM_SHARED) && (vma->vm_flags & VM_MAYWRITE))
+	if ((desc->vm_flags & VM_SHARED) && (desc->vm_flags & VM_MAYWRITE))
 		return -EINVAL;
 
-	vma->vm_ops = &erofs_dax_vm_ops;
-	vm_flags_set(vma, VM_HUGEPAGE);
+	desc->vm_ops = &erofs_dax_vm_ops;
+	desc->vm_flags |= VM_HUGEPAGE;
 	return 0;
 }
 #else
-#define erofs_file_mmap	generic_file_readonly_mmap
+#define erofs_file_mmap_prepare	generic_file_readonly_mmap_prepare
 #endif
 
 static loff_t erofs_file_llseek(struct file *file, loff_t offset, int whence)
@@ -463,7 +462,7 @@ static loff_t erofs_file_llseek(struct file *file, loff_t offset, int whence)
 const struct file_operations erofs_file_fops = {
 	.llseek		= erofs_file_llseek,
 	.read_iter	= erofs_file_read_iter,
-	.mmap		= erofs_file_mmap,
+	.mmap_prepare	= erofs_file_mmap_prepare,
 	.get_unmapped_area = thp_get_unmapped_area,
 	.splice_read	= filemap_splice_read,
 };
