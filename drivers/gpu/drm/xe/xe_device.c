@@ -64,10 +64,12 @@
 #include "xe_ttm_sys_mgr.h"
 #include "xe_vm.h"
 #include "xe_vram.h"
+#include "xe_vram_types.h"
 #include "xe_vsec.h"
 #include "xe_wait_user_fence.h"
 #include "xe_wa.h"
 
+#include <generated/xe_device_wa_oob.h>
 #include <generated/xe_wa_oob.h>
 
 static int xe_file_open(struct drm_device *dev, struct drm_file *file)
@@ -686,6 +688,21 @@ static void sriov_update_device_info(struct xe_device *xe)
 	}
 }
 
+static int xe_device_vram_alloc(struct xe_device *xe)
+{
+	struct xe_vram_region *vram;
+
+	if (!IS_DGFX(xe))
+		return 0;
+
+	vram = drmm_kzalloc(&xe->drm, sizeof(*vram), GFP_KERNEL);
+	if (!vram)
+		return -ENOMEM;
+
+	xe->mem.vram = vram;
+	return 0;
+}
+
 /**
  * xe_device_probe_early: Device early probe
  * @xe: xe device instance
@@ -699,6 +716,9 @@ static void sriov_update_device_info(struct xe_device *xe)
 int xe_device_probe_early(struct xe_device *xe)
 {
 	int err;
+
+	xe_wa_device_init(xe);
+	xe_wa_process_device_oob(xe);
 
 	err = xe_mmio_probe_early(xe);
 	if (err)
@@ -729,6 +749,10 @@ int xe_device_probe_early(struct xe_device *xe)
 		return err;
 
 	xe->wedged.mode = xe_modparam.wedged_mode;
+
+	err = xe_device_vram_alloc(xe);
+	if (err)
+		return err;
 
 	return 0;
 }
@@ -860,6 +884,10 @@ int xe_device_probe(struct xe_device *xe)
 		if (err)
 			return err;
 	}
+
+	if (xe->tiles->media_gt &&
+	    XE_WA(xe->tiles->media_gt, 15015404425_disable))
+		XE_DEVICE_WA_DISABLE(xe, 15015404425);
 
 	xe_nvm_init(xe);
 
