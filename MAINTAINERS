@@ -306,10 +306,11 @@ F:	tools/power/acpi/
 
 ACPI APEI
 M:	"Rafael J. Wysocki" <rafael@kernel.org>
-R:	Len Brown <lenb@kernel.org>
-R:	James Morse <james.morse@arm.com>
 R:	Tony Luck <tony.luck@intel.com>
 R:	Borislav Petkov <bp@alien8.de>
+R:	Hanjun Guo <guohanjun@huawei.com>
+R:	Mauro Carvalho Chehab <mchehab@kernel.org>
+R:	Shuai Xue <xueshuai@linux.alibaba.com>
 L:	linux-acpi@vger.kernel.org
 F:	drivers/acpi/apei/
 
@@ -9804,7 +9805,7 @@ F:	fs/freevxfs/
 
 FREEZER
 M:	"Rafael J. Wysocki" <rafael@kernel.org>
-M:	Pavel Machek <pavel@kernel.org>
+R:	Pavel Machek <pavel@kernel.org>
 L:	linux-pm@vger.kernel.org
 S:	Supported
 F:	Documentation/power/freezing-of-tasks.rst
@@ -10682,7 +10683,7 @@ F:	drivers/video/fbdev/hgafb.c
 
 HIBERNATION (aka Software Suspend, aka swsusp)
 M:	"Rafael J. Wysocki" <rafael@kernel.org>
-M:	Pavel Machek <pavel@kernel.org>
+R:	Pavel Machek <pavel@kernel.org>
 L:	linux-pm@vger.kernel.org
 S:	Supported
 B:	https://bugzilla.kernel.org
@@ -24012,8 +24013,8 @@ F:	drivers/sh/
 
 SUSPEND TO RAM
 M:	"Rafael J. Wysocki" <rafael@kernel.org>
-M:	Len Brown <len.brown@intel.com>
-M:	Pavel Machek <pavel@kernel.org>
+R:	Len Brown <lenb@kernel.org>
+R:	Pavel Machek <pavel@kernel.org>
 L:	linux-pm@vger.kernel.org
 S:	Supported
 B:	https://bugzilla.kernel.org
