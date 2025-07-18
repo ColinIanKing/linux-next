@@ -23,6 +23,23 @@
 #define MODULE_LICENSE(x)
 #define dump_stack()	assert(0)
 
+
+#include <linux/maple_tree.h>
+
+static void free_node(struct rcu_head *head)
+{
+	struct maple_node *node = container_of(head, struct maple_node, rcu);
+
+	free(node);
+}
+
+static void kfree_rcu_node(struct maple_node *node)
+{
+	call_rcu(&node->rcu, free_node);
+}
+
+#define kfree_rcu(ptr, memb) kfree_rcu_node(ptr)
+
 #include "../../../lib/maple_tree.c"
 #include "../../../lib/test_maple_tree.c"
 
