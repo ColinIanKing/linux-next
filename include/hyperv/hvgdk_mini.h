@@ -557,7 +557,7 @@ union hv_gpa_page_range {
 struct hv_guest_mapping_flush_list {
 	u64 address_space;
 	u64 flags;
-	union hv_gpa_page_range gpa_list[HV_MAX_FLUSH_REP_COUNT];
+	union hv_gpa_page_range gpa_list[];
 };
 
 struct hv_tlb_flush {	 /* HV_INPUT_FLUSH_VIRTUAL_ADDRESS_LIST */
@@ -1244,7 +1244,7 @@ struct hv_gpa_range_for_visibility {
 	u32 host_visibility : 2;
 	u32 reserved0 : 30;
 	u32 reserved1;
-	u64 gpa_page_list[HV_MAX_MODIFY_GPA_REP_COUNT];
+	u64 gpa_page_list[];
 } __packed;
 
 #if defined(CONFIG_X86)
