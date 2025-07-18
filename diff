@@ -1,0 +1,28 @@
+diff --git a/arch/arm64/include/uapi/asm/kvm.h b/arch/arm64/include/uapi/asm/kvm.h
+index ed5f3892674c..14b3a07733fe 100644
+--- a/arch/arm64/include/uapi/asm/kvm.h
++++ b/arch/arm64/include/uapi/asm/kvm.h
+@@ -182,11 +182,21 @@ struct kvm_pmu_event_filter {
+ struct kvm_vcpu_events {
+ 	struct {
+ 		__u8 serror_pending;
+-		__u8 serror_has_esr;
++		union {
++#ifndef __KERNEL__
++			__u8 serror_has_esr;
++#endif
++			__u8 ext_abt_has_esr;
++		};
+ 		__u8 ext_dabt_pending;
+ 		/* Align it to 8 bytes */
+ 		__u8 pad[5];
+-		__u64 serror_esr;
++		union {
++#ifndef __KERNEL__
++			__u64 serror_esr;
++#endif
++			__u64 ext_abt_esr;
++		};
+ 	} exception;
+ 	__u32 reserved[12];
+ };
