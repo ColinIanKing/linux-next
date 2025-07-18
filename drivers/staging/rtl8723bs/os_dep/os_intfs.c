@@ -99,8 +99,6 @@ MODULE_PARM_DESC(rtw_ant_num, "Antenna number setting");
 static int rtw_antdiv_cfg = 1; /*  0:OFF , 1:ON, 2:decide by Efuse config */
 static int rtw_antdiv_type; /* 0:decide by efuse  1: for 88EE, 1Tx and 1RxCG are diversity.(2 Ant with SPDT), 2:  for 88EE, 1Tx and 2Rx are diversity.(2 Ant, Tx and RxCG are both on aux port, RxCS is on main port), 3: for 88EE, 1Tx and 1RxCG are fixed.(1Ant, Tx and RxCG are both on aux port) */
 
-
-
 static int rtw_hw_wps_pbc;
 
 int rtw_mc2u_disable;
@@ -627,7 +625,6 @@ void rtw_reset_drv_sw(struct adapter *padapter)
 	padapter->mlmeextpriv.sitesurvey_res.state = SCAN_DISABLE;
 
 	rtw_set_signal_stat_timer(&padapter->recvpriv);
-
 }
 
 
@@ -709,9 +706,6 @@ void rtw_cancel_all_timer(struct adapter *padapter)
 	rtw_clear_scan_deny(padapter);
 
 	timer_delete_sync(&padapter->recvpriv.signal_stat_timer);
-
-	/* cancel dm timer */
-	rtw_hal_dm_deinit(padapter);
 }
 
 u8 rtw_free_drv_sw(struct adapter *padapter)
@@ -922,7 +916,7 @@ static int pm_netdev_open(struct net_device *pnetdev, u8 bnormal)
 			mutex_unlock(&(adapter_to_dvobj(padapter)->hw_init_mutex));
 		}
 	} else {
-		status =  (_SUCCESS == ips_netdrv_open(padapter)) ? (0) : (-1);
+		status =  (ips_netdrv_open(padapter) == _SUCCESS) ? (0) : (-1);
 	}
 
 	return status;
@@ -1112,7 +1106,7 @@ void rtw_suspend_common(struct adapter *padapter)
 
 	if ((!padapter->bup) || (padapter->bDriverStopped) || (padapter->bSurpriseRemoved)) {
 		pdbgpriv->dbg_suspend_error_cnt++;
-		goto exit;
+		return;
 	}
 	rtw_ps_deny(padapter, PS_DENY_SUSPEND);
 
@@ -1134,10 +1128,6 @@ void rtw_suspend_common(struct adapter *padapter)
 
 	netdev_dbg(padapter->pnetdev, "rtw suspend success in %d ms\n",
 		   jiffies_to_msecs(jiffies - start_time));
-
-exit:
-
-	return;
 }
 
 static int rtw_resume_process_normal(struct adapter *padapter)
@@ -1211,9 +1201,9 @@ int rtw_resume_common(struct adapter *padapter)
 
 	hal_btcoex_SuspendNotify(padapter, 0);
 
-	if (pwrpriv) {
+	if (pwrpriv)
 		pwrpriv->bInSuspend = false;
-	}
+
 	netdev_dbg(padapter->pnetdev, "%s:%d in %d ms\n", __func__, ret,
 		   jiffies_to_msecs(jiffies - start_time));
 
