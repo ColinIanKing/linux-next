@@ -67,8 +67,7 @@ extern bool hv_nested;
 extern u64 hv_current_partition_id;
 extern enum hv_partition_type hv_curr_partition_type;
 
-extern void * __percpu *hyperv_pcpu_input_arg;
-extern void * __percpu *hyperv_pcpu_output_arg;
+extern void * __percpu *hyperv_pcpu_arg;
 
 u64 hv_do_hypercall(u64 control, void *inputaddr, void *outputaddr);
 u64 hv_do_fast_hypercall8(u16 control, u64 input8);
@@ -154,9 +153,6 @@ static inline u64 hv_do_rep_hypercall(u16 code, u16 rep_count, u16 varhead_size,
 /*
  * Hypercall input and output argument setup
  */
-
-/* Temporary mapping to be removed at the end of the patch series */
-#define hyperv_pcpu_arg hyperv_pcpu_input_arg
 
 /*
  * Allocate one page that is shared between input and output args, which is
