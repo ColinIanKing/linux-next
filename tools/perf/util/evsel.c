@@ -56,6 +56,7 @@
 #include "off_cpu.h"
 #include "pmu.h"
 #include "pmus.h"
+#include "drm_pmu.h"
 #include "hwmon_pmu.h"
 #include "tool_pmu.h"
 #include "rlimit.h"
@@ -1656,6 +1657,15 @@ static void evsel__free_config_terms(struct evsel *evsel)
 	free_config_terms(&evsel->config_terms);
 }
 
+static void (*evsel__priv_destructor)(void *priv);
+
+void evsel__set_priv_destructor(void (*destructor)(void *priv))
+{
+	assert(evsel__priv_destructor == NULL);
+
+	evsel__priv_destructor = destructor;
+}
+
 void evsel__exit(struct evsel *evsel)
 {
 	assert(list_empty(&evsel->core.node));
@@ -1686,6 +1696,8 @@ void evsel__exit(struct evsel *evsel)
 	hashmap__free(evsel->per_pkg_mask);
 	evsel->per_pkg_mask = NULL;
 	zfree(&evsel->metric_events);
+	if (evsel__priv_destructor)
+		evsel__priv_destructor(evsel->priv);
 	perf_evsel__object.fini(evsel);
 	if (evsel__tool_event(evsel) == TOOL_PMU__EVENT_SYSTEM_TIME ||
 	    evsel__tool_event(evsel) == TOOL_PMU__EVENT_USER_TIME)
@@ -1888,6 +1900,9 @@ int evsel__read_counter(struct evsel *evsel, int cpu_map_idx, int thread)
 
 	if (evsel__is_hwmon(evsel))
 		return evsel__hwmon_pmu_read(evsel, cpu_map_idx, thread);
+
+	if (evsel__is_drm(evsel))
+		return evsel__drm_pmu_read(evsel, cpu_map_idx, thread);
 
 	if (evsel__is_retire_lat(evsel))
 		return evsel__tpebs_read(evsel, cpu_map_idx, thread);
@@ -2609,6 +2624,11 @@ fallback_missing_features:
 		return evsel__hwmon_pmu_open(evsel, threads,
 					     start_cpu_map_idx,
 					     end_cpu_map_idx);
+	}
+	if (evsel__is_drm(evsel)) {
+		return evsel__drm_pmu_open(evsel, threads,
+					   start_cpu_map_idx,
+					   end_cpu_map_idx);
 	}
 
 	for (idx = start_cpu_map_idx; idx < end_cpu_map_idx; idx++) {

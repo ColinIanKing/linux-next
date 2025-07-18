@@ -108,9 +108,7 @@ static struct parse_events_option_args parse_events_option_args = {
 
 static bool all_counters_use_bpf = true;
 
-static struct target target = {
-	.uid	= UINT_MAX,
-};
+static struct target target;
 
 static volatile sig_atomic_t	child_pid			= -1;
 static int			detailed_run			=  0;
@@ -1865,8 +1863,7 @@ static int add_default_events(void)
 						stat_config.metric_no_threshold,
 						stat_config.user_requested_cpu_list,
 						stat_config.system_wide,
-						stat_config.hardware_aware_grouping,
-						&stat_config.metric_events);
+						stat_config.hardware_aware_grouping);
 		goto out;
 	}
 
@@ -1903,8 +1900,7 @@ static int add_default_events(void)
 						stat_config.metric_no_threshold,
 						stat_config.user_requested_cpu_list,
 						stat_config.system_wide,
-						stat_config.hardware_aware_grouping,
-						&stat_config.metric_events);
+						stat_config.hardware_aware_grouping);
 		goto out;
 	}
 
@@ -1941,8 +1937,7 @@ static int add_default_events(void)
 						/*metric_no_threshold=*/true,
 						stat_config.user_requested_cpu_list,
 						stat_config.system_wide,
-						stat_config.hardware_aware_grouping,
-						&stat_config.metric_events) < 0) {
+						stat_config.hardware_aware_grouping) < 0) {
 			ret = -1;
 			goto out;
 		}
@@ -1991,8 +1986,7 @@ static int add_default_events(void)
 							/*metric_no_threshold=*/true,
 							stat_config.user_requested_cpu_list,
 							stat_config.system_wide,
-							stat_config.hardware_aware_grouping,
-							&stat_config.metric_events) < 0) {
+							stat_config.hardware_aware_grouping) < 0) {
 				ret = -1;
 				goto out;
 			}
@@ -2001,6 +1995,9 @@ static int add_default_events(void)
 				evsel->default_metricgroup = true;
 
 			evlist__splice_list_tail(evlist, &metric_evlist->core.entries);
+			metricgroup__copy_metric_events(evlist, /*cgrp=*/NULL,
+							&evlist->metric_events,
+							&metric_evlist->metric_events);
 			evlist__delete(metric_evlist);
 		}
 	}
@@ -2055,6 +2052,9 @@ out:
 	}
 	parse_events_error__exit(&err);
 	evlist__splice_list_tail(evsel_list, &evlist->core.entries);
+	metricgroup__copy_metric_events(evsel_list, /*cgrp=*/NULL,
+					&evsel_list->metric_events,
+					&evlist->metric_events);
 	evlist__delete(evlist);
 	return ret;
 }
@@ -2741,8 +2741,7 @@ int cmd_stat(int argc, const char **argv)
 						stat_config.metric_no_threshold,
 						stat_config.user_requested_cpu_list,
 						stat_config.system_wide,
-						stat_config.hardware_aware_grouping,
-						&stat_config.metric_events);
+						stat_config.hardware_aware_grouping);
 
 		zfree(&metrics);
 		if (ret) {
@@ -2762,8 +2761,7 @@ int cmd_stat(int argc, const char **argv)
 			goto out;
 		}
 
-		if (evlist__expand_cgroup(evsel_list, stat_config.cgroup_list,
-					  &stat_config.metric_events, true) < 0) {
+		if (evlist__expand_cgroup(evsel_list, stat_config.cgroup_list, true) < 0) {
 			parse_options_usage(stat_usage, stat_options,
 					    "for-each-cgroup", 0);
 			goto out;
@@ -2938,7 +2936,6 @@ out:
 
 	evlist__delete(evsel_list);
 
-	metricgroup__rblist_exit(&stat_config.metric_events);
 	evlist__close_control(stat_config.ctl_fd, stat_config.ctl_fd_ack, &stat_config.ctl_fd_close);
 
 	return status;
