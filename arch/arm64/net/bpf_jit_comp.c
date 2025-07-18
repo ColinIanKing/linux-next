@@ -1630,17 +1630,14 @@ emit_cond_jmp:
 			return ret;
 		break;
 
-	/* speculation barrier */
+	/* speculation barrier against v1 and v4 */
 	case BPF_ST | BPF_NOSPEC:
-		/*
-		 * Nothing required here.
-		 *
-		 * In case of arm64, we rely on the firmware mitigation of
-		 * Speculative Store Bypass as controlled via the ssbd kernel
-		 * parameter. Whenever the mitigation is enabled, it works
-		 * for all of the kernel code with no need to provide any
-		 * additional instructions.
-		 */
+		if (alternative_has_cap_likely(ARM64_HAS_SB)) {
+			emit(A64_SB, ctx);
+		} else {
+			emit(A64_DSB_NSH, ctx);
+			emit(A64_ISB, ctx);
+		}
 		break;
 
 	/* ST: *(size *)(dst + off) = imm */
@@ -2243,11 +2240,6 @@ static int calc_arg_aux(const struct btf_func_model *m,
 
 	/* the rest arguments are passed through stack */
 	for (; i < m->nr_args; i++) {
-		/* We can not know for sure about exact alignment needs for
-		 * struct passed on stack, so deny those
-		 */
-		if (m->arg_flags[i] & BTF_FMODEL_STRUCT_ARG)
-			return -ENOTSUPP;
 		stack_slots = (m->arg_size[i] + 7) / 8;
 		a->bstack_for_args += stack_slots * 8;
 		a->ostack_for_args = a->ostack_for_args + stack_slots * 8;
@@ -2908,6 +2900,17 @@ bool bpf_jit_supports_insn(struct bpf_insn *insn, bool in_arena)
 
 bool bpf_jit_supports_percpu_insn(void)
 {
+	return true;
+}
+
+bool bpf_jit_bypass_spec_v4(void)
+{
+	/* In case of arm64, we rely on the firmware mitigation of Speculative
+	 * Store Bypass as controlled via the ssbd kernel parameter. Whenever
+	 * the mitigation is enabled, it works for all of the kernel code with
+	 * no need to provide any additional instructions. Therefore, skip
+	 * inserting nospec insns against Spectre v4.
+	 */
 	return true;
 }
 
