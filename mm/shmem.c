@@ -1692,9 +1692,7 @@ try_split:
 				__GFP_HIGH | __GFP_NOMEMALLOC | __GFP_NOWARN);
 		/* Swap entry might be erased by racing shmem_free_swap() */
 		if (!error) {
-			spin_lock(&info->lock);
-			info->swapped -= nr_pages;
-			spin_unlock(&info->lock);
+			shmem_recalc_inode(inode, 0, -nr_pages);
 			swap_free_nr(folio->swap, nr_pages);
 		}
 
