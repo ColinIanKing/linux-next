@@ -12,27 +12,34 @@
 
 int bch2_dev_missing_bkey(struct bch_fs *c, struct bkey_s_c k, unsigned dev)
 {
-	struct printbuf buf = PRINTBUF;
+	CLASS(printbuf, buf)();
 	bch2_log_msg_start(c, &buf);
 
-	prt_printf(&buf, "pointer to nonexistent device %u in key\n", dev);
-	bch2_bkey_val_to_text(&buf, c, k);
+	bool removed = test_bit(dev, c->devs_removed.d);
 
-	bool print = bch2_count_fsck_err(c, ptr_to_invalid_device, &buf);
+	prt_printf(&buf, "pointer to %s device %u in key\n",
+		   removed ? "removed" : "nonexistent", dev);
+	bch2_bkey_val_to_text(&buf, c, k);
+	prt_newline(&buf);
+
+	bool print = removed
+		? bch2_count_fsck_err(c, ptr_to_removed_device, &buf)
+		: bch2_count_fsck_err(c, ptr_to_invalid_device, &buf);
 
 	int ret = bch2_run_explicit_recovery_pass(c, &buf,
 					BCH_RECOVERY_PASS_check_allocations, 0);
 
 	if (print)
 		bch2_print_str(c, KERN_ERR, buf.buf);
-	printbuf_exit(&buf);
 	return ret;
 }
 
 void bch2_dev_missing_atomic(struct bch_fs *c, unsigned dev)
 {
 	if (dev != BCH_SB_MEMBER_INVALID)
-		bch2_fs_inconsistent(c, "pointer to nonexistent device %u", dev);
+		bch2_fs_inconsistent(c, "pointer to %s device %u",
+				     test_bit(dev, c->devs_removed.d)
+				     ? "removed" : "nonexistent", dev);
 }
 
 void bch2_dev_bucket_missing(struct bch_dev *ca, u64 bucket)
@@ -413,14 +420,29 @@ void bch2_sb_members_from_cpu(struct bch_fs *c)
 	}
 }
 
+void bch2_sb_members_to_cpu(struct bch_fs *c)
+{
+	for_each_member_device(c, ca) {
+		struct bch_member m = bch2_sb_member_get(c->disk_sb.sb, ca->dev_idx);
+		ca->mi = bch2_mi_to_cpu(&m);
+	}
+
+	struct bch_sb_field_members_v2 *mi2 = bch2_sb_field_get(c->disk_sb.sb, members_v2);
+	if (mi2)
+		for (unsigned i = 0; i < c->sb.nr_devices; i++) {
+			struct bch_member m = members_v2_get(mi2, i);
+			bool removed = uuid_equal(&m.uuid, &BCH_SB_MEMBER_DELETED_UUID);
+			mod_bit(i, c->devs_removed.d, removed);
+		}
+}
+
 void bch2_dev_io_errors_to_text(struct printbuf *out, struct bch_dev *ca)
 {
 	struct bch_fs *c = ca->fs;
 	struct bch_member m;
 
-	mutex_lock(&ca->fs->sb_lock);
-	m = bch2_sb_member_get(c->disk_sb.sb, ca->dev_idx);
-	mutex_unlock(&ca->fs->sb_lock);
+	scoped_guard(mutex, &ca->fs->sb_lock)
+		m = bch2_sb_member_get(c->disk_sb.sb, ca->dev_idx);
 
 	printbuf_tabstop_push(out, 12);
 
@@ -447,16 +469,15 @@ void bch2_dev_io_errors_to_text(struct printbuf *out, struct bch_dev *ca)
 void bch2_dev_errors_reset(struct bch_dev *ca)
 {
 	struct bch_fs *c = ca->fs;
-	struct bch_member *m;
 
-	mutex_lock(&c->sb_lock);
-	m = bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx);
+	guard(mutex)(&c->sb_lock);
+
+	struct bch_member *m = bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx);
 	for (unsigned i = 0; i < ARRAY_SIZE(m->errors_at_reset); i++)
 		m->errors_at_reset[i] = cpu_to_le64(atomic64_read(&ca->errors[i]));
 	m->errors_reset_time = cpu_to_le64(ktime_get_real_seconds());
 
 	bch2_write_super(c);
-	mutex_unlock(&c->sb_lock);
 }
 
 /*
@@ -588,7 +609,7 @@ have_slot:
 
 void bch2_sb_members_clean_deleted(struct bch_fs *c)
 {
-	mutex_lock(&c->sb_lock);
+	guard(mutex)(&c->sb_lock);
 	bool write_sb = false;
 
 	for (unsigned i = 0; i < c->sb.nr_devices; i++) {
@@ -602,5 +623,4 @@ void bch2_sb_members_clean_deleted(struct bch_fs *c)
 
 	if (write_sb)
 		bch2_write_super(c);
-	mutex_unlock(&c->sb_lock);
 }
