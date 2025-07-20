@@ -1339,11 +1339,18 @@ static int remap_is_valid(struct vma_remap_struct *vrm)
 			(vma->vm_flags & (VM_DONTEXPAND | VM_PFNMAP)))
 		return -EINVAL;
 
+	/*
+	 * We permit crossing of boundaries for the range being unmapped due to
+	 * a shrink.
+	 */
+	if (vrm->remap_type == MREMAP_SHRINK)
+		old_len = new_len;
+
 	/* We can't remap across vm area boundaries */
 	if (old_len > vma->vm_end - addr)
 		return -EFAULT;
 
-	if (new_len <= old_len)
+	if (new_len == old_len)
 		return 0;
 
 	/* Need to be careful about a growing mapping */
