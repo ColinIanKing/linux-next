@@ -1107,7 +1107,10 @@ struct file {
 	const struct cred		*f_cred;
 	struct fown_struct		*f_owner;
 	/* --- cacheline 1 boundary (64 bytes) --- */
-	struct path			f_path;
+	union {
+		const struct path	f_path;
+		struct path		__f_path;
+	};
 	union {
 		/* regular files (with FMODE_ATOMIC_POS) and directories */
 		struct mutex		f_pos_lock;
