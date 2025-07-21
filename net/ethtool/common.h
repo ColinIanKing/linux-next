@@ -44,6 +44,7 @@ int ethtool_check_max_channel(struct net_device *dev,
 			      struct ethtool_channels channels,
 			      struct genl_info *info);
 int ethtool_check_rss_ctx_busy(struct net_device *dev, u32 rss_context);
+int ethtool_rxfh_config_is_sym(u64 rxfh);
 
 void ethtool_ringparam_get_cfg(struct net_device *dev,
 			       struct ethtool_ringparam *param,
@@ -73,5 +74,13 @@ int ethtool_get_module_eeprom_call(struct net_device *dev,
 				   struct ethtool_eeprom *ee, u8 *data);
 
 bool __ethtool_dev_mm_supported(struct net_device *dev);
+
+#if IS_ENABLED(CONFIG_ETHTOOL_NETLINK)
+void ethtool_rss_notify(struct net_device *dev, u32 rss_context);
+#else
+static inline void ethtool_rss_notify(struct net_device *dev, u32 rss_context)
+{
+}
+#endif
 
 #endif /* _ETHTOOL_COMMON_H */
