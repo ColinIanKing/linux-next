@@ -267,7 +267,7 @@ static inline union journal_res_state journal_state_buf_put(struct journal *j, u
 {
 	union journal_res_state s;
 
-	s.v = atomic64_sub_return(((union journal_res_state) {
+	s.v = atomic64_sub_return_release(((union journal_res_state) {
 				    .buf0_count = idx == 0,
 				    .buf1_count = idx == 1,
 				    .buf2_count = idx == 2,
@@ -297,9 +297,8 @@ static inline void bch2_journal_buf_put(struct journal *j, u64 seq)
 
 	s = journal_state_buf_put(j, idx);
 	if (!journal_state_count(s, idx)) {
-		spin_lock(&j->lock);
+		guard(spinlock)(&j->lock);
 		bch2_journal_buf_put_final(j, seq);
-		spin_unlock(&j->lock);
 	} else if (unlikely(s.cur_entry_offset == JOURNAL_ENTRY_BLOCKED_VAL))
 		wake_up(&j->wait);
 }

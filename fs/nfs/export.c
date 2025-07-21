@@ -66,13 +66,20 @@ nfs_fh_to_dentry(struct super_block *sb, struct fid *fid,
 {
 	struct nfs_fattr *fattr = NULL;
 	struct nfs_fh *server_fh = nfs_exp_embedfh(fid->raw);
-	size_t fh_size = offsetof(struct nfs_fh, data) + server_fh->size;
+	size_t fh_size;
 	const struct nfs_rpc_ops *rpc_ops;
 	struct dentry *dentry;
 	struct inode *inode;
-	int len = EMBED_FH_OFF + XDR_QUADLEN(fh_size);
+	int len;
 	u32 *p = fid->raw;
 	int ret;
+
+	/* check for user input size */
+	if ((char*)server_fh <= (char*)p || (int)((u32*)server_fh - (u32*)p + 1) < fh_len)
+		return ERR_PTR(-EINVAL);
+
+	fh_size = offsetof(struct nfs_fh, data) + server_fh->size;
+	len = EMBED_FH_OFF + XDR_QUADLEN(fh_size);
 
 	/* NULL translates to ESTALE */
 	if (fh_len < len || fh_type != len)
