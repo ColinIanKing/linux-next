@@ -1,0 +1,41 @@
+soc/arm
+	patch
+		ARM: Switch to new sys-off handler API
+
+soc/dt
+	patch
+		arm64: dts: lg: Refactor common LG1312 and LG1313 parts
+		arm64: dts: lg: Add missing PL011 "uartclk"
+		arm64: dts: cavium: thunder2: Add missing PL011 "uartclk"
+	renesas/dt-bindings
+		https://git.kernel.org/pub/scm/linux/kernel/git/geert/renesas-devel tags/renesas-dt-bindings-for-v6.17-tag1
+	renesas/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/geert/renesas-devel tags/renesas-dts-for-v6.17-tag1
+	broadcom/dt
+		https://github.com/Broadcom/stblinux tags/arm-soc/for-6.17/devicetree
+	patch
+		ARM: dts: lpc32xx: Add #pwm-cells property to the two SoC PWMs
+		MAINTAINERS: Switch ASPEED tree to shared BMC repository
+	broadcom/dt64
+		https://github.com/Broadcom/stblinux tags/arm-soc/for-6.17/devicetree-arm64
+
+soc/drivers
+	renesas/drivers
+		https://git.kernel.org/pub/scm/linux/kernel/git/geert/renesas-devel tags/renesas-drivers-for-v6.17-tag1
+
+soc/defconfig
+	renesas/defconfig
+		https://git.kernel.org/pub/scm/linux/kernel/git/geert/renesas-devel tags/renesas-arm-defconfig-for-v6.17-tag1
+	broadcom/defconfig
+		https://github.com/Broadcom/stblinux tags/arm-soc/for-6.17/defconfig-arm64
+
+soc/late
+
+arm/fixes
+	<no branch> (a46b4822bed08d15a856966357a4b12273751cd3)
+		https://git.kernel.org/pub/scm/linux/kernel/git/sunxi/linux tags/sunxi-fixes-for-6.16
+
+soc/newsoc
+	newsoc/pxa1908
+		Merge branch 'newsoc/pxa1908' into soc/newsoc
+
