@@ -963,6 +963,20 @@ struct bkey_s_c bch2_btree_iter_peek_and_restart_outlined(struct btree_trans *,
 	_p;								\
 })
 
+#define allocate_dropping_locks_norelock(_trans, _lock_dropped, _do)	\
+({									\
+	gfp_t _gfp = GFP_NOWAIT|__GFP_NOWARN;				\
+	typeof(_do) _p = _do;						\
+	_lock_dropped = false;						\
+	if (unlikely(!_p)) {						\
+		bch2_trans_unlock(_trans);				\
+		_lock_dropped = true;					\
+		_gfp = GFP_KERNEL;					\
+		_p = _do;						\
+	}								\
+	_p;								\
+})
+
 struct btree_trans *__bch2_trans_get(struct bch_fs *, unsigned);
 void bch2_trans_put(struct btree_trans *);
 
@@ -993,13 +1007,19 @@ static inline void class_btree_trans_destructor(struct btree_trans **p)
 
 #define class_btree_trans_constructor(_c)	bch2_trans_get(_c)
 
+/* deprecated, prefer CLASS(btree_trans) */
 #define bch2_trans_run(_c, _do)						\
 ({									\
 	CLASS(btree_trans, trans)(_c);					\
 	(_do);								\
 })
 
-#define bch2_trans_do(_c, _do)	bch2_trans_run(_c, lockrestart_do(trans, _do))
+/* deprecated, prefer CLASS(btree_trans) */
+#define bch2_trans_do(_c, _do)						\
+({									\
+	CLASS(btree_trans, trans)(_c);					\
+	lockrestart_do(trans, _do);					\
+})
 
 void bch2_btree_trans_to_text(struct printbuf *, struct btree_trans *);
 
