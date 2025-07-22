@@ -44,6 +44,7 @@ description: |
         msm8953
         msm8956
         msm8960
+        msm8960t
         msm8974
         msm8974pro
         msm8976
@@ -87,6 +88,7 @@ description: |
         sm6115
         sm6115p
         sm6125
+        sm6150
         sm6350
         sm6375
         sm7125
@@ -205,10 +207,17 @@ properties:
 
       - items:
           - enum:
+              - sony,huashan
+          - const: qcom,msm8960t
+          - const: qcom,msm8960
+
+      - items:
+          - enum:
               - lge,hammerhead
               - samsung,hlte
               - sony,xperia-amami
               - sony,xperia-honami
+              - sony,xperia-togari
           - const: qcom,msm8974
 
       - items:
@@ -229,6 +238,11 @@ properties:
           - const: samsung,klte
           - const: qcom,msm8974pro
           - const: qcom,msm8974
+
+      - items:
+          - enum:
+              - longcheer,l9360
+          - const: qcom,msm8976
 
       - items:
           - enum:
@@ -943,6 +957,7 @@ properties:
           - enum:
               - qcom,qcs615-ride
           - const: qcom,qcs615
+          - const: qcom,sm6150
 
       - items:
           - enum:
