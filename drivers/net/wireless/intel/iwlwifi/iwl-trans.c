@@ -14,8 +14,8 @@
 #include "iwl-fh.h"
 #include <linux/dmapool.h>
 #include "fw/api/commands.h"
-#include "pcie/internal.h"
-#include "iwl-context-info-v2.h"
+#include "pcie/gen1_2/internal.h"
+#include "pcie/iwl-context-info-v2.h"
 
 struct iwl_trans_dev_restart_data {
 	struct list_head list;
@@ -268,7 +268,9 @@ static void iwl_trans_restart_wk(struct work_struct *wk)
 
 struct iwl_trans *iwl_trans_alloc(unsigned int priv_size,
 				  struct device *dev,
-				  const struct iwl_mac_cfg *mac_cfg)
+				  const struct iwl_mac_cfg *mac_cfg,
+				  unsigned int txcmd_size,
+				  unsigned int txcmd_align)
 {
 	struct iwl_trans *trans;
 #ifdef CONFIG_LOCKDEP
@@ -290,35 +292,6 @@ struct iwl_trans *iwl_trans_alloc(unsigned int priv_size,
 
 	INIT_DELAYED_WORK(&trans->restart.wk, iwl_trans_restart_wk);
 
-	return trans;
-}
-
-int iwl_trans_init(struct iwl_trans *trans)
-{
-	int txcmd_size, txcmd_align;
-
-	/* check if name/num_rx_queues were set as a proxy for info being set */
-	if (WARN_ON(!trans->info.name || !trans->info.num_rxqs))
-		return -EINVAL;
-
-	if (!trans->mac_cfg->gen2) {
-		txcmd_size = sizeof(struct iwl_tx_cmd_v6);
-		txcmd_align = sizeof(void *);
-	} else if (trans->mac_cfg->device_family < IWL_DEVICE_FAMILY_AX210) {
-		txcmd_size = sizeof(struct iwl_tx_cmd_v9);
-		txcmd_align = 64;
-	} else {
-		txcmd_size = sizeof(struct iwl_tx_cmd);
-		txcmd_align = 128;
-	}
-
-	txcmd_size += sizeof(struct iwl_cmd_header);
-	txcmd_size += 36; /* biggest possible 802.11 header */
-
-	/* Ensure device TX cmd cannot reach/cross a page boundary in gen2 */
-	if (WARN_ON(trans->mac_cfg->gen2 && txcmd_size >= txcmd_align))
-		return -EINVAL;
-
 	snprintf(trans->dev_cmd_pool_name, sizeof(trans->dev_cmd_pool_name),
 		 "iwl_cmd_pool:%s", dev_name(trans->dev));
 	trans->dev_cmd_pool =
@@ -326,9 +299,9 @@ int iwl_trans_init(struct iwl_trans *trans)
 				  txcmd_size, txcmd_align,
 				  SLAB_HWCACHE_ALIGN, NULL);
 	if (!trans->dev_cmd_pool)
-		return -ENOMEM;
+		return NULL;
 
-	return 0;
+	return trans;
 }
 
 void iwl_trans_free(struct iwl_trans *trans)
@@ -446,7 +419,10 @@ void iwl_trans_op_mode_leave(struct iwl_trans *trans)
 {
 	might_sleep();
 
-	iwl_trans_pcie_op_mode_leave(trans);
+	if (trans->mac_cfg->gen2)
+		iwl_trans_pcie_gen2_op_mode_leave(trans);
+	else
+		iwl_trans_pcie_op_mode_leave(trans);
 
 	cancel_delayed_work_sync(&trans->restart.wk);
 
@@ -497,7 +473,19 @@ IWL_EXPORT_SYMBOL(iwl_trans_read_mem);
 int iwl_trans_write_mem(struct iwl_trans *trans, u32 addr,
 			const void *buf, int dwords)
 {
-	return iwl_trans_pcie_write_mem(trans, addr, buf, dwords);
+	int offs, ret = 0;
+	const u32 *vals = buf;
+
+	if (iwl_trans_grab_nic_access(trans)) {
+		iwl_write32(trans, HBUS_TARG_MEM_WADDR, addr);
+		for (offs = 0; offs < dwords; offs++)
+			iwl_write32(trans, HBUS_TARG_MEM_WDAT,
+				    vals ? vals[offs] : 0);
+		iwl_trans_release_nic_access(trans);
+	} else {
+		ret = -EBUSY;
+	}
+	return ret;
 }
 IWL_EXPORT_SYMBOL(iwl_trans_write_mem);
 
@@ -510,9 +498,9 @@ void iwl_trans_set_pmi(struct iwl_trans *trans, bool state)
 }
 IWL_EXPORT_SYMBOL(iwl_trans_set_pmi);
 
-int iwl_trans_sw_reset(struct iwl_trans *trans, bool retake_ownership)
+int iwl_trans_sw_reset(struct iwl_trans *trans)
 {
-	return iwl_trans_pcie_sw_reset(trans, retake_ownership);
+	return iwl_trans_pcie_sw_reset(trans, true);
 }
 IWL_EXPORT_SYMBOL(iwl_trans_sw_reset);
 

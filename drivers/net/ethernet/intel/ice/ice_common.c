@@ -1342,6 +1342,26 @@ static void ice_copy_rxq_ctx_to_hw(struct ice_hw *hw,
 	}
 }
 
+/**
+ * ice_copy_rxq_ctx_from_hw - Copy packed Rx Queue context from HW registers
+ * @hw: pointer to the hardware structure
+ * @rxq_ctx: pointer to the packed Rx queue context
+ * @rxq_index: the index of the Rx queue
+ */
+static void ice_copy_rxq_ctx_from_hw(struct ice_hw *hw,
+				     ice_rxq_ctx_buf_t *rxq_ctx,
+				     u32 rxq_index)
+{
+	u32 *ctx = (u32 *)rxq_ctx;
+
+	/* Copy each dword separately from HW */
+	for (int i = 0; i < ICE_RXQ_CTX_SIZE_DWORDS; i++, ctx++) {
+		*ctx = rd32(hw, QRX_CONTEXT(i, rxq_index));
+
+		ice_debug(hw, ICE_DBG_QCTX, "qrxdata[%d]: %08X\n", i, *ctx);
+	}
+}
+
 #define ICE_CTX_STORE(struct_name, struct_field, width, lsb) \
 	PACKED_FIELD((lsb) + (width) - 1, (lsb), struct struct_name, struct_field)
 
@@ -1386,6 +1406,21 @@ static void ice_pack_rxq_ctx(const struct ice_rlan_ctx *ctx,
 }
 
 /**
+ * ice_unpack_rxq_ctx - Unpack Rx queue context from a HW buffer
+ * @buf: the HW buffer to unpack from
+ * @ctx: the Rx queue context to unpack
+ *
+ * Unpack the Rx queue context from the HW buffer into the CPU-friendly
+ * structure.
+ */
+static void ice_unpack_rxq_ctx(const ice_rxq_ctx_buf_t *buf,
+			       struct ice_rlan_ctx *ctx)
+{
+	unpack_fields(buf, sizeof(*buf), ctx, ice_rlan_ctx_fields,
+		      QUIRK_LITTLE_ENDIAN | QUIRK_LSW32_IS_FIRST);
+}
+
+/**
  * ice_write_rxq_ctx - Write Rx Queue context to hardware
  * @hw: pointer to the hardware structure
  * @rlan_ctx: pointer to the unpacked Rx queue context
@@ -1406,6 +1441,31 @@ int ice_write_rxq_ctx(struct ice_hw *hw, struct ice_rlan_ctx *rlan_ctx,
 
 	ice_pack_rxq_ctx(rlan_ctx, &buf);
 	ice_copy_rxq_ctx_to_hw(hw, &buf, rxq_index);
+
+	return 0;
+}
+
+/**
+ * ice_read_rxq_ctx - Read Rx queue context from HW
+ * @hw: pointer to the hardware structure
+ * @rlan_ctx: pointer to the Rx queue context
+ * @rxq_index: the index of the Rx queue
+ *
+ * Read the Rx queue context from the hardware registers, and unpack it into
+ * the sparse Rx queue context structure.
+ *
+ * Returns: 0 on success, or -EINVAL if the Rx queue index is invalid.
+ */
+int ice_read_rxq_ctx(struct ice_hw *hw, struct ice_rlan_ctx *rlan_ctx,
+		     u32 rxq_index)
+{
+	ice_rxq_ctx_buf_t buf = {};
+
+	if (rxq_index > QRX_CTRL_MAX_INDEX)
+		return -EINVAL;
+
+	ice_copy_rxq_ctx_from_hw(hw, &buf, rxq_index);
+	ice_unpack_rxq_ctx(&buf, rlan_ctx);
 
 	return 0;
 }
@@ -1443,17 +1503,184 @@ static const struct packed_field_u8 ice_tlan_ctx_fields[] = {
 };
 
 /**
- * ice_pack_txq_ctx - Pack Tx queue context into a HW buffer
+ * ice_pack_txq_ctx - Pack Tx queue context into Admin Queue buffer
  * @ctx: the Tx queue context to pack
- * @buf: the HW buffer to pack into
+ * @buf: the Admin Queue HW buffer to pack into
  *
  * Pack the Tx queue context from the CPU-friendly unpacked buffer into its
- * bit-packed HW layout.
+ * bit-packed Admin Queue layout.
  */
 void ice_pack_txq_ctx(const struct ice_tlan_ctx *ctx, ice_txq_ctx_buf_t *buf)
 {
 	pack_fields(buf, sizeof(*buf), ctx, ice_tlan_ctx_fields,
 		    QUIRK_LITTLE_ENDIAN | QUIRK_LSW32_IS_FIRST);
+}
+
+/**
+ * ice_pack_txq_ctx_full - Pack Tx queue context into a HW buffer
+ * @ctx: the Tx queue context to pack
+ * @buf: the HW buffer to pack into
+ *
+ * Pack the Tx queue context from the CPU-friendly unpacked buffer into its
+ * bit-packed HW layout, including the internal data portion.
+ */
+static void ice_pack_txq_ctx_full(const struct ice_tlan_ctx *ctx,
+				  ice_txq_ctx_buf_full_t *buf)
+{
+	pack_fields(buf, sizeof(*buf), ctx, ice_tlan_ctx_fields,
+		    QUIRK_LITTLE_ENDIAN | QUIRK_LSW32_IS_FIRST);
+}
+
+/**
+ * ice_unpack_txq_ctx_full - Unpack Tx queue context from a HW buffer
+ * @buf: the HW buffer to unpack from
+ * @ctx: the Tx queue context to unpack
+ *
+ * Unpack the Tx queue context from the HW buffer (including the full internal
+ * state) into the CPU-friendly structure.
+ */
+static void ice_unpack_txq_ctx_full(const ice_txq_ctx_buf_full_t *buf,
+				    struct ice_tlan_ctx *ctx)
+{
+	unpack_fields(buf, sizeof(*buf), ctx, ice_tlan_ctx_fields,
+		      QUIRK_LITTLE_ENDIAN | QUIRK_LSW32_IS_FIRST);
+}
+
+/**
+ * ice_copy_txq_ctx_from_hw - Copy Tx Queue context from HW registers
+ * @hw: pointer to the hardware structure
+ * @txq_ctx: pointer to the packed Tx queue context, including internal state
+ * @txq_index: the index of the Tx queue
+ *
+ * Copy Tx Queue context from HW register space to dense structure
+ */
+static void ice_copy_txq_ctx_from_hw(struct ice_hw *hw,
+				     ice_txq_ctx_buf_full_t *txq_ctx,
+				     u32 txq_index)
+{
+	struct ice_pf *pf = container_of(hw, struct ice_pf, hw);
+	u32 *ctx = (u32 *)txq_ctx;
+	u32 txq_base, reg;
+
+	/* Get Tx queue base within card space */
+	txq_base = rd32(hw, PFLAN_TX_QALLOC(hw->pf_id));
+	txq_base = FIELD_GET(PFLAN_TX_QALLOC_FIRSTQ_M, txq_base);
+
+	reg = FIELD_PREP(GLCOMM_QTX_CNTX_CTL_CMD_M,
+			 GLCOMM_QTX_CNTX_CTL_CMD_READ) |
+	      FIELD_PREP(GLCOMM_QTX_CNTX_CTL_QUEUE_ID_M,
+			 txq_base + txq_index) |
+	      GLCOMM_QTX_CNTX_CTL_CMD_EXEC_M;
+
+	/* Prevent other PFs on the same adapter from accessing the Tx queue
+	 * context interface concurrently.
+	 */
+	spin_lock(&pf->adapter->txq_ctx_lock);
+
+	wr32(hw, GLCOMM_QTX_CNTX_CTL, reg);
+	ice_flush(hw);
+
+	/* Copy each dword separately from HW */
+	for (int i = 0; i < ICE_TXQ_CTX_FULL_SIZE_DWORDS; i++, ctx++) {
+		*ctx = rd32(hw, GLCOMM_QTX_CNTX_DATA(i));
+
+		ice_debug(hw, ICE_DBG_QCTX, "qtxdata[%d]: %08X\n", i, *ctx);
+	}
+
+	spin_unlock(&pf->adapter->txq_ctx_lock);
+}
+
+/**
+ * ice_copy_txq_ctx_to_hw - Copy Tx Queue context into HW registers
+ * @hw: pointer to the hardware structure
+ * @txq_ctx: pointer to the packed Tx queue context, including internal state
+ * @txq_index: the index of the Tx queue
+ */
+static void ice_copy_txq_ctx_to_hw(struct ice_hw *hw,
+				   const ice_txq_ctx_buf_full_t *txq_ctx,
+				   u32 txq_index)
+{
+	struct ice_pf *pf = container_of(hw, struct ice_pf, hw);
+	u32 txq_base, reg;
+
+	/* Get Tx queue base within card space */
+	txq_base = rd32(hw, PFLAN_TX_QALLOC(hw->pf_id));
+	txq_base = FIELD_GET(PFLAN_TX_QALLOC_FIRSTQ_M, txq_base);
+
+	reg = FIELD_PREP(GLCOMM_QTX_CNTX_CTL_CMD_M,
+			 GLCOMM_QTX_CNTX_CTL_CMD_WRITE_NO_DYN) |
+	      FIELD_PREP(GLCOMM_QTX_CNTX_CTL_QUEUE_ID_M,
+			 txq_base + txq_index) |
+	      GLCOMM_QTX_CNTX_CTL_CMD_EXEC_M;
+
+	/* Prevent other PFs on the same adapter from accessing the Tx queue
+	 * context interface concurrently.
+	 */
+	spin_lock(&pf->adapter->txq_ctx_lock);
+
+	/* Copy each dword separately to HW */
+	for (int i = 0; i < ICE_TXQ_CTX_FULL_SIZE_DWORDS; i++) {
+		u32 ctx = ((const u32 *)txq_ctx)[i];
+
+		wr32(hw, GLCOMM_QTX_CNTX_DATA(i), ctx);
+
+		ice_debug(hw, ICE_DBG_QCTX, "qtxdata[%d]: %08X\n", i, ctx);
+	}
+
+	wr32(hw, GLCOMM_QTX_CNTX_CTL, reg);
+	ice_flush(hw);
+
+	spin_unlock(&pf->adapter->txq_ctx_lock);
+}
+
+/**
+ * ice_read_txq_ctx - Read Tx queue context from HW
+ * @hw: pointer to the hardware structure
+ * @tlan_ctx: pointer to the Tx queue context
+ * @txq_index: the index of the Tx queue
+ *
+ * Read the Tx queue context from the HW registers, then unpack it into the
+ * ice_tlan_ctx structure for use.
+ *
+ * Returns: 0 on success, or -EINVAL on an invalid Tx queue index.
+ */
+int ice_read_txq_ctx(struct ice_hw *hw, struct ice_tlan_ctx *tlan_ctx,
+		     u32 txq_index)
+{
+	ice_txq_ctx_buf_full_t buf = {};
+
+	if (txq_index > QTX_COMM_HEAD_MAX_INDEX)
+		return -EINVAL;
+
+	ice_copy_txq_ctx_from_hw(hw, &buf, txq_index);
+	ice_unpack_txq_ctx_full(&buf, tlan_ctx);
+
+	return 0;
+}
+
+/**
+ * ice_write_txq_ctx - Write Tx queue context to HW
+ * @hw: pointer to the hardware structure
+ * @tlan_ctx: pointer to the Tx queue context
+ * @txq_index: the index of the Tx queue
+ *
+ * Pack the Tx queue context into the dense HW layout, then write it into the
+ * HW registers.
+ *
+ * Returns: 0 on success, or -EINVAL on an invalid Tx queue index.
+ */
+int ice_write_txq_ctx(struct ice_hw *hw, struct ice_tlan_ctx *tlan_ctx,
+		      u32 txq_index)
+{
+	ice_txq_ctx_buf_full_t buf = {};
+
+	if (txq_index > QTX_COMM_HEAD_MAX_INDEX)
+		return -EINVAL;
+
+	ice_pack_txq_ctx_full(tlan_ctx, &buf);
+	ice_copy_txq_ctx_to_hw(hw, &buf, txq_index);
+
+	return 0;
 }
 
 /* Sideband Queue command wrappers */
@@ -2301,12 +2528,12 @@ ice_parse_1588_func_caps(struct ice_hw *hw, struct ice_hw_func_caps *func_p,
 		info->clk_freq = FIELD_GET(ICE_TS_CLK_FREQ_M, number);
 		info->clk_src = ((number & ICE_TS_CLK_SRC_M) != 0);
 	} else {
-		info->clk_freq = ICE_TIME_REF_FREQ_156_250;
-		info->clk_src = ICE_CLK_SRC_TCXO;
+		info->clk_freq = ICE_TSPLL_FREQ_156_250;
+		info->clk_src = ICE_CLK_SRC_TIME_REF;
 	}
 
-	if (info->clk_freq < NUM_ICE_TIME_REF_FREQ) {
-		info->time_ref = (enum ice_time_ref_freq)info->clk_freq;
+	if (info->clk_freq < NUM_ICE_TSPLL_FREQ) {
+		info->time_ref = (enum ice_tspll_freq)info->clk_freq;
 	} else {
 		/* Unknown clock frequency, so assume a (probably incorrect)
 		 * default to avoid out-of-bounds look ups of frequency
@@ -2314,7 +2541,7 @@ ice_parse_1588_func_caps(struct ice_hw *hw, struct ice_hw_func_caps *func_p,
 		 */
 		ice_debug(hw, ICE_DBG_INIT, "1588 func caps: unknown clock frequency %u\n",
 			  info->clk_freq);
-		info->time_ref = ICE_TIME_REF_FREQ_25_000;
+		info->time_ref = ICE_TSPLL_FREQ_25_000;
 	}
 
 	ice_debug(hw, ICE_DBG_INIT, "func caps: ieee_1588 = %u\n",
@@ -4971,6 +5198,32 @@ ice_dis_vsi_rdma_qset(struct ice_port_info *pi, u16 count, u32 *qset_teid,
 }
 
 /**
+ * ice_aq_get_cgu_input_pin_measure - get input pin signal measurements
+ * @hw: pointer to the HW struct
+ * @dpll_idx: index of dpll to be measured
+ * @meas: array to be filled with results
+ * @meas_num: max number of results array can hold
+ *
+ * Get CGU measurements (0x0C59) of phase and frequency offsets for input
+ * pins on given dpll.
+ *
+ * Return: 0 on success or negative value on failure.
+ */
+int ice_aq_get_cgu_input_pin_measure(struct ice_hw *hw, u8 dpll_idx,
+				     struct ice_cgu_input_measure *meas,
+				     u16 meas_num)
+{
+	struct ice_aqc_get_cgu_input_measure *cmd;
+	struct ice_aq_desc desc;
+
+	ice_fill_dflt_direct_cmd_desc(&desc, ice_aqc_opc_get_cgu_input_measure);
+	cmd = &desc.params.get_cgu_input_measure;
+	cmd->dpll_idx_opt = dpll_idx & ICE_AQC_GET_CGU_IN_MEAS_DPLL_IDX_M;
+
+	return ice_aq_send_cmd(hw, &desc, meas, meas_num * sizeof(*meas), NULL);
+}
+
+/**
  * ice_aq_get_cgu_abilities - get cgu abilities
  * @hw: pointer to the HW struct
  * @abilities: CGU abilities
@@ -6105,4 +6358,65 @@ u32 ice_get_link_speed(u16 index)
 		return 0;
 
 	return ice_aq_to_link_speed[index];
+}
+
+/**
+ * ice_read_cgu_reg - Read a CGU register
+ * @hw: Pointer to the HW struct
+ * @addr: Register address to read
+ * @val: Storage for register value read
+ *
+ * Read the contents of a register of the Clock Generation Unit. Only
+ * applicable to E82X devices.
+ *
+ * Return: 0 on success, other error codes when failed to read from CGU.
+ */
+int ice_read_cgu_reg(struct ice_hw *hw, u32 addr, u32 *val)
+{
+	struct ice_sbq_msg_input cgu_msg = {
+		.opcode = ice_sbq_msg_rd,
+		.dest_dev = ice_sbq_dev_cgu,
+		.msg_addr_low = addr
+	};
+	int err;
+
+	err = ice_sbq_rw_reg(hw, &cgu_msg, ICE_AQ_FLAG_RD);
+	if (err) {
+		ice_debug(hw, ICE_DBG_PTP, "Failed to read CGU register 0x%04x, err %d\n",
+			  addr, err);
+		return err;
+	}
+
+	*val = cgu_msg.data;
+
+	return 0;
+}
+
+/**
+ * ice_write_cgu_reg - Write a CGU register
+ * @hw: Pointer to the HW struct
+ * @addr: Register address to write
+ * @val: Value to write into the register
+ *
+ * Write the specified value to a register of the Clock Generation Unit. Only
+ * applicable to E82X devices.
+ *
+ * Return: 0 on success, other error codes when failed to write to CGU.
+ */
+int ice_write_cgu_reg(struct ice_hw *hw, u32 addr, u32 val)
+{
+	struct ice_sbq_msg_input cgu_msg = {
+		.opcode = ice_sbq_msg_wr,
+		.dest_dev = ice_sbq_dev_cgu,
+		.msg_addr_low = addr,
+		.data = val
+	};
+	int err;
+
+	err = ice_sbq_rw_reg(hw, &cgu_msg, ICE_AQ_FLAG_RD);
+	if (err)
+		ice_debug(hw, ICE_DBG_PTP, "Failed to write CGU register 0x%04x, err %d\n",
+			  addr, err);
+
+	return err;
 }

@@ -30,6 +30,7 @@ ALL_TESTS="
 	kci_test_address_proto
 	kci_test_enslave_bonding
 	kci_test_mngtmpaddr
+	kci_test_operstate
 "
 
 devdummy="test-dummy0"
@@ -291,6 +292,17 @@ kci_test_route_get()
 	end_test "PASS: route get"
 }
 
+check_addr_not_exist()
+{
+	dev=$1
+	addr=$2
+	if ip addr show dev $dev | grep -q $addr; then
+		return 1
+	else
+		return 0
+	fi
+}
+
 kci_test_addrlft()
 {
 	for i in $(seq 10 100) ;do
@@ -298,9 +310,8 @@ kci_test_addrlft()
 		run_cmd ip addr add 10.23.11.$i/32 dev "$devdummy" preferred_lft $lft valid_lft $((lft+1))
 	done
 
-	sleep 5
-	run_cmd_grep_fail "10.23.11." ip addr show dev "$devdummy"
-	if [ $? -eq 0 ]; then
+	slowwait 5 check_addr_not_exist "$devdummy" "10.23.11."
+	if [ $? -eq 1 ]; then
 		check_err 1
 		end_test "FAIL: preferred_lft addresses remaining"
 		return
@@ -1332,6 +1343,39 @@ kci_test_mngtmpaddr()
 
 	ip netns del "$testns"
 	return $ret
+}
+
+kci_test_operstate()
+{
+	local ret=0
+
+	# Check that it is possible to set operational state during device
+	# creation and that it is preserved when the administrative state of
+	# the device is toggled.
+	run_cmd ip link add name vx0 up state up type vxlan id 10010 dstport 4789
+	run_cmd_grep "state UP" ip link show dev vx0
+	run_cmd ip link set dev vx0 down
+	run_cmd_grep "state DOWN" ip link show dev vx0
+	run_cmd ip link set dev vx0 up
+	run_cmd_grep "state UP" ip link show dev vx0
+
+	run_cmd ip link del dev vx0
+
+	# Check that it is possible to set the operational state of the device
+	# after creation.
+	run_cmd ip link add name vx0 up type vxlan id 10010 dstport 4789
+	run_cmd_grep "state UNKNOWN" ip link show dev vx0
+	run_cmd ip link set dev vx0 state up
+	run_cmd_grep "state UP" ip link show dev vx0
+
+	run_cmd ip link del dev vx0
+
+	if [ "$ret" -ne 0 ]; then
+		end_test "FAIL: operstate"
+		return 1
+	fi
+
+	end_test "PASS: operstate"
 }
 
 kci_test_rtnl()
