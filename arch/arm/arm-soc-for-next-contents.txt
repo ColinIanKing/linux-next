@@ -79,6 +79,16 @@ soc/dt
 		https://git.kernel.org/pub/scm/linux/kernel/git/amlogic/linux tags/amlogic-arm64-dt-for-v6.17
 	mvebu/dt
 		https://git.kernel.org/pub/scm/linux/kernel/git/gclement/mvebu tags/mvebu-dt-6.17-1
+	patch
+		ARM: dts: st: spear: Use generic "ethernet" as node name
+	rockchip/dt64-2
+		https://git.kernel.org/pub/scm/linux/kernel/git/mmind/linux-rockchip tags/v6.17-rockchip-dts64-2
+	thead/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/fustini/linux tags/thead-dt-for-v6.17
+	at91/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/at91/linux tags/at91-dt-6.17
+	apple/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/sven/linux tags/apple-soc-dt-6.17
 
 soc/drivers
 	renesas/drivers
@@ -108,6 +118,22 @@ soc/drivers
 		https://git.kernel.org/pub/scm/linux/kernel/git/tegra/linux tags/tegra-for-6.17-soc
 	patch
 		bus: del unnecessary init var
+	tegra/firmware
+		https://git.kernel.org/pub/scm/linux/kernel/git/tegra/linux tags/tegra-for-6.17-firmware
+	tegra/memory
+		https://git.kernel.org/pub/scm/linux/kernel/git/tegra/linux tags/tegra-for-6.17-memory
+	imx/drivers
+		https://git.kernel.org/pub/scm/linux/kernel/git/shawnguo/linux tags/imx-drivers-6.17
+	drivers/memory
+		https://git.kernel.org/pub/scm/linux/kernel/git/krzk/linux-mem-ctrl tags/memory-controller-drv-6.17
+	qcom/drivers
+		https://git.kernel.org/pub/scm/linux/kernel/git/qcom/linux tags/qcom-drivers-for-6.17
+	apple/drivers
+		https://git.kernel.org/pub/scm/linux/kernel/git/sven/linux tags/apple-soc-drivers-6.17
+	qcom/drivers-2
+		https://git.kernel.org/pub/scm/linux/kernel/git/qcom/linux tags/qcom-drivers-for-6.17-2
+	hisilicon/drivers
+		https://github.com/hisilicon/linux-hisi tags/hisi-drivers-for-6.17
 
 soc/defconfig
 	renesas/defconfig
@@ -125,6 +151,12 @@ soc/defconfig
 		https://git.kernel.org/pub/scm/linux/kernel/git/shawnguo/linux tags/imx-defconfig-6.17
 	riscv/defconfig
 		https://git.kernel.org/pub/scm/linux/kernel/git/conor/linux tags/riscv-config-for-v6.17
+	at91/defconfig
+		https://git.kernel.org/pub/scm/linux/kernel/git/at91/linux tags/at91-defconfig-6.17
+	qcom/defconfig
+		https://git.kernel.org/pub/scm/linux/kernel/git/qcom/linux tags/qcom-arm64-defconfig-for-6.17
+	rockchip/defconfig
+		https://git.kernel.org/pub/scm/linux/kernel/git/mmind/linux-rockchip tags/v6.17-rockchip-defconfig64-1
 
 soc/late
 
