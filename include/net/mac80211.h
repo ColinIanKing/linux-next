@@ -758,6 +758,8 @@ struct ieee80211_parsed_tpe {
  *	be updated to 1, even if bss_param_ch_cnt didn't change. This allows
  *	the link to know that it heard the latest value from its own beacon
  *	(as opposed to hearing its value from another link's beacon).
+ * @s1g_long_beacon_period: number of beacon intervals between each long
+ *	beacon transmission.
  */
 struct ieee80211_bss_conf {
 	struct ieee80211_vif *vif;
@@ -857,6 +859,8 @@ struct ieee80211_bss_conf {
 
 	u8 bss_param_ch_cnt;
 	u8 bss_param_ch_cnt_link_id;
+
+	u8 s1g_long_beacon_period;
 };
 
 /**
@@ -6029,18 +6033,6 @@ void ieee80211_set_key_rx_seq(struct ieee80211_key_conf *keyconf,
 			      int tid, struct ieee80211_key_seq *seq);
 
 /**
- * ieee80211_remove_key - remove the given key
- * @keyconf: the parameter passed with the set key
- *
- * Context: Must be called with the wiphy mutex held.
- *
- * Remove the given key. If the key was uploaded to the hardware at the
- * time this function is called, it is not deleted in the hardware but
- * instead assumed to have been removed already.
- */
-void ieee80211_remove_key(struct ieee80211_key_conf *keyconf);
-
-/**
  * ieee80211_gtk_rekey_add - add a GTK key from rekeying during WoWLAN
  * @vif: the virtual interface to add the key on
  * @keyconf: new key data
@@ -6066,9 +6058,7 @@ void ieee80211_remove_key(struct ieee80211_key_conf *keyconf);
  * for the new key for each TID to set up sequence counters properly.
  *
  * IMPORTANT: If this replaces a key that is present in the hardware,
- * then it will attempt to remove it during this call. In many cases
- * this isn't what you want, so call ieee80211_remove_key() first for
- * the key that's being replaced.
+ * then it will attempt to remove it during this call.
  */
 struct ieee80211_key_conf *
 ieee80211_gtk_rekey_add(struct ieee80211_vif *vif,
