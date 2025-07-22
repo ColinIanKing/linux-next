@@ -1712,7 +1712,6 @@ static void test_seal_discard_ro_anon_on_filebacked(bool seal)
 	unsigned long size = 4 * page_size;
 	int ret;
 	int fd;
-	unsigned long mapflags = MAP_PRIVATE;
 
 	fd = memfd_create("test", 0);
 	FAIL_TEST_IF_FALSE(fd > 0);
@@ -1720,7 +1719,7 @@ static void test_seal_discard_ro_anon_on_filebacked(bool seal)
 	ret = fallocate(fd, 0, 0, size);
 	FAIL_TEST_IF_FALSE(!ret);
 
-	ptr = mmap(NULL, size, PROT_READ, mapflags, fd, 0);
+	ptr = mmap(NULL, size, PROT_READ, MAP_SHARED, fd, 0);
 	FAIL_TEST_IF_FALSE(ptr != MAP_FAILED);
 
 	if (seal) {
