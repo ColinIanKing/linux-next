@@ -385,7 +385,9 @@ always
     Attempt to allocate huge pages every time we need a new page;
 
 never
-    Do not allocate huge pages;
+    Do not allocate huge pages. Note that ``madvise(..., MADV_COLLAPSE)``
+    can still cause transparent huge pages to be obtained even if this mode
+    is specified everywhere;
 
 within_size
     Only allocate huge page if it will be fully within i_size.
@@ -441,7 +443,9 @@ inherit
     have enabled="inherit" and all other hugepage sizes have enabled="never";
 
 never
-    Do not allocate <size> huge pages;
+    Do not allocate <size> huge pages. Note that ``madvise(...,
+    MADV_COLLAPSE)`` can still cause transparent huge pages to be obtained
+    even if this mode is specified everywhere;
 
 within_size
     Only allocate <size> huge page if it will be fully within i_size.
