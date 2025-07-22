@@ -206,14 +206,15 @@ out1:
 out:
 	return ret;
 }
-const char* file_type_str(enum file_type type) {
+const char *file_type_str(enum file_type type)
+{
 	switch (type) {
-		case FILE_SHMEM:
-			return "shmem";
-		case FILE_MMAP:
-			return "mmap";
-		default:
-			return "unknown";
+	case FILE_SHMEM:
+		return "shmem";
+	case FILE_MMAP:
+		return "mmap";
+	default:
+		return "unknown";
 	}
 }
 
@@ -236,7 +237,8 @@ bool run_cachestat_test(enum file_type type)
 		fd = open(filename, O_RDWR | O_CREAT | O_TRUNC, 0666);
 
 	if (fd < 0) {
-		ksft_print_msg("Unable to create %s file.\n",file_type_str(type));
+		ksft_print_msg("Unable to create %s file.\n",
+				file_type_str(type));
 		ret = false;
 		goto out;
 	}
@@ -246,30 +248,30 @@ bool run_cachestat_test(enum file_type type)
 		ret = false;
 		goto close_fd;
 	}
-	switch (type){
-		case FILE_SHMEM:
-			if (!write_exactly(fd, filesize)) {
-				ksft_print_msg("Unable to write to file.\n");
-				ret = false;
-				goto close_fd;
-			}
-			break;
-		case FILE_MMAP:
-			char *map = mmap(NULL, filesize, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-			if (map == MAP_FAILED) {
-				ksft_print_msg("mmap failed.\n");
-				ret = false;
-				goto close_fd;
-			}
-			for (int i = 0; i < filesize; i++) {
-				map[i] = 'A';
-			}
-			break;
-		default:
-			ksft_print_msg("Unsupported file type.\n");
+	switch (type) {
+	case FILE_SHMEM:
+		if (!write_exactly(fd, filesize)) {
+			ksft_print_msg("Unable to write to file.\n");
 			ret = false;
 			goto close_fd;
-			break;
+		}
+		break;
+	case FILE_MMAP:
+		char *map = mmap(NULL, filesize, PROT_READ | PROT_WRITE,
+				 MAP_SHARED, fd, 0);
+
+		if (map == MAP_FAILED) {
+			ksft_print_msg("mmap failed.\n");
+			ret = false;
+			goto close_fd;
+		}
+		for (int i = 0; i < filesize; i++)
+			map[i] = 'A';
+		break;
+	default:
+		ksft_print_msg("Unsupported file type.\n");
+		ret = false;
+		goto close_fd;
 	}
 	syscall_ret = syscall(__NR_cachestat, fd, &cs_range, &cs, 0);
 
