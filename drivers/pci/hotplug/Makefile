@@ -3,6 +3,9 @@
 # Makefile for the Linux kernel pci hotplug controller drivers.
 #
 
+# define_trace.h needs to know how to find our header
+CFLAGS_pciehp_ctrl.o				:= -I$(src)
+
 obj-$(CONFIG_HOTPLUG_PCI)		+= pci_hotplug.o
 obj-$(CONFIG_HOTPLUG_PCI_COMPAQ)	+= cpqphp.o
 obj-$(CONFIG_HOTPLUG_PCI_IBM)		+= ibmphp.o
