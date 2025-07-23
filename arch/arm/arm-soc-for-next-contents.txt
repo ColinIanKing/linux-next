@@ -10,6 +10,8 @@ soc/arm
 		https://git.kernel.org/pub/scm/linux/kernel/git/ti/linux tags/ti-k3-config-for-v6.17
 	mvebu/arm
 		https://git.kernel.org/pub/scm/linux/kernel/git/gclement/mvebu tags/mvebu-arm-6.17-1
+	<no branch> (7cdb433bb44cdc87dc5260cdf15bf03cc1cd1814)
+		https://git.kernel.org/pub/scm/linux/kernel/git/mmind/linux-rockchip tags/v6.17-rockchip-arm32-1
 
 soc/dt
 	patch
@@ -89,6 +91,14 @@ soc/dt
 		https://git.kernel.org/pub/scm/linux/kernel/git/at91/linux tags/at91-dt-6.17
 	apple/dt
 		https://git.kernel.org/pub/scm/linux/kernel/git/sven/linux tags/apple-soc-dt-6.17
+	sophgo/dt
+		https://github.com/sophgo/linux tags/riscv-sophgo-dt-for-v6.17
+	samsung/dt-bindings
+		https://git.kernel.org/pub/scm/linux/kernel/git/krzk/linux tags/samsung-drivers-6.17
+	samsung/dt-2
+		https://git.kernel.org/pub/scm/linux/kernel/git/krzk/linux tags/samsung-dt64-6.17-2
+	riscv/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/conor/linux tags/riscv-dt-for-v6.17
 
 soc/drivers
 	renesas/drivers
@@ -175,4 +185,6 @@ soc/newsoc
 		Merge branch 'newsoc/cix-p1' into soc/newsoc
 	newsoc/axiado
 		Merge branch 'newsoc/axiado' into soc/newsoc
+	sophgo/sg2000
+		https://github.com/sophgo/linux tags/arm-sophgo-dt-for-v6.17
 
