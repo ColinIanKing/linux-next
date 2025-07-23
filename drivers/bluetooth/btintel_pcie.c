@@ -540,6 +540,12 @@ static int btintel_pcie_reset_bt(struct btintel_pcie_data *data)
 	return reg == 0 ? 0 : -ENODEV;
 }
 
+static void btintel_pcie_set_persistence_mode(struct btintel_pcie_data *data)
+{
+	btintel_pcie_set_reg_bits(data, BTINTEL_PCIE_CSR_HW_BOOT_CONFIG,
+				  BTINTEL_PCIE_CSR_HW_BOOT_CONFIG_KEEP_ON);
+}
+
 static void btintel_pcie_mac_init(struct btintel_pcie_data *data)
 {
 	u32 reg;
@@ -828,6 +834,8 @@ static int btintel_pcie_enable_bt(struct btintel_pcie_data *data)
 	 * gp0 interrupt handler.
 	 */
 	data->boot_stage_cache = 0x0;
+
+	btintel_pcie_set_persistence_mode(data);
 
 	/* Set MAC_INIT bit to start primary bootloader */
 	reg = btintel_pcie_rd_reg32(data, BTINTEL_PCIE_CSR_FUNC_CTRL_REG);
@@ -2573,11 +2581,105 @@ static void btintel_pcie_coredump(struct device *dev)
 }
 #endif
 
+#ifdef CONFIG_PM
+static int btintel_pcie_suspend_late(struct device *dev, pm_message_t mesg)
+{
+	struct pci_dev *pdev = to_pci_dev(dev);
+	struct btintel_pcie_data *data;
+	ktime_t start;
+	u32 dxstate;
+	s64 delta;
+	int err;
+
+	data = pci_get_drvdata(pdev);
+
+	if (mesg.event == PM_EVENT_SUSPEND)
+		dxstate = BTINTEL_PCIE_STATE_D3_HOT;
+	else
+		dxstate = BTINTEL_PCIE_STATE_D3_COLD;
+
+	data->gp0_received = false;
+
+	start = ktime_get();
+
+	/* Refer: 6.4.11.7 -> Platform power management */
+	btintel_pcie_wr_sleep_cntrl(data, dxstate);
+	err = wait_event_timeout(data->gp0_wait_q, data->gp0_received,
+				 msecs_to_jiffies(BTINTEL_DEFAULT_INTR_TIMEOUT_MS));
+	delta = ktime_to_ns(ktime_get() - start) / 1000;
+
+	if (err == 0) {
+		bt_dev_err(data->hdev, "Timeout (%u ms) on alive interrupt for D3 entry",
+				BTINTEL_DEFAULT_INTR_TIMEOUT_MS);
+		return -EBUSY;
+	}
+	bt_dev_info(data->hdev, "device entered into d3 state from d0 in %lld us",
+		    delta);
+	return 0;
+}
+
+static int btintel_pcie_suspend(struct device *dev)
+{
+	return btintel_pcie_suspend_late(dev, PMSG_SUSPEND);
+}
+
+static int btintel_pcie_hibernate(struct device *dev)
+{
+	return btintel_pcie_suspend_late(dev, PMSG_HIBERNATE);
+}
+
+static int btintel_pcie_freeze(struct device *dev)
+{
+	return btintel_pcie_suspend_late(dev, PMSG_FREEZE);
+}
+
+static int btintel_pcie_resume(struct device *dev)
+{
+	struct pci_dev *pdev = to_pci_dev(dev);
+	struct btintel_pcie_data *data;
+	ktime_t start;
+	int err;
+	s64 delta;
+
+	data = pci_get_drvdata(pdev);
+	data->gp0_received = false;
+
+	start = ktime_get();
+
+	/* Refer: 6.4.11.7 -> Platform power management */
+	btintel_pcie_wr_sleep_cntrl(data, BTINTEL_PCIE_STATE_D0);
+	err = wait_event_timeout(data->gp0_wait_q, data->gp0_received,
+				 msecs_to_jiffies(BTINTEL_DEFAULT_INTR_TIMEOUT_MS));
+	delta = ktime_to_ns(ktime_get() - start) / 1000;
+
+	if (err == 0) {
+		bt_dev_err(data->hdev, "Timeout (%u ms) on alive interrupt for D0 entry",
+				BTINTEL_DEFAULT_INTR_TIMEOUT_MS);
+		return -EBUSY;
+	}
+	bt_dev_info(data->hdev, "device entered into d0 state from d3 in %lld us",
+		    delta);
+	return 0;
+}
+
+const struct dev_pm_ops btintel_pcie_pm_ops = {
+	.suspend = btintel_pcie_suspend,
+	.resume = btintel_pcie_resume,
+	.freeze = btintel_pcie_freeze,
+	.thaw = btintel_pcie_resume,
+	.poweroff = btintel_pcie_hibernate,
+	.restore = btintel_pcie_resume,
+};
+#define BTINTELPCIE_PM_OPS	(&btintel_pcie_pm_ops)
+#else
+#define BTINTELPCIE_PM_OPS	NULL
+#endif
 static struct pci_driver btintel_pcie_driver = {
 	.name = KBUILD_MODNAME,
 	.id_table = btintel_pcie_table,
 	.probe = btintel_pcie_probe,
 	.remove = btintel_pcie_remove,
+	.driver.pm = BTINTELPCIE_PM_OPS,
 #ifdef CONFIG_DEV_COREDUMP
 	.driver.coredump = btintel_pcie_coredump
 #endif
