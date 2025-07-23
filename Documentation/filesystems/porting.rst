@@ -1255,3 +1255,15 @@ iterator needed.  Instead of a cloned mount tree, the new interface returns
 an array of struct path, one for each mount collect_mounts() would've
 created.  These struct path point to locations in the caller's namespace
 that would be roots of the cloned mounts.
+
+---
+
+**highly recommended**
+
+The file operations mmap() callback is deprecated in favour of
+mmap_prepare(). This passes a pointer to a vm_area_desc to the callback
+rather than a VMA, as the VMA at this stage is not yet valid.
+
+The vm_area_desc provides the minimum required information for a filesystem
+to initialise state upon memory mapping of a file-backed region, and output
+parameters for the file system to set this state.
