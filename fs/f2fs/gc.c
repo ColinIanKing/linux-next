@@ -144,7 +144,7 @@ do_gc:
 				gc_control.one_time;
 
 		/* foreground GC was been triggered via f2fs_balance_fs() */
-		if (foreground)
+		if (foreground && !f2fs_sb_has_blkzoned(sbi))
 			sync_mode = false;
 
 		gc_control.init_gc_type = sync_mode ? FG_GC : BG_GC;
@@ -1162,8 +1162,8 @@ static bool is_alive(struct f2fs_sb_info *sbi, struct f2fs_summary *sum,
 		return false;
 	}
 
-	if (IS_INODE(&node_folio->page)) {
-		base = offset_in_addr(F2FS_INODE(&node_folio->page));
+	if (IS_INODE(node_folio)) {
+		base = offset_in_addr(F2FS_INODE(node_folio));
 		max_addrs = DEF_ADDRS_PER_INODE;
 	} else {
 		base = 0;
@@ -1177,7 +1177,7 @@ static bool is_alive(struct f2fs_sb_info *sbi, struct f2fs_summary *sum,
 		return false;
 	}
 
-	*nofs = ofs_of_node(&node_folio->page);
+	*nofs = ofs_of_node(node_folio);
 	source_blkaddr = data_blkaddr(NULL, node_folio, ofs_in_node);
 	f2fs_folio_put(node_folio, true);
 
@@ -1249,7 +1249,7 @@ static int ra_data_block(struct inode *inode, pgoff_t index)
 	}
 got_it:
 	/* read folio */
-	fio.page = &folio->page;
+	fio.folio = folio;
 	fio.new_blkaddr = fio.old_blkaddr = dn.data_blkaddr;
 
 	/*
@@ -1353,7 +1353,7 @@ static int move_data_block(struct inode *inode, block_t bidx,
 		goto put_out;
 
 	/* read page */
-	fio.page = &folio->page;
+	fio.folio = folio;
 	fio.new_blkaddr = fio.old_blkaddr = dn.data_blkaddr;
 
 	if (lfs_mode)
@@ -1473,7 +1473,7 @@ static int move_data_page(struct inode *inode, block_t bidx, int gc_type,
 			goto out;
 		}
 		folio_mark_dirty(folio);
-		set_page_private_gcing(&folio->page);
+		folio_set_f2fs_gcing(folio);
 	} else {
 		struct f2fs_io_info fio = {
 			.sbi = F2FS_I_SB(inode),
@@ -1483,7 +1483,7 @@ static int move_data_page(struct inode *inode, block_t bidx, int gc_type,
 			.op = REQ_OP_WRITE,
 			.op_flags = REQ_SYNC,
 			.old_blkaddr = NULL_ADDR,
-			.page = &folio->page,
+			.folio = folio,
 			.encrypted_page = NULL,
 			.need_lock = LOCK_REQ,
 			.io_type = FS_GC_DATA_IO,
@@ -1499,11 +1499,11 @@ retry:
 			f2fs_remove_dirty_inode(inode);
 		}
 
-		set_page_private_gcing(&folio->page);
+		folio_set_f2fs_gcing(folio);
 
 		err = f2fs_do_write_data_page(&fio);
 		if (err) {
-			clear_page_private_gcing(&folio->page);
+			folio_clear_f2fs_gcing(folio);
 			if (err == -ENOMEM) {
 				memalloc_retry_wait(GFP_NOFS);
 				goto retry;
@@ -1891,6 +1891,7 @@ gc_more:
 	/* Let's run FG_GC, if we don't have enough space. */
 	if (has_not_enough_free_secs(sbi, 0, 0)) {
 		gc_type = FG_GC;
+		gc_control->one_time = false;
 
 		/*
 		 * For example, if there are many prefree_segments below given
@@ -2064,7 +2065,7 @@ int f2fs_gc_range(struct f2fs_sb_info *sbi,
 			.iroot = RADIX_TREE_INIT(gc_list.iroot, GFP_NOFS),
 		};
 
-		if (IS_CURSEC(sbi, GET_SEC_FROM_SEG(sbi, segno)))
+		if (is_cursec(sbi, GET_SEC_FROM_SEG(sbi, segno)))
 			continue;
 
 		do_garbage_collect(sbi, segno, &gc_list, FG_GC, true, false);
