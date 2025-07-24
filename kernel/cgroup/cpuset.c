@@ -1408,14 +1408,22 @@ static void partition_xcpus_del(int old_prs, struct cpuset *parent,
 	cpumask_or(parent->effective_cpus, parent->effective_cpus, xcpus);
 }
 
+bool __weak arch_isolated_cpus_can_update(struct cpumask *new_cpus)
+{
+	return true;
+}
+
 /*
- * isolated_cpus_can_update - check for isolated & nohz_full conflicts
+ * isolated_cpus_can_update - check for conflicts against housekeeping and
+ *                            CPUs capabilities.
  * @add_cpus: cpu mask for cpus that are going to be isolated
  * @del_cpus: cpu mask for cpus that are no longer isolated, can be NULL
  * Return: false if there is conflict, true otherwise
  *
- * If nohz_full is enabled and we have isolated CPUs, their combination must
- * still leave housekeeping CPUs.
+ * Check for conflicts:
+ * - If nohz_full is enabled and there are isolated CPUs, their combination must
+ *   still leave housekeeping CPUs.
+ * - Architecture has CPU capabilities incompatible with being isolated
  *
  * TBD: Should consider merging this function into
  *      prstate_housekeeping_conflict().
@@ -1425,6 +1433,9 @@ static bool isolated_cpus_can_update(struct cpumask *add_cpus,
 {
 	cpumask_var_t full_hk_cpus;
 	int res = true;
+
+	if (!arch_isolated_cpus_can_update(add_cpus))
+		return false;
 
 	if (!housekeeping_enabled(HK_TYPE_KERNEL_NOISE))
 		return true;
