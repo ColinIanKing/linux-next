@@ -299,17 +299,12 @@ int bch2_save_backtrace(bch_stacktrace *stack, struct task_struct *task, unsigne
 	if (ret)
 		return ret;
 
-	if (!down_read_trylock(&task->signal->exec_update_lock))
-		return -1;
-
 	do {
 		nr_entries = stack_trace_save_tsk(task, stack->data, stack->size, skipnr + 1);
 	} while (nr_entries == stack->size &&
 		 !(ret = darray_make_room_gfp(stack, stack->size * 2, gfp)));
 
 	stack->nr = nr_entries;
-	up_read(&task->signal->exec_update_lock);
-
 	return ret;
 #else
 	return 0;
@@ -326,11 +321,10 @@ void bch2_prt_backtrace(struct printbuf *out, bch_stacktrace *stack)
 
 int bch2_prt_task_backtrace(struct printbuf *out, struct task_struct *task, unsigned skipnr, gfp_t gfp)
 {
-	bch_stacktrace stack = { 0 };
+	CLASS(bch_stacktrace, stack)();
 	int ret = bch2_save_backtrace(&stack, task, skipnr + 1, gfp);
 
 	bch2_prt_backtrace(out, &stack);
-	darray_exit(&stack);
 	return ret;
 }
 
@@ -617,17 +611,10 @@ void bch2_pd_controller_debug_to_text(struct printbuf *out, struct bch_pd_contro
 
 void bch2_bio_map(struct bio *bio, void *base, size_t size)
 {
-	while (size) {
-		struct page *page = is_vmalloc_addr(base)
-				? vmalloc_to_page(base)
-				: virt_to_page(base);
-		unsigned offset = offset_in_page(base);
-		unsigned len = min_t(size_t, PAGE_SIZE - offset, size);
-
-		BUG_ON(!bio_add_page(bio, page, len, offset));
-		size -= len;
-		base += len;
-	}
+	if (is_vmalloc_addr(base))
+		bio_add_vmalloc(bio, base, size);
+	else
+		bio_add_virt_nofail(bio, base, size);
 }
 
 int bch2_bio_alloc_pages(struct bio *bio, size_t size, gfp_t gfp_mask)
@@ -994,9 +981,8 @@ u64 *bch2_acc_percpu_u64s(u64 __percpu *p, unsigned nr)
 	int cpu;
 
 	/* access to pcpu vars has to be blocked by other locking */
-	preempt_disable();
-	ret = this_cpu_ptr(p);
-	preempt_enable();
+	scoped_guard(preempt)
+		ret = this_cpu_ptr(p);
 
 	for_each_possible_cpu(cpu) {
 		u64 *i = per_cpu_ptr(p, cpu);

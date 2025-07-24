@@ -5,6 +5,7 @@
 #include "bset.h"
 #include "btree_cache.h"
 #include "btree_journal_iter.h"
+#include "disk_accounting.h"
 #include "journal_io.h"
 
 #include <linux/sort.h>
@@ -278,12 +279,23 @@ int bch2_journal_key_insert_take(struct bch_fs *c, enum btree_id id,
 
 	if (idx < keys->size &&
 	    journal_key_cmp(&n, &keys->data[idx]) == 0) {
+		struct bkey_i *o = keys->data[idx].k;
+
+		if (k->k.type == KEY_TYPE_accounting &&
+		    o->k.type == KEY_TYPE_accounting) {
+			if (!keys->data[idx].allocated)
+				goto insert;
+
+			bch2_accounting_accumulate(bkey_i_to_accounting(k),
+						   bkey_i_to_s_c_accounting(o));
+		}
+
 		if (keys->data[idx].allocated)
 			kfree(keys->data[idx].k);
 		keys->data[idx] = n;
 		return 0;
 	}
-
+insert:
 	if (idx > keys->gap)
 		idx -= keys->size - keys->nr;
 
@@ -450,9 +462,8 @@ void bch2_journal_key_overwritten(struct bch_fs *c, enum btree_id btree,
 	    keys->data[idx].level	== level &&
 	    bpos_eq(keys->data[idx].k->k.p, pos) &&
 	    !keys->data[idx].overwritten) {
-		mutex_lock(&keys->overwrite_lock);
+		guard(mutex)(&keys->overwrite_lock);
 		__bch2_journal_key_overwritten(keys, idx);
-		mutex_unlock(&keys->overwrite_lock);
 	}
 }
 
@@ -803,7 +814,7 @@ void bch2_shoot_down_journal_keys(struct bch_fs *c, enum btree_id btree,
 void bch2_journal_keys_dump(struct bch_fs *c)
 {
 	struct journal_keys *keys = &c->journal_keys;
-	struct printbuf buf = PRINTBUF;
+	CLASS(printbuf, buf)();
 
 	pr_info("%zu keys:", keys->nr);
 
@@ -817,7 +828,6 @@ void bch2_journal_keys_dump(struct bch_fs *c)
 		bch2_bkey_val_to_text(&buf, c, bkey_i_to_s_c(i->k));
 		pr_err("%s", buf.buf);
 	}
-	printbuf_exit(&buf);
 }
 
 void bch2_fs_journal_keys_init(struct bch_fs *c)

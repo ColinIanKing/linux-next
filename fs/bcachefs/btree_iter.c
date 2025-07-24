@@ -645,6 +645,7 @@ static void bch2_trans_revalidate_updates_in_node(struct btree_trans *trans, str
 
 	trans_for_each_update(trans, i)
 		if (!i->cached &&
+		    !i->key_cache_flushing &&
 		    i->level	== b->c.level &&
 		    i->btree_id	== b->c.btree_id &&
 		    bpos_cmp(i->k->k.p, b->data->min_key) >= 0 &&
@@ -902,7 +903,7 @@ static noinline int btree_node_iter_and_journal_peek(struct btree_trans *trans,
 
 	k = bch2_btree_and_journal_iter_peek(&jiter);
 	if (!k.k) {
-		struct printbuf buf = PRINTBUF;
+		CLASS(printbuf, buf)();
 
 		prt_str(&buf, "node not found at pos ");
 		bch2_bpos_to_text(&buf, path->pos);
@@ -910,7 +911,6 @@ static noinline int btree_node_iter_and_journal_peek(struct btree_trans *trans,
 		bch2_btree_pos_to_text(&buf, c, l->b);
 
 		ret = bch2_fs_topology_error(c, "%s", buf.buf);
-		printbuf_exit(&buf);
 		goto err;
 	}
 
@@ -929,7 +929,7 @@ static noinline_for_stack int btree_node_missing_err(struct btree_trans *trans,
 						     struct btree_path *path)
 {
 	struct bch_fs *c = trans->c;
-	struct printbuf buf = PRINTBUF;
+	CLASS(printbuf, buf)();
 
 	prt_str(&buf, "node not found at pos ");
 	bch2_bpos_to_text(&buf, path->pos);
@@ -1450,7 +1450,7 @@ void __noreturn bch2_trans_restart_error(struct btree_trans *trans, u32 restart_
 static void __noreturn bch2_trans_in_restart_error(struct btree_trans *trans)
 {
 #ifdef CONFIG_BCACHEFS_DEBUG
-	struct printbuf buf = PRINTBUF;
+	CLASS(printbuf, buf)();
 	bch2_prt_backtrace(&buf, &trans->last_restarted_trace);
 	panic("in transaction restart: %s, last restarted by\n%s",
 	      bch2_err_str(trans->restarted),
@@ -1600,13 +1600,13 @@ void bch2_trans_paths_to_text(struct printbuf *out, struct btree_trans *trans)
 static noinline __cold
 void __bch2_dump_trans_paths_updates(struct btree_trans *trans, bool nosort)
 {
-	struct printbuf buf = PRINTBUF;
+	CLASS(printbuf, buf)();
+	bch2_log_msg_start(trans->c, &buf);
 
 	__bch2_trans_paths_to_text(&buf, trans, nosort);
 	bch2_trans_updates_to_text(&buf, trans);
 
 	bch2_print_str(trans->c, KERN_ERR, buf.buf);
-	printbuf_exit(&buf);
 }
 
 noinline __cold
@@ -1619,21 +1619,18 @@ noinline __cold
 static void bch2_trans_update_max_paths(struct btree_trans *trans)
 {
 	struct btree_transaction_stats *s = btree_trans_stats(trans);
-	struct printbuf buf = PRINTBUF;
+	CLASS(printbuf, buf)();
 	size_t nr = bitmap_weight(trans->paths_allocated, trans->nr_paths);
 
 	bch2_trans_paths_to_text(&buf, trans);
 
 	if (!buf.allocation_failure) {
-		mutex_lock(&s->lock);
+		guard(mutex)(&s->lock);
 		if (nr > s->nr_max_paths) {
 			s->nr_max_paths = nr;
 			swap(s->max_paths_text, buf.buf);
 		}
-		mutex_unlock(&s->lock);
 	}
-
-	printbuf_exit(&buf);
 
 	trans->nr_paths_max = nr;
 }
@@ -1642,11 +1639,10 @@ noinline __cold
 int __bch2_btree_trans_too_many_iters(struct btree_trans *trans)
 {
 	if (trace_trans_restart_too_many_iters_enabled()) {
-		struct printbuf buf = PRINTBUF;
+		CLASS(printbuf, buf)();
 
 		bch2_trans_paths_to_text(&buf, trans);
 		trace_trans_restart_too_many_iters(trans, _THIS_IP_, buf.buf);
-		printbuf_exit(&buf);
 	}
 
 	count_event(trans->c, trans_restart_too_many_iters);
@@ -2288,6 +2284,7 @@ static struct bkey_s_c __bch2_btree_iter_peek(struct btree_trans *trans, struct 
 
 		if (unlikely(iter->flags & BTREE_ITER_with_key_cache) &&
 		    k.k &&
+		    !bkey_deleted(k.k) &&
 		    (k2 = btree_trans_peek_key_cache(trans, iter, k.k->p)).k) {
 			k = k2;
 			if (bkey_err(k)) {
@@ -2580,6 +2577,7 @@ static struct bkey_s_c __bch2_btree_iter_peek_prev(struct btree_trans *trans, st
 
 		if (unlikely(iter->flags & BTREE_ITER_with_key_cache) &&
 		    k.k &&
+		    !bkey_deleted(k.k) &&
 		    (k2 = btree_trans_peek_key_cache(trans, iter, k.k->p)).k) {
 			k = k2;
 			if (bkey_err(k2)) {
@@ -2746,7 +2744,7 @@ struct bkey_s_c bch2_btree_iter_peek_prev_min(struct btree_trans *trans, struct 
 	}
 
 	/* Extents can straddle iter->pos: */
-	iter->pos = bpos_min(iter->pos, k.k->p);;
+	iter->pos = bpos_min(iter->pos, k.k->p);
 
 	if (iter->flags & BTREE_ITER_filter_snapshots)
 		iter->pos.snapshot = iter->snapshot;
@@ -2795,7 +2793,7 @@ struct bkey_s_c bch2_btree_iter_prev(struct btree_trans *trans, struct btree_ite
 struct bkey_s_c bch2_btree_iter_peek_slot(struct btree_trans *trans, struct btree_iter *iter)
 {
 	struct bpos search_key;
-	struct bkey_s_c k;
+	struct bkey_s_c k, k2;
 	int ret;
 
 	bch2_trans_verify_not_unlocked_or_in_restart(trans);
@@ -2854,17 +2852,18 @@ struct bkey_s_c bch2_btree_iter_peek_slot(struct btree_trans *trans, struct btre
 		    (k = btree_trans_peek_slot_journal(trans, iter)).k)
 			goto out;
 
-		if (unlikely(iter->flags & BTREE_ITER_with_key_cache) &&
-		    (k = btree_trans_peek_key_cache(trans, iter, iter->pos)).k) {
-			if (!bkey_err(k))
-				iter->k = *k.k;
-			/* We're not returning a key from iter->path: */
-			goto out;
-		}
-
 		k = bch2_btree_path_peek_slot(btree_iter_path(trans, iter), &iter->k);
 		if (unlikely(!k.k))
 			goto out;
+
+		if (unlikely(iter->flags & BTREE_ITER_with_key_cache) &&
+		    !bkey_deleted(k.k) &&
+		    (k2 = btree_trans_peek_key_cache(trans, iter, iter->pos)).k) {
+			k = k2;
+			if (bkey_err(k))
+				goto out;
+			iter->k = *k.k;
+		}
 
 		if (unlikely(k.k->type == KEY_TYPE_whiteout &&
 			     (iter->flags & BTREE_ITER_filter_snapshots) &&
@@ -3193,14 +3192,13 @@ void *__bch2_trans_kmalloc(struct btree_trans *trans, size_t size, unsigned long
 
 	if (WARN_ON_ONCE(new_bytes > BTREE_TRANS_MEM_MAX)) {
 #ifdef CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE
-		struct printbuf buf = PRINTBUF;
+		CLASS(printbuf, buf)();
 		bch2_log_msg_start(c, &buf);
 		prt_printf(&buf, "bump allocator exceeded BTREE_TRANS_MEM_MAX (%u)\n",
 			   BTREE_TRANS_MEM_MAX);
 
 		bch2_trans_kmalloc_trace_to_text(&buf, &trans->trans_kmalloc_trace);
 		bch2_print_str(c, KERN_ERR, buf.buf);
-		printbuf_exit(&buf);
 #endif
 	}
 
@@ -3210,7 +3208,7 @@ void *__bch2_trans_kmalloc(struct btree_trans *trans, size_t size, unsigned long
 
 	struct btree_transaction_stats *s = btree_trans_stats(trans);
 	if (new_bytes > s->max_mem) {
-		mutex_lock(&s->lock);
+		guard(mutex)(&s->lock);
 #ifdef CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE
 		darray_resize(&s->trans_kmalloc_trace, trans->trans_kmalloc_trace.nr);
 		s->trans_kmalloc_trace.nr = min(s->trans_kmalloc_trace.size,
@@ -3222,7 +3220,6 @@ void *__bch2_trans_kmalloc(struct btree_trans *trans, size_t size, unsigned long
 		       s->trans_kmalloc_trace.nr);
 #endif
 		s->max_mem = new_bytes;
-		mutex_unlock(&s->lock);
 	}
 
 	if (trans->used_mempool || new_bytes > BTREE_TRANS_MEM_MAX) {
@@ -3238,32 +3235,30 @@ void *__bch2_trans_kmalloc(struct btree_trans *trans, size_t size, unsigned long
 	}
 
 	EBUG_ON(trans->mem);
+	EBUG_ON(trans->mem_bytes);
+	EBUG_ON(trans->mem_top);
+	EBUG_ON(new_bytes > BTREE_TRANS_MEM_MAX);
+	
+	bool lock_dropped = false;
+	new_mem = allocate_dropping_locks_norelock(trans, lock_dropped, kmalloc(new_bytes, _gfp));
+	if (!new_mem) {
+		new_mem = mempool_alloc(&c->btree_trans_mem_pool, GFP_KERNEL);
+		new_bytes = BTREE_TRANS_MEM_MAX;
+		trans->used_mempool = true;
+	}
 
-	new_mem = kmalloc(new_bytes, GFP_NOWAIT|__GFP_NOWARN);
-	if (unlikely(!new_mem)) {
-		bch2_trans_unlock(trans);
+	EBUG_ON(!new_mem);
 
-		new_mem = kmalloc(new_bytes, GFP_KERNEL);
-		if (!new_mem && new_bytes <= BTREE_TRANS_MEM_MAX) {
-			new_mem = mempool_alloc(&c->btree_trans_mem_pool, GFP_KERNEL);
-			new_bytes = BTREE_TRANS_MEM_MAX;
-			trans->used_mempool = true;
-		}
+	trans->mem = new_mem;
+	trans->mem_bytes = new_bytes;
 
-		EBUG_ON(!new_mem);
-
-		trans->mem = new_mem;
-		trans->mem_bytes = new_bytes;
-
+	if (unlikely(lock_dropped)) {
 		ret = bch2_trans_relock(trans);
 		if (ret)
 			return ERR_PTR(ret);
 	}
 
-	trans->mem = new_mem;
-	trans->mem_bytes = new_bytes;
-
-	p = trans->mem + trans->mem_top;
+	p = trans->mem;
 	trans->mem_top += size;
 	memset(p, 0, size);
 	return p;
@@ -3323,23 +3318,26 @@ u32 bch2_trans_begin(struct btree_trans *trans)
 	trans->restart_count++;
 	trans->mem_top			= 0;
 
-	if (trans->restarted == BCH_ERR_transaction_restart_mem_realloced) {
-		EBUG_ON(!trans->mem || !trans->mem_bytes);
+	if (unlikely(trans->restarted == BCH_ERR_transaction_restart_mem_realloced)) {
 		unsigned new_bytes = trans->realloc_bytes_required;
-		void *new_mem = krealloc(trans->mem, new_bytes, GFP_NOWAIT|__GFP_NOWARN);
-		if (unlikely(!new_mem)) {
-			bch2_trans_unlock(trans);
-			new_mem = krealloc(trans->mem, new_bytes, GFP_KERNEL);
+		EBUG_ON(new_bytes > BTREE_TRANS_MEM_MAX);
+		EBUG_ON(!trans->mem);
+		EBUG_ON(!trans->mem_bytes);
 
-			EBUG_ON(new_bytes > BTREE_TRANS_MEM_MAX);
+		bool lock_dropped = false;
+		void *new_mem = allocate_dropping_locks_norelock(trans, lock_dropped,
+					krealloc(trans->mem, new_bytes, _gfp));
+		(void)lock_dropped;
 
-			if (!new_mem) {
-				new_mem = mempool_alloc(&trans->c->btree_trans_mem_pool, GFP_KERNEL);
-				new_bytes = BTREE_TRANS_MEM_MAX;
-				trans->used_mempool = true;
-				kfree(trans->mem);
-			}
-                }
+		if (!new_mem) {
+			new_mem = mempool_alloc(&trans->c->btree_trans_mem_pool, GFP_KERNEL);
+			new_bytes = BTREE_TRANS_MEM_MAX;
+			trans->used_mempool = true;
+			kfree(trans->mem);
+		}
+
+		EBUG_ON(!new_mem);
+
 		trans->mem = new_mem;
 		trans->mem_bytes = new_bytes;
 	}
@@ -3531,7 +3529,7 @@ static void check_btree_paths_leaked(struct btree_trans *trans)
 		struct btree_path *path;
 		unsigned i;
 
-		struct printbuf buf = PRINTBUF;
+		CLASS(printbuf, buf)();
 		bch2_log_msg_start(c, &buf);
 
 		prt_printf(&buf, "btree paths leaked from %s!\n", trans->fn);
@@ -3543,7 +3541,6 @@ static void check_btree_paths_leaked(struct btree_trans *trans)
 
 		bch2_fs_emergency_read_only2(c, &buf);
 		bch2_print_str(c, KERN_ERR, buf.buf);
-		printbuf_exit(&buf);
 	}
 }
 #else
@@ -3668,11 +3665,11 @@ void bch2_btree_trans_to_text(struct printbuf *out, struct btree_trans *trans)
 
 	/* trans->paths is rcu protected vs. freeing */
 	guard(rcu)();
-	out->atomic++;
+	guard(printbuf_atomic)(out);
 
 	struct btree_path *paths = rcu_dereference(trans->paths);
 	if (!paths)
-		goto out;
+		return;
 
 	unsigned long *paths_allocated = trans_paths_allocated(paths);
 
@@ -3708,8 +3705,6 @@ void bch2_btree_trans_to_text(struct printbuf *out, struct btree_trans *trans)
 		bch2_btree_bkey_cached_common_to_text(out, b);
 		prt_newline(out);
 	}
-out:
-	--out->atomic;
 }
 
 void bch2_fs_btree_iter_exit(struct bch_fs *c)
