@@ -22,4 +22,9 @@
 #define	ERRATA_THEAD_NUMBER 4
 #endif
 
+#ifdef CONFIG_ERRATA_MIPS
+#define	ERRATA_MIPS_P8700_PAUSE_OPCODE 0
+#define	ERRATA_MIPS_NUMBER 1
+#endif
+
 #endif
