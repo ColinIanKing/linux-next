@@ -44,6 +44,8 @@ static inline unsigned int pshift(void)
 	return __page_shift;
 }
 
+bool detect_huge_zeropage(void);
+
 /*
  * Plan 9 FS has bugs (at least on QEMU) where certain operations fail with
  * ENOENT on unlinked files. See
@@ -116,6 +118,9 @@ static inline void log_test_result(int result)
 {
 	ksft_test_result_report(result, "%s\n", test_name);
 }
+
+void *sys_mremap(void *old_address, unsigned long old_size,
+		 unsigned long new_size, int flags, void *new_address);
 
 /*
  * On ppc64 this will only work with radix 2M hugepage size
