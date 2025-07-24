@@ -5,6 +5,7 @@
 #define BCH_ERRCODES()								\
 	x(ERANGE,			ERANGE_option_too_small)		\
 	x(ERANGE,			ERANGE_option_too_big)			\
+	x(ERANGE,			projid_too_big)				\
 	x(EINVAL,			injected)				\
 	x(BCH_ERR_injected,		injected_fs_start)			\
 	x(EINVAL,			mount_option)				\
@@ -89,6 +90,8 @@
 	x(ENOMEM,			ENOMEM_disk_accounting)			\
 	x(ENOMEM,			ENOMEM_stripe_head_alloc)		\
 	x(ENOMEM,                       ENOMEM_journal_read_bucket)             \
+	x(ENOMEM,                       ENOMEM_acl)				\
+	x(ENOMEM,                       ENOMEM_move_extent)			\
 	x(ENOSPC,			ENOSPC_disk_reservation)		\
 	x(ENOSPC,			ENOSPC_bucket_alloc)			\
 	x(ENOSPC,			ENOSPC_disk_label_add)			\
@@ -215,7 +218,17 @@
 	x(EINVAL,			varint_decode_error)			\
 	x(EINVAL,			erasure_coding_found_btree_node)	\
 	x(EINVAL,			option_negative)			\
+	x(EINVAL,			topology_repair)			\
+	x(BCH_ERR_topology_repair,	topology_repair_drop_this_node)		\
+	x(BCH_ERR_topology_repair,	topology_repair_drop_prev_node)		\
+	x(BCH_ERR_topology_repair,	topology_repair_did_fill_from_scan)	\
 	x(EOPNOTSUPP,			may_not_use_incompat_feature)		\
+	x(EOPNOTSUPP,			no_casefolding_without_utf8)		\
+	x(EOPNOTSUPP,			casefolding_disabled)			\
+	x(EOPNOTSUPP,			casefold_opt_is_dir_only)		\
+	x(EOPNOTSUPP,			unsupported_fsx_flag)			\
+	x(EOPNOTSUPP,			unsupported_fa_flag)			\
+	x(EOPNOTSUPP,			unsupported_fallocate_mode)		\
 	x(EROFS,			erofs_trans_commit)			\
 	x(EROFS,			erofs_no_writes)			\
 	x(EROFS,			erofs_journal_err)			\
