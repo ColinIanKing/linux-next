@@ -25,6 +25,11 @@ def to_dict(object, attr_name_converter):
         d[attr_name] = converter(getattr(object, attr_name))
     return d
 
+def ops_to_dict(ops):
+    return to_dict(ops, [
+        ['id', int],
+        ])
+
 def intervals_goal_to_dict(goal):
     return to_dict(goal, [
         ['access_bp', int],
@@ -117,15 +122,70 @@ def damos_watermarks_to_dict(watermarks):
         ['high', int], ['mid', int], ['low', int],
         ])
 
+def damos_migrate_dests_to_dict(dests):
+    nr_dests = int(dests.nr_dests)
+    node_id_arr = []
+    weight_arr = []
+    for i in range(nr_dests):
+        node_id_arr.append(int(dests.node_id_arr[i]))
+        weight_arr.append(int(dests.weight_arr[i]))
+    return {
+            'node_id_arr': node_id_arr,
+            'weight_arr': weight_arr,
+            'nr_dests': nr_dests,
+            }
+
+def damos_filter_to_dict(damos_filter):
+    filter_type_keyword = {
+            0: 'anon',
+            1: 'active',
+            2: 'memcg',
+            3: 'young',
+            4: 'hugepage_size',
+            5: 'unmapped',
+            6: 'addr',
+            7: 'target'
+            }
+    dict_ = {
+            'type': filter_type_keyword[int(damos_filter.type)],
+            'matching': bool(damos_filter.matching),
+            'allow': bool(damos_filter.allow),
+            }
+    type_ = dict_['type']
+    if type_ == 'memcg':
+        dict_['memcg_id'] = int(damos_filter.memcg_id)
+    elif type_ == 'addr':
+        dict_['addr_range'] = [int(damos_filter.addr_range.start),
+                               int(damos_filter.addr_range.end)]
+    elif type_ == 'target':
+        dict_['target_idx'] = int(damos_filter.target_idx)
+    elif type_ == 'hugeapge_size':
+        dict_['sz_range'] = [int(damos_filter.sz_range.min),
+                             int(damos_filter.sz_range.max)]
+    return dict_
+
 def scheme_to_dict(scheme):
-    return to_dict(scheme, [
+    dict_ = to_dict(scheme, [
         ['pattern', damos_access_pattern_to_dict],
         ['action', int],
         ['apply_interval_us', int],
         ['quota', damos_quota_to_dict],
         ['wmarks', damos_watermarks_to_dict],
         ['target_nid', int],
+        ['migrate_dests', damos_migrate_dests_to_dict],
         ])
+    filters = []
+    for f in list_for_each_entry(
+            'struct damos_filter', scheme.filters.address_of_(), 'list'):
+        filters.append(damos_filter_to_dict(f))
+    dict_['filters'] = filters
+    ops_filters = []
+    for f in list_for_each_entry(
+            'struct damos_filter', scheme.ops_filters.address_of_(), 'list'):
+        ops_filters.append(damos_filter_to_dict(f))
+    dict_['ops_filters'] = ops_filters
+
+    return dict_
 
 def schemes_to_list(schemes):
     return [scheme_to_dict(s)
@@ -134,6 +194,7 @@ def schemes_to_list(schemes):
 
 def damon_ctx_to_dict(ctx):
     return to_dict(ctx, [
+        ['ops', ops_to_dict],
         ['attrs', attrs_to_dict],
         ['adaptive_targets', targets_to_list],
         ['schemes', schemes_to_list],
