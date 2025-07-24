@@ -85,6 +85,21 @@ EXPORT_SYMBOL(pci_bus_write_config_byte);
 EXPORT_SYMBOL(pci_bus_write_config_word);
 EXPORT_SYMBOL(pci_bus_write_config_dword);
 
+int pci_bus_read_config(void *priv, unsigned int devfn, int where, u32 size,
+			u32 *val)
+{
+	struct pci_bus *bus = priv;
+
+	if (size == 1)
+		return pci_bus_read_config_byte(bus, devfn, where, (u8 *)val);
+	else if (size == 2)
+		return pci_bus_read_config_word(bus, devfn, where, (u16 *)val);
+	else if (size == 4)
+		return pci_bus_read_config_dword(bus, devfn, where, val);
+	else
+		return PCIBIOS_BAD_REGISTER_NUMBER;
+}
+
 int pci_generic_config_read(struct pci_bus *bus, unsigned int devfn,
 			    int where, int size, u32 *val)
 {
