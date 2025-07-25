@@ -1132,6 +1132,10 @@ static void print_trailer(struct kmem_cache *s, struct slab *slab, u8 *p)
 			      size_from_object(s) - off);
 }
 
+/*
+ * object - should be a valid object.
+ * check_valid_pointer(s, slab, object) should be true.
+ */
 static void object_err(struct kmem_cache *s, struct slab *slab,
 			u8 *object, const char *reason)
 {
@@ -1622,7 +1626,7 @@ static inline int alloc_consistency_checks(struct kmem_cache *s,
 		return 0;
 
 	if (!check_valid_pointer(s, slab, object)) {
-		object_err(s, slab, object, "Freelist Pointer check fails");
+		slab_err(s, slab, "Invalid object pointer 0x%p", object);
 		return 0;
 	}
 
