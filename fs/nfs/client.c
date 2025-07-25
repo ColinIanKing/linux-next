@@ -814,7 +814,6 @@ static void nfs_server_set_fsinfo(struct nfs_server *server,
 		server->wsize = max_rpc_payload;
 	if (server->wsize > NFS_MAX_FILE_IO_SIZE)
 		server->wsize = NFS_MAX_FILE_IO_SIZE;
-	server->wpages = (server->wsize + PAGE_SIZE - 1) >> PAGE_SHIFT;
 
 	server->wtmult = nfs_block_bits(fsinfo->wtmult, NULL);
 
@@ -831,7 +830,6 @@ static void nfs_server_set_fsinfo(struct nfs_server *server,
 
 	server->maxfilesize = fsinfo->maxfilesize;
 
-	server->time_delta = fsinfo->time_delta;
 	server->change_attr_type = fsinfo->change_attr_type;
 
 	server->clone_blksize = fsinfo->clone_blksize;
