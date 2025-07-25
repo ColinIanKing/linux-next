@@ -345,7 +345,7 @@ static struct vfio_pfn *vfio_find_vpfn_range(struct vfio_dma *dma,
 
 static inline struct vfio_pfn *vfio_find_vpfn(struct vfio_dma *dma, dma_addr_t iova)
 {
-	return vfio_find_vpfn_range(dma, iova, iova + PAGE_SIZE);
+	return vfio_find_vpfn_range(dma, iova, iova + 1);
 }
 
 static void vfio_link_pfn(struct vfio_dma *dma,
