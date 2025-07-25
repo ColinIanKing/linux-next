@@ -27,6 +27,16 @@
 /* Provides a unique ID for each genpd device */
 static DEFINE_IDA(genpd_ida);
 
+/* The bus for genpd_providers. */
+static const struct bus_type genpd_provider_bus_type = {
+	.name		= "genpd_provider",
+};
+
+/* The parent for genpd_provider devices. */
+static struct device genpd_provider_bus = {
+	.init_name = "genpd_provider",
+};
+
 #define GENPD_RETRY_MAX_MS	250		/* Approximate */
 
 #define GENPD_DEV_CALLBACK(genpd, type, callback, dev)		\
@@ -2262,6 +2272,8 @@ static int genpd_alloc_data(struct generic_pm_domain *genpd)
 	genpd->gd = gd;
 	device_initialize(&genpd->dev);
 	genpd->dev.release = genpd_provider_release;
+	genpd->dev.bus = &genpd_provider_bus_type;
+	genpd->dev.parent = &genpd_provider_bus;
 
 	if (!genpd_is_dev_name_fw(genpd)) {
 		dev_set_name(&genpd->dev, "%s", genpd->name);
@@ -2491,6 +2503,8 @@ struct of_genpd_provider {
 static LIST_HEAD(of_genpd_providers);
 /* Mutex to protect the list above. */
 static DEFINE_MUTEX(of_genpd_mutex);
+/* Used to prevent registering devices before the bus. */
+static bool genpd_bus_registered;
 
 /**
  * genpd_xlate_simple() - Xlate function for direct node-domain mapping
@@ -2557,7 +2571,7 @@ static int genpd_add_provider(struct device_node *np, genpd_xlate_t xlate,
 	cp->node = of_node_get(np);
 	cp->data = data;
 	cp->xlate = xlate;
-	fwnode_dev_initialized(&np->fwnode, true);
+	fwnode_dev_initialized(of_fwnode_handle(np), true);
 
 	mutex_lock(&of_genpd_mutex);
 	list_add(&cp->link, &of_genpd_providers);
@@ -2597,16 +2611,25 @@ int of_genpd_add_provider_simple(struct device_node *np,
 	if (!np || !genpd)
 		return -EINVAL;
 
+	if (!genpd_bus_registered)
+		return -ENODEV;
+
 	if (!genpd_present(genpd))
 		return -EINVAL;
 
 	genpd->dev.of_node = np;
 
+	ret = device_add(&genpd->dev);
+	if (ret)
+		return ret;
+
 	/* Parse genpd OPP table */
 	if (!genpd_is_opp_table_fw(genpd) && genpd->set_performance_state) {
 		ret = dev_pm_opp_of_add_table(&genpd->dev);
-		if (ret)
-			return dev_err_probe(&genpd->dev, ret, "Failed to add OPP table\n");
+		if (ret) {
+			dev_err_probe(&genpd->dev, ret, "Failed to add OPP table\n");
+			goto err_del;
+		}
 
 		/*
 		 * Save table for faster processing while setting performance
@@ -2617,19 +2640,22 @@ int of_genpd_add_provider_simple(struct device_node *np,
 	}
 
 	ret = genpd_add_provider(np, genpd_xlate_simple, genpd);
-	if (ret) {
-		if (genpd->opp_table) {
-			dev_pm_opp_put_opp_table(genpd->opp_table);
-			dev_pm_opp_of_remove_table(&genpd->dev);
-		}
-
-		return ret;
-	}
+	if (ret)
+		goto err_opp;
 
 	genpd->provider = &np->fwnode;
 	genpd->has_provider = true;
 
 	return 0;
+
+err_opp:
+	if (genpd->opp_table) {
+		dev_pm_opp_put_opp_table(genpd->opp_table);
+		dev_pm_opp_of_remove_table(&genpd->dev);
+	}
+err_del:
+	device_del(&genpd->dev);
+	return ret;
 }
 EXPORT_SYMBOL_GPL(of_genpd_add_provider_simple);
 
@@ -2648,6 +2674,9 @@ int of_genpd_add_provider_onecell(struct device_node *np,
 	if (!np || !data)
 		return -EINVAL;
 
+	if (!genpd_bus_registered)
+		return -ENODEV;
+
 	if (!data->xlate)
 		data->xlate = genpd_xlate_onecell;
 
@@ -2661,12 +2690,17 @@ int of_genpd_add_provider_onecell(struct device_node *np,
 
 		genpd->dev.of_node = np;
 
+		ret = device_add(&genpd->dev);
+		if (ret)
+			goto error;
+
 		/* Parse genpd OPP table */
 		if (!genpd_is_opp_table_fw(genpd) && genpd->set_performance_state) {
 			ret = dev_pm_opp_of_add_table_indexed(&genpd->dev, i);
 			if (ret) {
 				dev_err_probe(&genpd->dev, ret,
 					      "Failed to add OPP table for index %d\n", i);
+				device_del(&genpd->dev);
 				goto error;
 			}
 
@@ -2702,6 +2736,8 @@ error:
 			dev_pm_opp_put_opp_table(genpd->opp_table);
 			dev_pm_opp_of_remove_table(&genpd->dev);
 		}
+
+		device_del(&genpd->dev);
 	}
 
 	return ret;
@@ -2727,17 +2763,19 @@ void of_genpd_del_provider(struct device_node *np)
 			 * so that the PM domain can be safely removed.
 			 */
 			list_for_each_entry(gpd, &gpd_list, gpd_list_node) {
-				if (gpd->provider == &np->fwnode) {
+				if (gpd->provider == of_fwnode_handle(np)) {
 					gpd->has_provider = false;
 
 					if (gpd->opp_table) {
 						dev_pm_opp_put_opp_table(gpd->opp_table);
 						dev_pm_opp_of_remove_table(&gpd->dev);
 					}
+
+					device_del(&gpd->dev);
 				}
 			}
 
-			fwnode_dev_initialized(&cp->node->fwnode, false);
+			fwnode_dev_initialized(of_fwnode_handle(cp->node), false);
 			list_del(&cp->link);
 			of_node_put(cp->node);
 			kfree(cp);
@@ -2916,7 +2954,7 @@ struct generic_pm_domain *of_genpd_remove_last(struct device_node *np)
 
 	mutex_lock(&gpd_list_lock);
 	list_for_each_entry_safe(gpd, tmp, &gpd_list, gpd_list_node) {
-		if (gpd->provider == &np->fwnode) {
+		if (gpd->provider == of_fwnode_handle(np)) {
 			ret = genpd_remove(gpd);
 			genpd = ret ? ERR_PTR(ret) : gpd;
 			break;
@@ -3179,6 +3217,9 @@ struct device *genpd_dev_pm_attach_by_id(struct device *dev,
 	if (num_domains < 0 || index >= num_domains)
 		return NULL;
 
+	if (!genpd_bus_registered)
+		return ERR_PTR(-ENODEV);
+
 	/* Allocate and register device on the genpd bus. */
 	virt_dev = kzalloc(sizeof(*virt_dev), GFP_KERNEL);
 	if (!virt_dev)
@@ -3269,7 +3310,7 @@ static int genpd_parse_state(struct genpd_power_state *genpd_state,
 
 	genpd_state->power_on_latency_ns = 1000LL * exit_latency;
 	genpd_state->power_off_latency_ns = 1000LL * entry_latency;
-	genpd_state->fwnode = &state_node->fwnode;
+	genpd_state->fwnode = of_fwnode_handle(state_node);
 
 	return 0;
 }
@@ -3355,9 +3396,82 @@ int of_genpd_parse_idle_states(struct device_node *dn,
 }
 EXPORT_SYMBOL_GPL(of_genpd_parse_idle_states);
 
+/**
+ * of_genpd_sync_state() - A common sync_state function for genpd providers
+ * @np: The device node the genpd provider is associated with.
+ *
+ * The @np that corresponds to a genpd provider may provide one or multiple
+ * genpds. This function makes use @np to find the genpds that belongs to the
+ * provider. For each genpd we try a power-off.
+ */
+void of_genpd_sync_state(struct device_node *np)
+{
+	struct generic_pm_domain *genpd;
+
+	if (!np)
+		return;
+
+	mutex_lock(&gpd_list_lock);
+	list_for_each_entry(genpd, &gpd_list, gpd_list_node) {
+		if (genpd->provider == of_fwnode_handle(np)) {
+			genpd_lock(genpd);
+			genpd_power_off(genpd, false, 0);
+			genpd_unlock(genpd);
+		}
+	}
+	mutex_unlock(&gpd_list_lock);
+}
+EXPORT_SYMBOL_GPL(of_genpd_sync_state);
+
+static int genpd_provider_probe(struct device *dev)
+{
+	return 0;
+}
+
+static void genpd_provider_sync_state(struct device *dev)
+{
+}
+
+static struct device_driver genpd_provider_drv = {
+	.name = "genpd_provider",
+	.bus = &genpd_provider_bus_type,
+	.probe = genpd_provider_probe,
+	.sync_state = genpd_provider_sync_state,
+	.suppress_bind_attrs = true,
+};
+
 static int __init genpd_bus_init(void)
 {
-	return bus_register(&genpd_bus_type);
+	int ret;
+
+	ret = device_register(&genpd_provider_bus);
+	if (ret) {
+		put_device(&genpd_provider_bus);
+		return ret;
+	}
+
+	ret = bus_register(&genpd_provider_bus_type);
+	if (ret)
+		goto err_dev;
+
+	ret = bus_register(&genpd_bus_type);
+	if (ret)
+		goto err_prov_bus;
+
+	ret = driver_register(&genpd_provider_drv);
+	if (ret)
+		goto err_bus;
+
+	genpd_bus_registered = true;
+	return 0;
+
+err_bus:
+	bus_unregister(&genpd_bus_type);
+err_prov_bus:
+	bus_unregister(&genpd_provider_bus_type);
+err_dev:
+	device_unregister(&genpd_provider_bus);
+	return ret;
 }
 core_initcall(genpd_bus_init);
 
