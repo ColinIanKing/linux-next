@@ -143,7 +143,7 @@
 #include <linux/init.h>
 #include <linux/slab.h>
 
-#ifdef CONFIG_DA_MON_EVENTS
+#ifdef CONFIG_RV_MON_EVENTS
 #define CREATE_TRACE_POINTS
 #include <rv_trace.h>
 #endif
@@ -165,7 +165,7 @@ struct dentry *get_monitors_root(void)
 LIST_HEAD(rv_monitors_list);
 
 static int task_monitor_count;
-static bool task_monitor_slots[RV_PER_TASK_MONITORS];
+static bool task_monitor_slots[CONFIG_RV_PER_TASK_MONITORS];
 
 int rv_get_task_monitor_slot(void)
 {
@@ -173,12 +173,12 @@ int rv_get_task_monitor_slot(void)
 
 	lockdep_assert_held(&rv_interface_lock);
 
-	if (task_monitor_count == RV_PER_TASK_MONITORS)
+	if (task_monitor_count == CONFIG_RV_PER_TASK_MONITORS)
 		return -EBUSY;
 
 	task_monitor_count++;
 
-	for (i = 0; i < RV_PER_TASK_MONITORS; i++) {
+	for (i = 0; i < CONFIG_RV_PER_TASK_MONITORS; i++) {
 		if (task_monitor_slots[i] == false) {
 			task_monitor_slots[i] = true;
 			return i;
@@ -194,7 +194,7 @@ void rv_put_task_monitor_slot(int slot)
 {
 	lockdep_assert_held(&rv_interface_lock);
 
-	if (slot < 0 || slot >= RV_PER_TASK_MONITORS) {
+	if (slot < 0 || slot >= CONFIG_RV_PER_TASK_MONITORS) {
 		WARN_ONCE(1, "RV releasing an invalid slot!: %d\n", slot);
 		return;
 	}
@@ -675,8 +675,6 @@ static bool __read_mostly monitoring_on;
  */
 bool rv_monitoring_on(void)
 {
-	/* Ensures that concurrent monitors read consistent monitoring_on */
-	smp_rmb();
 	return READ_ONCE(monitoring_on);
 }
 
@@ -696,8 +694,6 @@ static ssize_t monitoring_on_read_data(struct file *filp, char __user *user_buf,
 static void turn_monitoring_off(void)
 {
 	WRITE_ONCE(monitoring_on, false);
-	/* Ensures that concurrent monitors read consistent monitoring_on */
-	smp_wmb();
 }
 
 static void reset_all_monitors(void)
@@ -713,8 +709,6 @@ static void reset_all_monitors(void)
 static void turn_monitoring_on(void)
 {
 	WRITE_ONCE(monitoring_on, true);
-	/* Ensures that concurrent monitors read consistent monitoring_on */
-	smp_wmb();
 }
 
 static void turn_monitoring_on_with_reset(void)
