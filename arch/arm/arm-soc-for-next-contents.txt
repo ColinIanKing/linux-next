@@ -1,6 +1,17 @@
 soc/arm
 	patch
 		ARM: Switch to new sys-off handler API
+		ARM: sa110/gpio: convert set_multiple() to returning an integer
+	mediatek/arm
+		https://git.kernel.org/pub/scm/linux/kernel/git/mediatek/linux tags/mtk-arm32-for-v6.17
+	tegra/arm
+		https://git.kernel.org/pub/scm/linux/kernel/git/tegra/linux tags/tegra-for-6.17-arm-core
+	k3/config
+		https://git.kernel.org/pub/scm/linux/kernel/git/ti/linux tags/ti-k3-config-for-v6.17
+	mvebu/arm
+		https://git.kernel.org/pub/scm/linux/kernel/git/gclement/mvebu tags/mvebu-arm-6.17-1
+	<no branch> (7cdb433bb44cdc87dc5260cdf15bf03cc1cd1814)
+		https://git.kernel.org/pub/scm/linux/kernel/git/mmind/linux-rockchip tags/v6.17-rockchip-arm32-1
 
 soc/dt
 	patch
@@ -42,6 +53,52 @@ soc/dt
 		https://git.kernel.org/pub/scm/linux/kernel/git/mediatek/linux tags/mtk-dts32-for-v6.17
 	mediatek/dt64
 		https://git.kernel.org/pub/scm/linux/kernel/git/mediatek/linux tags/mtk-dts64-for-v6.17
+	tegra/dt-bindings
+		https://git.kernel.org/pub/scm/linux/kernel/git/tegra/linux tags/tegra-for-6.17-dt-bindings
+	tegra/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/tegra/linux tags/tegra-for-6.17-arm-dt
+	tegra/dt64
+		https://git.kernel.org/pub/scm/linux/kernel/git/tegra/linux tags/tegra-for-6.17-arm64-dt
+	socfpga/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/dinguyen/linux tags/socfpga_dts_updates_for_v6.17
+	imx/dt64
+		https://git.kernel.org/pub/scm/linux/kernel/git/shawnguo/linux tags/imx-dt64-6.17
+	imx/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/shawnguo/linux tags/imx-dt-6.17
+	imx/dt-bindings
+		https://git.kernel.org/pub/scm/linux/kernel/git/shawnguo/linux tags/imx-bindings-6.17
+	spacemit/dt
+		https://github.com/spacemit-com/linux tags/spacemit-dt-for-6.17-1
+	qcom/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/qcom/linux tags/qcom-arm32-for-6.17
+	k3/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/ti/linux tags/ti-k3-dt-for-v6.17
+	sunxi/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/sunxi/linux tags/sunxi-dt-for-6.17
+	qcom/dt64
+		https://git.kernel.org/pub/scm/linux/kernel/git/qcom/linux tags/qcom-arm64-for-6.17
+	amlogic/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/amlogic/linux tags/amlogic-arm64-dt-for-v6.17
+	mvebu/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/gclement/mvebu tags/mvebu-dt-6.17-1
+	patch
+		ARM: dts: st: spear: Use generic "ethernet" as node name
+	rockchip/dt64-2
+		https://git.kernel.org/pub/scm/linux/kernel/git/mmind/linux-rockchip tags/v6.17-rockchip-dts64-2
+	thead/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/fustini/linux tags/thead-dt-for-v6.17
+	at91/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/at91/linux tags/at91-dt-6.17
+	apple/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/sven/linux tags/apple-soc-dt-6.17
+	sophgo/dt
+		https://github.com/sophgo/linux tags/riscv-sophgo-dt-for-v6.17
+	samsung/dt-bindings
+		https://git.kernel.org/pub/scm/linux/kernel/git/krzk/linux tags/samsung-drivers-6.17
+	samsung/dt-2
+		https://git.kernel.org/pub/scm/linux/kernel/git/krzk/linux tags/samsung-dt64-6.17-2
+	riscv/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/conor/linux tags/riscv-dt-for-v6.17
 
 soc/drivers
 	renesas/drivers
@@ -60,25 +117,72 @@ soc/drivers
 		https://git.pengutronix.de/git/pza/linux tags/reset-for-v6.17
 	mediatek/soc
 		https://git.kernel.org/pub/scm/linux/kernel/git/mediatek/linux tags/mtk-soc-for-v6.17
-	<no branch> (4a525d5d3150a3e387cb841f927f07eb4a98c368)
+	broadcom/maintainers
 		https://github.com/Broadcom/stblinux tags/arm-soc/for-6.17/maintainers
 	broadcom/drivers
-soc/maintainers
 		https://github.com/Broadcom/stblinux tags/arm-soc/for-6.17/drivers
+	patch
+		pinctrl: rp1: use new GPIO line value setter callbacks
+		soc: fsl: qe: convert set_multiple() to returning an integer
+	tegra/soc-driver
+		https://git.kernel.org/pub/scm/linux/kernel/git/tegra/linux tags/tegra-for-6.17-soc
+	patch
+		bus: del unnecessary init var
+	tegra/firmware
+		https://git.kernel.org/pub/scm/linux/kernel/git/tegra/linux tags/tegra-for-6.17-firmware
+	tegra/memory
+		https://git.kernel.org/pub/scm/linux/kernel/git/tegra/linux tags/tegra-for-6.17-memory
+	imx/drivers
+		https://git.kernel.org/pub/scm/linux/kernel/git/shawnguo/linux tags/imx-drivers-6.17
+	drivers/memory
+		https://git.kernel.org/pub/scm/linux/kernel/git/krzk/linux-mem-ctrl tags/memory-controller-drv-6.17
+	qcom/drivers
+		https://git.kernel.org/pub/scm/linux/kernel/git/qcom/linux tags/qcom-drivers-for-6.17
+	qcom/drivers-2
+		https://git.kernel.org/pub/scm/linux/kernel/git/qcom/linux tags/qcom-drivers-for-6.17-2
+	hisilicon/drivers
+		https://github.com/hisilicon/linux-hisi tags/hisi-drivers-for-6.17
 
 soc/defconfig
 	renesas/defconfig
 		https://git.kernel.org/pub/scm/linux/kernel/git/geert/renesas-devel tags/renesas-arm-defconfig-for-v6.17-tag1
 	broadcom/defconfig
 		https://github.com/Broadcom/stblinux tags/arm-soc/for-6.17/defconfig-arm64
+	<no branch> (a7d7aebed4005b9c287f9bd9d22c273da63c9028)
+		https://git.kernel.org/pub/scm/linux/kernel/git/krzk/linux tags/samsung-defconfig-6.17
+	patch
+		arm: omap2plus_defconfig: Enable TPS65219 regulator
+		arm: multi_v7_defconfig: Enable TPS65219 regulator
+	tegra/defconfig
+		https://git.kernel.org/pub/scm/linux/kernel/git/tegra/linux tags/tegra-for-6.17-arm64-defconfig
+	imx/defconfig
+		https://git.kernel.org/pub/scm/linux/kernel/git/shawnguo/linux tags/imx-defconfig-6.17
+	riscv/defconfig
+		https://git.kernel.org/pub/scm/linux/kernel/git/conor/linux tags/riscv-config-for-v6.17
+	at91/defconfig
+		https://git.kernel.org/pub/scm/linux/kernel/git/at91/linux tags/at91-defconfig-6.17
+	qcom/defconfig
+		https://git.kernel.org/pub/scm/linux/kernel/git/qcom/linux tags/qcom-arm64-defconfig-for-6.17
+	rockchip/defconfig
+		https://git.kernel.org/pub/scm/linux/kernel/git/mmind/linux-rockchip tags/v6.17-rockchip-defconfig64-1
 
 soc/late
 
 arm/fixes
 	<no branch> (a46b4822bed08d15a856966357a4b12273751cd3)
 		https://git.kernel.org/pub/scm/linux/kernel/git/sunxi/linux tags/sunxi-fixes-for-6.16
+	patch
+		arm64: dts: rockchip: Drop netdev led-triggers on NanoPi R5S
 
 soc/newsoc
 	newsoc/pxa1908
 		Merge branch 'newsoc/pxa1908' into soc/newsoc
+	newsoc/andes
+		Merge branch 'newsoc/andes' into soc/newsoc
+	newsoc/cix-p1
+		Merge branch 'newsoc/cix-p1' into soc/newsoc
+	newsoc/axiado
+		Merge branch 'newsoc/axiado' into soc/newsoc
+	sophgo/sg2000
+		https://github.com/sophgo/linux tags/arm-sophgo-dt-for-v6.17
 
