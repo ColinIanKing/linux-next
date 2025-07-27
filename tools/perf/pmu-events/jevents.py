@@ -235,6 +235,7 @@ class JsonEvent:
           'NO_GROUP_EVENTS_NMI': '2',
           'NO_NMI_WATCHDOG': '2',
           'NO_GROUP_EVENTS_SMT': '3',
+          'NO_THRESHOLD_AND_NMI': '4',
       }
       return metric_constraint_to_enum[metric_constraint]
 
@@ -397,6 +398,9 @@ class JsonEvent:
       self.desc += extra_desc
     if self.long_desc and extra_desc:
       self.long_desc += extra_desc
+    if self.desc and self.long_desc and self.desc == self.long_desc:
+        # Avoid duplicated descriptions.
+        self.long_desc = None
     if arch_std:
       if arch_std.lower() in _arch_std_events:
         event = _arch_std_events[arch_std.lower()].event
