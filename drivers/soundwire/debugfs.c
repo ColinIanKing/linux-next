@@ -42,9 +42,9 @@ static ssize_t sdw_sprintf(struct sdw_slave *slave,
 	value = sdw_read_no_pm(slave, reg);
 
 	if (value < 0)
-		return scnprintf(buf + pos, RD_BUF - pos, "%3x\tXX\n", reg);
+		return sysfs_emit_at(buf, pos, "%3x\tXX\n", reg);
 	else
-		return scnprintf(buf + pos, RD_BUF - pos,
+		return sysfs_emit_at(buf, pos,
 				"%3x\t%2x\n", reg, value);
 }
 
@@ -64,21 +64,21 @@ static int sdw_slave_reg_show(struct seq_file *s_file, void *data)
 		return ret;
 	}
 
-	ret = scnprintf(buf, RD_BUF, "Register  Value\n");
+	ret = sysfs_emit(buf, "Register  Value\n");
 
 	/* DP0 non-banked registers */
-	ret += scnprintf(buf + ret, RD_BUF - ret, "\nDP0\n");
+	ret += sysfs_emit_at(buf, ret, "\nDP0\n");
 	for (i = SDW_DP0_INT; i <= SDW_DP0_PREPARECTRL; i++)
 		ret += sdw_sprintf(slave, buf, ret, i);
 
 	/* DP0 Bank 0 registers */
-	ret += scnprintf(buf + ret, RD_BUF - ret, "Bank0\n");
+	ret += sysfs_emit_at(buf, ret, "Bank0\n");
 	ret += sdw_sprintf(slave, buf, ret, SDW_DP0_CHANNELEN);
 	for (i = SDW_DP0_SAMPLECTRL1; i <= SDW_DP0_LANECTRL; i++)
 		ret += sdw_sprintf(slave, buf, ret, i);
 
 	/* DP0 Bank 1 registers */
-	ret += scnprintf(buf + ret, RD_BUF - ret, "Bank1\n");
+	ret += sysfs_emit_at(buf, ret, "Bank1\n");
 	ret += sdw_sprintf(slave, buf, ret,
 			SDW_DP0_CHANNELEN + SDW_BANK1_OFFSET);
 	for (i = SDW_DP0_SAMPLECTRL1 + SDW_BANK1_OFFSET;
@@ -86,7 +86,7 @@ static int sdw_slave_reg_show(struct seq_file *s_file, void *data)
 		ret += sdw_sprintf(slave, buf, ret, i);
 
 	/* SCP registers */
-	ret += scnprintf(buf + ret, RD_BUF - ret, "\nSCP\n");
+	ret += sysfs_emit_at(buf, ret, "\nSCP\n");
 	for (i = SDW_SCP_INT1; i <= SDW_SCP_BUS_CLOCK_BASE; i++)
 		ret += sdw_sprintf(slave, buf, ret, i);
 	for (i = SDW_SCP_DEVID_0; i <= SDW_SCP_DEVID_5; i++)
@@ -110,18 +110,18 @@ static int sdw_slave_reg_show(struct seq_file *s_file, void *data)
 	for (i = 1; SDW_VALID_PORT_RANGE(i); i++) {
 
 		/* DPi registers */
-		ret += scnprintf(buf + ret, RD_BUF - ret, "\nDP%d\n", i);
+		ret += sysfs_emit_at(buf, ret, "\nDP%d\n", i);
 		for (j = SDW_DPN_INT(i); j <= SDW_DPN_PREPARECTRL(i); j++)
 			ret += sdw_sprintf(slave, buf, ret, j);
 
 		/* DPi Bank0 registers */
-		ret += scnprintf(buf + ret, RD_BUF - ret, "Bank0\n");
+		ret += sysfs_emit_at(buf, ret, "Bank0\n");
 		for (j = SDW_DPN_CHANNELEN_B0(i);
 		     j <= SDW_DPN_LANECTRL_B0(i); j++)
 			ret += sdw_sprintf(slave, buf, ret, j);
 
 		/* DPi Bank1 registers */
-		ret += scnprintf(buf + ret, RD_BUF - ret, "Bank1\n");
+		ret += sysfs_emit_at(buf, ret, "Bank1\n");
 		for (j = SDW_DPN_CHANNELEN_B1(i);
 		     j <= SDW_DPN_LANECTRL_B1(i); j++)
 			ret += sdw_sprintf(slave, buf, ret, j);
@@ -291,15 +291,15 @@ static int cmd_go(void *data, u64 value)
 
 	finish_t = ktime_get();
 
+	dev_dbg(&slave->dev, "command completed, num_byte %zu status %d, time %lld ms\n",
+		num_bytes, ret, div_u64(finish_t - start_t, NSEC_PER_MSEC));
+
 out:
 	if (fw)
 		release_firmware(fw);
 
 	pm_runtime_mark_last_busy(&slave->dev);
 	pm_runtime_put(&slave->dev);
-
-	dev_dbg(&slave->dev, "command completed, num_byte %zu status %d, time %lld ms\n",
-		num_bytes, ret, div_u64(finish_t - start_t, NSEC_PER_MSEC));
 
 	return ret;
 }
@@ -317,7 +317,7 @@ static int read_buffer_show(struct seq_file *s_file, void *data)
 		return -EINVAL;
 
 	for (i = 0; i < num_bytes; i++) {
-		scnprintf(buf, MAX_LINE_LEN, "address %#x val 0x%02x\n",
+		sysfs_emit(buf, "address %#x val 0x%02x\n",
 			  start_addr + i, read_buffer[i]);
 		seq_printf(s_file, "%s", buf);
 	}

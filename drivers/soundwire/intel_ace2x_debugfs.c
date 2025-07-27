@@ -31,7 +31,7 @@ static ssize_t intel_sprintf(void __iomem *mem, bool l,
 	else
 		value = intel_readw(mem, reg);
 
-	return scnprintf(buf + pos, RD_BUF - pos, "%4x\t%4x\n", reg, value);
+	return sysfs_emit_at(buf, pos, "%4x\t%4x\n", reg, value);
 }
 
 static int intel_reg_show(struct seq_file *s_file, void *data)
@@ -49,8 +49,8 @@ static int intel_reg_show(struct seq_file *s_file, void *data)
 	if (!buf)
 		return -ENOMEM;
 
-	ret = scnprintf(buf, RD_BUF, "Register  Value\n");
-	ret += scnprintf(buf + ret, RD_BUF - ret, "\nShim\n");
+	ret = sysfs_emit(buf, "Register  Value\n");
+	ret += sysfs_emit_at(buf, ret, "\nShim\n");
 
 	ret += intel_sprintf(s, true, buf, ret, SDW_SHIM2_LECAP);
 	ret += intel_sprintf(s, false, buf, ret, SDW_SHIM2_PCMSCAP);
@@ -65,14 +65,14 @@ static int intel_reg_show(struct seq_file *s_file, void *data)
 				SDW_SHIM2_PCMSYCHC(j));
 	}
 
-	ret += scnprintf(buf + ret, RD_BUF - ret, "\nVS CLK controls\n");
+	ret += sysfs_emit_at(buf, ret, "\nVS CLK controls\n");
 	ret += intel_sprintf(vs_s, true, buf, ret, SDW_SHIM2_INTEL_VS_LVSCTL);
 
-	ret += scnprintf(buf + ret, RD_BUF - ret, "\nVS Wake registers\n");
+	ret += sysfs_emit_at(buf, ret, "\nVS Wake registers\n");
 	ret += intel_sprintf(vs_s, false, buf, ret, SDW_SHIM2_INTEL_VS_WAKEEN);
 	ret += intel_sprintf(vs_s, false, buf, ret, SDW_SHIM2_INTEL_VS_WAKESTS);
 
-	ret += scnprintf(buf + ret, RD_BUF - ret, "\nVS IOCTL, ACTMCTL\n");
+	ret += sysfs_emit_at(buf, ret, "\nVS IOCTL, ACTMCTL\n");
 	ret += intel_sprintf(vs_s, false, buf, ret, SDW_SHIM2_INTEL_VS_IOCTL);
 	ret += intel_sprintf(vs_s, false, buf, ret, SDW_SHIM2_INTEL_VS_ACTMCTL);
 

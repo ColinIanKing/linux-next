@@ -319,8 +319,7 @@ EXPORT_SYMBOL(sdw_cdns_config_update_set_wait);
 static ssize_t cdns_sprintf(struct sdw_cdns *cdns,
 			    char *buf, size_t pos, unsigned int reg)
 {
-	return scnprintf(buf + pos, RD_BUF - pos,
-			 "%4x\t%8x\n", reg, cdns_readl(cdns, reg));
+	return sysfs_emit_at(buf, pos, "%4x\t%8x\n", reg, cdns_readl(cdns, reg));
 }
 
 static int cdns_reg_show(struct seq_file *s, void *data)
@@ -334,42 +333,42 @@ static int cdns_reg_show(struct seq_file *s, void *data)
 	if (!buf)
 		return -ENOMEM;
 
-	ret = scnprintf(buf, RD_BUF, "Register  Value\n");
-	ret += scnprintf(buf + ret, RD_BUF - ret, "\nMCP Registers\n");
+	ret = sysfs_emit(buf, "Register  Value\n");
+	ret += sysfs_emit_at(buf, ret, "\nMCP Registers\n");
 	/* 8 MCP registers */
 	for (i = CDNS_MCP_CONFIG; i <= CDNS_MCP_PHYCTRL; i += sizeof(u32))
 		ret += cdns_sprintf(cdns, buf, ret, i);
 
-	ret += scnprintf(buf + ret, RD_BUF - ret,
+	ret += sysfs_emit_at(buf, ret,
 			 "\nStatus & Intr Registers\n");
 	/* 13 Status & Intr registers (offsets 0x70 and 0x74 not defined) */
 	for (i = CDNS_MCP_STAT; i <=  CDNS_MCP_FIFOSTAT; i += sizeof(u32))
 		ret += cdns_sprintf(cdns, buf, ret, i);
 
-	ret += scnprintf(buf + ret, RD_BUF - ret,
+	ret += sysfs_emit_at(buf, ret,
 			 "\nSSP & Clk ctrl Registers\n");
 	ret += cdns_sprintf(cdns, buf, ret, CDNS_MCP_SSP_CTRL0);
 	ret += cdns_sprintf(cdns, buf, ret, CDNS_MCP_SSP_CTRL1);
 	ret += cdns_sprintf(cdns, buf, ret, CDNS_MCP_CLK_CTRL0);
 	ret += cdns_sprintf(cdns, buf, ret, CDNS_MCP_CLK_CTRL1);
 
-	ret += scnprintf(buf + ret, RD_BUF - ret,
+	ret += sysfs_emit_at(buf, ret,
 			 "\nDPn B0 Registers\n");
 
 	num_ports = cdns->num_ports;
 
 	for (i = 0; i < num_ports; i++) {
-		ret += scnprintf(buf + ret, RD_BUF - ret,
+		ret += sysfs_emit_at(buf, ret,
 				 "\nDP-%d\n", i);
 		for (j = CDNS_DPN_B0_CONFIG(i);
 		     j < CDNS_DPN_B0_ASYNC_CTRL(i); j += sizeof(u32))
 			ret += cdns_sprintf(cdns, buf, ret, j);
 	}
 
-	ret += scnprintf(buf + ret, RD_BUF - ret,
+	ret += sysfs_emit_at(buf, ret,
 			 "\nDPn B1 Registers\n");
 	for (i = 0; i < num_ports; i++) {
-		ret += scnprintf(buf + ret, RD_BUF - ret,
+		ret += sysfs_emit_at(buf, ret,
 				 "\nDP-%d\n", i);
 
 		for (j = CDNS_DPN_B1_CONFIG(i);
@@ -377,13 +376,13 @@ static int cdns_reg_show(struct seq_file *s, void *data)
 			ret += cdns_sprintf(cdns, buf, ret, j);
 	}
 
-	ret += scnprintf(buf + ret, RD_BUF - ret,
+	ret += sysfs_emit_at(buf, ret,
 			 "\nDPn Control Registers\n");
 	for (i = 0; i < num_ports; i++)
 		ret += cdns_sprintf(cdns, buf, ret,
 				CDNS_PORTCTRL + i * CDNS_PORT_OFFSET);
 
-	ret += scnprintf(buf + ret, RD_BUF - ret,
+	ret += sysfs_emit_at(buf, ret,
 			 "\nPDIn Config Registers\n");
 
 	/* number of PDI and ports is interchangeable */

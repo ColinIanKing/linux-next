@@ -65,8 +65,7 @@ static ssize_t intel_sprintf(void __iomem *mem, bool l,
 		value = intel_readl(mem, reg);
 	else
 		value = intel_readw(mem, reg);
-
-	return scnprintf(buf + pos, RD_BUF - pos, "%4x\t%4x\n", reg, value);
+	return sysfs_emit_at(buf, pos, "%4x\t%4x\n", reg, value);
 }
 
 static int intel_reg_show(struct seq_file *s_file, void *data)
@@ -84,8 +83,8 @@ static int intel_reg_show(struct seq_file *s_file, void *data)
 
 	links = intel_readl(s, SDW_SHIM_LCAP) & SDW_SHIM_LCAP_LCOUNT_MASK;
 
-	ret = scnprintf(buf, RD_BUF, "Register  Value\n");
-	ret += scnprintf(buf + ret, RD_BUF - ret, "\nShim\n");
+	ret = sysfs_emit(buf, "Register  Value\n");
+	ret += sysfs_emit_at(buf, ret, "\nShim\n");
 
 	for (i = 0; i < links; i++) {
 		reg = SDW_SHIM_LCAP + i * 4;
@@ -93,7 +92,7 @@ static int intel_reg_show(struct seq_file *s_file, void *data)
 	}
 
 	for (i = 0; i < links; i++) {
-		ret += scnprintf(buf + ret, RD_BUF - ret, "\nLink%d\n", i);
+		ret += sysfs_emit_at(buf, ret, "\nLink%d\n", i);
 		ret += intel_sprintf(s, false, buf, ret, SDW_SHIM_CTLSCAP(i));
 		ret += intel_sprintf(s, false, buf, ret, SDW_SHIM_CTLS0CM(i));
 		ret += intel_sprintf(s, false, buf, ret, SDW_SHIM_CTLS1CM(i));
@@ -101,7 +100,7 @@ static int intel_reg_show(struct seq_file *s_file, void *data)
 		ret += intel_sprintf(s, false, buf, ret, SDW_SHIM_CTLS3CM(i));
 		ret += intel_sprintf(s, false, buf, ret, SDW_SHIM_PCMSCAP(i));
 
-		ret += scnprintf(buf + ret, RD_BUF - ret, "\n PCMSyCH registers\n");
+		ret += sysfs_emit_at(buf, ret, "\n PCMSyCH registers\n");
 
 		/*
 		 * the value 10 is the number of PDIs. We will need a
@@ -114,17 +113,17 @@ static int intel_reg_show(struct seq_file *s_file, void *data)
 			ret += intel_sprintf(s, false, buf, ret,
 					SDW_SHIM_PCMSYCHC(i, j));
 		}
-		ret += scnprintf(buf + ret, RD_BUF - ret, "\n IOCTL, CTMCTL\n");
+		ret += sysfs_emit_at(buf, ret, "\n IOCTL, CTMCTL\n");
 
 		ret += intel_sprintf(s, false, buf, ret, SDW_SHIM_IOCTL(i));
 		ret += intel_sprintf(s, false, buf, ret, SDW_SHIM_CTMCTL(i));
 	}
 
-	ret += scnprintf(buf + ret, RD_BUF - ret, "\nWake registers\n");
+	ret += sysfs_emit_at(buf, ret, "\nWake registers\n");
 	ret += intel_sprintf(s, false, buf, ret, SDW_SHIM_WAKEEN);
 	ret += intel_sprintf(s, false, buf, ret, SDW_SHIM_WAKESTS);
 
-	ret += scnprintf(buf + ret, RD_BUF - ret, "\nALH STRMzCFG\n");
+	ret += sysfs_emit_at(buf, ret, "\nALH STRMzCFG\n");
 	for (i = 0; i < SDW_ALH_NUM_STREAMS; i++)
 		ret += intel_sprintf(a, true, buf, ret, SDW_ALH_STRMZCFG(i));
 
