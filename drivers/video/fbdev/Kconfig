@@ -660,7 +660,7 @@ config FB_ATMEL
 
 config FB_NVIDIA
 	tristate "nVidia Framebuffer Support"
-	depends on FB && PCI
+	depends on FB && PCI && HAS_IOPORT
 	select FB_CFB_FILLRECT
 	select FB_CFB_COPYAREA
 	select FB_CFB_IMAGEBLIT
@@ -1697,15 +1697,6 @@ config XEN_FBDEV_FRONTEND
 	  This driver implements the front-end of the Xen virtual
 	  frame buffer driver.  It communicates with a back-end
 	  in another domain.
-
-config FB_METRONOME
-	tristate "E-Ink Metronome/8track controller support"
-	depends on FB
-	select FB_SYSMEM_HELPERS_DEFERRED
-	help
-	  This driver implements support for the E-Ink Metronome
-	  controller. The pre-release name for this device was 8track
-	  and could also have been called by some vendors as PVI-nnnn.
 
 config FB_MB862XX
 	tristate "Fujitsu MB862xx GDC support"
