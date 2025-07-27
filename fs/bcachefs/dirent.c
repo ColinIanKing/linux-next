@@ -13,17 +13,18 @@
 
 #include <linux/dcache.h>
 
-#ifdef CONFIG_UNICODE
+#if IS_ENABLED(CONFIG_UNICODE)
 int bch2_casefold(struct btree_trans *trans, const struct bch_hash_info *info,
 		  const struct qstr *str, struct qstr *out_cf)
 {
 	*out_cf = (struct qstr) QSTR_INIT(NULL, 0);
 
-	if (!bch2_fs_casefold_enabled(trans->c))
-		return -EOPNOTSUPP;
+	int ret = bch2_fs_casefold_enabled(trans->c);
+	if (ret)
+		return ret;
 
 	unsigned char *buf = bch2_trans_kmalloc(trans, BCH_NAME_MAX + 1);
-	int ret = PTR_ERR_OR_ZERO(buf);
+	ret = PTR_ERR_OR_ZERO(buf);
 	if (ret)
 		return ret;
 
@@ -213,11 +214,13 @@ void bch2_dirent_to_text(struct printbuf *out, struct bch_fs *c, struct bkey_s_c
 	struct bkey_s_c_dirent d = bkey_s_c_to_dirent(k);
 	struct qstr d_name = bch2_dirent_get_name(d);
 
-	prt_printf(out, "%.*s", d_name.len, d_name.name);
+	prt_bytes(out, d_name.name, d_name.len);
 
 	if (d.v->d_casefold) {
+		prt_str(out, " (casefold ");
 		struct qstr d_name = bch2_dirent_get_lookup_name(d);
-		prt_printf(out, " (casefold %.*s)", d_name.len, d_name.name);
+		prt_bytes(out, d_name.name, d_name.len);
+		prt_char(out, ')');
 	}
 
 	prt_str(out, " ->");
@@ -253,13 +256,15 @@ int bch2_dirent_init_name(struct bch_fs *c,
 		       offsetof(struct bch_dirent, d_name) -
 		       name->len);
 	} else {
-		if (!bch2_fs_casefold_enabled(c))
-			return -EOPNOTSUPP;
+		int ret = bch2_fs_casefold_enabled(c);
+		if (ret)
+			return ret;
 
-#ifdef CONFIG_UNICODE
+#if IS_ENABLED(CONFIG_UNICODE)
 		memcpy(&dirent->v.d_cf_name_block.d_names[0], name->name, name->len);
 
 		char *cf_out = &dirent->v.d_cf_name_block.d_names[name->len];
+		void *val_end = bkey_val_end(bkey_i_to_s(&dirent->k_i));
 
 		if (cf_name) {
 			cf_len = cf_name->len;
@@ -267,16 +272,14 @@ int bch2_dirent_init_name(struct bch_fs *c,
 			memcpy(cf_out, cf_name->name, cf_name->len);
 		} else {
 			cf_len = utf8_casefold(hash_info->cf_encoding, name,
-					       cf_out,
-					       bkey_val_end(bkey_i_to_s(&dirent->k_i)) - (void *) cf_out);
+					       cf_out, val_end - (void *) cf_out);
 			if (cf_len <= 0)
 				return cf_len;
 		}
 
-		memset(&dirent->v.d_cf_name_block.d_names[name->len + cf_len], 0,
-		       bkey_val_bytes(&dirent->k) -
-		       offsetof(struct bch_dirent, d_cf_name_block.d_names) -
-		       name->len + cf_len);
+		void *name_end = &dirent->v.d_cf_name_block.d_names[name->len + cf_len];
+		BUG_ON(name_end > val_end);
+		memset(name_end, 0, val_end - name_end);
 
 		dirent->v.d_cf_name_block.d_name_len = cpu_to_le16(name->len);
 		dirent->v.d_cf_name_block.d_cf_name_len = cpu_to_le16(cf_len);
@@ -619,13 +622,12 @@ u64 bch2_dirent_lookup(struct bch_fs *c, subvol_inum dir,
 		       const struct bch_hash_info *hash_info,
 		       const struct qstr *name, subvol_inum *inum)
 {
-	struct btree_trans *trans = bch2_trans_get(c);
+	CLASS(btree_trans, trans)(c);
 	struct btree_iter iter = {};
 
 	int ret = lockrestart_do(trans,
 		bch2_dirent_lookup_trans(trans, &iter, dir, hash_info, name, inum, 0));
 	bch2_trans_iter_exit(trans, &iter);
-	bch2_trans_put(trans);
 	return ret;
 }
 
@@ -685,8 +687,8 @@ int bch2_readdir(struct bch_fs *c, subvol_inum inum,
 	struct bkey_buf sk;
 	bch2_bkey_buf_init(&sk);
 
-	int ret = bch2_trans_run(c,
-		for_each_btree_key_in_subvolume_max(trans, iter, BTREE_ID_dirents,
+	CLASS(btree_trans, trans)(c);
+	int ret = for_each_btree_key_in_subvolume_max(trans, iter, BTREE_ID_dirents,
 				   POS(inum.inum, ctx->pos),
 				   POS(inum.inum, U64_MAX),
 				   inum.subvol, 0, k, ({
@@ -707,7 +709,7 @@ int bch2_readdir(struct bch_fs *c, subvol_inum inum,
 				continue;
 
 			ret2 ?: (bch2_trans_unlock(trans), bch2_dir_emit(ctx, dirent, target));
-		})));
+		}));
 
 	bch2_bkey_buf_exit(&sk, c);
 

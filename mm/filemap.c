@@ -3849,6 +3849,18 @@ int generic_file_mmap(struct file *file, struct vm_area_struct *vma)
 	return 0;
 }
 
+int generic_file_mmap_prepare(struct vm_area_desc *desc)
+{
+	struct file *file = desc->file;
+	struct address_space *mapping = file->f_mapping;
+
+	if (!mapping->a_ops->read_folio)
+		return -ENOEXEC;
+	file_accessed(file);
+	desc->vm_ops = &generic_file_vm_ops;
+	return 0;
+}
+
 /*
  * This is for filesystems which do not implement ->writepage.
  */
@@ -3857,6 +3869,13 @@ int generic_file_readonly_mmap(struct file *file, struct vm_area_struct *vma)
 	if (vma_is_shared_maywrite(vma))
 		return -EINVAL;
 	return generic_file_mmap(file, vma);
+}
+
+int generic_file_readonly_mmap_prepare(struct vm_area_desc *desc)
+{
+	if (is_shared_maywrite(desc->vm_flags))
+		return -EINVAL;
+	return generic_file_mmap_prepare(desc);
 }
 #else
 vm_fault_t filemap_page_mkwrite(struct vm_fault *vmf)
@@ -3867,7 +3886,15 @@ int generic_file_mmap(struct file *file, struct vm_area_struct *vma)
 {
 	return -ENOSYS;
 }
+int generic_file_mmap_prepare(struct vm_area_desc *desc)
+{
+	return -ENOSYS;
+}
 int generic_file_readonly_mmap(struct file *file, struct vm_area_struct *vma)
+{
+	return -ENOSYS;
+}
+int generic_file_readonly_mmap_prepare(struct vm_area_desc *desc)
 {
 	return -ENOSYS;
 }
@@ -3875,7 +3902,9 @@ int generic_file_readonly_mmap(struct file *file, struct vm_area_struct *vma)
 
 EXPORT_SYMBOL(filemap_page_mkwrite);
 EXPORT_SYMBOL(generic_file_mmap);
+EXPORT_SYMBOL(generic_file_mmap_prepare);
 EXPORT_SYMBOL(generic_file_readonly_mmap);
+EXPORT_SYMBOL(generic_file_readonly_mmap_prepare);
 
 static struct folio *do_read_cache_folio(struct address_space *mapping,
 		pgoff_t index, filler_t filler, struct file *file, gfp_t gfp)
@@ -4144,7 +4173,7 @@ retry:
 			break;
 		}
 
-		status = a_ops->write_begin(file, mapping, pos, bytes,
+		status = a_ops->write_begin(iocb, mapping, pos, bytes,
 						&folio, &fsdata);
 		if (unlikely(status < 0))
 			break;
@@ -4165,7 +4194,7 @@ retry:
 		copied = copy_folio_from_iter_atomic(folio, offset, bytes, i);
 		flush_dcache_folio(folio);
 
-		status = a_ops->write_end(file, mapping, pos, bytes, copied,
+		status = a_ops->write_end(iocb, mapping, pos, bytes, copied,
 						folio, fsdata);
 		if (unlikely(status != copied)) {
 			iov_iter_revert(i, copied - max(status, 0L));

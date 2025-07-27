@@ -63,15 +63,14 @@ void bch2_io_failures_to_text(struct printbuf *out,
 			((!!f->failed_ec)		<< 3);
 
 		bch2_printbuf_make_room(out, 1024);
-		out->atomic++;
 		scoped_guard(rcu) {
+			guard(printbuf_atomic)(out);
 			struct bch_dev *ca = bch2_dev_rcu_noerror(c, f->dev);
 			if (ca)
 				prt_str(out, ca->name);
 			else
 				prt_printf(out, "(invalid device %u)", f->dev);
 		}
-		--out->atomic;
 
 		prt_char(out, ' ');
 
@@ -283,9 +282,9 @@ int bch2_bkey_pick_read_device(struct bch_fs *c, struct bkey_s_c k,
 
 	if (have_pick)
 		return 1;
-	if (!have_dirty_ptrs)
+	if (!have_dirty_ptrs && !bkey_is_btree_ptr(k.k))
 		return 0;
-	if (have_missing_devs)
+	if (have_missing_devs || !have_dirty_ptrs)
 		return bch_err_throw(c, no_device_to_read_from);
 	if (have_csum_errors)
 		return bch_err_throw(c, data_read_csum_err);
@@ -1007,6 +1006,20 @@ const struct bch_extent_ptr *bch2_bkey_has_device_c(struct bkey_s_c k, unsigned 
 	return NULL;
 }
 
+bool bch2_bkey_devs_rw(struct bch_fs *c, struct bkey_s_c k)
+{
+	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
+
+	guard(rcu)();
+	bkey_for_each_ptr(ptrs, ptr) {
+		CLASS(bch2_dev_tryget, ca)(c, ptr->dev);
+		if (!ca || ca->mi.state != BCH_MEMBER_STATE_rw)
+			return false;
+	}
+
+	return true;
+}
+
 bool bch2_bkey_has_target(struct bch_fs *c, struct bkey_s_c k, unsigned target)
 {
 	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
@@ -1021,6 +1034,18 @@ bool bch2_bkey_has_target(struct bch_fs *c, struct bkey_s_c k, unsigned target)
 			return true;
 
 	return false;
+}
+
+bool bch2_bkey_in_target(struct bch_fs *c, struct bkey_s_c k, unsigned target)
+{
+	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
+
+	guard(rcu)();
+	bkey_for_each_ptr(ptrs, ptr)
+		if (!bch2_dev_in_target(c, ptr->dev, target))
+			return false;
+
+	return true;
 }
 
 bool bch2_bkey_matches_ptr(struct bch_fs *c, struct bkey_s_c k,
@@ -1225,7 +1250,7 @@ restart_drop_ptrs:
 
 void bch2_extent_ptr_to_text(struct printbuf *out, struct bch_fs *c, const struct bch_extent_ptr *ptr)
 {
-	out->atomic++;
+	guard(printbuf_atomic)(out);
 	guard(rcu)();
 	struct bch_dev *ca = bch2_dev_rcu_noerror(c, ptr->dev);
 	if (!ca) {
@@ -1250,7 +1275,6 @@ void bch2_extent_ptr_to_text(struct printbuf *out, struct bch_fs *c, const struc
 		else if (stale)
 			prt_printf(out, " invalid");
 	}
-	--out->atomic;
 }
 
 void bch2_extent_crc_unpacked_to_text(struct printbuf *out, struct bch_extent_crc_unpacked *crc)
@@ -1512,7 +1536,7 @@ int bch2_bkey_ptrs_validate(struct bch_fs *c, struct bkey_s_c k,
 			const struct bch_extent_rebalance *r = &entry->rebalance;
 
 			if (!bch2_compression_opt_valid(r->compression)) {
-				struct bch_compression_opt opt = __bch2_compression_decode(r->compression);
+				union bch_compression_opt opt = { .value = r->compression };
 				prt_printf(err, "invalid compression opt %u:%u",
 					   opt.type, opt.level);
 				return bch_err_throw(c, invalid_bkey);
