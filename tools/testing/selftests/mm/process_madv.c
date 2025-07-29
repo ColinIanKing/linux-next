@@ -141,7 +141,7 @@ TEST_F(process_madvise, remote_collapse)
 		void *map_addr;
 	} info;
 
-	huge_page_size = default_huge_page_size();
+	huge_page_size = read_pmd_pagesize();
 	if (huge_page_size <= 0)
 		SKIP(return, "Could not determine a valid huge page size.\n");
 
@@ -193,7 +193,8 @@ TEST_F(process_madvise, remote_collapse)
 	vec.iov_base = info.map_addr;
 	vec.iov_len = huge_page_size;
 
-	ret = sys_process_madvise(self->remote_pidfd, &vec, 1, MADV_COLLAPSE, 0);
+	ret = sys_process_madvise(self->remote_pidfd, &vec, 1, MADV_COLLAPSE,
+				  0);
 	if (ret == -1) {
 		if (errno == EINVAL)
 			SKIP(return, "PROCESS_MADV_ADVISE is not supported.\n");
@@ -212,12 +213,18 @@ TEST_F(process_madvise, remote_collapse)
  */
 TEST_F(process_madvise, exited_process_pidfd)
 {
+	const unsigned long pagesize = self->page_size;
 	struct iovec vec;
+	char *map;
 	ssize_t ret;
-	int pidfd;
 
-	vec.iov_base = (void *)0x1234;
-	vec.iov_len = 4096;
+	map = mmap(NULL, pagesize, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS, -1,
+		   0);
+	if (map == MAP_FAILED)
+		SKIP(return, "mmap failed, not enough memory.\n");
+
+	vec.iov_base = map;
+	vec.iov_len = pagesize;
 
 	/*
 	 * Using a pidfd for a process that has already exited should fail
@@ -229,16 +236,16 @@ TEST_F(process_madvise, exited_process_pidfd)
 	if (self->child_pid == 0)
 		exit(0);
 
-	pidfd = syscall(__NR_pidfd_open, self->child_pid, 0);
-	ASSERT_GE(pidfd, 0);
+	self->remote_pidfd = syscall(__NR_pidfd_open, self->child_pid, 0);
+	ASSERT_GE(self->remote_pidfd, 0);
 
 	/* Wait for the child to ensure it has terminated. */
 	waitpid(self->child_pid, NULL, 0);
 
-	ret = sys_process_madvise(pidfd, &vec, 1, MADV_DONTNEED, 0);
+	ret = sys_process_madvise(self->remote_pidfd, &vec, 1, MADV_DONTNEED,
+				  0);
 	ASSERT_EQ(ret, -1);
 	ASSERT_EQ(errno, ESRCH);
-	close(pidfd);
 }
 
 /*
@@ -247,11 +254,18 @@ TEST_F(process_madvise, exited_process_pidfd)
  */
 TEST_F(process_madvise, bad_pidfd)
 {
+	const unsigned long pagesize = self->page_size;
 	struct iovec vec;
+	char *map;
 	ssize_t ret;
 
-	vec.iov_base = (void *)0x1234;
-	vec.iov_len = 4096;
+	map = mmap(NULL, pagesize, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS, -1,
+		   0);
+	if (map == MAP_FAILED)
+		SKIP(return, "mmap failed, not enough memory.\n");
+
+	vec.iov_base = map;
+	vec.iov_len = pagesize;
 
 	/* Using an invalid fd number (-1) should fail with EBADF. */
 	ret = sys_process_madvise(-1, &vec, 1, MADV_DONTNEED, 0);
@@ -265,6 +279,34 @@ TEST_F(process_madvise, bad_pidfd)
 	ret = sys_process_madvise(STDIN_FILENO, &vec, 1, MADV_DONTNEED, 0);
 	ASSERT_EQ(ret, -1);
 	ASSERT_EQ(errno, EBADF);
+}
+
+/*
+ * Test that process_madvise() rejects vlen > UIO_MAXIOV.
+ * The kernel should return -EINVAL when the number of iovecs exceeds 1024.
+ */
+TEST_F(process_madvise, invalid_vlen)
+{
+	const unsigned long pagesize = self->page_size;
+	int pidfd = self->pidfd;
+	struct iovec vec;
+	char *map;
+	ssize_t ret;
+
+	map = mmap(NULL, pagesize, PROT_READ, MAP_PRIVATE | MAP_ANONYMOUS, -1,
+		   0);
+	if (map == MAP_FAILED)
+		SKIP(return, "mmap failed, not enough memory.\n");
+
+	vec.iov_base = map;
+	vec.iov_len = pagesize;
+
+	ret = sys_process_madvise(pidfd, &vec, 1025, MADV_DONTNEED, 0);
+	ASSERT_EQ(ret, -1);
+	ASSERT_EQ(errno, EINVAL);
+
+	/* Cleanup. */
+	ASSERT_EQ(munmap(map, pagesize), 0);
 }
 
 /*
