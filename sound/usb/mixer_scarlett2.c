@@ -2351,6 +2351,8 @@ static int scarlett2_usb(
 	struct scarlett2_usb_packet *req, *resp = NULL;
 	size_t req_buf_size = struct_size(req, data, req_size);
 	size_t resp_buf_size = struct_size(resp, data, resp_size);
+	int retries = 0;
+	const int max_retries = 5;
 	int err;
 
 	req = kmalloc(req_buf_size, GFP_KERNEL);
@@ -2374,10 +2376,15 @@ static int scarlett2_usb(
 	if (req_size)
 		memcpy(req->data, req_data, req_size);
 
+retry:
 	err = scarlett2_usb_tx(dev, private->bInterfaceNumber,
 			       req, req_buf_size);
 
 	if (err != req_buf_size) {
+		if (err == -EPROTO && ++retries <= max_retries) {
+			msleep(5 * (1 << (retries - 1)));
+			goto retry;
+		}
 		usb_audio_err(
 			mixer->chip,
 			"%s USB request result cmd %x was %d\n",
@@ -7396,13 +7403,15 @@ static int scarlett2_mux_src_enum_ctl_info(struct snd_kcontrol *kctl,
 
 			if (port_type == SCARLETT2_PORT_TYPE_MIX &&
 			    item >= private->num_mix_out)
-				sprintf(uinfo->value.enumerated.name,
-					port->dsp_src_descr,
-					item - private->num_mix_out + 1);
+				scnprintf(uinfo->value.enumerated.name,
+					  sizeof(uinfo->value.enumerated.name),
+					  port->dsp_src_descr,
+					  item - private->num_mix_out + 1);
 			else
-				sprintf(uinfo->value.enumerated.name,
-					port->src_descr,
-					item + port->src_num_offset);
+				scnprintf(uinfo->value.enumerated.name,
+					  sizeof(uinfo->value.enumerated.name),
+					  port->src_descr,
+					  item + port->src_num_offset);
 
 			return 0;
 		}
