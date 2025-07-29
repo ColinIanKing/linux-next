@@ -55,7 +55,7 @@ struct aux_payload;
 struct set_config_cmd_payload;
 struct dmub_notification;
 
-#define DC_VER "3.2.340"
+#define DC_VER "3.2.343"
 
 /**
  * MAX_SURFACES - representative of the upper bound of surfaces that can be piped to a single CRTC
@@ -839,7 +839,8 @@ union dpia_debug_options {
 		uint32_t enable_force_tbt3_work_around:1; /* bit 4 */
 		uint32_t disable_usb4_pm_support:1; /* bit 5 */
 		uint32_t enable_usb4_bw_zero_alloc_patch:1; /* bit 6 */
-		uint32_t reserved:25;
+		uint32_t enable_bw_allocation_mode:1; /* bit 7 */
+		uint32_t reserved:24;
 	} bits;
 	uint32_t raw;
 };
@@ -1145,6 +1146,11 @@ struct dc_debug_options {
 	bool enable_hblank_borrow;
 	bool force_subvp_df_throttle;
 	uint32_t acpi_transition_bitmasks[MAX_PIPES];
+	unsigned int auxless_alpm_lfps_setup_ns;
+	unsigned int auxless_alpm_lfps_period_ns;
+	unsigned int auxless_alpm_lfps_silence_ns;
+	unsigned int auxless_alpm_lfps_t1t2_us;
+	short auxless_alpm_lfps_t1t2_offset_us;
 };
 
 
@@ -2446,6 +2452,12 @@ void dc_link_dp_dpia_handle_usb4_bandwidth_allocation_for_link(
  * return: dc_status
  */
 enum dc_status dc_link_validate_dp_tunneling_bandwidth(const struct dc *dc, const struct dc_state *new_ctx);
+
+/*
+ * Get if ALPM is supported by the link
+ */
+void dc_link_get_alpm_support(struct dc_link *link, bool *auxless_support,
+	bool *auxwake_support);
 
 /* Sink Interfaces - A sink corresponds to a display output device */
 
