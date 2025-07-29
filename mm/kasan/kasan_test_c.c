@@ -1088,23 +1088,25 @@ static void kmem_cache_rcu_reuse(struct kunit *test)
 				  NULL);
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, cache);
 
+	migrate_disable();
 	p = kmem_cache_alloc(cache, GFP_KERNEL);
 	if (!p) {
 		kunit_err(test, "Allocation failed: %s\n", __func__);
-		kmem_cache_destroy(cache);
-		return;
+		goto out;
 	}
 
 	kmem_cache_free(cache, p);
 	p2 = kmem_cache_alloc(cache, GFP_KERNEL);
 	if (!p2) {
 		kunit_err(test, "Allocation failed: %s\n", __func__);
-		kmem_cache_destroy(cache);
-		return;
+		goto out;
 	}
-	KUNIT_ASSERT_PTR_EQ(test, p, p2);
+	KUNIT_EXPECT_PTR_EQ(test, p, p2);
 
 	kmem_cache_free(cache, p2);
+
+out:
+	migrate_enable();
 	kmem_cache_destroy(cache);
 }
 
