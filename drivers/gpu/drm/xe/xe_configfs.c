@@ -259,15 +259,23 @@ static struct config_group *xe_config_make_device_group(struct config_group *gro
 	unsigned int domain, bus, slot, function;
 	struct xe_config_device *dev;
 	struct pci_dev *pdev;
+	char canonical[16];
 	int ret;
 
-	ret = sscanf(name, "%04x:%02x:%02x.%x", &domain, &bus, &slot, &function);
+	ret = sscanf(name, "%x:%x:%x.%x", &domain, &bus, &slot, &function);
 	if (ret != 4)
+		return ERR_PTR(-EINVAL);
+
+	ret = scnprintf(canonical, sizeof(canonical), "%04x:%02x:%02x.%d", domain, bus,
+			PCI_SLOT(PCI_DEVFN(slot, function)),
+			PCI_FUNC(PCI_DEVFN(slot, function)));
+	if (ret != 12 || strcmp(name, canonical))
 		return ERR_PTR(-EINVAL);
 
 	pdev = pci_get_domain_bus_and_slot(domain, bus, PCI_DEVFN(slot, function));
 	if (!pdev)
-		return ERR_PTR(-EINVAL);
+		return ERR_PTR(-ENODEV);
+	pci_dev_put(pdev);
 
 	dev = kzalloc(sizeof(*dev), GFP_KERNEL);
 	if (!dev)
@@ -304,13 +312,9 @@ static struct configfs_subsystem xe_configfs = {
 static struct xe_config_device *configfs_find_group(struct pci_dev *pdev)
 {
 	struct config_item *item;
-	char name[64];
-
-	snprintf(name, sizeof(name), "%04x:%02x:%02x.%x", pci_domain_nr(pdev->bus),
-		 pdev->bus->number, PCI_SLOT(pdev->devfn), PCI_FUNC(pdev->devfn));
 
 	mutex_lock(&xe_configfs.su_mutex);
-	item = config_group_find_item(&xe_configfs.su_group, name);
+	item = config_group_find_item(&xe_configfs.su_group, pci_name(pdev));
 	mutex_unlock(&xe_configfs.su_mutex);
 
 	if (!item)
