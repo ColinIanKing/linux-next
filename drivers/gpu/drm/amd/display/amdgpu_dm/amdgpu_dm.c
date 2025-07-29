@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /*
  * Copyright 2015 Advanced Micro Devices, Inc.
  *
@@ -39,13 +40,11 @@
 #include "dc/dc_stat.h"
 #include "dc/dc_state.h"
 #include "amdgpu_dm_trace.h"
-#include "dpcd_defs.h"
 #include "link/protocols/link_dpcd.h"
 #include "link_service_types.h"
 #include "link/protocols/link_dp_capability.h"
 #include "link/protocols/link_ddc.h"
 
-#include "vid.h"
 #include "amdgpu.h"
 #include "amdgpu_display.h"
 #include "amdgpu_ucode.h"
@@ -56,7 +55,6 @@
 #include "amdgpu_dm_hdcp.h"
 #include <drm/display/drm_hdcp_helper.h>
 #include "amdgpu_dm_wb.h"
-#include "amdgpu_pm.h"
 #include "amdgpu_atombios.h"
 
 #include "amd_shared.h"
@@ -101,15 +99,6 @@
 #include <acpi/video.h>
 
 #include "ivsrcid/dcn/irqsrcs_dcn_1_0.h"
-
-#include "dcn/dcn_1_0_offset.h"
-#include "dcn/dcn_1_0_sh_mask.h"
-#include "soc15_hw_ip.h"
-#include "soc15_common.h"
-#include "vega10_ip_offset.h"
-
-#include "gc/gc_11_0_0_offset.h"
-#include "gc/gc_11_0_0_sh_mask.h"
 
 #include "modules/inc/mod_freesync.h"
 #include "modules/power/power_helpers.h"
@@ -3398,8 +3387,10 @@ static int dm_resume(struct amdgpu_ip_block *ip_block)
 		link_enc_cfg_copy(adev->dm.dc->current_state, dc_state);
 
 		r = dm_dmub_hw_init(adev);
-		if (r)
+		if (r) {
 			drm_err(adev_to_drm(adev), "DMUB interface failed to initialize: status=%d\n", r);
+			return r;
+		}
 
 		dc_dmub_srv_set_power_state(dm->dc->ctx->dmub_srv, DC_ACPI_CM_POWER_STATE_D0);
 		dc_set_power_state(dm->dc, DC_ACPI_CM_POWER_STATE_D0);
@@ -4924,10 +4915,8 @@ static u32 amdgpu_dm_backlight_get_level(struct amdgpu_display_manager *dm,
 
 	if (caps.aux_support) {
 		u32 avg, peak;
-		bool rc;
 
-		rc = dc_link_get_backlight_level_nits(link, &avg, &peak);
-		if (!rc)
+		if (!dc_link_get_backlight_level_nits(link, &avg, &peak))
 			return dm->brightness[bl_idx];
 		return convert_brightness_to_user(&caps, avg);
 	}
@@ -4983,9 +4972,9 @@ amdgpu_dm_register_backlight_device(struct amdgpu_dm_connector *aconnector)
 	caps = &dm->backlight_caps[aconnector->bl_idx];
 	if (get_brightness_range(caps, &min, &max)) {
 		if (power_supply_is_system_supplied() > 0)
-			props.brightness = (max - min) * DIV_ROUND_CLOSEST(caps->ac_level, 100);
+			props.brightness = DIV_ROUND_CLOSEST((max - min) * caps->ac_level, 100);
 		else
-			props.brightness = (max - min) * DIV_ROUND_CLOSEST(caps->dc_level, 100);
+			props.brightness = DIV_ROUND_CLOSEST((max - min) * caps->dc_level, 100);
 		/* min is zero, so max needs to be adjusted */
 		props.max_brightness = max - min;
 		drm_dbg(drm, "Backlight caps: min: %d, max: %d, ac %d, dc %d\n", min, max,
@@ -5410,7 +5399,8 @@ fail:
 
 static void amdgpu_dm_destroy_drm_device(struct amdgpu_display_manager *dm)
 {
-	drm_atomic_private_obj_fini(&dm->atomic_obj);
+	if (dm->atomic_obj.state)
+		drm_atomic_private_obj_fini(&dm->atomic_obj);
 }
 
 /******************************************************************************
@@ -6387,13 +6377,15 @@ static void fill_stream_properties_from_drm_display_mode(
 							       (struct drm_connector *)connector,
 							       mode_in);
 		if (err < 0)
-			drm_warn_once(connector->dev, "Failed to setup avi infoframe on connector %s: %zd \n", connector->name, err);
+			drm_warn_once(connector->dev, "Failed to setup avi infoframe on connector %s: %zd\n",
+				      connector->name, err);
 		timing_out->vic = avi_frame.video_code;
 		err = drm_hdmi_vendor_infoframe_from_display_mode(&hv_frame,
 								  (struct drm_connector *)connector,
 								  mode_in);
 		if (err < 0)
-			drm_warn_once(connector->dev, "Failed to setup vendor infoframe on connector %s: %zd \n", connector->name, err);
+			drm_warn_once(connector->dev, "Failed to setup vendor infoframe on connector %s: %zd\n",
+				      connector->name, err);
 		timing_out->hdmi_vic = hv_frame.vic;
 	}
 
@@ -10394,6 +10386,7 @@ static void amdgpu_dm_atomic_commit_tail(struct drm_atomic_state *state)
 #if defined(CONFIG_DRM_AMD_SECURE_DISPLAY)
 				if (amdgpu_dm_crc_window_is_activated(crtc)) {
 					uint8_t cnt;
+
 					spin_lock_irqsave(&adev_to_drm(adev)->event_lock, flags);
 					for (cnt = 0; cnt < MAX_CRC_WINDOW_NUM; cnt++) {
 						if (acrtc->dm_irq_params.window_param[cnt].enable) {
