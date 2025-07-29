@@ -194,7 +194,7 @@ static int kho_test_save(void)
 	return register_kho_notifier(&kho_test_nb);
 }
 
-static int __init kho_test_restore_data(const void *fdt, int node)
+static int kho_test_restore_data(const void *fdt, int node)
 {
 	const unsigned int *nr_folios;
 	const phys_addr_t *folios_info;
