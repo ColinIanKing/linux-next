@@ -586,7 +586,6 @@ struct module {
 
 #ifdef CONFIG_MODULES
 
-extern int modules_disabled; /* for sysctl */
 /* Get/put a kernel symbol (calls must be symmetric) */
 void *__symbol_get(const char *symbol);
 void *__symbol_get_gpl(const char *symbol);
