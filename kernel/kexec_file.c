@@ -800,7 +800,7 @@ int kexec_add_buffer(struct kexec_buf *kbuf)
 /* Calculate and store the digest of segments */
 static int kexec_calculate_store_digests(struct kimage *image)
 {
-	struct sha256_state state;
+	struct sha256_ctx sctx;
 	int ret = 0, i, j, zero_buf_sz, sha_region_sz;
 	size_t nullsz;
 	u8 digest[SHA256_DIGEST_SIZE];
@@ -819,7 +819,7 @@ static int kexec_calculate_store_digests(struct kimage *image)
 	if (!sha_regions)
 		return -ENOMEM;
 
-	sha256_init(&state);
+	sha256_init(&sctx);
 
 	for (j = i = 0; i < image->nr_segments; i++) {
 		struct kexec_segment *ksegment;
@@ -845,7 +845,7 @@ static int kexec_calculate_store_digests(struct kimage *image)
 		if (check_ima_segment_index(image, i))
 			continue;
 
-		sha256_update(&state, ksegment->kbuf, ksegment->bufsz);
+		sha256_update(&sctx, ksegment->kbuf, ksegment->bufsz);
 
 		/*
 		 * Assume rest of the buffer is filled with zero and
@@ -857,7 +857,7 @@ static int kexec_calculate_store_digests(struct kimage *image)
 
 			if (bytes > zero_buf_sz)
 				bytes = zero_buf_sz;
-			sha256_update(&state, zero_buf, bytes);
+			sha256_update(&sctx, zero_buf, bytes);
 			nullsz -= bytes;
 		}
 
@@ -866,7 +866,7 @@ static int kexec_calculate_store_digests(struct kimage *image)
 		j++;
 	}
 
-	sha256_final(&state, digest);
+	sha256_final(&sctx, digest);
 
 	ret = kexec_purgatory_get_set_symbol(image, "purgatory_sha_regions",
 					     sha_regions, sha_region_sz, 0);
