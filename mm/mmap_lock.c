@@ -235,7 +235,7 @@ retry:
 		goto fallback;
 	}
 
-	/* Verify the vma is not behind of the last search position. */
+	/* Verify the vma is not behind the last search position. */
 	if (unlikely(from_addr >= vma->vm_end))
 		goto fallback_unlock;
 
