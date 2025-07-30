@@ -885,7 +885,6 @@ static int check_bucket_backpointer_mismatch(struct btree_trans *trans, struct b
 	if (!ca)
 		return 0;
 
-	struct btree_iter iter;
 	struct bkey_s_c bp_k;
 	int ret = 0;
 	for_each_btree_key_max_norestart(trans, iter, BTREE_ID_backpointers,
@@ -901,7 +900,7 @@ static int check_bucket_backpointer_mismatch(struct btree_trans *trans, struct b
 		     bp.v->pad)) {
 			ret = bch2_backpointer_del(trans, bp_k.k->p);
 			if (ret)
-				break;
+				return ret;
 
 			need_commit = true;
 			continue;
@@ -916,7 +915,6 @@ static int check_bucket_backpointer_mismatch(struct btree_trans *trans, struct b
 
 		sectors[alloc_counter] += bp.v->bucket_len;
 	};
-	bch2_trans_iter_exit(&iter);
 	if (ret)
 		return ret;
 
