@@ -145,7 +145,7 @@ static int readpage_bio_extend(struct btree_trans *trans,
 
 		BUG_ON(folio_sector(folio) != bio_end_sector(bio));
 
-		BUG_ON(!bio_add_folio(bio, folio, folio_size(folio), 0));
+		bio_add_folio_nofail(bio, folio, folio_size(folio), 0);
 	}
 
 	return bch2_trans_relock(trans);
@@ -254,12 +254,11 @@ err:
 	bch2_trans_iter_exit(trans, &iter);
 
 	if (ret) {
-		struct printbuf buf = PRINTBUF;
+		CLASS(printbuf, buf)();
 		lockrestart_do(trans,
 			bch2_inum_offset_err_msg_trans(trans, &buf, inum, iter.pos.offset << 9));
-		prt_printf(&buf, "read error %i from btree lookup", ret);
+		prt_printf(&buf, "read error %s from btree lookup", bch2_err_str(ret));
 		bch_err_ratelimited(c, "%s", buf.buf);
-		printbuf_exit(&buf);
 
 		rbio->bio.bi_status = BLK_STS_IOERR;
 		bio_endio(&rbio->bio);
@@ -311,7 +310,7 @@ void bch2_readahead(struct readahead_control *ractl)
 		readpage_iter_advance(&readpages_iter);
 
 		rbio->bio.bi_iter.bi_sector = folio_sector(folio);
-		BUG_ON(!bio_add_folio(&rbio->bio, folio, folio_size(folio), 0));
+		bio_add_folio_nofail(&rbio->bio, folio, folio_size(folio), 0);
 
 		bchfs_read(trans, rbio, inode_inum(inode),
 			   &readpages_iter);
@@ -354,7 +353,7 @@ int bch2_read_single_folio(struct folio *folio, struct address_space *mapping)
 	rbio->bio.bi_private = &done;
 	rbio->bio.bi_opf = REQ_OP_READ|REQ_SYNC;
 	rbio->bio.bi_iter.bi_sector = folio_sector(folio);
-	BUG_ON(!bio_add_folio(&rbio->bio, folio, folio_size(folio), 0));
+	bio_add_folio_nofail(&rbio->bio, folio, folio_size(folio), 0);
 
 	blk_start_plug(&plug);
 	bch2_trans_run(c, (bchfs_read(trans, rbio, inode_inum(inode), NULL), 0));
@@ -425,27 +424,23 @@ static void bch2_writepage_io_done(struct bch_write_op *op)
 		set_bit(EI_INODE_ERROR, &io->inode->ei_flags);
 
 		bio_for_each_folio_all(fi, bio) {
-			struct bch_folio *s;
-
 			mapping_set_error(fi.folio->mapping, -EIO);
 
-			s = __bch2_folio(fi.folio);
-			spin_lock(&s->lock);
+			struct bch_folio *s = __bch2_folio(fi.folio);
+			guard(spinlock)(&s->lock);
+
 			for (i = 0; i < folio_sectors(fi.folio); i++)
 				s->s[i].nr_replicas = 0;
-			spin_unlock(&s->lock);
 		}
 	}
 
 	if (io->op.flags & BCH_WRITE_wrote_data_inline) {
 		bio_for_each_folio_all(fi, bio) {
-			struct bch_folio *s;
+			struct bch_folio *s = __bch2_folio(fi.folio);
+			guard(spinlock)(&s->lock);
 
-			s = __bch2_folio(fi.folio);
-			spin_lock(&s->lock);
 			for (i = 0; i < folio_sectors(fi.folio); i++)
 				s->s[i].nr_replicas = 0;
-			spin_unlock(&s->lock);
 		}
 	}
 
@@ -571,30 +566,30 @@ do_io:
 	BUG_ON(ret);
 
 	/* Before unlocking the page, get copy of reservations: */
-	spin_lock(&s->lock);
-	memcpy(w->tmp, s->s, sizeof(struct bch_folio_sector) * f_sectors);
+	scoped_guard(spinlock, &s->lock) {
+		memcpy(w->tmp, s->s, sizeof(struct bch_folio_sector) * f_sectors);
 
-	for (i = 0; i < f_sectors; i++) {
-		if (s->s[i].state < SECTOR_dirty)
-			continue;
+		for (i = 0; i < f_sectors; i++) {
+			if (s->s[i].state < SECTOR_dirty)
+				continue;
 
-		nr_replicas_this_write =
-			min_t(unsigned, nr_replicas_this_write,
-			      s->s[i].nr_replicas +
-			      s->s[i].replicas_reserved);
+			nr_replicas_this_write =
+				min_t(unsigned, nr_replicas_this_write,
+				      s->s[i].nr_replicas +
+				      s->s[i].replicas_reserved);
+		}
+
+		for (i = 0; i < f_sectors; i++) {
+			if (s->s[i].state < SECTOR_dirty)
+				continue;
+
+			s->s[i].nr_replicas = w->opts.compression
+				? 0 : nr_replicas_this_write;
+
+			s->s[i].replicas_reserved = 0;
+			bch2_folio_sector_set(folio, s, i, SECTOR_allocated);
+		}
 	}
-
-	for (i = 0; i < f_sectors; i++) {
-		if (s->s[i].state < SECTOR_dirty)
-			continue;
-
-		s->s[i].nr_replicas = w->opts.compression
-			? 0 : nr_replicas_this_write;
-
-		s->s[i].replicas_reserved = 0;
-		bch2_folio_sector_set(folio, s, i, SECTOR_allocated);
-	}
-	spin_unlock(&s->lock);
 
 	BUG_ON(atomic_read(&s->write_count));
 	atomic_set(&s->write_count, 1);
@@ -639,8 +634,8 @@ do_io:
 		atomic_inc(&s->write_count);
 
 		BUG_ON(inode != w->io->inode);
-		BUG_ON(!bio_add_folio(&w->io->op.wbio.bio, folio,
-				     sectors << 9, offset << 9));
+		bio_add_folio_nofail(&w->io->op.wbio.bio, folio,
+				     sectors << 9, offset << 9);
 
 		w->io->op.res.sectors += reserved_sectors;
 		w->io->op.i_sectors_delta -= dirty_sectors;
@@ -780,10 +775,9 @@ int bch2_write_end(const struct kiocb *iocb, struct address_space *mapping,
 		copied = 0;
 	}
 
-	spin_lock(&inode->v.i_lock);
-	if (pos + copied > inode->v.i_size)
-		i_size_write(&inode->v, pos + copied);
-	spin_unlock(&inode->v.i_lock);
+	scoped_guard(spinlock, &inode->v.i_lock)
+		if (pos + copied > inode->v.i_size)
+			i_size_write(&inode->v, pos + copied);
 
 	if (copied) {
 		if (!folio_test_uptodate(folio))
@@ -942,10 +936,9 @@ static int __bch2_buffered_write(struct bch_inode_info *inode,
 
 	end = pos + copied;
 
-	spin_lock(&inode->v.i_lock);
-	if (end > inode->v.i_size)
-		i_size_write(&inode->v, end);
-	spin_unlock(&inode->v.i_lock);
+	scoped_guard(spinlock, &inode->v.i_lock)
+		if (end > inode->v.i_size)
+			i_size_write(&inode->v, end);
 
 	f_pos = pos;
 	f_offset = pos - folio_pos(darray_first(fs));

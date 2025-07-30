@@ -422,14 +422,16 @@ struct btree_insert_entry {
 	u8			sort_order;
 	u8			bkey_type;
 	enum btree_id		btree_id:8;
-	u8			level:4;
+	u8			level:3;
 	bool			cached:1;
 	bool			insert_trigger_run:1;
 	bool			overwrite_trigger_run:1;
 	bool			key_cache_already_flushed:1;
+	bool			key_cache_flushing:1;
 	/*
-	 * @old_k may be a key from the journal; @old_btree_u64s always refers
-	 * to the size of the key being overwritten in the btree:
+	 * @old_k may be a key from the journal or the key cache;
+	 * @old_btree_u64s always refers to the size of the key being
+	 * overwritten in the btree:
 	 */
 	u8			old_btree_u64s;
 	btree_path_idx_t	path;
@@ -483,7 +485,7 @@ typedef DARRAY(struct trans_kmalloc_trace) darray_trans_kmalloc_trace;
 struct btree_trans_subbuf {
 	u16			base;
 	u16			u64s;
-	u16			size;;
+	u16			size;
 };
 
 struct btree_trans {
@@ -852,15 +854,15 @@ static inline bool btree_node_type_is_extents(enum btree_node_type type)
 	return type != BKEY_TYPE_btree && btree_id_is_extents(type - 1);
 }
 
+static const u64 btree_has_snapshots_mask = 0
+#define x(name, nr, flags, ...)	|((!!((flags) & BTREE_IS_snapshots)) << nr)
+BCH_BTREE_IDS()
+#undef x
+;
+
 static inline bool btree_type_has_snapshots(enum btree_id btree)
 {
-	const u64 mask = 0
-#define x(name, nr, flags, ...)	|((!!((flags) & BTREE_IS_snapshots)) << nr)
-	BCH_BTREE_IDS()
-#undef x
-	;
-
-	return BIT_ULL(btree) & mask;
+	return BIT_ULL(btree) & btree_has_snapshots_mask;
 }
 
 static inline bool btree_type_has_snapshot_field(enum btree_id btree)
