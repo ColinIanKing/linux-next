@@ -73,7 +73,10 @@ vmlinux_link()
 		objs="${objs} .builtin-dtbs.o"
 	fi
 
-	objs="${objs} .vmlinux.export.o"
+	if is_enabled CONFIG_MODULES; then
+		objs="${objs} .vmlinux.export.o"
+	fi
+
 	objs="${objs} init/version-timestamp.o"
 
 	if [ "${SRCARCH}" = "um" ]; then
