@@ -89,11 +89,8 @@ endif
 remove-section-y                                   := .modinfo
 remove-section-$(CONFIG_ARCH_VMLINUX_NEEDS_RELOCS) += '.rel*'
 
-remove-symbols := -w --strip-symbol='__mod_device_table__*'
-
 quiet_cmd_strip_relocs = OBJCOPY $@
-      cmd_strip_relocs = $(OBJCOPY) $(addprefix --remove-section=,$(remove-section-y)) \
-                         $(remove-symbols) $< $@
+      cmd_strip_relocs = $(OBJCOPY) $(addprefix --remove-section=,$(remove-section-y)) $< $@
 
 targets += vmlinux
 vmlinux: vmlinux.unstripped FORCE

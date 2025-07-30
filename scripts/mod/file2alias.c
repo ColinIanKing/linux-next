@@ -1527,21 +1527,5 @@ void handle_moddevtable(struct module *mod, struct elf_info *info,
 		}
 	}
 
-	if (mod->is_vmlinux) {
-		struct module_alias *alias;
-
-		/*
-		 * If this is vmlinux, record the name of the builtin module.
-		 * Traverse the linked list in the reverse order, and set the
-		 * builtin_modname unless it has already been set in the
-		 * previous call.
-		 */
-		list_for_each_entry_reverse(alias, &mod->aliases, node) {
-			if (alias->builtin_modname)
-				break;
-			alias->builtin_modname = xstrndup(modname, modnamelen);
-		}
-	}
-
 	free(zeros);
 }
