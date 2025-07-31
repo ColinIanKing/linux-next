@@ -93,7 +93,7 @@ static inline int get_arch_reserved_keys(void)
 			return NR_RESERVED_PKEYS_64K_3KEYS;
 }
 
-static inline void expect_fault_on_read_execonly_key(void *p1, int pkey)
+static inline void expect_fault_on_read_execonly_key(void __unused *p1, int __unused pkey)
 {
 	/*
 	 * powerpc does not allow userspace to change permissions of exec-only

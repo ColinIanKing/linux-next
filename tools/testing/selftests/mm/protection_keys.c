@@ -309,7 +309,7 @@ static char *si_code_str(int si_code)
 
 static int pkey_faults;
 static int last_si_pkey = -1;
-static void signal_handler(int signum, siginfo_t *si, void *vucontext)
+static void signal_handler(int __unused signum, siginfo_t *si, void *vucontext)
 {
 	ucontext_t *uctxt = vucontext;
 	int trapno;
@@ -889,7 +889,7 @@ static void close_test_fds(void)
 	nr_test_fds = 0;
 }
 
-static void test_pkey_alloc_free_attach_pkey0(int *ptr, u16 pkey)
+static void test_pkey_alloc_free_attach_pkey0(int *ptr, u16 __unused pkey)
 {
 	int i, err;
 	int max_nr_pkey_allocs;
@@ -1106,7 +1106,7 @@ static void test_pkey_syscalls_on_non_allocated_pkey(int *ptr, u16 pkey)
 }
 
 /* Assumes that all pkeys other than 'pkey' are unallocated */
-static void test_pkey_syscalls_bad_args(int *ptr, u16 pkey)
+static void test_pkey_syscalls_bad_args(int *ptr, u16 __unused pkey)
 {
 	int err;
 	int bad_pkey = NR_PKEYS+99;
@@ -1132,7 +1132,7 @@ static void become_child(void)
 }
 
 /* Assumes that all pkeys other than 'pkey' are unallocated */
-static void test_pkey_alloc_exhaust(int *ptr, u16 pkey)
+static void test_pkey_alloc_exhaust(int __unused *ptr, u16 __unused pkey)
 {
 	int err;
 	int allocated_pkeys[NR_PKEYS] = {0};
@@ -1238,7 +1238,7 @@ static void arch_force_pkey_reg_init(void)
  * a long-running test that continually checks the pkey
  * register.
  */
-static void test_pkey_init_state(int *ptr, u16 pkey)
+static void test_pkey_init_state(int __unused *ptr, u16 __unused pkey)
 {
 	int err;
 	int allocated_pkeys[NR_PKEYS] = {0};
@@ -1397,7 +1397,7 @@ static void *get_pointer_to_instructions(void)
 	return p1;
 }
 
-static void test_executing_on_unreadable_memory(int *ptr, u16 pkey)
+static void test_executing_on_unreadable_memory(int __unused *ptr, u16 pkey)
 {
 	void *p1;
 	int scratch;
@@ -1429,7 +1429,7 @@ static void test_executing_on_unreadable_memory(int *ptr, u16 pkey)
 	pkey_assert(!ret);
 }
 
-static void test_implicit_mprotect_exec_only_memory(int *ptr, u16 pkey)
+static void test_implicit_mprotect_exec_only_memory(int __unused *ptr, u16 __unused pkey)
 {
 	void *p1;
 	int scratch;
@@ -1478,7 +1478,7 @@ static void test_implicit_mprotect_exec_only_memory(int *ptr, u16 pkey)
 }
 
 #if defined(__i386__) || defined(__x86_64__)
-static void test_ptrace_modifies_pkru(int *ptr, u16 pkey)
+static void test_ptrace_modifies_pkru(int __unused *ptr, u16 __unused pkey)
 {
 	u32 new_pkru;
 	pid_t child;
@@ -1601,7 +1601,7 @@ static void test_ptrace_modifies_pkru(int *ptr, u16 pkey)
 #endif
 
 #if defined(__aarch64__)
-static void test_ptrace_modifies_pkru(int *ptr, u16 pkey)
+static void test_ptrace_modifies_pkru(int __unused *ptr, u16 __unused pkey)
 {
 	pid_t child;
 	int status, ret;
