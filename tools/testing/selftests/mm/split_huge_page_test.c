@@ -297,10 +297,8 @@ void split_file_backed_thp(int order)
 		ksft_exit_fail_msg("Unable to create a tmpfs for testing\n");
 
 	status = snprintf(testfile, INPUT_MAX, "%s/thp_file", tmpfs_loc);
-	if (status >= INPUT_MAX) {
+	if (status >= INPUT_MAX)
 		ksft_exit_fail_msg("Fail to create file-backed THP split testing file\n");
-		goto cleanup;
-	}
 
 	fd = open(testfile, O_CREAT|O_RDWR, 0664);
 	if (fd == -1) {
