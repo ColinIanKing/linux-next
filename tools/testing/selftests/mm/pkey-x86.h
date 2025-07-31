@@ -157,7 +157,8 @@ static inline void expect_fault_on_read_execonly_key(void *p1, int pkey)
 	expected_pkey_fault(pkey);
 }
 
-static inline void *malloc_pkey_with_mprotect_subpage(long size, int prot, u16 pkey)
+static inline void *malloc_pkey_with_mprotect_subpage(long __unused size, int __unused prot,
+						      u16 __unused pkey)
 {
 	return PTR_ERR_ENOTSUP;
 }
