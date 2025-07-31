@@ -64,6 +64,7 @@
 #include "xe_ttm_sys_mgr.h"
 #include "xe_vm.h"
 #include "xe_vram.h"
+#include "xe_vram_types.h"
 #include "xe_vsec.h"
 #include "xe_wait_user_fence.h"
 #include "xe_wa.h"
@@ -681,10 +682,26 @@ static void sriov_update_device_info(struct xe_device *xe)
 	/* disable features that are not available/applicable to VFs */
 	if (IS_SRIOV_VF(xe)) {
 		xe->info.probe_display = 0;
+		xe->info.has_heci_cscfi = 0;
 		xe->info.has_heci_gscfi = 0;
 		xe->info.skip_guc_pc = 1;
 		xe->info.skip_pcode = 1;
 	}
+}
+
+static int xe_device_vram_alloc(struct xe_device *xe)
+{
+	struct xe_vram_region *vram;
+
+	if (!IS_DGFX(xe))
+		return 0;
+
+	vram = drmm_kzalloc(&xe->drm, sizeof(*vram), GFP_KERNEL);
+	if (!vram)
+		return -ENOMEM;
+
+	xe->mem.vram = vram;
+	return 0;
 }
 
 /**
@@ -733,6 +750,10 @@ int xe_device_probe_early(struct xe_device *xe)
 		return err;
 
 	xe->wedged.mode = xe_modparam.wedged_mode;
+
+	err = xe_device_vram_alloc(xe);
+	if (err)
+		return err;
 
 	return 0;
 }
@@ -919,6 +940,10 @@ int xe_device_probe(struct xe_device *xe)
 		xe_gt_sanitize_freq(gt);
 
 	xe_vsec_init(xe);
+
+	err = xe_sriov_late_init(xe);
+	if (err)
+		goto err_unregister_display;
 
 	return devm_add_action_or_reset(xe->drm.dev, xe_device_sanitize, xe);
 
