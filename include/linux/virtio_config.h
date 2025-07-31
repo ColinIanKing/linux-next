@@ -58,6 +58,10 @@ struct virtqueue_info {
  * @set_status: write the status byte
  *	vdev: the virtio_device
  *	status: the new status byte
+ * @enable_disconnect: driver will get disconnect callbacks
+ *	vdev: the virtio_device
+ * @disable_disconnect: driver will not get disconnect callbacks
+ *	vdev: the virtio_device
  * @reset: reset the device
  *	vdev: the virtio device
  *	After this, status and feature negotiation must be done again
@@ -117,6 +121,8 @@ struct virtio_config_ops {
 	u32 (*generation)(struct virtio_device *vdev);
 	u8 (*get_status)(struct virtio_device *vdev);
 	void (*set_status)(struct virtio_device *vdev, u8 status);
+	void (*enable_disconnect)(struct virtio_device *vdev);
+	void (*disable_disconnect)(struct virtio_device *vdev);
 	void (*reset)(struct virtio_device *vdev);
 	int (*find_vqs)(struct virtio_device *vdev, unsigned int nvqs,
 			struct virtqueue *vqs[],
@@ -296,6 +302,32 @@ void virtio_device_ready(struct virtio_device *dev)
 	 * we won't lose any notification.
 	 */
 	dev->config->set_status(dev, status | VIRTIO_CONFIG_S_DRIVER_OK);
+}
+
+/**
+ * virtio_device_enable_disconnect - enable disconnect callback
+ * @dev: the virtio device
+ *
+ * Driver must call this in the probe function.
+ */
+static inline
+void virtio_device_enable_disconnect(struct virtio_device *dev)
+{
+	if (dev->config->enable_disconnect)
+		dev->config->enable_disconnect(dev);
+}
+
+/**
+ * virtio_device_disable_disconnect - enable disconnect callback
+ * @dev: the virtio device
+ *
+ * Driver must call this in the remove function.
+ */
+static inline
+void virtio_device_disable_disconnect(struct virtio_device *dev)
+{
+	if (dev->config->disable_disconnect)
+		dev->config->disable_disconnect(dev);
 }
 
 static inline
