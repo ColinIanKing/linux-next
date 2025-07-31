@@ -123,7 +123,7 @@ close_pipe:
 	close(pipefd[1]);
 }
 
-static void try_process_vm_read(int fd, int pipefd[2])
+static void try_process_vm_read(int __unused fd, int pipefd[2])
 {
 	struct iovec liov, riov;
 	char buf[64];
@@ -147,7 +147,7 @@ static void try_process_vm_read(int fd, int pipefd[2])
 	exit(KSFT_FAIL);
 }
 
-static void try_ptrace(int fd, int pipefd[2])
+static void try_ptrace(int __unused fd, int pipefd[2])
 {
 	pid_t ppid = getppid();
 	int status;
