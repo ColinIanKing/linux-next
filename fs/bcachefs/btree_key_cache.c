@@ -253,11 +253,13 @@ static int btree_key_cache_create(struct btree_trans *trans,
 
 		struct bkey_i *new_k = allocate_dropping_locks(trans, ret,
 				kmalloc(key_u64s * sizeof(u64), _gfp));
-		if (unlikely(!new_k)) {
+		if (unlikely(!new_k && !ret)) {
 			bch_err(trans->c, "error allocating memory for key cache key, btree %s u64s %u",
 				bch2_btree_id_str(ck->key.btree_id), key_u64s);
 			ret = bch_err_throw(c, ENOMEM_btree_key_cache_fill);
-		} else if (ret) {
+		}
+
+		if (unlikely(ret)) {
 			kfree(new_k);
 			goto err;
 		}
@@ -300,13 +302,12 @@ static noinline_for_stack void do_trace_key_cache_fill(struct btree_trans *trans
 						       struct btree_path *ck_path,
 						       struct bkey_s_c k)
 {
-	struct printbuf buf = PRINTBUF;
+	CLASS(printbuf, buf)();
 
 	bch2_bpos_to_text(&buf, ck_path->pos);
 	prt_char(&buf, ' ');
 	bch2_bkey_val_to_text(&buf, trans->c, k);
 	trace_key_cache_fill(trans, buf.buf);
-	printbuf_exit(&buf);
 }
 
 static noinline int btree_key_cache_fill(struct btree_trans *trans,
@@ -321,19 +322,16 @@ static noinline int btree_key_cache_fill(struct btree_trans *trans,
 	}
 
 	struct bch_fs *c = trans->c;
-	struct btree_iter iter;
-	struct bkey_s_c k;
-	int ret;
 
-	bch2_trans_iter_init(trans, &iter, ck_path->btree_id, ck_path->pos,
-			     BTREE_ITER_intent|
-			     BTREE_ITER_key_cache_fill|
-			     BTREE_ITER_cached_nofill);
+	CLASS(btree_iter, iter)(trans, ck_path->btree_id, ck_path->pos,
+				BTREE_ITER_intent|
+				BTREE_ITER_key_cache_fill|
+				BTREE_ITER_cached_nofill);
 	iter.flags &= ~BTREE_ITER_with_journal;
-	k = bch2_btree_iter_peek_slot(trans, &iter);
-	ret = bkey_err(k);
+	struct bkey_s_c k = bch2_btree_iter_peek_slot(&iter);
+	int ret = bkey_err(k);
 	if (ret)
-		goto err;
+		return ret;
 
 	/* Recheck after btree lookup, before allocating: */
 	ck_path = trans->paths + ck_path_idx;
@@ -343,15 +341,13 @@ static noinline int btree_key_cache_fill(struct btree_trans *trans,
 
 	ret = btree_key_cache_create(trans, btree_iter_path(trans, &iter), ck_path, k);
 	if (ret)
-		goto err;
+		return ret;
 
 	if (trace_key_cache_fill_enabled())
 		do_trace_key_cache_fill(trans, ck_path, k);
 out:
 	/* We're not likely to need this iterator again: */
-	bch2_set_btree_iter_dontneed(trans, &iter);
-err:
-	bch2_trans_iter_exit(trans, &iter);
+	bch2_set_btree_iter_dontneed(&iter);
 	return ret;
 }
 
@@ -407,7 +403,7 @@ int bch2_btree_path_traverse_cached(struct btree_trans *trans,
 			btree_node_unlock(trans, path, 0);
 			path->l[0].b = ERR_PTR(ret);
 		}
-	} else {
+	} else if (!(flags & BTREE_ITER_cached_nofill)) {
 		BUG_ON(path->uptodate);
 		BUG_ON(!path->nodes_locked);
 	}
@@ -423,35 +419,34 @@ static int btree_key_cache_flush_pos(struct btree_trans *trans,
 {
 	struct bch_fs *c = trans->c;
 	struct journal *j = &c->journal;
-	struct btree_iter c_iter, b_iter;
 	struct bkey_cached *ck = NULL;
 	int ret;
 
-	bch2_trans_iter_init(trans, &b_iter, key.btree_id, key.pos,
-			     BTREE_ITER_slots|
-			     BTREE_ITER_intent|
-			     BTREE_ITER_all_snapshots);
-	bch2_trans_iter_init(trans, &c_iter, key.btree_id, key.pos,
-			     BTREE_ITER_cached|
-			     BTREE_ITER_intent);
+	CLASS(btree_iter, b_iter)(trans, key.btree_id, key.pos,
+				  BTREE_ITER_slots|
+				  BTREE_ITER_intent|
+				  BTREE_ITER_all_snapshots);
+	CLASS(btree_iter, c_iter)(trans, key.btree_id, key.pos,
+				  BTREE_ITER_cached|
+				  BTREE_ITER_intent);
 	b_iter.flags &= ~BTREE_ITER_with_key_cache;
 
-	ret = bch2_btree_iter_traverse(trans, &c_iter);
+	ret = bch2_btree_iter_traverse(&c_iter);
 	if (ret)
-		goto out;
+		return ret;
 
 	ck = (void *) btree_iter_path(trans, &c_iter)->l[0].b;
 	if (!ck)
-		goto out;
+		return 0;
 
 	if (!test_bit(BKEY_CACHED_DIRTY, &ck->flags)) {
 		if (evict)
 			goto evict;
-		goto out;
+		return 0;
 	}
 
 	if (journal_seq && ck->journal.seq != journal_seq)
-		goto out;
+		return 0;
 
 	trans->journal_res.seq = ck->journal.seq;
 
@@ -468,7 +463,7 @@ static int btree_key_cache_flush_pos(struct btree_trans *trans,
 	    !test_bit(JOURNAL_space_low, &c->journal.flags))
 		commit_flags |= BCH_TRANS_COMMIT_no_journal_res;
 
-	struct bkey_s_c btree_k = bch2_btree_iter_peek_slot(trans, &b_iter);
+	struct bkey_s_c btree_k = bch2_btree_iter_peek_slot(&b_iter);
 	ret = bkey_err(btree_k);
 	if (ret)
 		goto err;
@@ -527,8 +522,6 @@ evict:
 		}
 	}
 out:
-	bch2_trans_iter_exit(trans, &b_iter);
-	bch2_trans_iter_exit(trans, &c_iter);
 	return ret;
 }
 
@@ -539,10 +532,10 @@ int bch2_btree_key_cache_journal_flush(struct journal *j,
 	struct bkey_cached *ck =
 		container_of(pin, struct bkey_cached, journal);
 	struct bkey_cached_key key;
-	struct btree_trans *trans = bch2_trans_get(c);
 	int srcu_idx = srcu_read_lock(&c->btree_trans_barrier);
 	int ret = 0;
 
+	CLASS(btree_trans, trans)(c);
 	btree_node_lock_nopath_nofail(trans, &ck->c, SIX_LOCK_read);
 	key = ck->key;
 
@@ -565,8 +558,6 @@ int bch2_btree_key_cache_journal_flush(struct journal *j,
 				BCH_TRANS_COMMIT_journal_reclaim, false));
 unlock:
 	srcu_read_unlock(&c->btree_trans_barrier, srcu_idx);
-
-	bch2_trans_put(trans);
 	return ret;
 }
 
@@ -580,6 +571,7 @@ bool bch2_btree_insert_key_cached(struct btree_trans *trans,
 	bool kick_reclaim = false;
 
 	BUG_ON(insert->k.u64s > ck->u64s);
+	BUG_ON(bkey_deleted(&insert->k));
 
 	bkey_copy(ck->k, insert);
 
