@@ -145,7 +145,7 @@ static inline int wb_flush_one(struct btree_trans *trans, struct btree_iter *ite
 	EBUG_ON(!trans->c->btree_write_buffer.flushing.pin.seq);
 	EBUG_ON(trans->c->btree_write_buffer.flushing.pin.seq > wb->journal_seq);
 
-	ret = bch2_btree_iter_traverse(trans, iter);
+	ret = bch2_btree_iter_traverse(iter);
 	if (ret)
 		return ret;
 
@@ -203,19 +203,14 @@ static int
 btree_write_buffered_insert(struct btree_trans *trans,
 			  struct btree_write_buffered_key *wb)
 {
-	struct btree_iter iter;
-	int ret;
-
-	bch2_trans_iter_init(trans, &iter, wb->btree, bkey_start_pos(&wb->k.k),
-			     BTREE_ITER_cached|BTREE_ITER_intent);
+	CLASS(btree_iter, iter)(trans, wb->btree, bkey_start_pos(&wb->k.k),
+				BTREE_ITER_cached|BTREE_ITER_intent);
 
 	trans->journal_res.seq = wb->journal_seq;
 
-	ret   = bch2_btree_iter_traverse(trans, &iter) ?:
+	return  bch2_btree_iter_traverse(&iter) ?:
 		bch2_trans_update(trans, &iter, &wb->k,
 				  BTREE_UPDATE_internal_snapshot_node);
-	bch2_trans_iter_exit(trans, &iter);
-	return ret;
 }
 
 static void move_keys_from_inc_to_flushing(struct btree_write_buffer *wb)
@@ -259,9 +254,8 @@ out:
 					bch2_btree_write_buffer_journal_flush);
 
 	if (j->watermark) {
-		spin_lock(&j->lock);
+		guard(spinlock)(&j->lock);
 		bch2_journal_set_watermark(j);
-		spin_unlock(&j->lock);
 	}
 
 	BUG_ON(wb->sorted.size < wb->flushing.keys.nr);
@@ -270,7 +264,7 @@ out:
 int bch2_btree_write_buffer_insert_err(struct bch_fs *c,
 				       enum btree_id btree, struct bkey_i *k)
 {
-	struct printbuf buf = PRINTBUF;
+	CLASS(printbuf, buf)();
 
 	prt_printf(&buf, "attempting to do write buffer update on non wb btree=");
 	bch2_btree_id_to_text(&buf, btree);
@@ -278,7 +272,6 @@ int bch2_btree_write_buffer_insert_err(struct bch_fs *c,
 	bch2_bkey_val_to_text(&buf, c, bkey_i_to_s_c(k));
 
 	bch2_fs_inconsistent(c, "%s", buf.buf);
-	printbuf_exit(&buf);
 	return -EROFS;
 }
 
@@ -287,7 +280,7 @@ static int bch2_btree_write_buffer_flush_locked(struct btree_trans *trans)
 	struct bch_fs *c = trans->c;
 	struct journal *j = &c->journal;
 	struct btree_write_buffer *wb = &c->btree_write_buffer;
-	struct btree_iter iter = {};
+	struct btree_iter iter = { NULL };
 	size_t overwritten = 0, fast = 0, slowpath = 0, could_not_insert = 0;
 	bool write_locked = false;
 	bool accounting_replay_done = test_bit(BCH_FS_accounting_replay_done, &c->flags);
@@ -300,9 +293,8 @@ static int bch2_btree_write_buffer_flush_locked(struct btree_trans *trans)
 	bch2_trans_unlock(trans);
 	bch2_trans_begin(trans);
 
-	mutex_lock(&wb->inc.lock);
-	move_keys_from_inc_to_flushing(wb);
-	mutex_unlock(&wb->inc.lock);
+	scoped_guard(mutex, &wb->inc.lock)
+		move_keys_from_inc_to_flushing(wb);
 
 	for (size_t i = 0; i < wb->flushing.keys.nr; i++) {
 		wb->sorted.data[i].idx = i;
@@ -330,10 +322,9 @@ static int bch2_btree_write_buffer_flush_locked(struct btree_trans *trans)
 	darray_for_each(wb->sorted, i) {
 		struct btree_write_buffered_key *k = &wb->flushing.keys.data[i->idx];
 
-		if (unlikely(!btree_type_uses_write_buffer(k->btree))) {
-			ret = bch2_btree_write_buffer_insert_err(trans->c, k->btree, &k->k);
+		ret = bch2_btree_write_buffer_insert_checks(c, k->btree, &k->k);
+		if (unlikely(ret))
 			goto err;
-		}
 
 		for (struct wb_key_ref *n = i + 1; n < min(i + 4, &darray_top(wb->sorted)); n++)
 			prefetch(&wb->flushing.keys.data[n->idx]);
@@ -370,7 +361,7 @@ static int bch2_btree_write_buffer_flush_locked(struct btree_trans *trans)
 				write_locked = false;
 
 				ret = lockrestart_do(trans,
-					bch2_btree_iter_traverse(trans, &iter) ?:
+					bch2_btree_iter_traverse(&iter) ?:
 					bch2_foreground_maybe_merge(trans, iter.path, 0,
 							BCH_WATERMARK_reclaim|
 							BCH_TRANS_COMMIT_journal_reclaim|
@@ -382,12 +373,12 @@ static int bch2_btree_write_buffer_flush_locked(struct btree_trans *trans)
 		}
 
 		if (!iter.path || iter.btree_id != k->btree) {
-			bch2_trans_iter_exit(trans, &iter);
+			bch2_trans_iter_exit(&iter);
 			bch2_trans_iter_init(trans, &iter, k->btree, k->k.k.p,
 					     BTREE_ITER_intent|BTREE_ITER_all_snapshots);
 		}
 
-		bch2_btree_iter_set_pos(trans, &iter, k->k.k.p);
+		bch2_btree_iter_set_pos(&iter, k->k.k.p);
 		btree_iter_path(trans, &iter)->preserve = false;
 
 		bool accounting_accumulated = false;
@@ -416,7 +407,7 @@ static int bch2_btree_write_buffer_flush_locked(struct btree_trans *trans)
 		struct btree_path *path = btree_iter_path(trans, &iter);
 		bch2_btree_node_unlock_write(trans, path, path->l[0].b);
 	}
-	bch2_trans_iter_exit(trans, &iter);
+	bch2_trans_iter_exit(&iter);
 
 	if (ret)
 		goto err;
@@ -534,9 +525,8 @@ static int fetch_wb_keys_from_journal(struct bch_fs *c, u64 max_seq)
 		ret = bch2_journal_keys_to_write_buffer(c, buf);
 
 		if (!blocked && !ret) {
-			spin_lock(&j->lock);
+			guard(spinlock)(&j->lock);
 			buf->need_flush_to_write_buffer = false;
-			spin_unlock(&j->lock);
 		}
 
 		mutex_unlock(&j->buf_lock);
@@ -568,9 +558,8 @@ static int btree_write_buffer_flush_seq(struct btree_trans *trans, u64 max_seq,
 		 * On memory allocation failure, bch2_btree_write_buffer_flush_locked()
 		 * is not guaranteed to empty wb->inc:
 		 */
-		mutex_lock(&wb->flushing.lock);
-		ret = bch2_btree_write_buffer_flush_locked(trans);
-		mutex_unlock(&wb->flushing.lock);
+		scoped_guard(mutex, &wb->flushing.lock)
+			ret = bch2_btree_write_buffer_flush_locked(trans);
 	} while (!ret &&
 		 (fetch_from_journal_err ||
 		  (wb->inc.pin.seq && wb->inc.pin.seq <= max_seq) ||
@@ -583,9 +572,10 @@ static int bch2_btree_write_buffer_journal_flush(struct journal *j,
 				struct journal_entry_pin *_pin, u64 seq)
 {
 	struct bch_fs *c = container_of(j, struct bch_fs, journal);
+	CLASS(btree_trans, trans)(c);
 	bool did_work = false;
 
-	return bch2_trans_run(c, btree_write_buffer_flush_seq(trans, seq, &did_work));
+	return btree_write_buffer_flush_seq(trans, seq, &did_work);
 }
 
 int bch2_btree_write_buffer_flush_sync(struct btree_trans *trans)
@@ -607,9 +597,9 @@ bool bch2_btree_write_buffer_flush_going_ro(struct bch_fs *c)
 	if (bch2_journal_error(&c->journal))
 		return false;
 
+	CLASS(btree_trans, trans)(c);
 	bool did_work = false;
-	bch2_trans_run(c, btree_write_buffer_flush_seq(trans,
-				journal_cur_seq(&c->journal), &did_work));
+	btree_write_buffer_flush_seq(trans, journal_cur_seq(&c->journal), &did_work);
 	return did_work;
 }
 
@@ -656,11 +646,10 @@ int bch2_btree_write_buffer_maybe_flush(struct btree_trans *trans,
 
 	if (!bkey_and_val_eq(referring_k, bkey_i_to_s_c(last_flushed->k))) {
 		if (trace_write_buffer_maybe_flush_enabled()) {
-			struct printbuf buf = PRINTBUF;
+			CLASS(printbuf, buf)();
 
 			bch2_bkey_val_to_text(&buf, c, referring_k);
 			trace_write_buffer_maybe_flush(trans, _RET_IP_, buf.buf);
-			printbuf_exit(&buf);
 		}
 
 		bch2_bkey_buf_reassemble(&tmp, c, referring_k);
@@ -691,11 +680,12 @@ static void bch2_btree_write_buffer_flush_work(struct work_struct *work)
 	struct btree_write_buffer *wb = &c->btree_write_buffer;
 	int ret;
 
-	mutex_lock(&wb->flushing.lock);
-	do {
-		ret = bch2_trans_run(c, bch2_btree_write_buffer_flush_locked(trans));
-	} while (!ret && bch2_btree_write_buffer_should_flush(c));
-	mutex_unlock(&wb->flushing.lock);
+	scoped_guard(mutex, &wb->flushing.lock) {
+		CLASS(btree_trans, trans)(c);
+		do {
+			ret = bch2_btree_write_buffer_flush_locked(trans);
+		} while (!ret && bch2_btree_write_buffer_should_flush(c));
+	}
 
 	enumerated_ref_put(&c->writes, BCH_WRITE_REF_btree_write_buffer);
 }

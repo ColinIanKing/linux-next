@@ -5260,10 +5260,9 @@ static int smb2_make_node(unsigned int xid, struct inode *inode,
 	if (cifs_sb->mnt_cifs_flags & CIFS_MOUNT_UNX_EMUL) {
 		rc = cifs_sfu_make_node(xid, inode, dentry, tcon,
 					full_path, mode, dev);
-	} else if ((le32_to_cpu(tcon->fsAttrInfo.Attributes) & FILE_SUPPORTS_REPARSE_POINTS)
-		|| (tcon->posix_extensions)) {
-		rc = smb2_mknod_reparse(xid, inode, dentry, tcon,
-					full_path, mode, dev);
+	} else if (CIFS_REPARSE_SUPPORT(tcon)) {
+		rc = mknod_reparse(xid, inode, dentry, tcon,
+				   full_path, mode, dev);
 	}
 	return rc;
 }
@@ -5321,7 +5320,7 @@ struct smb_version_operations smb20_operations = {
 	.get_reparse_point_buffer = smb2_get_reparse_point_buffer,
 	.query_mf_symlink = smb3_query_mf_symlink,
 	.create_mf_symlink = smb3_create_mf_symlink,
-	.create_reparse_symlink = smb2_create_reparse_symlink,
+	.create_reparse_inode = smb2_create_reparse_inode,
 	.open = smb2_open_file,
 	.set_fid = smb2_set_fid,
 	.close = smb2_close_file,
@@ -5424,7 +5423,7 @@ struct smb_version_operations smb21_operations = {
 	.get_reparse_point_buffer = smb2_get_reparse_point_buffer,
 	.query_mf_symlink = smb3_query_mf_symlink,
 	.create_mf_symlink = smb3_create_mf_symlink,
-	.create_reparse_symlink = smb2_create_reparse_symlink,
+	.create_reparse_inode = smb2_create_reparse_inode,
 	.open = smb2_open_file,
 	.set_fid = smb2_set_fid,
 	.close = smb2_close_file,
@@ -5531,7 +5530,7 @@ struct smb_version_operations smb30_operations = {
 	.get_reparse_point_buffer = smb2_get_reparse_point_buffer,
 	.query_mf_symlink = smb3_query_mf_symlink,
 	.create_mf_symlink = smb3_create_mf_symlink,
-	.create_reparse_symlink = smb2_create_reparse_symlink,
+	.create_reparse_inode = smb2_create_reparse_inode,
 	.open = smb2_open_file,
 	.set_fid = smb2_set_fid,
 	.close = smb2_close_file,
@@ -5647,7 +5646,7 @@ struct smb_version_operations smb311_operations = {
 	.get_reparse_point_buffer = smb2_get_reparse_point_buffer,
 	.query_mf_symlink = smb3_query_mf_symlink,
 	.create_mf_symlink = smb3_create_mf_symlink,
-	.create_reparse_symlink = smb2_create_reparse_symlink,
+	.create_reparse_inode = smb2_create_reparse_inode,
 	.open = smb2_open_file,
 	.set_fid = smb2_set_fid,
 	.close = smb2_close_file,
