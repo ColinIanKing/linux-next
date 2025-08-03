@@ -329,19 +329,21 @@ do {									\
 		bch2_print_str(_c, __VA_ARGS__);			\
 } while (0)
 
-#define bch_info(c, fmt, ...) \
-	bch2_print(c, KERN_INFO bch2_fmt(c, fmt), ##__VA_ARGS__)
-#define bch_info_ratelimited(c, fmt, ...) \
-	bch2_print_ratelimited(c, KERN_INFO bch2_fmt(c, fmt), ##__VA_ARGS__)
-#define bch_notice(c, fmt, ...) \
-	bch2_print(c, KERN_NOTICE bch2_fmt(c, fmt), ##__VA_ARGS__)
-#define bch_warn(c, fmt, ...) \
-	bch2_print(c, KERN_WARNING bch2_fmt(c, fmt), ##__VA_ARGS__)
-#define bch_warn_ratelimited(c, fmt, ...) \
-	bch2_print_ratelimited(c, KERN_WARNING bch2_fmt(c, fmt), ##__VA_ARGS__)
+#define bch_log(c, loglevel, fmt, ...) \
+	bch2_print(c, loglevel bch2_fmt(c, fmt), ##__VA_ARGS__)
+#define bch_log_ratelimited(c, loglevel, fmt, ...) \
+	bch2_print_ratelimited(c, loglevel bch2_fmt(c, fmt), ##__VA_ARGS__)
 
-#define bch_err(c, fmt, ...) \
-	bch2_print(c, KERN_ERR bch2_fmt(c, fmt), ##__VA_ARGS__)
+#define bch_err(c, ...)			bch_log(c, KERN_ERR, __VA_ARGS__)
+#define bch_err_ratelimited(c, ...)	bch_log_ratelimited(c, KERN_ERR, __VA_ARGS__)
+#define bch_warn(c, ...)		bch_log(c, KERN_WARNING, __VA_ARGS__)
+#define bch_warn_ratelimited(c, ...)	bch_log_ratelimited(c, KERN_WARNING, __VA_ARGS__)
+#define bch_notice(c, ...)		bch_log(c, KERN_NOTICE, __VA_ARGS__)
+#define bch_info(c, ...)		bch_log(c, KERN_INFO, __VA_ARGS__)
+#define bch_info_ratelimited(c, ...)	bch_log_ratelimited(c, KERN_INFO, __VA_ARGS__)
+#define bch_verbose(c, ...)		bch_log(c, KERN_DEBUG, __VA_ARGS__)
+#define bch_verbose_ratelimited(c, ...)	bch_log_ratelimited(c, KERN_DEBUG, __VA_ARGS__)
+
 #define bch_err_dev(ca, fmt, ...) \
 	bch2_print(c, KERN_ERR bch2_fmt_dev(ca, fmt), ##__VA_ARGS__)
 #define bch_err_dev_offset(ca, _offset, fmt, ...) \
@@ -351,8 +353,6 @@ do {									\
 #define bch_err_inum_offset(c, _inum, _offset, fmt, ...) \
 	bch2_print(c, KERN_ERR bch2_fmt_inum_offset(c, _inum, _offset, fmt), ##__VA_ARGS__)
 
-#define bch_err_ratelimited(c, fmt, ...) \
-	bch2_print_ratelimited(c, KERN_ERR bch2_fmt(c, fmt), ##__VA_ARGS__)
 #define bch_err_dev_ratelimited(ca, fmt, ...) \
 	bch2_print_ratelimited(ca, KERN_ERR bch2_fmt_dev(ca, fmt), ##__VA_ARGS__)
 #define bch_err_dev_offset_ratelimited(ca, _offset, fmt, ...) \
@@ -384,24 +384,6 @@ do {									\
 	if (should_print_err(_ret))					\
 		bch_err(_c, "%s(): error " _msg " %s", __func__,	\
 			##__VA_ARGS__, bch2_err_str(_ret));		\
-} while (0)
-
-#define bch_verbose(c, fmt, ...)					\
-do {									\
-	if ((c)->opts.verbose)						\
-		bch_info(c, fmt, ##__VA_ARGS__);			\
-} while (0)
-
-#define bch_verbose_ratelimited(c, fmt, ...)				\
-do {									\
-	if ((c)->opts.verbose)						\
-		bch_info_ratelimited(c, fmt, ##__VA_ARGS__);		\
-} while (0)
-
-#define pr_verbose_init(opts, fmt, ...)					\
-do {									\
-	if (opt_get(opts, verbose))					\
-		pr_info(fmt, ##__VA_ARGS__);				\
 } while (0)
 
 static inline int __bch2_err_trace(struct bch_fs *c, int err)
@@ -819,6 +801,7 @@ struct bch_fs {
 	struct work_struct	read_only_work;
 
 	struct bch_dev __rcu	*devs[BCH_SB_MEMBERS_MAX];
+	struct bch_devs_mask	devs_removed;
 
 	struct bch_accounting_mem accounting;
 
@@ -832,6 +815,8 @@ struct bch_fs {
 	struct bch_disk_groups_cpu __rcu *disk_groups;
 
 	struct bch_opts		opts;
+	unsigned		loglevel;
+	unsigned		prev_loglevel;
 
 	/* Updated by bch2_sb_update():*/
 	struct {
@@ -860,8 +845,8 @@ struct bch_fs {
 		unsigned long	errors_silent[BITS_TO_LONGS(BCH_FSCK_ERR_MAX)];
 		u64		btrees_lost_data;
 	}			sb;
-	DARRAY(enum bcachefs_metadata_version)
-				incompat_versions_requested;
+
+	unsigned long		incompat_versions_requested[BITS_TO_LONGS(BCH_VERSION_MINOR(bcachefs_metadata_version_current))];
 
 	struct unicode_map	*cf_encoding;
 
@@ -1180,7 +1165,7 @@ static inline bool bch2_ro_ref_tryget(struct bch_fs *c)
 
 static inline void bch2_ro_ref_put(struct bch_fs *c)
 {
-	if (refcount_dec_and_test(&c->ro_ref))
+	if (c && refcount_dec_and_test(&c->ro_ref))
 		wake_up(&c->ro_ref_wait);
 }
 
@@ -1283,13 +1268,20 @@ static inline bool bch2_discard_opt_enabled(struct bch_fs *c, struct bch_dev *ca
 		: ca->mi.discard;
 }
 
-static inline bool bch2_fs_casefold_enabled(struct bch_fs *c)
+static inline int bch2_fs_casefold_enabled(struct bch_fs *c)
 {
-#ifdef CONFIG_UNICODE
-	return !c->opts.casefold_disabled;
-#else
-	return false;
-#endif
+	if (!IS_ENABLED(CONFIG_UNICODE))
+		return bch_err_throw(c, no_casefolding_without_utf8);
+	if (c->opts.casefold_disabled)
+		return bch_err_throw(c, casefolding_disabled);
+	return 0;
+}
+
+static inline const char *strip_bch2(const char *msg)
+{
+	if (!strncmp("bch2_", msg, 5))
+		return msg + 5;
+	return msg;
 }
 
 #endif /* _BCACHEFS_H */

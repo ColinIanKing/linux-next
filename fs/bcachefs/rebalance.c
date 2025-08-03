@@ -15,6 +15,7 @@
 #include "inode.h"
 #include "io_write.h"
 #include "move.h"
+#include "progress.h"
 #include "rebalance.h"
 #include "subvolume.h"
 #include "super-io.h"
@@ -220,7 +221,7 @@ int bch2_get_update_rebalance_opts(struct btree_trans *trans,
 	return bch2_bkey_set_needs_rebalance(trans->c, io_opts, n) ?:
 		bch2_trans_update(trans, iter, n, BTREE_UPDATE_internal_snapshot_node) ?:
 		bch2_trans_commit(trans, NULL, NULL, 0) ?:
-		-BCH_ERR_transaction_restart_nested;
+		bch_err_throw(trans->c, transaction_restart_nested);
 }
 
 #define REBALANCE_WORK_SCAN_OFFSET	(U64_MAX - 1)
@@ -234,43 +235,34 @@ static const char * const bch2_rebalance_state_strs[] = {
 
 int bch2_set_rebalance_needs_scan_trans(struct btree_trans *trans, u64 inum)
 {
-	struct btree_iter iter;
-	struct bkey_s_c k;
-	struct bkey_i_cookie *cookie;
-	u64 v;
-	int ret;
-
-	bch2_trans_iter_init(trans, &iter, BTREE_ID_rebalance_work,
-			     SPOS(inum, REBALANCE_WORK_SCAN_OFFSET, U32_MAX),
-			     BTREE_ITER_intent);
-	k = bch2_btree_iter_peek_slot(trans, &iter);
-	ret = bkey_err(k);
+	CLASS(btree_iter, iter)(trans, BTREE_ID_rebalance_work,
+				SPOS(inum, REBALANCE_WORK_SCAN_OFFSET, U32_MAX),
+				BTREE_ITER_intent);
+	struct bkey_s_c k = bch2_btree_iter_peek_slot(&iter);
+	int ret = bkey_err(k);
 	if (ret)
-		goto err;
+		return ret;
 
-	v = k.k->type == KEY_TYPE_cookie
+	u64 v = k.k->type == KEY_TYPE_cookie
 		? le64_to_cpu(bkey_s_c_to_cookie(k).v->cookie)
 		: 0;
 
-	cookie = bch2_trans_kmalloc(trans, sizeof(*cookie));
+	struct bkey_i_cookie *cookie = bch2_trans_kmalloc(trans, sizeof(*cookie));
 	ret = PTR_ERR_OR_ZERO(cookie);
 	if (ret)
-		goto err;
+		return ret;
 
 	bkey_cookie_init(&cookie->k_i);
 	cookie->k.p = iter.pos;
 	cookie->v.cookie = cpu_to_le64(v + 1);
 
-	ret = bch2_trans_update(trans, &iter, &cookie->k_i, 0);
-err:
-	bch2_trans_iter_exit(trans, &iter);
-	return ret;
+	return bch2_trans_update(trans, &iter, &cookie->k_i, 0);
 }
 
 int bch2_set_rebalance_needs_scan(struct bch_fs *c, u64 inum)
 {
-	int ret = bch2_trans_commit_do(c, NULL, NULL,
-				       BCH_TRANS_COMMIT_no_enospc,
+	CLASS(btree_trans, trans)(c);
+	int ret = commit_do(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc,
 			    bch2_set_rebalance_needs_scan_trans(trans, inum));
 	bch2_rebalance_wakeup(c);
 	return ret;
@@ -283,36 +275,65 @@ int bch2_set_fs_needs_rebalance(struct bch_fs *c)
 
 static int bch2_clear_rebalance_needs_scan(struct btree_trans *trans, u64 inum, u64 cookie)
 {
-	struct btree_iter iter;
-	struct bkey_s_c k;
-	u64 v;
-	int ret;
-
-	bch2_trans_iter_init(trans, &iter, BTREE_ID_rebalance_work,
-			     SPOS(inum, REBALANCE_WORK_SCAN_OFFSET, U32_MAX),
-			     BTREE_ITER_intent);
-	k = bch2_btree_iter_peek_slot(trans, &iter);
-	ret = bkey_err(k);
+	CLASS(btree_iter, iter)(trans, BTREE_ID_rebalance_work,
+				SPOS(inum, REBALANCE_WORK_SCAN_OFFSET, U32_MAX),
+				BTREE_ITER_intent);
+	struct bkey_s_c k = bch2_btree_iter_peek_slot(&iter);
+	int ret = bkey_err(k);
 	if (ret)
-		goto err;
+		return ret;
 
-	v = k.k->type == KEY_TYPE_cookie
+	u64 v = k.k->type == KEY_TYPE_cookie
 		? le64_to_cpu(bkey_s_c_to_cookie(k).v->cookie)
 		: 0;
 
-	if (v == cookie)
-		ret = bch2_btree_delete_at(trans, &iter, 0);
-err:
-	bch2_trans_iter_exit(trans, &iter);
-	return ret;
+	return v == cookie
+		? bch2_btree_delete_at(trans, &iter, 0)
+		: 0;
 }
 
-static struct bkey_s_c next_rebalance_entry(struct btree_trans *trans,
-					    struct btree_iter *work_iter)
+#define REBALANCE_WORK_BUF_NR		1024
+DEFINE_DARRAY_NAMED(darray_rebalance_work, struct bkey_i_cookie);
+
+static struct bkey_i *next_rebalance_entry(struct btree_trans *trans,
+					 darray_rebalance_work *buf, struct bpos *work_pos)
 {
-	return !kthread_should_stop()
-		? bch2_btree_iter_peek(trans, work_iter)
-		: bkey_s_c_null;
+	if (unlikely(!buf->nr)) {
+		/*
+		 * Avoid contention with write buffer flush: buffer up rebalance
+		 * work entries in a darray
+		 */
+
+		BUG_ON(!buf->size);;
+
+		bch2_trans_begin(trans);
+
+		for_each_btree_key(trans, iter, BTREE_ID_rebalance_work, *work_pos,
+				   BTREE_ITER_all_snapshots|BTREE_ITER_prefetch, k, ({
+			/* we previously used darray_make_room */
+			BUG_ON(bkey_bytes(k.k) > sizeof(buf->data[0]));
+
+			bkey_reassemble(&darray_top(*buf).k_i, k);
+			buf->nr++;
+
+			*work_pos = bpos_successor(iter.pos);
+			if (buf->nr == buf->size)
+				break;
+			0;
+		}));
+
+		if (!buf->nr)
+			return NULL;
+
+		unsigned l = 0, r = buf->nr - 1;
+		while (l < r) {
+			swap(buf->data[l], buf->data[r]);
+			l++;
+			--r;
+		}
+	}
+
+	return &(&darray_pop(buf))->k_i;
 }
 
 static int bch2_bkey_clear_needs_rebalance(struct btree_trans *trans,
@@ -340,12 +361,12 @@ static struct bkey_s_c next_rebalance_extent(struct btree_trans *trans,
 {
 	struct bch_fs *c = trans->c;
 
-	bch2_trans_iter_exit(trans, extent_iter);
+	bch2_trans_iter_exit(extent_iter);
 	bch2_trans_iter_init(trans, extent_iter,
 			     work_pos.inode ? BTREE_ID_extents : BTREE_ID_reflink,
 			     work_pos,
 			     BTREE_ITER_all_snapshots);
-	struct bkey_s_c k = bch2_btree_iter_peek_slot(trans, extent_iter);
+	struct bkey_s_c k = bch2_btree_iter_peek_slot(extent_iter);
 	if (bkey_err(k))
 		return k;
 
@@ -373,7 +394,7 @@ static struct bkey_s_c next_rebalance_extent(struct btree_trans *trans,
 	}
 
 	if (trace_rebalance_extent_enabled()) {
-		struct printbuf buf = PRINTBUF;
+		CLASS(printbuf, buf)();
 
 		bch2_bkey_val_to_text(&buf, c, k);
 		prt_newline(&buf);
@@ -399,7 +420,6 @@ static struct bkey_s_c next_rebalance_extent(struct btree_trans *trans,
 		}
 
 		trace_rebalance_extent(c, buf.buf);
-		printbuf_exit(&buf);
 	}
 
 	return k;
@@ -480,10 +500,9 @@ static int do_rebalance_scan(struct moving_context *ctxt, u64 inum, u64 cookie)
 	per_snapshot_io_opts_init(&snapshot_io_opts, c);
 
 	int ret = for_each_btree_key_max(trans, iter, BTREE_ID_extents,
-				      r->scan_start.pos, r->scan_end.pos,
-				      BTREE_ITER_all_snapshots|
-				      BTREE_ITER_not_extents|
-				      BTREE_ITER_prefetch, k, ({
+					 r->scan_start.pos, r->scan_end.pos,
+					 BTREE_ITER_all_snapshots|
+					 BTREE_ITER_prefetch, k, ({
 		ctxt->stats->pos = BBPOS(iter.btree_id, iter.pos);
 
 		struct bch_io_opts *io_opts = bch2_move_get_io_opts(trans,
@@ -540,53 +559,40 @@ static int do_rebalance(struct moving_context *ctxt)
 	struct btree_trans *trans = ctxt->trans;
 	struct bch_fs *c = trans->c;
 	struct bch_fs_rebalance *r = &c->rebalance;
-	struct btree_iter rebalance_work_iter, extent_iter = {};
-	struct bkey_s_c k;
+	struct btree_iter extent_iter = {};
 	u32 kick = r->kick;
-	int ret = 0;
 
-	bch2_trans_begin(trans);
+	struct bpos work_pos = POS_MIN;
+	CLASS(darray_rebalance_work, work)();
+	int ret = darray_make_room(&work, REBALANCE_WORK_BUF_NR);
+	if (ret)
+		return ret;
 
 	bch2_move_stats_init(&r->work_stats, "rebalance_work");
 	bch2_move_stats_init(&r->scan_stats, "rebalance_scan");
-
-	bch2_trans_iter_init(trans, &rebalance_work_iter,
-			     BTREE_ID_rebalance_work, POS_MIN,
-			     BTREE_ITER_all_snapshots);
 
 	while (!bch2_move_ratelimit(ctxt)) {
 		if (!bch2_rebalance_enabled(c)) {
 			bch2_moving_ctxt_flush_all(ctxt);
 			kthread_wait_freezable(bch2_rebalance_enabled(c) ||
 					       kthread_should_stop());
+			if (kthread_should_stop())
+				break;
 		}
 
-		if (kthread_should_stop())
+		struct bkey_i *k = next_rebalance_entry(trans, &work, &work_pos);
+		if (!k)
 			break;
 
-		bch2_trans_begin(trans);
-
-		ret = bkey_err(k = next_rebalance_entry(trans, &rebalance_work_iter));
-		if (bch2_err_matches(ret, BCH_ERR_transaction_restart))
-			continue;
-		if (ret || !k.k)
-			break;
-
-		ret = k.k->type == KEY_TYPE_cookie
-			? do_rebalance_scan(ctxt, k.k->p.inode,
-					    le64_to_cpu(bkey_s_c_to_cookie(k).v->cookie))
-			: do_rebalance_extent(ctxt, k.k->p, &extent_iter);
-
-		if (bch2_err_matches(ret, BCH_ERR_transaction_restart))
-			continue;
+		ret = k->k.type == KEY_TYPE_cookie
+			? do_rebalance_scan(ctxt, k->k.p.inode,
+					    le64_to_cpu(bkey_i_to_cookie(k)->v.cookie))
+			: lockrestart_do(trans, do_rebalance_extent(ctxt, k->k.p, &extent_iter));
 		if (ret)
 			break;
-
-		bch2_btree_iter_advance(trans, &rebalance_work_iter);
 	}
 
-	bch2_trans_iter_exit(trans, &extent_iter);
-	bch2_trans_iter_exit(trans, &rebalance_work_iter);
+	bch2_trans_iter_exit(&extent_iter);
 	bch2_move_stats_exit(&r->scan_stats, c);
 
 	if (!ret &&
@@ -713,17 +719,15 @@ void bch2_rebalance_stop(struct bch_fs *c)
 
 int bch2_rebalance_start(struct bch_fs *c)
 {
-	struct task_struct *p;
-	int ret;
-
 	if (c->rebalance.thread)
 		return 0;
 
 	if (c->opts.nochanges)
 		return 0;
 
-	p = kthread_create(bch2_rebalance_thread, c, "bch-rebalance/%s", c->name);
-	ret = PTR_ERR_OR_ZERO(p);
+	struct task_struct *p =
+		kthread_create(bch2_rebalance_thread, c, "bch-rebalance/%s", c->name);
+	int ret = PTR_ERR_OR_ZERO(p);
 	bch_err_msg(c, ret, "creating rebalance thread");
 	if (ret)
 		return ret;
@@ -779,10 +783,10 @@ static int check_rebalance_work_one(struct btree_trans *trans,
 {
 	struct bch_fs *c = trans->c;
 	struct bkey_s_c extent_k, rebalance_k;
-	struct printbuf buf = PRINTBUF;
+	CLASS(printbuf, buf)();
 
-	int ret = bkey_err(extent_k	= bch2_btree_iter_peek(trans, extent_iter)) ?:
-		  bkey_err(rebalance_k	= bch2_btree_iter_peek(trans, rebalance_iter));
+	int ret = bkey_err(extent_k	= bch2_btree_iter_peek(extent_iter)) ?:
+		  bkey_err(rebalance_k	= bch2_btree_iter_peek(rebalance_iter));
 	if (ret)
 		return ret;
 
@@ -790,7 +794,7 @@ static int check_rebalance_work_one(struct btree_trans *trans,
 	    extent_iter->btree_id == BTREE_ID_reflink &&
 	    (!rebalance_k.k ||
 	     rebalance_k.k->p.inode >= BCACHEFS_ROOT_INO)) {
-		bch2_trans_iter_exit(trans, extent_iter);
+		bch2_trans_iter_exit(extent_iter);
 		bch2_trans_iter_init(trans, extent_iter,
 				     BTREE_ID_extents, POS_MIN,
 				     BTREE_ITER_prefetch|
@@ -833,7 +837,7 @@ static int check_rebalance_work_one(struct btree_trans *trans,
 		ret = bch2_btree_bit_mod_buffered(trans, BTREE_ID_rebalance_work,
 						  extent_k.k->p, false);
 		if (ret)
-			goto err;
+			return ret;
 	}
 
 	if (fsck_err_on(should_have_rebalance && !have_rebalance,
@@ -842,37 +846,36 @@ static int check_rebalance_work_one(struct btree_trans *trans,
 		ret = bch2_btree_bit_mod_buffered(trans, BTREE_ID_rebalance_work,
 						  extent_k.k->p, true);
 		if (ret)
-			goto err;
+			return ret;
 	}
 
 	if (cmp <= 0)
-		bch2_btree_iter_advance(trans, extent_iter);
+		bch2_btree_iter_advance(extent_iter);
 	if (cmp >= 0)
-		bch2_btree_iter_advance(trans, rebalance_iter);
-err:
+		bch2_btree_iter_advance(rebalance_iter);
 fsck_err:
-	printbuf_exit(&buf);
 	return ret;
 }
 
 int bch2_check_rebalance_work(struct bch_fs *c)
 {
-	struct btree_trans *trans = bch2_trans_get(c);
-	struct btree_iter rebalance_iter, extent_iter;
-	int ret = 0;
-
-	bch2_trans_iter_init(trans, &extent_iter,
-			     BTREE_ID_reflink, POS_MIN,
-			     BTREE_ITER_prefetch);
-	bch2_trans_iter_init(trans, &rebalance_iter,
-			     BTREE_ID_rebalance_work, POS_MIN,
-			     BTREE_ITER_prefetch);
+	CLASS(btree_trans, trans)(c);
+	CLASS(btree_iter, extent_iter)(trans, BTREE_ID_reflink, POS_MIN,
+				       BTREE_ITER_prefetch);
+	CLASS(btree_iter, rebalance_iter)(trans, BTREE_ID_rebalance_work, POS_MIN,
+					  BTREE_ITER_prefetch);
 
 	struct bkey_buf last_flushed;
 	bch2_bkey_buf_init(&last_flushed);
 	bkey_init(&last_flushed.k->k);
 
+	struct progress_indicator_state progress;
+	bch2_progress_init(&progress, c, BIT_ULL(BTREE_ID_rebalance_work));
+
+	int ret = 0;
 	while (!ret) {
+		progress_update_iter(trans, &progress, &rebalance_iter);
+
 		bch2_trans_begin(trans);
 
 		ret = check_rebalance_work_one(trans, &extent_iter, &rebalance_iter, &last_flushed);
@@ -882,8 +885,5 @@ int bch2_check_rebalance_work(struct bch_fs *c)
 	}
 
 	bch2_bkey_buf_exit(&last_flushed, c);
-	bch2_trans_iter_exit(trans, &extent_iter);
-	bch2_trans_iter_exit(trans, &rebalance_iter);
-	bch2_trans_put(trans);
 	return ret < 0 ? ret : 0;
 }
