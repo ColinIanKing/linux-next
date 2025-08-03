@@ -287,11 +287,6 @@ handle instance id.
 The following program demonstrates using KCOV to collect coverage from both
 local tasks spawned by the process and the global task that handles USB bus #1:
 
-The user-space code for KCOV should also use an acquire to fetch the count
-of coverage entries in the shared buffer. This acquire pairs with the
-corresponding write memory barrier (smp_wmb()) on the kernel-side in
-kcov_move_area().
-
 .. code-block:: c
 
     /* Same includes and defines as above. */
@@ -366,6 +361,11 @@ kcov_move_area().
 	 */
 	sleep(2);
 
+        /*
+         * The load to the coverage count should be an acquire to pair with
+         * pair with the corresponding write memory barrier (smp_wmb()) on
+         * the kernel-side in kcov_move_area().
+         */
 	n = __atomic_load_n(&cover[0], __ATOMIC_ACQUIRE);
 	for (i = 0; i < n; i++)
 		printf("0x%lx\n", cover[i + 1]);
