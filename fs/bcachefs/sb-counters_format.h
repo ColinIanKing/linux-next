@@ -12,6 +12,12 @@ enum counters_flags {
 	x(io_read_inline,				80,	TYPE_SECTORS)	\
 	x(io_read_hole,					81,	TYPE_SECTORS)	\
 	x(io_read_promote,				30,	TYPE_COUNTER)	\
+	x(io_read_nopromote,				85,	TYPE_COUNTER)	\
+	x(io_read_nopromote_may_not,			86,	TYPE_COUNTER)	\
+	x(io_read_nopromote_already_promoted,		87,	TYPE_COUNTER)	\
+	x(io_read_nopromote_unwritten,			88,	TYPE_COUNTER)	\
+	x(io_read_nopromote_congested,			89,	TYPE_COUNTER)	\
+	x(io_read_nopromote_in_flight,			90,	TYPE_COUNTER)	\
 	x(io_read_bounce,				31,	TYPE_COUNTER)	\
 	x(io_read_split,				33,	TYPE_COUNTER)	\
 	x(io_read_reuse_race,				34,	TYPE_COUNTER)	\
@@ -25,6 +31,8 @@ enum counters_flags {
 	x(io_move_fail,					38,	TYPE_COUNTER)	\
 	x(io_move_write_fail,				82,	TYPE_COUNTER)	\
 	x(io_move_start_fail,				39,	TYPE_COUNTER)	\
+	x(io_move_drop_only,				91,	TYPE_COUNTER)	\
+	x(io_move_noop,					92,	TYPE_COUNTER)	\
 	x(io_move_created_rebalance,			83,	TYPE_COUNTER)	\
 	x(io_move_evacuate_bucket,			84,	TYPE_COUNTER)	\
 	x(bucket_invalidate,				3,	TYPE_COUNTER)	\
@@ -93,7 +101,9 @@ enum counters_flags {
 	x(trans_restart_write_buffer_flush,		75,	TYPE_COUNTER)	\
 	x(trans_restart_split_race,			76,	TYPE_COUNTER)	\
 	x(write_buffer_flush_slowpath,			77,	TYPE_COUNTER)	\
-	x(write_buffer_flush_sync,			78,	TYPE_COUNTER)
+	x(write_buffer_flush_sync,			78,	TYPE_COUNTER)	\
+	x(accounting_key_to_wb_slowpath,		94,	TYPE_COUNTER)	\
+	x(error_throw,					93,	TYPE_COUNTER)
 
 enum bch_persistent_counters {
 #define x(t, n, ...) BCH_COUNTER_##t,
