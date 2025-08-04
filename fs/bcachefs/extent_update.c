@@ -68,7 +68,6 @@ static int count_iters_for_insert(struct btree_trans *trans,
 		u64 idx = REFLINK_P_IDX(p.v);
 		unsigned sectors = bpos_min(*end, p.k->p).offset -
 			bkey_start_offset(p.k);
-		struct btree_iter iter;
 		struct bkey_s_c r_k;
 
 		for_each_btree_key_norestart(trans, iter,
@@ -88,11 +87,9 @@ static int count_iters_for_insert(struct btree_trans *trans,
 						    r_k.k->p.offset - idx);
 
 				*end = bpos_min(*end, pos);
-				ret = 1;
-				break;
+				return 1;
 			}
 		}
-		bch2_trans_iter_exit(trans, &iter);
 
 		break;
 	}
@@ -108,14 +105,14 @@ int bch2_extent_atomic_end(struct btree_trans *trans,
 	unsigned nr_iters = 0;
 
 	struct btree_iter copy;
-	bch2_trans_copy_iter(trans, &copy, iter);
+	bch2_trans_copy_iter(&copy, iter);
 
-	int ret = bch2_btree_iter_traverse(trans, &copy);
+	int ret = bch2_btree_iter_traverse(&copy);
 	if (ret)
 		goto err;
 
 	struct bkey_s_c k;
-	for_each_btree_key_max_continue_norestart(trans, copy, *end, 0, k, ret) {
+	for_each_btree_key_max_continue_norestart(copy, *end, 0, k, ret) {
 		unsigned offset = 0;
 
 		if (bkey_gt(iter->pos, bkey_start_pos(k.k)))
@@ -126,7 +123,7 @@ int bch2_extent_atomic_end(struct btree_trans *trans,
 			break;
 	}
 err:
-	bch2_trans_iter_exit(trans, &copy);
+	bch2_trans_iter_exit(&copy);
 	return ret < 0 ? ret : 0;
 }
 
