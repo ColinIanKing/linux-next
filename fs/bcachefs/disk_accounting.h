@@ -145,6 +145,16 @@ static inline bool bch2_accounting_is_mem(struct disk_accounting_pos *acc)
 		acc->type != BCH_DISK_ACCOUNTING_inum;
 }
 
+static inline bool bch2_bkey_is_accounting_mem(struct bkey *k)
+{
+	if (k->type != KEY_TYPE_accounting)
+		return false;
+
+	struct disk_accounting_pos acc_k;
+	bpos_to_disk_accounting_pos(&acc_k, k->p);
+	return bch2_accounting_is_mem(&acc_k);
+}
+
 /*
  * Update in memory counters so they match the btree update we're doing; called
  * from transaction commit path
@@ -211,10 +221,8 @@ static inline int bch2_accounting_mem_mod_locked(struct btree_trans *trans,
 
 static inline int bch2_accounting_mem_add(struct btree_trans *trans, struct bkey_s_c_accounting a, bool gc)
 {
-	percpu_down_read(&trans->c->mark_lock);
-	int ret = bch2_accounting_mem_mod_locked(trans, a, gc ? BCH_ACCOUNTING_gc : BCH_ACCOUNTING_normal, false);
-	percpu_up_read(&trans->c->mark_lock);
-	return ret;
+	guard(percpu_read)(&trans->c->mark_lock);
+	return bch2_accounting_mem_mod_locked(trans, a, gc ? BCH_ACCOUNTING_gc : BCH_ACCOUNTING_normal, false);
 }
 
 static inline void bch2_accounting_mem_read_counters(struct bch_accounting_mem *acc,
@@ -236,13 +244,12 @@ static inline void bch2_accounting_mem_read_counters(struct bch_accounting_mem *
 static inline void bch2_accounting_mem_read(struct bch_fs *c, struct bpos p,
 					    u64 *v, unsigned nr)
 {
-	percpu_down_read(&c->mark_lock);
+	guard(percpu_read)(&c->mark_lock);
 	struct bch_accounting_mem *acc = &c->accounting;
 	unsigned idx = eytzinger0_find(acc->k.data, acc->k.nr, sizeof(acc->k.data[0]),
 				       accounting_pos_cmp, &p);
 
 	bch2_accounting_mem_read_counters(acc, idx, v, nr, false);
-	percpu_up_read(&c->mark_lock);
 }
 
 static inline struct bversion journal_pos_to_bversion(struct journal_res *res, unsigned offset)

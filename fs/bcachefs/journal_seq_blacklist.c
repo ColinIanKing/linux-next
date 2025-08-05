@@ -49,7 +49,7 @@ int bch2_journal_seq_blacklist_add(struct bch_fs *c, u64 start, u64 end)
 	unsigned i = 0, nr;
 	int ret = 0;
 
-	mutex_lock(&c->sb_lock);
+	guard(mutex)(&c->sb_lock);
 	bl = bch2_sb_field_get(c->disk_sb.sb, journal_seq_blacklist);
 	nr = blacklist_nr_entries(bl);
 
@@ -77,10 +77,8 @@ int bch2_journal_seq_blacklist_add(struct bch_fs *c, u64 start, u64 end)
 
 	bl = bch2_sb_field_resize(&c->disk_sb, journal_seq_blacklist,
 				  sb_blacklist_u64s(nr + 1));
-	if (!bl) {
-		ret = bch_err_throw(c, ENOSPC_sb_journal_seq_blacklist);
-		goto out;
-	}
+	if (!bl)
+		return bch_err_throw(c, ENOSPC_sb_journal_seq_blacklist);
 
 	array_insert_item(bl->start, nr, i, ((struct journal_seq_blacklist_entry) {
 		.start	= cpu_to_le64(start),
@@ -89,8 +87,6 @@ int bch2_journal_seq_blacklist_add(struct bch_fs *c, u64 start, u64 end)
 	c->disk_sb.sb->features[0] |= cpu_to_le64(1ULL << BCH_FEATURE_journal_seq_blacklist_v3);
 
 	ret = bch2_write_super(c);
-out:
-	mutex_unlock(&c->sb_lock);
 
 	return ret ?: bch2_blacklist_table_initialize(c);
 }
@@ -101,6 +97,52 @@ static int journal_seq_blacklist_table_cmp(const void *_l, const void *_r)
 	const struct journal_seq_blacklist_table_entry *r = _r;
 
 	return cmp_int(l->start, r->start);
+}
+
+static int journal_seq_blacklist_table_end_cmp(const void *_l, const void *_r)
+{
+	const struct journal_seq_blacklist_table_entry *l = _l;
+	const struct journal_seq_blacklist_table_entry *r = _r;
+
+	return cmp_int(l->end, r->end);
+}
+
+u64 bch2_journal_seq_next_blacklisted(struct bch_fs *c, u64 seq)
+{
+	struct journal_seq_blacklist_table *t = c->journal_seq_blacklist_table;
+
+	if (!t)
+		return U64_MAX;
+
+	struct journal_seq_blacklist_table_entry search = { .end = seq };
+	int idx = eytzinger0_find_gt(t->entries, t->nr,
+				     sizeof(t->entries[0]),
+				     journal_seq_blacklist_table_end_cmp,
+				     &search);
+	if (idx < 0)
+		return U64_MAX;
+
+	return max(seq, t->entries[idx].start);
+}
+
+u64 bch2_journal_seq_next_nonblacklisted(struct bch_fs *c, u64 seq)
+{
+	struct journal_seq_blacklist_table *t = c->journal_seq_blacklist_table;
+
+	if (!t)
+		return seq;
+
+	while (true) {
+		struct journal_seq_blacklist_table_entry search = { .start = seq };
+		int idx = eytzinger0_find_le(t->entries, t->nr,
+					     sizeof(t->entries[0]),
+					     journal_seq_blacklist_table_cmp,
+					     &search);
+		if (idx < 0 || t->entries[idx].end <= seq)
+			return seq;
+
+		seq = t->entries[idx].end;
+	}
 }
 
 bool bch2_journal_seq_is_blacklisted(struct bch_fs *c, u64 seq,
