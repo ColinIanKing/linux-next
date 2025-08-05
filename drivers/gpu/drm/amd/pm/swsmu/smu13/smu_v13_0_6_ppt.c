@@ -177,7 +177,7 @@ static const struct cmn2asic_msg_mapping smu_v13_0_6_message_map[SMU_MSG_MAX_COU
 	MSG_MAP(SetThrottlingPolicy,                 PPSMC_MSG_SetThrottlingPolicy,             0),
 	MSG_MAP(ResetSDMA,                           PPSMC_MSG_ResetSDMA,                       0),
 	MSG_MAP(ResetVCN,                            PPSMC_MSG_ResetVCN,                       0),
-	MSG_MAP(GetStaticMetricsTable,               PPSMC_MSG_GetStaticMetricsTable,           0),
+	MSG_MAP(GetStaticMetricsTable,               PPSMC_MSG_GetStaticMetricsTable,           1),
 };
 
 // clang-format on
@@ -402,14 +402,28 @@ static void smu_v13_0_6_init_caps(struct smu_context *smu)
 		if ((pgm == 7 && fw_ver >= 0x7550E00) ||
 		    (pgm == 0 && fw_ver >= 0x00557E00))
 			smu_v13_0_6_cap_set(smu, SMU_CAP(HST_LIMIT_METRICS));
-		if ((pgm == 0 && fw_ver >= 0x00557F01) ||
-		    (pgm == 7 && fw_ver >= 0x7551000)) {
-			smu_v13_0_6_cap_set(smu, SMU_CAP(STATIC_METRICS));
-			smu_v13_0_6_cap_set(smu, SMU_CAP(BOARD_VOLTAGE));
+
+		if (amdgpu_sriov_vf(adev)) {
+			if ((pgm == 0 && fw_ver >= 0x00558000) ||
+			    (pgm == 7 && fw_ver >= 0x7551000)) {
+				smu_v13_0_6_cap_set(smu,
+						    SMU_CAP(STATIC_METRICS));
+				smu_v13_0_6_cap_set(smu,
+						    SMU_CAP(BOARD_VOLTAGE));
+				smu_v13_0_6_cap_set(smu, SMU_CAP(PLDM_VERSION));
+			}
+		} else {
+			if ((pgm == 0 && fw_ver >= 0x00557F01) ||
+			    (pgm == 7 && fw_ver >= 0x7551000)) {
+				smu_v13_0_6_cap_set(smu,
+						    SMU_CAP(STATIC_METRICS));
+				smu_v13_0_6_cap_set(smu,
+						    SMU_CAP(BOARD_VOLTAGE));
+			}
+			if ((pgm == 0 && fw_ver >= 0x00558000) ||
+			    (pgm == 7 && fw_ver >= 0x7551000))
+				smu_v13_0_6_cap_set(smu, SMU_CAP(PLDM_VERSION));
 		}
-		if ((pgm == 0 && fw_ver >= 0x00558000) ||
-		    (pgm == 7 && fw_ver >= 0x7551000))
-			smu_v13_0_6_cap_set(smu, SMU_CAP(PLDM_VERSION));
 	}
 	if (((pgm == 7) && (fw_ver >= 0x7550700)) ||
 	    ((pgm == 0) && (fw_ver >= 0x00557900)) ||
