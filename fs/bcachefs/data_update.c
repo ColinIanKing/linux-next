@@ -115,7 +115,7 @@ static void trace_io_move_finish2(struct data_update *u,
 				  struct bkey_i *insert)
 {
 	struct bch_fs *c = u->op.c;
-	struct printbuf buf = PRINTBUF;
+	CLASS(printbuf, buf)();
 
 	prt_newline(&buf);
 
@@ -131,7 +131,6 @@ static void trace_io_move_finish2(struct data_update *u,
 	prt_newline(&buf);
 
 	trace_io_move_finish(c, buf.buf);
-	printbuf_exit(&buf);
 }
 
 noinline_for_stack
@@ -143,7 +142,7 @@ static void trace_io_move_fail2(struct data_update *m,
 {
 	struct bch_fs *c = m->op.c;
 	struct bkey_s_c old = bkey_i_to_s_c(m->k.k);
-	struct printbuf buf = PRINTBUF;
+	CLASS(printbuf, buf)();
 	unsigned rewrites_found = 0;
 
 	if (!trace_io_move_fail_enabled())
@@ -187,7 +186,6 @@ static void trace_io_move_fail2(struct data_update *m,
 	}
 
 	trace_io_move_fail(c, buf.buf);
-	printbuf_exit(&buf);
 }
 
 noinline_for_stack
@@ -196,7 +194,7 @@ static void trace_data_update2(struct data_update *m,
 			       struct bkey_i *insert)
 {
 	struct bch_fs *c = m->op.c;
-	struct printbuf buf = PRINTBUF;
+	CLASS(printbuf, buf)();
 
 	prt_str(&buf, "\nold: ");
 	bch2_bkey_val_to_text(&buf, c, old);
@@ -206,7 +204,6 @@ static void trace_data_update2(struct data_update *m,
 	bch2_bkey_val_to_text(&buf, c, bkey_i_to_s_c(insert));
 
 	trace_data_update(c, buf.buf);
-	printbuf_exit(&buf);
 }
 
 noinline_for_stack
@@ -215,7 +212,7 @@ static void trace_io_move_created_rebalance2(struct data_update *m,
 					     struct bkey_i *insert)
 {
 	struct bch_fs *c = m->op.c;
-	struct printbuf buf = PRINTBUF;
+	CLASS(printbuf, buf)();
 
 	bch2_data_update_opts_to_text(&buf, c, &m->op.opts, &m->data_opts);
 
@@ -227,9 +224,8 @@ static void trace_io_move_created_rebalance2(struct data_update *m,
 	bch2_bkey_val_to_text(&buf, c, bkey_i_to_s_c(insert));
 
 	trace_io_move_created_rebalance(c, buf.buf);
-	printbuf_exit(&buf);
 
-	this_cpu_inc(c->counters[BCH_COUNTER_io_move_created_rebalance]);
+	count_event(c, io_move_created_rebalance);
 }
 
 noinline_for_stack
@@ -238,7 +234,7 @@ static int data_update_invalid_bkey(struct data_update *m,
 				    struct bkey_i *insert)
 {
 	struct bch_fs *c = m->op.c;
-	struct printbuf buf = PRINTBUF;
+	CLASS(printbuf, buf)();
 	bch2_log_msg_start(c, &buf);
 
 	prt_str(&buf, "about to insert invalid key in data update path");
@@ -254,7 +250,6 @@ static int data_update_invalid_bkey(struct data_update *m,
 	bch2_fs_emergency_read_only2(c, &buf);
 
 	bch2_print_str(c, KERN_ERR, buf.buf);
-	printbuf_exit(&buf);
 
 	return bch_err_throw(c, invalid_bkey);
 }
@@ -263,11 +258,10 @@ static int __bch2_data_update_index_update(struct btree_trans *trans,
 					   struct bch_write_op *op)
 {
 	struct bch_fs *c = op->c;
-	struct btree_iter iter;
 	struct data_update *m = container_of(op, struct data_update, op);
 	int ret = 0;
 
-	bch2_trans_iter_init(trans, &iter, m->btree_id,
+	CLASS(btree_iter, iter)(trans, m->btree_id,
 			     bkey_start_pos(&bch2_keylist_front(&op->insert_keys)->k),
 			     BTREE_ITER_slots|BTREE_ITER_intent);
 
@@ -288,7 +282,7 @@ static int __bch2_data_update_index_update(struct btree_trans *trans,
 
 		bch2_trans_begin(trans);
 
-		k = bch2_btree_iter_peek_slot(trans, &iter);
+		k = bch2_btree_iter_peek_slot(&iter);
 		ret = bkey_err(k);
 		if (ret)
 			goto err;
@@ -461,22 +455,16 @@ restart_drop_extra_replicas:
 		if (ret)
 			goto err;
 
-		bch2_btree_iter_set_pos(trans, &iter, next_pos);
+		bch2_btree_iter_set_pos(&iter, next_pos);
 
 		this_cpu_add(c->counters[BCH_COUNTER_io_move_finish], new->k.size);
 		if (trace_io_move_finish_enabled())
 			trace_io_move_finish2(m, &new->k_i, insert);
+		goto next;
 err:
-		if (bch2_err_matches(ret, BCH_ERR_transaction_restart))
-			ret = 0;
-		if (ret)
+		if (!bch2_err_matches(ret, BCH_ERR_transaction_restart))
 			break;
-next:
-		while (bkey_ge(iter.pos, bch2_keylist_front(&op->insert_keys)->k.p)) {
-			bch2_keylist_pop_front(&op->insert_keys);
-			if (bch2_keylist_empty(&op->insert_keys))
-				goto out;
-		}
+
 		continue;
 nowork:
 		if (m->stats) {
@@ -485,21 +473,25 @@ nowork:
 			atomic64_add(k.k->p.offset - iter.pos.offset,
 				     &m->stats->sectors_raced);
 		}
-
 		count_event(c, io_move_fail);
 
-		bch2_btree_iter_advance(trans, &iter);
-		goto next;
+		bch2_btree_iter_advance(&iter);
+next:
+		while (bkey_ge(iter.pos, bch2_keylist_front(&op->insert_keys)->k.p)) {
+			bch2_keylist_pop_front(&op->insert_keys);
+			if (bch2_keylist_empty(&op->insert_keys))
+				goto out;
+		}
 	}
 out:
-	bch2_trans_iter_exit(trans, &iter);
 	BUG_ON(bch2_err_matches(ret, BCH_ERR_transaction_restart));
 	return ret;
 }
 
 int bch2_data_update_index_update(struct bch_write_op *op)
 {
-	return bch2_trans_run(op->c, __bch2_data_update_index_update(trans, op));
+	CLASS(btree_trans, trans)(op->c);
+	return __bch2_data_update_index_update(trans, op);
 }
 
 void bch2_data_update_read_done(struct data_update *m)
@@ -557,10 +549,10 @@ int bch2_update_unwritten_extent(struct btree_trans *trans,
 		bch2_trans_iter_init(trans, &iter, update->btree_id, update->op.pos,
 				     BTREE_ITER_slots);
 		ret = lockrestart_do(trans, ({
-			k = bch2_btree_iter_peek_slot(trans, &iter);
+			k = bch2_btree_iter_peek_slot(&iter);
 			bkey_err(k);
 		}));
-		bch2_trans_iter_exit(trans, &iter);
+		bch2_trans_iter_exit(&iter);
 
 		if (ret || !bch2_extents_match(k, bkey_i_to_s_c(update->k.k)))
 			break;
@@ -675,7 +667,7 @@ void bch2_data_update_inflight_to_text(struct printbuf *out, struct data_update 
 	if (!m->read_done) {
 		prt_printf(out, "read:\n");
 		printbuf_indent_add(out, 2);
-		bch2_read_bio_to_text(out, &m->rbio);
+		bch2_read_bio_to_text(out, m->op.c, &m->rbio);
 	} else {
 		prt_printf(out, "write:\n");
 		printbuf_indent_add(out, 2);
@@ -698,6 +690,15 @@ int bch2_extent_drop_ptrs(struct btree_trans *trans,
 	ret = PTR_ERR_OR_ZERO(n);
 	if (ret)
 		return ret;
+
+	const union bch_extent_entry *entry;
+	struct extent_ptr_decoded p;
+	unsigned i = 0;
+	bkey_for_each_ptr_decode(k.k, bch2_bkey_ptrs_c(k), p, entry) {
+		if (data_opts->kill_ec_ptrs & BIT(i))
+			bch2_bkey_drop_ec(n, p.ptr.dev);
+		i++;
+	}
 
 	while (data_opts->kill_ptrs) {
 		unsigned i = 0, drop = __fls(data_opts->kill_ptrs);
@@ -783,6 +784,9 @@ static int can_write_extent(struct bch_fs *c, struct data_update *m)
 	darray_for_each(m->op.devs_have, i)
 		__clear_bit(*i, devs.d);
 
+	CLASS(printbuf, buf)();
+
+	guard(printbuf_atomic)(&buf);
 	guard(rcu)();
 
 	unsigned nr_replicas = 0, i;
@@ -794,7 +798,11 @@ static int can_write_extent(struct bch_fs *c, struct data_update *m)
 		struct bch_dev_usage usage;
 		bch2_dev_usage_read_fast(ca, &usage);
 
-		if (!dev_buckets_free(ca, usage, m->op.watermark))
+		u64 nr_free = dev_buckets_free(ca, usage, m->op.watermark);
+
+		prt_printf(&buf, "%s=%llu ", ca->name, nr_free);
+
+		if (!nr_free)
 			continue;
 
 		nr_replicas += ca->mi.durability;
@@ -802,8 +810,10 @@ static int can_write_extent(struct bch_fs *c, struct data_update *m)
 			break;
 	}
 
-	if (!nr_replicas)
+	if (!nr_replicas) {
+		trace_data_update_done_no_rw_devs(c, buf.buf);
 		return bch_err_throw(c, data_update_done_no_rw_devs);
+	}
 	if (nr_replicas < m->op.nr_replicas)
 		return bch_err_throw(c, insufficient_devices);
 	return 0;
