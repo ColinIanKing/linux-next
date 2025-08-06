@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: MIT */
 /*
  * Copyright (C) 2015-2020 Advanced Micro Devices, Inc. All rights reserved.
  *
@@ -150,6 +151,20 @@ struct idle_workqueue {
 	struct amdgpu_display_manager *dm;
 	bool enable;
 	bool running;
+};
+
+/**
+ * struct dm_vupdate_work - Work data for periodic action in idle
+ * @work: Kernel work data for the work event
+ * @adev: amdgpu_device back pointer
+ * @stream: DC stream associated with the crtc
+ * @adjust: DC CRTC timing adjust to be applied to the crtc
+ */
+struct vupdate_offload_work {
+	struct work_struct work;
+	struct amdgpu_device *adev;
+	struct dc_stream_state *stream;
+	struct dc_crtc_timing_adjust *adjust;
 };
 
 #define MAX_LUMINANCE_DATA_POINTS 99
