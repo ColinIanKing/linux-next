@@ -7339,6 +7339,7 @@ int smb2_lock(struct ksmbd_work *work)
 	struct ksmbd_file *fp = NULL;
 	struct file_lock *flock = NULL;
 	struct file *filp = NULL;
+	unsigned long idx;
 	int lock_count;
 	int flags = 0;
 	int cmd = 0;
@@ -7459,7 +7460,7 @@ int smb2_lock(struct ksmbd_work *work)
 		nolock = 1;
 		/* check locks in connection list */
 		down_read(&conn_list_lock);
-		list_for_each_entry(conn, &conn_list, conns_list) {
+		xa_for_each(&conn_list, idx, conn) {
 			spin_lock(&conn->llist_lock);
 			list_for_each_entry_safe(cmp_lock, tmp2, &conn->lock_list, clist) {
 				if (file_inode(cmp_lock->fl->c.flc_file) !=
