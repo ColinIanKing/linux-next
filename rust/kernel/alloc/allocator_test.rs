@@ -51,6 +51,7 @@ unsafe impl Allocator for Cmalloc {
         layout: Layout,
         old_layout: Layout,
         flags: Flags,
+        _nid: NumaNode,
     ) -> Result<NonNull<[u8]>, AllocError> {
         let src = match ptr {
             Some(src) => {
