@@ -539,7 +539,11 @@ struct ipmi_smi {
 
 	/* For handling of maintenance mode. */
 	int maintenance_mode;
-	bool maintenance_mode_enable;
+
+#define IPMI_MAINTENANCE_MODE_STATE_OFF		0
+#define IPMI_MAINTENANCE_MODE_STATE_FIRMWARE	1
+#define IPMI_MAINTENANCE_MODE_STATE_RESET	2
+	int maintenance_mode_state;
 	int auto_maintenance_timeout;
 	spinlock_t maintenance_mode_lock; /* Used in a timer... */
 
@@ -1534,8 +1538,15 @@ EXPORT_SYMBOL(ipmi_get_maintenance_mode);
 static void maintenance_mode_update(struct ipmi_smi *intf)
 {
 	if (intf->handlers->set_maintenance_mode)
+		/*
+		 * Lower level drivers only care about firmware mode
+		 * as it affects their timing.  They don't care about
+		 * reset, which disables all commands for a while.
+		 */
 		intf->handlers->set_maintenance_mode(
-			intf->send_info, intf->maintenance_mode_enable);
+			intf->send_info,
+			(intf->maintenance_mode_state ==
+			 IPMI_MAINTENANCE_MODE_STATE_FIRMWARE));
 }
 
 int ipmi_set_maintenance_mode(struct ipmi_user *user, int mode)
@@ -1552,16 +1563,17 @@ int ipmi_set_maintenance_mode(struct ipmi_user *user, int mode)
 	if (intf->maintenance_mode != mode) {
 		switch (mode) {
 		case IPMI_MAINTENANCE_MODE_AUTO:
-			intf->maintenance_mode_enable
-				= (intf->auto_maintenance_timeout > 0);
+			/* Just leave it alone. */
 			break;
 
 		case IPMI_MAINTENANCE_MODE_OFF:
-			intf->maintenance_mode_enable = false;
+			intf->maintenance_mode_state =
+				IPMI_MAINTENANCE_MODE_STATE_OFF;
 			break;
 
 		case IPMI_MAINTENANCE_MODE_ON:
-			intf->maintenance_mode_enable = true;
+			intf->maintenance_mode_state =
+				IPMI_MAINTENANCE_MODE_STATE_FIRMWARE;
 			break;
 
 		default:
@@ -1922,13 +1934,18 @@ static int i_ipmi_req_sysintf(struct ipmi_smi        *intf,
 
 	if (is_maintenance_mode_cmd(msg)) {
 		unsigned long flags;
+		int newst;
+
+		if (msg->netfn == IPMI_NETFN_FIRMWARE_REQUEST)
+			newst = IPMI_MAINTENANCE_MODE_STATE_FIRMWARE;
+		else
+			newst = IPMI_MAINTENANCE_MODE_STATE_RESET;
 
 		spin_lock_irqsave(&intf->maintenance_mode_lock, flags);
-		intf->auto_maintenance_timeout
-			= maintenance_mode_timeout_ms;
+		intf->auto_maintenance_timeout = maintenance_mode_timeout_ms;
 		if (!intf->maintenance_mode
-		    && !intf->maintenance_mode_enable) {
-			intf->maintenance_mode_enable = true;
+				&& intf->maintenance_mode_state < newst) {
+			intf->maintenance_mode_state = newst;
 			maintenance_mode_update(intf);
 		}
 		spin_unlock_irqrestore(&intf->maintenance_mode_lock,
@@ -5083,7 +5100,8 @@ static bool ipmi_timeout_handler(struct ipmi_smi *intf,
 				-= timeout_period;
 			if (!intf->maintenance_mode
 			    && (intf->auto_maintenance_timeout <= 0)) {
-				intf->maintenance_mode_enable = false;
+				intf->maintenance_mode_state =
+					IPMI_MAINTENANCE_MODE_STATE_OFF;
 				maintenance_mode_update(intf);
 			}
 		}
@@ -5099,7 +5117,7 @@ static bool ipmi_timeout_handler(struct ipmi_smi *intf,
 static void ipmi_request_event(struct ipmi_smi *intf)
 {
 	/* No event requests when in maintenance mode. */
-	if (intf->maintenance_mode_enable)
+	if (intf->maintenance_mode_state)
 		return;
 
 	if (!intf->in_shutdown)
