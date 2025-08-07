@@ -13,6 +13,7 @@
 #include <uapi/linux/exfat.h>
 
 #define EXFAT_ROOT_INO		1
+#define EXFAT_MAX_RA_SIZE     (128*1024)
 
 /*
  * exfat error flags
