@@ -585,7 +585,6 @@ static bool damon_attrs_equals(const struct damon_attrs *attrs1,
 		ig1->aggrs == ig2->aggrs &&
 		ig1->min_sample_us == ig2->min_sample_us &&
 		ig1->max_sample_us == ig2->max_sample_us;
-
 }
 
 static unsigned int damon_age_for_new_attrs(unsigned int age,
