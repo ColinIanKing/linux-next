@@ -2674,6 +2674,24 @@ out:
 	return err;
 }
 
+static void amdgpu_uid_init(struct amdgpu_device *adev)
+{
+	/* Initialize the UID for the device */
+	adev->uid_info = kzalloc(sizeof(struct amdgpu_uid), GFP_KERNEL);
+	if (!adev->uid_info) {
+		dev_warn(adev->dev, "Failed to allocate memory for UID\n");
+		return;
+	}
+	adev->uid_info->adev = adev;
+}
+
+static void amdgpu_uid_fini(struct amdgpu_device *adev)
+{
+	/* Free the UID memory */
+	kfree(adev->uid_info);
+	adev->uid_info = NULL;
+}
+
 /**
  * amdgpu_device_ip_early_init - run early init for hardware IPs
  *
@@ -2857,6 +2875,8 @@ static int amdgpu_device_ip_early_init(struct amdgpu_device *adev)
 	if (adev->gmc.xgmi.supported)
 		amdgpu_xgmi_early_init(adev);
 
+	if (amdgpu_is_multi_aid(adev))
+		amdgpu_uid_init(adev);
 	ip_block = amdgpu_device_ip_get_ip_block(adev, AMD_IP_BLOCK_TYPE_GFX);
 	if (ip_block->status.valid != false)
 		amdgpu_amdkfd_device_probe(adev);
@@ -3389,7 +3409,7 @@ static int amdgpu_device_enable_mgpu_fan_boost(void)
 	for (i = 0; i < mgpu_info.num_dgpu; i++) {
 		gpu_ins = &(mgpu_info.gpu_ins[i]);
 		adev = gpu_ins->adev;
-		if (!(adev->flags & AMD_IS_APU) &&
+		if (!(adev->flags & AMD_IS_APU || amdgpu_sriov_multi_vf_mode(adev)) &&
 		    !gpu_ins->mgpu_fan_enabled) {
 			ret = amdgpu_dpm_enable_mgpu_fan_boost(adev);
 			if (ret)
@@ -3648,6 +3668,7 @@ static int amdgpu_device_ip_fini(struct amdgpu_device *adev)
 	}
 
 	amdgpu_ras_fini(adev);
+	amdgpu_uid_fini(adev);
 
 	return 0;
 }
@@ -5701,7 +5722,7 @@ int amdgpu_device_link_reset(struct amdgpu_device *adev)
 
 	dev_info(adev->dev, "GPU link reset\n");
 
-	if (!adev->pcie_reset_ctx.occurs_dpc)
+	if (!amdgpu_reset_in_dpc(adev))
 		ret = amdgpu_dpm_link_reset(adev);
 
 	if (ret)
@@ -5830,6 +5851,7 @@ int amdgpu_device_reinit_after_reset(struct amdgpu_reset_context *reset_context)
 		amdgpu_set_init_level(tmp_adev, init_level);
 		if (full_reset) {
 			/* post card */
+			amdgpu_reset_set_dpc_status(tmp_adev, false);
 			amdgpu_ras_clear_err_state(tmp_adev);
 			r = amdgpu_device_asic_init(tmp_adev);
 			if (r) {
@@ -6136,12 +6158,11 @@ static int amdgpu_device_health_check(struct list_head *device_list_handle)
 	return ret;
 }
 
-static int amdgpu_device_recovery_prepare(struct amdgpu_device *adev,
+static void amdgpu_device_recovery_prepare(struct amdgpu_device *adev,
 					  struct list_head *device_list,
 					  struct amdgpu_hive_info *hive)
 {
 	struct amdgpu_device *tmp_adev = NULL;
-	int r;
 
 	/*
 	 * Build list of devices to reset.
@@ -6153,7 +6174,7 @@ static int amdgpu_device_recovery_prepare(struct amdgpu_device *adev,
 			list_add_tail(&tmp_adev->reset_list, device_list);
 			if (adev->shutdown)
 				tmp_adev->shutdown = true;
-			if (adev->pcie_reset_ctx.occurs_dpc)
+			if (amdgpu_reset_in_dpc(adev))
 				tmp_adev->pcie_reset_ctx.in_link_reset = true;
 		}
 		if (!list_is_first(&adev->reset_list, device_list))
@@ -6161,14 +6182,6 @@ static int amdgpu_device_recovery_prepare(struct amdgpu_device *adev,
 	} else {
 		list_add_tail(&adev->reset_list, device_list);
 	}
-
-	if (!amdgpu_sriov_vf(adev) && (!adev->pcie_reset_ctx.occurs_dpc)) {
-		r = amdgpu_device_health_check(device_list);
-		if (r)
-			return r;
-	}
-
-	return 0;
 }
 
 static void amdgpu_device_recovery_get_reset_lock(struct amdgpu_device *adev,
@@ -6237,9 +6250,8 @@ static void amdgpu_device_halt_activities(struct amdgpu_device *adev,
 		drm_client_dev_suspend(adev_to_drm(tmp_adev), false);
 
 		/* disable ras on ALL IPs */
-		if (!need_emergency_restart &&
-		      (!adev->pcie_reset_ctx.occurs_dpc) &&
-		      amdgpu_device_ip_need_full_reset(tmp_adev))
+		if (!need_emergency_restart && !amdgpu_reset_in_dpc(adev) &&
+		    amdgpu_device_ip_need_full_reset(tmp_adev))
 			amdgpu_ras_suspend(tmp_adev);
 
 		for (i = 0; i < AMDGPU_MAX_RINGS; ++i) {
@@ -6267,11 +6279,7 @@ static int amdgpu_device_asic_reset(struct amdgpu_device *adev,
 
 retry:	/* Rest of adevs pre asic reset from XGMI hive. */
 	list_for_each_entry(tmp_adev, device_list, reset_list) {
-		if (adev->pcie_reset_ctx.occurs_dpc)
-			tmp_adev->no_hw_access = true;
 		r = amdgpu_device_pre_asic_reset(tmp_adev, reset_context);
-		if (adev->pcie_reset_ctx.occurs_dpc)
-			tmp_adev->no_hw_access = false;
 		/*TODO Should we stop ?*/
 		if (r) {
 			dev_err(tmp_adev->dev, "GPU pre asic reset failed with err, %d for drm dev, %s ",
@@ -6449,8 +6457,9 @@ int amdgpu_device_gpu_recover(struct amdgpu_device *adev,
 		emergency_restart();
 	}
 
-	dev_info(adev->dev, "GPU %s begin!\n",
-		need_emergency_restart ? "jobs stop":"reset");
+	dev_info(adev->dev, "GPU %s begin!. Source:  %d\n",
+		 need_emergency_restart ? "jobs stop" : "reset",
+		 reset_context->src);
 
 	if (!amdgpu_sriov_vf(adev))
 		hive = amdgpu_get_xgmi_hive(adev);
@@ -6461,8 +6470,13 @@ int amdgpu_device_gpu_recover(struct amdgpu_device *adev,
 	reset_context->hive = hive;
 	INIT_LIST_HEAD(&device_list);
 
-	if (amdgpu_device_recovery_prepare(adev, &device_list, hive))
-		goto end_reset;
+	amdgpu_device_recovery_prepare(adev, &device_list, hive);
+
+	if (!amdgpu_sriov_vf(adev)) {
+		r = amdgpu_device_health_check(&device_list);
+		if (r)
+			goto end_reset;
+	}
 
 	/* We need to lock reset domain only once both for XGMI and single device */
 	amdgpu_device_recovery_get_reset_lock(adev, &device_list);
@@ -6890,11 +6904,6 @@ pci_ers_result_t amdgpu_pci_error_detected(struct pci_dev *pdev, pci_channel_sta
 
 	dev_info(adev->dev, "PCI error: detected callback!!\n");
 
-	if (!amdgpu_dpm_is_link_reset_supported(adev)) {
-		dev_warn(adev->dev, "No support for XGMI hive yet...\n");
-		return PCI_ERS_RESULT_DISCONNECT;
-	}
-
 	adev->pci_channel_state = state;
 
 	switch (state) {
@@ -6904,10 +6913,23 @@ pci_ers_result_t amdgpu_pci_error_detected(struct pci_dev *pdev, pci_channel_sta
 	case pci_channel_io_frozen:
 		/* Fatal error, prepare for slot reset */
 		dev_info(adev->dev, "pci_channel_io_frozen: state(%d)!!\n", state);
+		if (hive) {
+			/* Hive devices should be able to support FW based
+			 * link reset on other devices, if not return.
+			 */
+			if (!amdgpu_dpm_is_link_reset_supported(adev)) {
+				dev_warn(adev->dev,
+					 "No support for XGMI hive yet...\n");
+				return PCI_ERS_RESULT_DISCONNECT;
+			}
+			/* Set dpc status only if device is part of hive
+			 * Non-hive devices should be able to recover after
+			 * link reset.
+			 */
+			amdgpu_reset_set_dpc_status(adev, true);
 
-		if (hive)
 			mutex_lock(&hive->hive_lock);
-		adev->pcie_reset_ctx.occurs_dpc = true;
+		}
 		memset(&reset_context, 0, sizeof(reset_context));
 		INIT_LIST_HEAD(&device_list);
 
@@ -6968,12 +6990,6 @@ pci_ers_result_t amdgpu_pci_slot_reset(struct pci_dev *pdev)
 	struct list_head device_list;
 	int r = 0, i;
 	u32 memsize;
-
-	/* PCI error slot reset should be skipped During RAS recovery */
-	if ((amdgpu_ip_version(adev, GC_HWIP, 0) == IP_VERSION(9, 4, 3) ||
-	    amdgpu_ip_version(adev, GC_HWIP, 0) == IP_VERSION(9, 4, 4)) &&
-	    amdgpu_ras_in_recovery(adev))
-		return PCI_ERS_RESULT_RECOVERED;
 
 	dev_info(adev->dev, "PCI error: slot reset callback!!\n");
 
@@ -7076,7 +7092,6 @@ void amdgpu_pci_resume(struct pci_dev *pdev)
 	amdgpu_device_sched_resume(&device_list, NULL, NULL);
 	amdgpu_device_gpu_resume(adev, &device_list, false);
 	amdgpu_device_recovery_put_reset_lock(adev, &device_list);
-	adev->pcie_reset_ctx.occurs_dpc = false;
 
 	if (hive) {
 		mutex_unlock(&hive->hive_lock);
@@ -7493,4 +7508,54 @@ ssize_t amdgpu_show_reset_mask(char *buf, uint32_t supported_reset)
 
 	size += sysfs_emit_at(buf, size, "\n");
 	return size;
+}
+
+void amdgpu_device_set_uid(struct amdgpu_uid *uid_info,
+			   enum amdgpu_uid_type type, uint8_t inst,
+			   uint64_t uid)
+{
+	if (!uid_info)
+		return;
+
+	if (type >= AMDGPU_UID_TYPE_MAX) {
+		dev_err_once(uid_info->adev->dev, "Invalid UID type %d\n",
+			     type);
+		return;
+	}
+
+	if (inst >= AMDGPU_UID_INST_MAX) {
+		dev_err_once(uid_info->adev->dev, "Invalid UID instance %d\n",
+			     inst);
+		return;
+	}
+
+	if (uid_info->uid[type][inst] != 0) {
+		dev_warn_once(
+			uid_info->adev->dev,
+			"Overwriting existing UID %llu for type %d instance %d\n",
+			uid_info->uid[type][inst], type, inst);
+	}
+
+	uid_info->uid[type][inst] = uid;
+}
+
+u64 amdgpu_device_get_uid(struct amdgpu_uid *uid_info,
+			  enum amdgpu_uid_type type, uint8_t inst)
+{
+	if (!uid_info)
+		return 0;
+
+	if (type >= AMDGPU_UID_TYPE_MAX) {
+		dev_err_once(uid_info->adev->dev, "Invalid UID type %d\n",
+			     type);
+		return 0;
+	}
+
+	if (inst >= AMDGPU_UID_INST_MAX) {
+		dev_err_once(uid_info->adev->dev, "Invalid UID instance %d\n",
+			     inst);
+		return 0;
+	}
+
+	return uid_info->uid[type][inst];
 }
