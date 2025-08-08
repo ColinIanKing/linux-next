@@ -826,7 +826,7 @@ static unsigned int alloc_swap_scan_list(struct swap_info_struct *si,
 					 unsigned char usage,
 					 bool scan_all)
 {
-	int found = SWAP_ENTRY_INVALID;
+	unsigned int found = SWAP_ENTRY_INVALID;
 
 	do {
 		struct swap_cluster_info *ci = isolate_lock_cluster(si, list);
@@ -837,7 +837,7 @@ static unsigned int alloc_swap_scan_list(struct swap_info_struct *si,
 		offset = cluster_offset(si, ci);
 		found = alloc_swap_scan_cluster(si, ci, offset, order, usage);
 		if (found)
-			return found;
+			break;
 	} while (scan_all);
 
 	return found;
