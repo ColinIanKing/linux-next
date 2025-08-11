@@ -27,6 +27,8 @@ static void coef_mutex_unlock(struct hda_codec *codec)
 	snd_hda_power_down_pm(codec);
 }
 
+DEFINE_GUARD(coef_mutex, struct hda_codec *, coef_mutex_lock(_T), coef_mutex_unlock(_T))
+
 static int __alc_read_coefex_idx(struct hda_codec *codec, hda_nid_t nid,
 				 unsigned int coef_idx)
 {
@@ -40,12 +42,8 @@ static int __alc_read_coefex_idx(struct hda_codec *codec, hda_nid_t nid,
 int alc_read_coefex_idx(struct hda_codec *codec, hda_nid_t nid,
 			unsigned int coef_idx)
 {
-	unsigned int val;
-
-	coef_mutex_lock(codec);
-	val = __alc_read_coefex_idx(codec, nid, coef_idx);
-	coef_mutex_unlock(codec);
-	return val;
+	guard(coef_mutex)(codec);
+	return __alc_read_coefex_idx(codec, nid, coef_idx);
 }
 EXPORT_SYMBOL_NS_GPL(alc_read_coefex_idx, "SND_HDA_CODEC_REALTEK");
 
@@ -59,9 +57,8 @@ static void __alc_write_coefex_idx(struct hda_codec *codec, hda_nid_t nid,
 void alc_write_coefex_idx(struct hda_codec *codec, hda_nid_t nid,
 			  unsigned int coef_idx, unsigned int coef_val)
 {
-	coef_mutex_lock(codec);
+	guard(coef_mutex)(codec);
 	__alc_write_coefex_idx(codec, nid, coef_idx, coef_val);
-	coef_mutex_unlock(codec);
 }
 EXPORT_SYMBOL_NS_GPL(alc_write_coefex_idx, "SND_HDA_CODEC_REALTEK");
 
@@ -80,9 +77,8 @@ void alc_update_coefex_idx(struct hda_codec *codec, hda_nid_t nid,
 			   unsigned int coef_idx, unsigned int mask,
 			   unsigned int bits_set)
 {
-	coef_mutex_lock(codec);
+	guard(coef_mutex)(codec);
 	__alc_update_coefex_idx(codec, nid, coef_idx, mask, bits_set);
-	coef_mutex_unlock(codec);
 }
 EXPORT_SYMBOL_NS_GPL(alc_update_coefex_idx, "SND_HDA_CODEC_REALTEK");
 
@@ -99,7 +95,7 @@ EXPORT_SYMBOL_NS_GPL(alc_get_coef0, "SND_HDA_CODEC_REALTEK");
 
 void alc_process_coef_fw(struct hda_codec *codec, const struct coef_fw *fw)
 {
-	coef_mutex_lock(codec);
+	guard(coef_mutex)(codec);
 	for (; fw->nid; fw++) {
 		if (fw->mask == (unsigned short)-1)
 			__alc_write_coefex_idx(codec, fw->nid, fw->idx, fw->val);
@@ -107,7 +103,6 @@ void alc_process_coef_fw(struct hda_codec *codec, const struct coef_fw *fw)
 			__alc_update_coefex_idx(codec, fw->nid, fw->idx,
 						fw->mask, fw->val);
 	}
-	coef_mutex_unlock(codec);
 }
 EXPORT_SYMBOL_NS_GPL(alc_process_coef_fw, "SND_HDA_CODEC_REALTEK");
 
