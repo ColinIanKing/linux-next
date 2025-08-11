@@ -24,7 +24,14 @@
 #include "super-io.h"
 #include "trace.h"
 
+#include <linux/moduleparam.h>
 #include <linux/sched/mm.h>
+
+#ifdef CONFIG_BCACHEFS_DEBUG
+static unsigned bch2_btree_read_corrupt_ratio;
+module_param_named(btree_read_corrupt_ratio, bch2_btree_read_corrupt_ratio, uint, 0644);
+MODULE_PARM_DESC(btree_read_corrupt_ratio, "");
+#endif
 
 static void bch2_btree_node_header_to_text(struct printbuf *out, struct btree_node *bn)
 {
@@ -124,10 +131,10 @@ static void *btree_bounce_alloc(struct bch_fs *c, size_t size,
 	BUG_ON(size > c->opts.btree_node_size);
 
 	*used_mempool = false;
-	p = kvmalloc(size, __GFP_NOWARN|GFP_NOWAIT);
+	p = kvmalloc(size, GFP_NOWAIT|__GFP_ACCOUNT|__GFP_RECLAIMABLE);
 	if (!p) {
 		*used_mempool = true;
-		p = mempool_alloc(&c->btree_bounce_pool, GFP_NOFS);
+		p = mempool_alloc(&c->btree_bounce_pool, GFP_NOFS|__GFP_ACCOUNT|__GFP_RECLAIMABLE);
 	}
 	memalloc_nofs_restore(flags);
 	return p;
@@ -585,7 +592,7 @@ static int __btree_err(int ret,
 		!(test_bit(BCH_FS_in_fsck, &c->flags) &&
 		  c->opts.fix_errors == FSCK_FIX_ask);
 
-	struct printbuf out = PRINTBUF;
+	CLASS(printbuf, out)();
 	bch2_log_msg_start(c, &out);
 
 	if (!print_deferred)
@@ -612,13 +619,13 @@ static int __btree_err(int ret,
 
 			if (!have_retry)
 				ret = bch_err_throw(c, fsck_fix);
-			goto out;
+			return ret;
 		case -BCH_ERR_btree_node_read_err_bad_node:
 			prt_str(&out, ", ");
 			break;
 		}
 
-		goto out;
+		return ret;
 	}
 
 	if (rw == WRITE) {
@@ -640,16 +647,14 @@ static int __btree_err(int ret,
 
 		if (!have_retry)
 			ret = bch_err_throw(c, fsck_fix);
-		goto out;
+		return ret;
 	case -BCH_ERR_btree_node_read_err_bad_node:
 		prt_str(&out, ", ");
 		break;
 	}
 print:
 	bch2_print_str(c, KERN_ERR, out.buf);
-out:
 fsck_err:
-	printbuf_exit(&out);
 	return ret;
 }
 
@@ -728,8 +733,8 @@ static int validate_bset(struct bch_fs *c, struct bch_dev *ca,
 			 struct printbuf *err_msg)
 {
 	unsigned version = le16_to_cpu(i->version);
-	struct printbuf buf1 = PRINTBUF;
-	struct printbuf buf2 = PRINTBUF;
+	CLASS(printbuf, buf1)();
+	CLASS(printbuf, buf2)();
 	int ret = 0;
 
 	btree_err_on(!bch2_version_compatible(version),
@@ -748,10 +753,9 @@ static int validate_bset(struct bch_fs *c, struct bch_dev *ca,
 			 "bset version %u older than superblock version_min %u",
 			 version, c->sb.version_min)) {
 		if (bch2_version_compatible(version)) {
-			mutex_lock(&c->sb_lock);
+			guard(mutex)(&c->sb_lock);
 			c->disk_sb.sb->version_min = cpu_to_le16(version);
 			bch2_write_super(c);
-			mutex_unlock(&c->sb_lock);
 		} else {
 			/* We have no idea what's going on: */
 			i->version = cpu_to_le16(c->sb.version);
@@ -765,10 +769,9 @@ static int validate_bset(struct bch_fs *c, struct bch_dev *ca,
 			 btree_node_bset_newer_than_sb,
 			 "bset version %u newer than superblock version %u",
 			 version, c->sb.version)) {
-		mutex_lock(&c->sb_lock);
+		guard(mutex)(&c->sb_lock);
 		c->disk_sb.sb->version = cpu_to_le16(version);
 		bch2_write_super(c);
-		mutex_unlock(&c->sb_lock);
 	}
 
 	btree_err_on(BSET_SEPARATE_WHITEOUTS(i),
@@ -868,8 +871,6 @@ static int validate_bset(struct bch_fs *c, struct bch_dev *ca,
 			       &bn->format);
 	}
 fsck_err:
-	printbuf_exit(&buf2);
-	printbuf_exit(&buf1);
 	return ret;
 }
 
@@ -939,7 +940,7 @@ static int validate_bset_keys(struct bch_fs *c, struct btree *b,
 {
 	unsigned version = le16_to_cpu(i->version);
 	struct bkey_packed *k, *prev = NULL;
-	struct printbuf buf = PRINTBUF;
+	CLASS(printbuf, buf)();
 	bool updated_range = b->key.k.type == KEY_TYPE_btree_ptr_v2 &&
 		BTREE_PTR_RANGE_UPDATED(&bkey_i_to_btree_ptr_v2(&b->key)->v);
 	int ret = 0;
@@ -1044,7 +1045,6 @@ got_good_key:
 		set_btree_node_need_rewrite_error(b);
 	}
 fsck_err:
-	printbuf_exit(&buf);
 	return ret;
 }
 
@@ -1063,7 +1063,7 @@ int bch2_btree_node_read_done(struct bch_fs *c, struct bch_dev *ca,
 		BTREE_PTR_RANGE_UPDATED(&bkey_i_to_btree_ptr_v2(&b->key)->v);
 	unsigned ptr_written = btree_ptr_sectors_written(bkey_i_to_s_c(&b->key));
 	u64 max_journal_seq = 0;
-	struct printbuf buf = PRINTBUF;
+	CLASS(printbuf, buf)();
 	int ret = 0, write = READ;
 	u64 start_time = local_clock();
 
@@ -1378,7 +1378,6 @@ int bch2_btree_node_read_done(struct bch_fs *c, struct bch_dev *ca,
 	}
 fsck_err:
 	mempool_free(iter, &c->fill_iter);
-	printbuf_exit(&buf);
 	bch2_time_stats_update(&c->times[BCH_TIME_btree_node_read_done], start_time);
 	return ret;
 }
@@ -1394,7 +1393,7 @@ static void btree_node_read_work(struct work_struct *work)
 	struct bch_io_failures failed = { .nr = 0 };
 	int ret = 0;
 
-	struct printbuf buf = PRINTBUF;
+	CLASS(printbuf, buf)();
 	bch2_log_msg_start(c, &buf);
 
 	prt_printf(&buf, "btree node read error at btree ");
@@ -1406,10 +1405,8 @@ static void btree_node_read_work(struct work_struct *work)
 		ret = bch2_bkey_pick_read_device(c,
 					bkey_i_to_s_c(&b->key),
 					&failed, &rb->pick, -1);
-		if (ret <= 0) {
-			set_btree_node_read_error(b);
+		if (ret <= 0)
 			break;
-		}
 
 		ca = bch2_dev_get_ioref(c, rb->pick.ptr.dev, READ, BCH_DEV_READ_REF_btree_node_read);
 		rb->have_ioref		= ca != NULL;
@@ -1437,28 +1434,27 @@ start:
 			continue;
 		}
 
+		memset(&bio->bi_iter, 0, sizeof(bio->bi_iter));
+		bio->bi_iter.bi_size	= btree_buf_bytes(b);
+
+		bch2_maybe_corrupt_bio(bio, bch2_btree_read_corrupt_ratio);
+
 		ret = bch2_btree_node_read_done(c, ca, b, &failed, &buf);
-		if (ret == -BCH_ERR_btree_node_read_err_want_retry ||
-		    ret == -BCH_ERR_btree_node_read_err_must_retry)
-			continue;
-
-		if (ret)
-			set_btree_node_read_error(b);
-
-		break;
+		if (ret != -BCH_ERR_btree_node_read_err_want_retry &&
+		    ret != -BCH_ERR_btree_node_read_err_must_retry)
+			break;
 	}
 
 	bch2_io_failures_to_text(&buf, c, &failed);
 
-	if (btree_node_read_error(b))
-		bch2_btree_lost_data(c, &buf, b->c.btree_id);
-
 	/*
 	 * only print retry success if we read from a replica with no errors
 	 */
-	if (btree_node_read_error(b))
+	if (ret) {
+		set_btree_node_read_error(b);
+		bch2_btree_lost_data(c, &buf, b->c.btree_id);
 		prt_printf(&buf, "ret %s", bch2_err_str(ret));
-	else if (failed.nr) {
+	} else if (failed.nr) {
 		if (!bch2_dev_io_failures(&failed, rb->pick.ptr.dev))
 			prt_printf(&buf, "retry success");
 		else
@@ -1474,14 +1470,13 @@ start:
 	}
 	prt_newline(&buf);
 
-	if (failed.nr)
+	if (ret || failed.nr)
 		bch2_print_str_ratelimited(c, KERN_ERR, buf.buf);
 
 	async_object_list_del(c, btree_read_bio, rb->list_idx);
 	bch2_time_stats_update(&c->times[BCH_TIME_btree_node_read],
 			       rb->start_time);
 	bio_put(&rb->bio);
-	printbuf_exit(&buf);
 	clear_btree_node_read_in_flight(b);
 	smp_mb__after_atomic();
 	wake_up_bit(&b->flags, BTREE_NODE_read_in_flight);
@@ -1563,7 +1558,7 @@ static CLOSURE_CALLBACK(btree_node_read_all_replicas_done)
 	closure_type(ra, struct btree_node_read_all, cl);
 	struct bch_fs *c = ra->c;
 	struct btree *b = ra->b;
-	struct printbuf buf = PRINTBUF;
+	CLASS(printbuf, buf)();
 	bool dump_bset_maps = false;
 	int ret = 0, best = -1, write = READ;
 	unsigned i, written = 0, written2 = 0;
@@ -1672,11 +1667,10 @@ fsck_err:
 	if (ret) {
 		set_btree_node_read_error(b);
 
-		struct printbuf buf = PRINTBUF;
+		CLASS(printbuf, buf)();
 		bch2_btree_lost_data(c, &buf, b->c.btree_id);
 		if (buf.pos)
 			bch_err(c, "%s", buf.buf);
-		printbuf_exit(&buf);
 	} else if (*saw_error)
 		bch2_btree_node_rewrite_async(c, b);
 
@@ -1687,7 +1681,6 @@ fsck_err:
 
 	closure_debug_destroy(&ra->cl);
 	kfree(ra);
-	printbuf_exit(&buf);
 
 	clear_btree_node_read_in_flight(b);
 	smp_mb__after_atomic();
@@ -1796,7 +1789,7 @@ void bch2_btree_node_read(struct btree_trans *trans, struct btree *b,
 	struct bio *bio;
 	int ret;
 
-	trace_and_count(c, btree_node_read, trans, b);
+	trace_btree_node(c, b, btree_node_read);
 
 	if (static_branch_unlikely(&bch2_verify_all_btree_replicas) &&
 	    !btree_node_read_all_replicas(c, b, sync))
@@ -1807,7 +1800,7 @@ void bch2_btree_node_read(struct btree_trans *trans, struct btree *b,
 
 	if (ret <= 0) {
 		bool ratelimit = true;
-		struct printbuf buf = PRINTBUF;
+		CLASS(printbuf, buf)();
 		bch2_log_msg_start(c, &buf);
 
 		prt_str(&buf, "btree node read error: no device to read from\n at ");
@@ -1824,7 +1817,6 @@ void bch2_btree_node_read(struct btree_trans *trans, struct btree *b,
 					      DEFAULT_RATELIMIT_BURST);
 		if (!ratelimit || __ratelimit(&rs))
 			bch2_print_str(c, KERN_ERR, buf.buf);
-		printbuf_exit(&buf);
 
 		set_btree_node_read_error(b);
 		clear_btree_node_read_in_flight(b);
@@ -1906,9 +1898,8 @@ static int __bch2_btree_root_read(struct btree_trans *trans, enum btree_id id,
 	bch2_btree_node_read(trans, b, true);
 
 	if (btree_node_read_error(b)) {
-		mutex_lock(&c->btree_cache.lock);
-		bch2_btree_node_hash_remove(&c->btree_cache, b);
-		mutex_unlock(&c->btree_cache.lock);
+		scoped_guard(mutex, &c->btree_cache.lock)
+			bch2_btree_node_hash_remove(&c->btree_cache, b);
 
 		ret = bch_err_throw(c, btree_node_read_error);
 		goto err;
@@ -1925,7 +1916,8 @@ err:
 int bch2_btree_root_read(struct bch_fs *c, enum btree_id id,
 			const struct bkey_i *k, unsigned level)
 {
-	return bch2_trans_run(c, __bch2_btree_root_read(trans, id, k, level));
+	CLASS(btree_trans, trans)(c);
+	return __bch2_btree_root_read(trans, id, k, level);
 }
 
 struct btree_node_scrub {
@@ -2004,7 +1996,7 @@ static void btree_node_scrub_work(struct work_struct *work)
 {
 	struct btree_node_scrub *scrub = container_of(work, struct btree_node_scrub, work);
 	struct bch_fs *c = scrub->c;
-	struct printbuf err = PRINTBUF;
+	CLASS(printbuf, err)();
 
 	__bch2_btree_pos_to_text(&err, c, scrub->btree, scrub->level,
 				 bkey_i_to_s_c(scrub->key.k));
@@ -2019,8 +2011,7 @@ static void btree_node_scrub_work(struct work_struct *work)
 			bch_err_fn_ratelimited(c, ret);
 	}
 
-	printbuf_exit(&err);
-	bch2_bkey_buf_exit(&scrub->key, c);;
+	bch2_bkey_buf_exit(&scrub->key, c);
 	btree_bounce_free(c, c->opts.btree_node_size, scrub->used_mempool, scrub->buf);
 	enumerated_ref_put(&scrub->ca->io_ref[READ], BCH_DEV_READ_REF_btree_node_scrub);
 	kfree(scrub);
@@ -2200,7 +2191,8 @@ static void btree_node_write_work(struct work_struct *work)
 
 		}
 	} else {
-		ret = bch2_trans_do(c,
+		CLASS(btree_trans, trans)(c);
+		ret = lockrestart_do(trans,
 			bch2_btree_node_update_key_get_iter(trans, b, &wbio->key,
 					BCH_WATERMARK_interior_updates|
 					BCH_TRANS_COMMIT_journal_reclaim|
@@ -2219,11 +2211,10 @@ err:
 	set_btree_node_noevict(b);
 
 	if (!bch2_err_matches(ret, EROFS)) {
-		struct printbuf buf = PRINTBUF;
+		CLASS(printbuf, buf)();
 		prt_printf(&buf, "writing btree node: %s\n  ", bch2_err_str(ret));
 		bch2_btree_pos_to_text(&buf, c, b);
 		bch2_fs_fatal_error(c, "%s", buf.buf);
-		printbuf_exit(&buf);
 	}
 	goto out;
 }
@@ -2242,13 +2233,12 @@ static void btree_node_write_endio(struct bio *bio)
 				   wbio->submit_time, !bio->bi_status);
 
 	if (ca && bio->bi_status) {
-		struct printbuf buf = PRINTBUF;
-		buf.atomic++;
+		CLASS(printbuf, buf)();
+		guard(printbuf_atomic)(&buf);
 		prt_printf(&buf, "btree write error: %s\n  ",
 			   bch2_blk_status_to_str(bio->bi_status));
 		bch2_btree_pos_to_text(&buf, c, b);
 		bch_err_dev_ratelimited(ca, "%s", buf.buf);
-		printbuf_exit(&buf);
 	}
 
 	if (bio->bi_status) {
@@ -2530,11 +2520,26 @@ do_write:
 	    c->opts.nochanges)
 		goto err;
 
-	trace_and_count(c, btree_node_write, b, bytes_to_write, sectors_to_write);
+	if (trace_btree_node_write_enabled()) {
+		CLASS(printbuf, buf)();
+		printbuf_indent_add(&buf, 2);
+		prt_printf(&buf, "offset %u sectors %u bytes %u\n",
+			   b->written,
+			   sectors_to_write,
+			   bytes_to_write);
+		bch2_btree_pos_to_text(&buf, c, b);
+		trace_btree_node_write(c, buf.buf);
+	}
+	count_event(c, btree_node_write);
+
+	/*
+	 * blk-wbt.c throttles all writes except those that have both REQ_SYNC
+	 * and REQ_IDLE set...
+	 */
 
 	wbio = container_of(bio_alloc_bioset(NULL,
 				buf_pages(data, sectors_to_write << 9),
-				REQ_OP_WRITE|REQ_META,
+				REQ_OP_WRITE|REQ_META|REQ_SYNC|REQ_IDLE,
 				GFP_NOFS,
 				&c->btree_bio),
 			    struct btree_write_bio, wbio.bio);

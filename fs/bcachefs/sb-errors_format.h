@@ -7,6 +7,7 @@ enum bch_fsck_flags {
 	FSCK_CAN_IGNORE		= BIT(1),
 	FSCK_AUTOFIX		= BIT(2),
 	FSCK_ERR_NO_LOG		= BIT(3),
+	FSCK_ERR_SILENT		= BIT(4),
 };
 
 #define BCH_SB_ERRS()									\
@@ -75,6 +76,8 @@ enum bch_fsck_flags {
 	x(btree_node_read_error,				 62,	FSCK_AUTOFIX)	\
 	x(btree_node_topology_bad_min_key,			 63,	FSCK_AUTOFIX)	\
 	x(btree_node_topology_bad_max_key,			 64,	FSCK_AUTOFIX)	\
+	x(btree_node_topology_bad_root_min_key,			 323,	FSCK_AUTOFIX)	\
+	x(btree_node_topology_bad_root_max_key,			 324,	FSCK_AUTOFIX)	\
 	x(btree_node_topology_overwritten_by_prev_node,		 65,	FSCK_AUTOFIX)	\
 	x(btree_node_topology_overwritten_by_next_node,		 66,	FSCK_AUTOFIX)	\
 	x(btree_node_topology_interior_node_empty,		 67,	FSCK_AUTOFIX)	\
@@ -157,6 +160,7 @@ enum bch_fsck_flags {
 	x(extent_ptrs_unwritten,				140,	0)		\
 	x(extent_ptrs_written_and_unwritten,			141,	0)		\
 	x(ptr_to_invalid_device,				142,	0)		\
+	x(ptr_to_removed_device,				322,	0)		\
 	x(ptr_to_duplicate_device,				143,	0)		\
 	x(ptr_after_last_bucket,				144,	0)		\
 	x(ptr_before_first_bucket,				145,	0)		\
@@ -279,7 +283,7 @@ enum bch_fsck_flags {
 	x(root_subvol_missing,					238,	0)		\
 	x(root_dir_missing,					239,	0)		\
 	x(root_inode_not_dir,					240,	0)		\
-	x(dir_loop,						241,	0)		\
+	x(dir_loop,						241,	FSCK_AUTOFIX)	\
 	x(hash_table_key_duplicate,				242,	FSCK_AUTOFIX)	\
 	x(hash_table_key_wrong_offset,				243,	FSCK_AUTOFIX)	\
 	x(unlinked_inode_not_on_deleted_list,			244,	FSCK_AUTOFIX)	\
@@ -290,13 +294,14 @@ enum bch_fsck_flags {
 	x(inode_points_to_missing_dirent,			249,	FSCK_AUTOFIX)	\
 	x(inode_points_to_wrong_dirent,				250,	FSCK_AUTOFIX)	\
 	x(inode_bi_parent_nonzero,				251,	0)		\
+	x(missing_inode_with_contents,				321,	FSCK_AUTOFIX)	\
 	x(dirent_to_missing_parent_subvol,			252,	0)		\
 	x(dirent_not_visible_in_parent_subvol,			253,	0)		\
 	x(subvol_fs_path_parent_wrong,				254,	0)		\
 	x(subvol_root_fs_path_parent_nonzero,			255,	0)		\
 	x(subvol_children_not_set,				256,	0)		\
 	x(subvol_children_bad,					257,	0)		\
-	x(subvol_loop,						258,	0)		\
+	x(subvol_loop,						258,	FSCK_AUTOFIX)	\
 	x(subvol_unreachable,					259,	FSCK_AUTOFIX)	\
 	x(btree_node_bkey_bad_u64s,				260,	0)		\
 	x(btree_node_topology_empty_interior_node,		261,	0)		\
@@ -331,7 +336,7 @@ enum bch_fsck_flags {
 	x(dirent_stray_data_after_cf_name,			305,	0)		\
 	x(rebalance_work_incorrectly_set,			309,	FSCK_AUTOFIX)	\
 	x(rebalance_work_incorrectly_unset,			310,	FSCK_AUTOFIX)	\
-	x(MAX,							321,	0)
+	x(MAX,							325,	0)
 
 enum bch_sb_error_id {
 #define x(t, n, ...) BCH_FSCK_ERR_##t = n,
