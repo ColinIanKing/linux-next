@@ -167,7 +167,7 @@ static void signal_our_withdraw(struct gfs2_sbd *sdp)
 		 * Dequeue any pending non-system glock holders that can no
 		 * longer be granted because the file system is withdrawn.
 		 */
-		gfs2_gl_dq_holders(sdp);
+		gfs2_withdraw_glocks(sdp);
 	}
 
 	if (sdp->sd_lockstruct.ls_ops->lm_lock == NULL) { /* lock_nolock */
