@@ -62,7 +62,8 @@ config BTRFS_FS_RUN_SANITY_TESTS
 
 config BTRFS_DEBUG
 	bool "Btrfs debugging support"
-	depends on BTRFS_FS
+	depends on BTRFS_FS && STACKTRACE_SUPPORT
+	select REF_TRACKER
 	help
 	  Enable run-time debugging support for the btrfs filesystem.
 
