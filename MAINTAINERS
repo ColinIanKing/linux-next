@@ -5544,7 +5544,7 @@ CAVIUM THUNDERX2 ARM64 SOC
 M:	Robert Richter <rric@kernel.org>
 L:	linux-arm-kernel@lists.infradead.org (moderated for non-subscribers)
 S:	Odd Fixes
-F:	Documentation/devicetree/bindings/arm/cavium-thunder2.txt
+F:	Documentation/devicetree/bindings/arm/bcm/brcm,vulcan-soc.yaml
 F:	arch/arm64/boot/dts/cavium/thunder2-99xx*
 
 CBS/ETF/TAPRIO QDISCS
@@ -9971,6 +9971,7 @@ R:	Ninad Palsule <ninad@linux.ibm.com>
 L:	linux-fsi@lists.ozlabs.org
 S:	Supported
 Q:	http://patchwork.ozlabs.org/project/linux-fsi/list/
+F:	Documentation/devicetree/bindings/fsi/
 F:	drivers/fsi/
 F:	include/linux/fsi*.h
 F:	include/trace/events/fsi*.h
