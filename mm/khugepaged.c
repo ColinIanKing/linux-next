@@ -1459,7 +1459,7 @@ static void collect_mm_slot(struct khugepaged_mm_slot *mm_slot)
 		/*
 		 * Not strictly needed because the mm exited already.
 		 *
-		 * mm_clear(mm, MMF_VM_HUGEPAGE);
+		 * mm_flags_clear(MMF_VM_HUGEPAGE, mm);
 		 */
 
 		/* khugepaged_mm_lock actually not necessary for the below */
