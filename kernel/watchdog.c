@@ -444,6 +444,13 @@ static void update_cpustat(void)
 		old_stat = __this_cpu_read(cpustat_old[i]);
 		new_stat = get_16bit_precision(cpustat[tracked_stats[i]]);
 		util = DIV_ROUND_UP(100 * (new_stat - old_stat), sample_period_16);
+		/* Since we use 16-bit precision, the raw data will undergo
+		 * integer division, which may sometimes result in data loss,
+		 * and then result might exceed 100%. To avoid confusion,
+		 * we enforce a 100% display cap when calculations exceed this threshold.
+		 */
+		if (util > 100)
+			util = 100;
 		__this_cpu_write(cpustat_util[tail][i], util);
 		__this_cpu_write(cpustat_old[i], new_stat);
 	}
