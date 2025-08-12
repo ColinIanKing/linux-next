@@ -128,18 +128,6 @@ struct bch_io_opts *bch2_move_get_io_opts(struct btree_trans *,
 
 int bch2_move_data_btree(struct moving_context *, struct bpos, struct bpos,
 			 move_pred_fn, void *, enum btree_id, unsigned);
-int __bch2_move_data(struct moving_context *,
-		     struct bbpos,
-		     struct bbpos,
-		     move_pred_fn, void *);
-int bch2_move_data(struct bch_fs *,
-		   struct bbpos start,
-		   struct bbpos end,
-		   struct bch_ratelimit *,
-		   struct bch_move_stats *,
-		   struct write_point_specifier,
-		   bool,
-		   move_pred_fn, void *);
 
 int bch2_move_data_phys(struct bch_fs *, unsigned, u64, u64, unsigned,
 			struct bch_ratelimit *, struct bch_move_stats *,
@@ -152,7 +140,7 @@ int bch2_evacuate_bucket(struct moving_context *,
 			   struct data_update_opts);
 int bch2_data_job(struct bch_fs *,
 		  struct bch_move_stats *,
-		  struct bch_ioctl_data);
+		  struct bch_ioctl_data *);
 
 void bch2_move_stats_to_text(struct printbuf *, struct bch_move_stats *);
 void bch2_move_stats_exit(struct bch_move_stats *, struct bch_fs *);
