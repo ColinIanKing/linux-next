@@ -101,6 +101,19 @@ config CRYPTO_LIB_CURVE25519
 config CRYPTO_LIB_DES
 	tristate
 
+config CRYPTO_LIB_MD5
+	tristate
+	help
+	  The MD5 and HMAC-MD5 library functions.  Select this if your module
+	  uses any of the functions from <crypto/md5.h>.
+
+config CRYPTO_LIB_MD5_ARCH
+	bool
+	depends on CRYPTO_LIB_MD5 && !UML
+	default y if MIPS && CPU_CAVIUM_OCTEON
+	default y if PPC
+	default y if SPARC64
+
 config CRYPTO_LIB_POLY1305_RSIZE
 	int
 	default 2 if MIPS
@@ -140,8 +153,8 @@ config CRYPTO_LIB_CHACHA20POLY1305
 config CRYPTO_LIB_SHA1
 	tristate
 	help
-	  The SHA-1 library functions.  Select this if your module uses any of
-	  the functions from <crypto/sha1.h>.
+	  The SHA-1 and HMAC-SHA1 library functions.  Select this if your module
+	  uses any of the functions from <crypto/sha1.h>.
 
 config CRYPTO_LIB_SHA1_ARCH
 	bool
@@ -157,9 +170,9 @@ config CRYPTO_LIB_SHA1_ARCH
 config CRYPTO_LIB_SHA256
 	tristate
 	help
-	  Enable the SHA-256 library interface. This interface may be fulfilled
-	  by either the generic implementation or an arch-specific one, if one
-	  is available and enabled.
+	  The SHA-224, SHA-256, HMAC-SHA224, and HMAC-SHA256 library functions.
+	  Select this if your module uses any of these functions from
+	  <crypto/sha2.h>.
 
 config CRYPTO_LIB_SHA256_ARCH
 	bool
