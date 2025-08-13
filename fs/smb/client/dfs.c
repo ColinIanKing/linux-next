@@ -448,7 +448,7 @@ int cifs_tree_connect(const unsigned int xid, struct cifs_tcon *tcon)
 
 out:
 	kfree(tree);
-	cifs_put_tcp_super(sb);
+	cifs_put_super(sb);
 
 	if (rc) {
 		spin_lock(&tcon->tc_lock);
