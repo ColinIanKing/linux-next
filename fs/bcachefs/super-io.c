@@ -68,37 +68,35 @@ enum bcachefs_metadata_version bch2_latest_compatible_version(enum bcachefs_meta
 
 int bch2_set_version_incompat(struct bch_fs *c, enum bcachefs_metadata_version version)
 {
-	int ret = ((c->sb.features & BIT_ULL(BCH_FEATURE_incompat_version_field)) &&
-		   version <= c->sb.version_incompat_allowed)
-		? 0
-		: -BCH_ERR_may_not_use_incompat_feature;
+	if (((c->sb.features & BIT_ULL(BCH_FEATURE_incompat_version_field)) &&
+	     version <= c->sb.version_incompat_allowed)) {
+		guard(mutex)(&c->sb_lock);
 
-	mutex_lock(&c->sb_lock);
-	if (!ret) {
-		SET_BCH_SB_VERSION_INCOMPAT(c->disk_sb.sb,
-			max(BCH_SB_VERSION_INCOMPAT(c->disk_sb.sb), version));
-		bch2_write_super(c);
+		if (version > c->sb.version_incompat) {
+			SET_BCH_SB_VERSION_INCOMPAT(c->disk_sb.sb,
+				max(BCH_SB_VERSION_INCOMPAT(c->disk_sb.sb), version));
+			bch2_write_super(c);
+		}
+		return 0;
 	} else {
-		darray_for_each(c->incompat_versions_requested, i)
-			if (version == *i)
-				goto out;
+		BUILD_BUG_ON(BCH_VERSION_MAJOR(bcachefs_metadata_version_current) != 1);
 
-		darray_push(&c->incompat_versions_requested, version);
-		struct printbuf buf = PRINTBUF;
-		prt_str(&buf, "requested incompat feature ");
-		bch2_version_to_text(&buf, version);
-		prt_str(&buf, " currently not enabled, allowed up to ");
-		bch2_version_to_text(&buf, version);
-		prt_printf(&buf, "\n  set version_upgrade=incompat to enable");
+		unsigned minor = BCH_VERSION_MINOR(version);
 
-		bch_notice(c, "%s", buf.buf);
-		printbuf_exit(&buf);
+		if (!test_bit(minor, c->incompat_versions_requested) &&
+		    !test_and_set_bit(minor, c->incompat_versions_requested)) {
+			CLASS(printbuf, buf)();
+			prt_str(&buf, "requested incompat feature ");
+			bch2_version_to_text(&buf, version);
+			prt_str(&buf, " currently not enabled, allowed up to ");
+			bch2_version_to_text(&buf, c->sb.version_incompat_allowed);
+			prt_printf(&buf, "\n  set version_upgrade=incompat to enable");
+
+			bch_notice(c, "%s", buf.buf);
+		}
+
+		return bch_err_throw(c, may_not_use_incompat_feature);
 	}
-
-out:
-	mutex_unlock(&c->sb_lock);
-
-	return ret;
 }
 
 const char * const bch2_sb_fields[] = {
@@ -203,12 +201,11 @@ int bch2_sb_realloc(struct bch_sb_handle *sb, unsigned u64s)
 		u64 max_bytes = 512 << sb->sb->layout.sb_max_size_bits;
 
 		if (new_bytes > max_bytes) {
-			struct printbuf buf = PRINTBUF;
+			CLASS(printbuf, buf)();
 
 			prt_bdevname(&buf, sb->bdev);
 			prt_printf(&buf, ": superblock too big: want %zu but have %llu", new_bytes, max_bytes);
 			pr_err("%s", buf.buf);
-			printbuf_exit(&buf);
 			return -BCH_ERR_ENOSPC_sb;
 		}
 	}
@@ -382,7 +379,7 @@ static int bch2_sb_compatible(struct bch_sb *sb, struct printbuf *out)
 	return 0;
 }
 
-int bch2_sb_validate(struct bch_sb *sb, u64 read_offset,
+int bch2_sb_validate(struct bch_sb *sb, struct bch_opts *opts, u64 read_offset,
 		     enum bch_validate_flags flags, struct printbuf *out)
 {
 	enum bch_opt_id opt_id;
@@ -392,28 +389,30 @@ int bch2_sb_validate(struct bch_sb *sb, u64 read_offset,
 	if (ret)
 		return ret;
 
-	u64 incompat = le64_to_cpu(sb->features[0]) & (~0ULL << BCH_FEATURE_NR);
-	unsigned incompat_bit = 0;
-	if (incompat)
-		incompat_bit = __ffs64(incompat);
-	else if (sb->features[1])
-		incompat_bit = 64 + __ffs64(le64_to_cpu(sb->features[1]));
+	if (!opts->no_version_check) {
+		u64 incompat = le64_to_cpu(sb->features[0]) & (~0ULL << BCH_FEATURE_NR);
+		unsigned incompat_bit = 0;
+		if (incompat)
+			incompat_bit = __ffs64(incompat);
+		else if (sb->features[1])
+			incompat_bit = 64 + __ffs64(le64_to_cpu(sb->features[1]));
 
-	if (incompat_bit) {
-		prt_printf(out, "Filesystem has incompatible feature bit %u, highest supported %s (%u)",
-			   incompat_bit,
-			   bch2_sb_features[BCH_FEATURE_NR - 1],
-			   BCH_FEATURE_NR - 1);
-		return -BCH_ERR_invalid_sb_features;
-	}
+		if (incompat_bit) {
+			prt_printf(out, "Filesystem has incompatible feature bit %u, highest supported %s (%u)",
+				   incompat_bit,
+				   bch2_sb_features[BCH_FEATURE_NR - 1],
+				   BCH_FEATURE_NR - 1);
+			return -BCH_ERR_invalid_sb_features;
+		}
 
-	if (BCH_VERSION_MAJOR(le16_to_cpu(sb->version)) > BCH_VERSION_MAJOR(bcachefs_metadata_version_current) ||
-	    BCH_SB_VERSION_INCOMPAT(sb) > bcachefs_metadata_version_current) {
-		prt_str(out, "Filesystem has incompatible version ");
-		bch2_version_to_text(out, le16_to_cpu(sb->version));
-		prt_str(out, ", current version ");
-		bch2_version_to_text(out, bcachefs_metadata_version_current);
-		return -BCH_ERR_invalid_sb_features;
+		if (BCH_VERSION_MAJOR(le16_to_cpu(sb->version)) > BCH_VERSION_MAJOR(bcachefs_metadata_version_current) ||
+		    BCH_SB_VERSION_INCOMPAT(sb) > bcachefs_metadata_version_current) {
+			prt_str(out, "Filesystem has incompatible version ");
+			bch2_version_to_text(out, le16_to_cpu(sb->version));
+			prt_str(out, ", current version ");
+			bch2_version_to_text(out, bcachefs_metadata_version_current);
+			return -BCH_ERR_invalid_sb_features;
+		}
 	}
 
 	if (bch2_is_zero(sb->user_uuid.b, sizeof(sb->user_uuid))) {
@@ -632,10 +631,7 @@ static void bch2_sb_update(struct bch_fs *c)
 		c->sb.btrees_lost_data = le64_to_cpu(ext->btrees_lost_data);
 	}
 
-	for_each_member_device(c, ca) {
-		struct bch_member m = bch2_sb_member_get(src, ca->dev_idx);
-		ca->mi = bch2_mi_to_cpu(&m);
-	}
+	bch2_sb_members_to_cpu(c);
 }
 
 static int __copy_super(struct bch_sb_handle *dst_handle, struct bch_sb *src)
@@ -786,8 +782,8 @@ static int __bch2_read_super(const char *path, struct bch_opts *opts,
 {
 	u64 offset = opt_get(*opts, sb);
 	struct bch_sb_layout layout;
-	struct printbuf err = PRINTBUF;
-	struct printbuf err2 = PRINTBUF;
+	CLASS(printbuf, err)();
+	CLASS(printbuf, err2)();
 	__le64 *i;
 	int ret;
 #ifndef __KERNEL__
@@ -862,7 +858,6 @@ retry:
 	else
 		bch2_print_opts(opts, KERN_ERR "%s", err2.buf);
 
-	printbuf_exit(&err2);
 	printbuf_reset(&err);
 
 	/*
@@ -922,21 +917,20 @@ got_super:
 
 	sb->have_layout = true;
 
-	ret = bch2_sb_validate(sb->sb, offset, 0, &err);
+	ret = bch2_sb_validate(sb->sb, opts, offset, 0, &err);
 	if (ret) {
 		bch2_print_opts(opts, KERN_ERR "bcachefs (%s): error validating superblock: %s\n",
 				path, err.buf);
 		goto err_no_print;
 	}
-out:
-	printbuf_exit(&err);
-	return ret;
+
+	return 0;
 err:
 	bch2_print_opts(opts, KERN_ERR "bcachefs (%s): error reading superblock: %s\n",
 			path, err.buf);
 err_no_print:
 	bch2_free_super(sb);
-	goto out;
+	return ret;
 }
 
 int bch2_read_super(const char *path, struct bch_opts *opts,
@@ -1004,7 +998,12 @@ static void write_one_super(struct bch_fs *c, struct bch_dev *ca, unsigned idx)
 	sb->csum = csum_vstruct(c, BCH_SB_CSUM_TYPE(sb),
 				null_nonce(), sb);
 
-	bio_reset(bio, ca->disk_sb.bdev, REQ_OP_WRITE|REQ_SYNC|REQ_META);
+	/*
+	 * blk-wbt.c throttles all writes except those that have both REQ_SYNC
+	 * and REQ_IDLE set...
+	 */
+
+	bio_reset(bio, ca->disk_sb.bdev, REQ_OP_WRITE|REQ_SYNC|REQ_IDLE|REQ_META);
 	bio->bi_iter.bi_sector	= le64_to_cpu(sb->offset);
 	bio->bi_end_io		= write_super_endio;
 	bio->bi_private		= ca;
@@ -1022,7 +1021,7 @@ static void write_one_super(struct bch_fs *c, struct bch_dev *ca, unsigned idx)
 int bch2_write_super(struct bch_fs *c)
 {
 	struct closure *cl = &c->sb_write;
-	struct printbuf err = PRINTBUF;
+	CLASS(printbuf, err)();
 	unsigned sb = 0, nr_wrote;
 	struct bch_devs_mask sb_written;
 	bool wrote, can_mount_without_written, can_mount_with_written;
@@ -1084,9 +1083,10 @@ int bch2_write_super(struct bch_fs *c)
 		bch2_sb_from_fs(c, (*ca));
 
 	darray_for_each(online_devices, ca) {
+		struct bch_opts opts = bch2_opts_empty();
 		printbuf_reset(&err);
 
-		ret = bch2_sb_validate((*ca)->disk_sb.sb, 0, BCH_VALIDATE_write, &err);
+		ret = bch2_sb_validate((*ca)->disk_sb.sb, &opts, 0, BCH_VALIDATE_write, &err);
 		if (ret) {
 			bch2_fs_inconsistent(c, "sb invalid before write: %s", err.buf);
 			goto out;
@@ -1104,14 +1104,13 @@ int bch2_write_super(struct bch_fs *c)
 		goto out;
 
 	if (le16_to_cpu(c->disk_sb.sb->version) > bcachefs_metadata_version_current) {
-		struct printbuf buf = PRINTBUF;
+		CLASS(printbuf, buf)();
 		prt_printf(&buf, "attempting to write superblock that wasn't version downgraded (");
 		bch2_version_to_text(&buf, le16_to_cpu(c->disk_sb.sb->version));
 		prt_str(&buf, " > ");
 		bch2_version_to_text(&buf, bcachefs_metadata_version_current);
 		prt_str(&buf, ")");
 		bch2_fs_fatal_error(c, ": %s", buf.buf);
-		printbuf_exit(&buf);
 		ret = bch_err_throw(c, sb_not_downgraded);
 		goto out;
 	}
@@ -1132,7 +1131,7 @@ int bch2_write_super(struct bch_fs *c)
 			continue;
 
 		if (le64_to_cpu(ca->sb_read_scratch->seq) < ca->disk_sb.seq) {
-			struct printbuf buf = PRINTBUF;
+			CLASS(printbuf, buf)();
 			prt_char(&buf, ' ');
 			prt_bdevname(&buf, ca->disk_sb.bdev);
 			prt_printf(&buf,
@@ -1147,12 +1146,10 @@ int bch2_write_super(struct bch_fs *c)
 			} else {
 				bch_err(c, "%s", buf.buf);
 			}
-
-			printbuf_exit(&buf);
 		}
 
 		if (le64_to_cpu(ca->sb_read_scratch->seq) > ca->disk_sb.seq) {
-			struct printbuf buf = PRINTBUF;
+			CLASS(printbuf, buf)();
 			prt_char(&buf, ' ');
 			prt_bdevname(&buf, ca->disk_sb.bdev);
 			prt_printf(&buf,
@@ -1160,7 +1157,6 @@ int bch2_write_super(struct bch_fs *c)
 				le64_to_cpu(ca->sb_read_scratch->seq),
 				ca->disk_sb.seq);
 			bch2_fs_fatal_error(c, "%s", buf.buf);
-			printbuf_exit(&buf);
 			ret = bch_err_throw(c, erofs_sb_err);
 		}
 	}
@@ -1222,19 +1218,17 @@ out:
 	darray_for_each(online_devices, ca)
 		enumerated_ref_put(&(*ca)->io_ref[READ], BCH_DEV_READ_REF_write_super);
 	darray_exit(&online_devices);
-	printbuf_exit(&err);
 	return ret;
 }
 
 void __bch2_check_set_feature(struct bch_fs *c, unsigned feat)
 {
-	mutex_lock(&c->sb_lock);
-	if (!(c->sb.features & (1ULL << feat))) {
-		c->disk_sb.sb->features[0] |= cpu_to_le64(1ULL << feat);
+	guard(mutex)(&c->sb_lock);
+	if (!(c->sb.features & BIT_ULL(feat))) {
+		c->disk_sb.sb->features[0] |= cpu_to_le64(BIT_ULL(feat));
 
 		bch2_write_super(c);
 	}
-	mutex_unlock(&c->sb_lock);
 }
 
 /* Downgrade if superblock is at a higher version than currently supported: */
@@ -1282,11 +1276,12 @@ void bch2_sb_upgrade(struct bch_fs *c, unsigned new_version, bool incompat)
 
 void bch2_sb_upgrade_incompat(struct bch_fs *c)
 {
-	mutex_lock(&c->sb_lock);
-	if (c->sb.version == c->sb.version_incompat_allowed)
-		goto unlock;
+	guard(mutex)(&c->sb_lock);
 
-	struct printbuf buf = PRINTBUF;
+	if (c->sb.version == c->sb.version_incompat_allowed)
+		return;
+
+	CLASS(printbuf, buf)();
 
 	prt_str(&buf, "Now allowing incompatible features up to ");
 	bch2_version_to_text(&buf, c->sb.version);
@@ -1295,14 +1290,11 @@ void bch2_sb_upgrade_incompat(struct bch_fs *c)
 	prt_newline(&buf);
 
 	bch_notice(c, "%s", buf.buf);
-	printbuf_exit(&buf);
 
 	c->disk_sb.sb->features[0] |= cpu_to_le64(BCH_SB_FEATURES_ALL);
 	SET_BCH_SB_VERSION_INCOMPAT_ALLOWED(c->disk_sb.sb,
 			max(BCH_SB_VERSION_INCOMPAT_ALLOWED(c->disk_sb.sb), c->sb.version));
 	bch2_write_super(c);
-unlock:
-	mutex_unlock(&c->sb_lock);
 }
 
 static int bch2_sb_ext_validate(struct bch_sb *sb, struct bch_sb_field *f,
@@ -1368,7 +1360,7 @@ static int bch2_sb_field_validate(struct bch_sb *sb, struct bch_sb_field *f,
 				  enum bch_validate_flags flags, struct printbuf *err)
 {
 	unsigned type = le32_to_cpu(f->type);
-	struct printbuf field_err = PRINTBUF;
+	CLASS(printbuf, field_err)();
 	const struct bch_sb_field_ops *ops = bch2_sb_field_type_ops(type);
 	int ret;
 
@@ -1380,7 +1372,6 @@ static int bch2_sb_field_validate(struct bch_sb *sb, struct bch_sb_field *f,
 		bch2_sb_field_to_text(err, sb, f);
 	}
 
-	printbuf_exit(&field_err);
 	return ret;
 }
 
