@@ -185,7 +185,7 @@ void arch_pick_mmap_layout(struct mm_struct *mm, struct rlimit *rlim_stack)
 		mm_flags_clear(MMF_TOPDOWN, mm);
 	} else {
 		mm->mmap_base = mmap_base(random_factor, rlim_stack);
-		mm_flag_set(MMF_TOPDOWN, mm);
+		mm_flags_set(MMF_TOPDOWN, mm);
 	}
 }
 
