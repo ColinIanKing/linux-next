@@ -934,8 +934,8 @@ struct mm_cid {
  */
 #define NUM_MM_FLAG_BITS BITS_PER_LONG
 typedef struct {
-	__private DECLARE_BITMAP(__mm_flags, NUM_MM_FLAG_BITS);
-} mm_flags_t;
+	DECLARE_BITMAP(__mm_flags, NUM_MM_FLAG_BITS);
+} __private mm_flags_t;
 
 struct kioctx_table;
 struct iommu_mm_data;
@@ -1233,17 +1233,8 @@ struct mm_struct {
 	unsigned long cpu_bitmap[];
 };
 
-/* Read the first system word of mm flags, non-atomically. */
-static inline unsigned long __mm_flags_get_word(struct mm_struct *mm)
-{
-	unsigned long *bitmap = ACCESS_PRIVATE(&mm->_flags, __mm_flags);
-
-	return bitmap_read(bitmap, 0, BITS_PER_LONG);
-}
-
 /* Set the first system word of mm flags, non-atomically. */
-static inline void __mm_flags_set_word(struct mm_struct *mm,
-				       unsigned long value)
+static inline void __mm_flags_set_word(struct mm_struct *mm, unsigned long value)
 {
 	unsigned long *bitmap = ACCESS_PRIVATE(&mm->_flags, __mm_flags);
 
@@ -1254,6 +1245,14 @@ static inline void __mm_flags_set_word(struct mm_struct *mm,
 static inline const unsigned long *__mm_flags_get_bitmap(const struct mm_struct *mm)
 {
 	return (const unsigned long *)ACCESS_PRIVATE(&mm->_flags, __mm_flags);
+}
+
+/* Read the first system word of mm flags, non-atomically. */
+static inline unsigned long __mm_flags_get_word(const struct mm_struct *mm)
+{
+	const unsigned long *bitmap = __mm_flags_get_bitmap(mm);
+
+	return bitmap_read(bitmap, 0, BITS_PER_LONG);
 }
 
 #define MM_MT_FLAGS	(MT_FLAGS_ALLOC_RANGE | MT_FLAGS_LOCK_EXTERN | \
