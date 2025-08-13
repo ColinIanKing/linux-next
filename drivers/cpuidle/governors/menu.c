@@ -293,8 +293,18 @@ static int menu_select(struct cpuidle_driver *drv, struct cpuidle_device *dev,
 	 * in a shallow idle state for a long time as a result of it.  In that
 	 * case, say we might mispredict and use the known time till the closest
 	 * timer event for the idle state selection.
+	 *
+	 * However, on nohz_full CPUs the tick does not run as a rule and the
+	 * time till the closest timer event may always be effectively infinite,
+	 * so using it as a replacement for the predicted idle duration would
+	 * effectively always cause the prediction results to be discarded and
+	 * deep idle states to be selected all the time.  That might introduce
+	 * unwanted latency into the workload and cause more energy than
+	 * necessary to be consumed if the discarded prediction results are
+	 * actually accurate, so skip nohz_full CPUs here.
 	 */
-	if (tick_nohz_tick_stopped() && predicted_ns < TICK_NSEC)
+	if (tick_nohz_tick_stopped() && !tick_nohz_full_cpu(dev->cpu) &&
+	    predicted_ns < TICK_NSEC)
 		predicted_ns = data->next_timer_ns;
 
 	/*
