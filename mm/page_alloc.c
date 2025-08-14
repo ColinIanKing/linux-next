@@ -6237,8 +6237,7 @@ static void calculate_totalreserve_pages(void)
 
 			/* Find valid and maximum lowmem_reserve in the zone */
 			for (j = i; j < MAX_NR_ZONES; j++) {
-				if (zone->lowmem_reserve[j] > max)
-					max = zone->lowmem_reserve[j];
+				max = max(max, zone->lowmem_reserve[j]);
 			}
 
 			/* we treat the high watermark as reserved pages. */
