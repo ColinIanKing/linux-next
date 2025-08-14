@@ -1076,6 +1076,8 @@ static void kmem_cache_rcu_uaf(struct kunit *test)
 /*
  * Check that SLAB_TYPESAFE_BY_RCU objects are immediately reused when
  * CONFIG_SLUB_RCU_DEBUG is off, and stay at the same address.
+ * Without this, KASAN builds would be unable to trigger bugs caused by
+ * SLAB_TYPESAFE_BY_RCU users handling reycled objects improperly.
  */
 static void kmem_cache_rcu_reuse(struct kunit *test)
 {
