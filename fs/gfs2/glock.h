@@ -68,6 +68,10 @@ enum {
  * also be granted in SHARED.  The preferred state is whichever is compatible
  * with other granted locks, or the specified state if no other locks exist.
  *
+ * In addition, when a lock is already held in EX mode locally, a SHARED or
+ * DEFERRED mode request with the LM_FLAG_ANY flag set will be granted.
+ * (The LM_FLAG_ANY flag is only use for SHARED mode requests currently.)
+ *
  * LM_FLAG_NODE_SCOPE
  * This holder agrees to share the lock within this node. In other words,
  * the glock is held in EX mode according to DLM, but local holders on the
@@ -259,7 +263,7 @@ bool gfs2_queue_verify_delete(struct gfs2_glock *gl, bool later);
 void gfs2_cancel_delete_work(struct gfs2_glock *gl);
 void gfs2_flush_delete_work(struct gfs2_sbd *sdp);
 void gfs2_gl_hash_clear(struct gfs2_sbd *sdp);
-void gfs2_gl_dq_holders(struct gfs2_sbd *sdp);
+void gfs2_withdraw_glocks(struct gfs2_sbd *sdp);
 void gfs2_glock_thaw(struct gfs2_sbd *sdp);
 void gfs2_glock_free(struct gfs2_glock *gl);
 void gfs2_glock_free_later(struct gfs2_glock *gl);
