@@ -42,6 +42,18 @@ properties:
     description: Indicates the PIC shall not be reset during runtime initialization.
     type: boolean
 
+  single-cpu-affinity:
+    description:
+      If present, non-IPI interrupts will be routed to a single CPU at a time.
+    type: boolean
+
+  last-interrupt-source:
+    description:
+      Some MPICs do not correctly report the number of hardware sources in the
+      global feature registers. This value, if specified, overrides the value
+      read from MPIC_GREG_FEATURE_LAST_SRC.
+    $ref: /schemas/types.yaml#/definitions/uint32
+
 required:
   - compatible
   - reg
