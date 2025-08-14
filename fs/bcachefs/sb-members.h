@@ -14,10 +14,35 @@ __bch2_members_v2_get_mut(struct bch_sb_field_members_v2 *mi, unsigned i)
 	return (void *) mi->_members + (i * le16_to_cpu(mi->member_bytes));
 }
 
+static inline struct bch_member bch2_members_v2_get(struct bch_sb_field_members_v2 *mi, int i)
+{
+	struct bch_member ret, *p = __bch2_members_v2_get_mut(mi, i);
+	memset(&ret, 0, sizeof(ret));
+	memcpy(&ret, p, min_t(size_t, le16_to_cpu(mi->member_bytes), sizeof(ret)));
+	return ret;
+}
+
+static inline struct bch_member *members_v1_get_mut(struct bch_sb_field_members_v1 *mi, int i)
+{
+	return (void *) mi->_members + (i * BCH_MEMBER_V1_BYTES);
+}
+
+static inline struct bch_member bch2_members_v1_get(struct bch_sb_field_members_v1 *mi, int i)
+{
+	struct bch_member ret, *p = members_v1_get_mut(mi, i);
+	memset(&ret, 0, sizeof(ret));
+	memcpy(&ret, p, min_t(size_t, BCH_MEMBER_V1_BYTES, sizeof(ret)));
+	return ret;
+}
+
 int bch2_sb_members_v2_init(struct bch_fs *c);
 int bch2_sb_members_cpy_v2_v1(struct bch_sb_handle *disk_sb);
 struct bch_member *bch2_members_v2_get_mut(struct bch_sb *sb, int i);
 struct bch_member bch2_sb_member_get(struct bch_sb *sb, int i);
+
+void bch2_member_to_text(struct printbuf *, struct bch_member *,
+			 struct bch_sb_field_disk_groups *,
+			 struct bch_sb *, unsigned);
 
 static inline bool bch2_dev_is_online(struct bch_dev *ca)
 {
@@ -133,7 +158,7 @@ static inline void __bch2_dev_put(struct bch_dev *ca)
 
 static inline void bch2_dev_put(struct bch_dev *ca)
 {
-	if (ca)
+	if (!IS_ERR_OR_NULL(ca))
 		__bch2_dev_put(ca);
 }
 
@@ -240,6 +265,10 @@ static inline struct bch_dev *bch2_dev_tryget_noerror(struct bch_fs *c, unsigned
 	return ca;
 }
 
+DEFINE_CLASS(bch2_dev_tryget_noerror, struct bch_dev *,
+	     bch2_dev_put(_T), bch2_dev_tryget_noerror(c, dev),
+	     struct bch_fs *c, unsigned dev);
+
 static inline struct bch_dev *bch2_dev_tryget(struct bch_fs *c, unsigned dev)
 {
 	struct bch_dev *ca = bch2_dev_tryget_noerror(c, dev);
@@ -247,6 +276,10 @@ static inline struct bch_dev *bch2_dev_tryget(struct bch_fs *c, unsigned dev)
 		bch2_dev_missing_atomic(c, dev);
 	return ca;
 }
+
+DEFINE_CLASS(bch2_dev_tryget, struct bch_dev *,
+	     bch2_dev_put(_T), bch2_dev_tryget(c, dev),
+	     struct bch_fs *c, unsigned dev);
 
 static inline struct bch_dev *bch2_dev_bucket_tryget_noerror(struct bch_fs *c, struct bpos bucket)
 {
@@ -257,6 +290,10 @@ static inline struct bch_dev *bch2_dev_bucket_tryget_noerror(struct bch_fs *c, s
 	}
 	return ca;
 }
+
+DEFINE_CLASS(bch2_dev_bucket_tryget_noerror, struct bch_dev *,
+	     bch2_dev_put(_T), bch2_dev_bucket_tryget_noerror(c, bucket),
+	     struct bch_fs *c, struct bpos bucket);
 
 void bch2_dev_bucket_missing(struct bch_dev *, u64);
 
@@ -270,6 +307,10 @@ static inline struct bch_dev *bch2_dev_bucket_tryget(struct bch_fs *c, struct bp
 	}
 	return ca;
 }
+
+DEFINE_CLASS(bch2_dev_bucket_tryget, struct bch_dev *,
+	     bch2_dev_put(_T), bch2_dev_bucket_tryget(c, bucket),
+	     struct bch_fs *c, struct bpos bucket);
 
 static inline struct bch_dev *bch2_dev_iterate_noerror(struct bch_fs *c, struct bch_dev *ca, unsigned dev_idx)
 {
@@ -349,6 +390,7 @@ static inline struct bch_member_cpu bch2_mi_to_cpu(struct bch_member *mi)
 }
 
 void bch2_sb_members_from_cpu(struct bch_fs *);
+void bch2_sb_members_to_cpu(struct bch_fs *);
 
 void bch2_dev_io_errors_to_text(struct printbuf *, struct bch_dev *);
 void bch2_dev_errors_reset(struct bch_dev *);

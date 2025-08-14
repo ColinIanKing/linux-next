@@ -111,7 +111,7 @@ static int bch2_dev_btree_drop_key(struct btree_trans *trans,
 
 	ret = drop_btree_ptrs(trans, &iter, b, dev_idx, flags);
 
-	bch2_trans_iter_exit(trans, &iter);
+	bch2_trans_iter_exit(&iter);
 	return ret;
 }
 
@@ -119,34 +119,33 @@ static int bch2_dev_usrdata_drop(struct bch_fs *c,
 				 struct progress_indicator_state *progress,
 				 unsigned dev_idx, unsigned flags)
 {
-	struct btree_trans *trans = bch2_trans_get(c);
-	enum btree_id id;
-	int ret = 0;
+	CLASS(btree_trans, trans)(c);
 
-	for (id = 0; id < BTREE_ID_NR; id++) {
+	for (unsigned id = 0; id < BTREE_ID_NR; id++) {
 		if (!btree_type_has_ptrs(id))
 			continue;
 
-		ret = for_each_btree_key_commit(trans, iter, id, POS_MIN,
+		/* Stripe keys have pointers, but are handled separately */
+		if (id == BTREE_ID_stripes)
+			continue;
+
+		int ret = for_each_btree_key_commit(trans, iter, id, POS_MIN,
 				BTREE_ITER_prefetch|BTREE_ITER_all_snapshots, k,
 				NULL, NULL, BCH_TRANS_COMMIT_no_enospc, ({
 			bch2_progress_update_iter(trans, progress, &iter, "dropping user data");
 			bch2_dev_usrdata_drop_key(trans, &iter, k, dev_idx, flags);
 		}));
 		if (ret)
-			break;
+			return ret;
 	}
 
-	bch2_trans_put(trans);
-
-	return ret;
+	return 0;
 }
 
 static int bch2_dev_metadata_drop(struct bch_fs *c,
 				  struct progress_indicator_state *progress,
 				  unsigned dev_idx, unsigned flags)
 {
-	struct btree_trans *trans;
 	struct btree_iter iter;
 	struct closure cl;
 	struct btree *b;
@@ -158,7 +157,7 @@ static int bch2_dev_metadata_drop(struct bch_fs *c,
 	if (flags & BCH_FORCE_IF_METADATA_LOST)
 		return bch_err_throw(c, remove_with_metadata_missing_unimplemented);
 
-	trans = bch2_trans_get(c);
+	CLASS(btree_trans, trans)(c);
 	bch2_bkey_buf_init(&k);
 	closure_init_stack(&cl);
 
@@ -168,7 +167,7 @@ static int bch2_dev_metadata_drop(struct bch_fs *c,
 retry:
 		ret = 0;
 		while (bch2_trans_begin(trans),
-		       (b = bch2_btree_iter_peek_node(trans, &iter)) &&
+		       (b = bch2_btree_iter_peek_node(&iter)) &&
 		       !(ret = PTR_ERR_OR_ZERO(b))) {
 			bch2_progress_update_iter(trans, progress, &iter, "dropping metadata");
 
@@ -184,12 +183,12 @@ retry:
 			if (ret)
 				break;
 next:
-			bch2_btree_iter_next_node(trans, &iter);
+			bch2_btree_iter_next_node(&iter);
 		}
 		if (bch2_err_matches(ret, BCH_ERR_transaction_restart))
 			goto retry;
 
-		bch2_trans_iter_exit(trans, &iter);
+		bch2_trans_iter_exit(&iter);
 
 		if (ret)
 			goto err;
@@ -199,7 +198,6 @@ next:
 	ret = 0;
 err:
 	bch2_bkey_buf_exit(&k, c);
-	bch2_trans_put(trans);
 
 	BUG_ON(bch2_err_matches(ret, BCH_ERR_transaction_restart));
 
@@ -234,13 +232,13 @@ static int data_drop_bp(struct btree_trans *trans, unsigned dev_idx,
 	else
 		ret = bch2_dev_usrdata_drop_key(trans, &iter, k, dev_idx, flags);
 out:
-	bch2_trans_iter_exit(trans, &iter);
+	bch2_trans_iter_exit(&iter);
 	return ret;
 }
 
 int bch2_dev_data_drop_by_backpointers(struct bch_fs *c, unsigned dev_idx, unsigned flags)
 {
-	struct btree_trans *trans = bch2_trans_get(c);
+	CLASS(btree_trans, trans)(c);
 
 	struct bkey_buf last_flushed;
 	bch2_bkey_buf_init(&last_flushed);
@@ -260,7 +258,6 @@ int bch2_dev_data_drop_by_backpointers(struct bch_fs *c, unsigned dev_idx, unsig
 	}));
 
 	bch2_bkey_buf_exit(&last_flushed, trans->c);
-	bch2_trans_put(trans);
 	bch_err_fn(c, ret);
 	return ret;
 }
