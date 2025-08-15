@@ -25,6 +25,7 @@ Quick feature summary
 * *Log-structured write-back* that preserves backend crash-consistency
 
 -------------------------------------------------------------------------------
+
 Constructor
 ===========
 
@@ -58,6 +59,7 @@ The first time a pmem device is used, dm-pcache formats it automatically
 (super-block, cache_info, etc.).
 
 -------------------------------------------------------------------------------
+
 Status line
 ===========
 
@@ -98,6 +100,7 @@ Field meanings
 ===============================  =============================================
 
 -------------------------------------------------------------------------------
+
 Messages
 ========
 
@@ -108,6 +111,7 @@ Messages
    dmsetup message <dev> 0 gc_percent <0-90>
 
 -------------------------------------------------------------------------------
+
 Theory of operation
 ===================
 
@@ -152,6 +156,7 @@ range when it is inserted and stores it in the on-media key.  Reads
 validate the CRC before copying to the caller.
 
 -------------------------------------------------------------------------------
+
 Failure handling
 ================
 
@@ -164,6 +169,7 @@ Failure handling
   use-after-free keys.
 
 -------------------------------------------------------------------------------
+
 Limitations & TODO
 ==================
 
@@ -173,6 +179,7 @@ Limitations & TODO
 * Discard planned.
 
 -------------------------------------------------------------------------------
+
 Example workflow
 ================
 
@@ -197,5 +204,6 @@ Example workflow
    dmsetup remove pcache_sdb
 
 -------------------------------------------------------------------------------
+
 ``dm-pcache`` is under active development; feedback, bug reports and patches
 are very welcome!
