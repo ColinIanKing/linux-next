@@ -2051,11 +2051,8 @@ static int __init hv_retrieve_scheduler_type(enum hv_scheduler_type *out)
 	u64 status;
 
 	local_irq_save(flags);
-	input = *this_cpu_ptr(hyperv_pcpu_input_arg);
-	output = *this_cpu_ptr(hyperv_pcpu_output_arg);
 
-	memset(input, 0, sizeof(*input));
-	memset(output, 0, sizeof(*output));
+	hv_setup_inout(&input, sizeof(*input), &output, sizeof(*output));
 	input->property_id = HV_SYSTEM_PROPERTY_SCHEDULER_TYPE;
 
 	status = hv_do_hypercall(HVCALL_GET_SYSTEM_PROPERTY, input, output);

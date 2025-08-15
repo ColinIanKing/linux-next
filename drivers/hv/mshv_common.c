@@ -17,12 +17,6 @@
 
 #include "mshv.h"
 
-#define HV_GET_REGISTER_BATCH_SIZE	\
-	(HV_HYP_PAGE_SIZE / sizeof(union hv_register_value))
-#define HV_SET_REGISTER_BATCH_SIZE	\
-	((HV_HYP_PAGE_SIZE - sizeof(struct hv_input_set_vp_registers)) \
-		/ sizeof(struct hv_register_assoc))
-
 int hv_call_get_vp_registers(u32 vp_index, u64 partition_id, u16 count,
 			     union hv_input_vtl input_vtl,
 			     struct hv_register_assoc *registers)
@@ -30,24 +24,23 @@ int hv_call_get_vp_registers(u32 vp_index, u64 partition_id, u16 count,
 	struct hv_input_get_vp_registers *input_page;
 	union hv_register_value *output_page;
 	u16 completed = 0;
-	unsigned long remaining = count;
+	unsigned long batch_size, remaining = count;
 	int rep_count, i;
 	u64 status = HV_STATUS_SUCCESS;
 	unsigned long flags;
 
 	local_irq_save(flags);
 
-	input_page = *this_cpu_ptr(hyperv_pcpu_input_arg);
-	output_page = *this_cpu_ptr(hyperv_pcpu_output_arg);
+	batch_size = hv_setup_inout_array(&input_page, sizeof(*input_page),
+			      sizeof(input_page->names[0]),
+			      &output_page, 0, sizeof(*output_page));
 
 	input_page->partition_id = partition_id;
 	input_page->vp_index = vp_index;
 	input_page->input_vtl.as_uint8 = input_vtl.as_uint8;
-	input_page->rsvd_z8 = 0;
-	input_page->rsvd_z16 = 0;
 
 	while (remaining) {
-		rep_count = min(remaining, HV_GET_REGISTER_BATCH_SIZE);
+		rep_count = min(remaining, batch_size);
 		for (i = 0; i < rep_count; ++i)
 			input_page->names[i] = registers[i].name;
 
@@ -76,21 +69,19 @@ int hv_call_set_vp_registers(u32 vp_index, u64 partition_id, u16 count,
 	struct hv_input_set_vp_registers *input_page;
 	u16 completed = 0;
 	unsigned long remaining = count;
-	int rep_count;
+	unsigned long rep_count, batch_size;
 	u64 status = HV_STATUS_SUCCESS;
 	unsigned long flags;
 
 	local_irq_save(flags);
-	input_page = *this_cpu_ptr(hyperv_pcpu_input_arg);
-
+	batch_size = hv_setup_in_array(&input_page, sizeof(*input_page),
+			sizeof(input_page->elements[0]));
 	input_page->partition_id = partition_id;
 	input_page->vp_index = vp_index;
 	input_page->input_vtl.as_uint8 = input_vtl.as_uint8;
-	input_page->rsvd_z8 = 0;
-	input_page->rsvd_z16 = 0;
 
 	while (remaining) {
-		rep_count = min(remaining, HV_SET_REGISTER_BATCH_SIZE);
+		rep_count = min(remaining, batch_size);
 		memcpy(input_page->elements, registers,
 		       sizeof(struct hv_register_assoc) * rep_count);
 
@@ -120,9 +111,7 @@ int hv_call_get_partition_property(u64 partition_id,
 	struct hv_output_get_partition_property *output;
 
 	local_irq_save(flags);
-	input = *this_cpu_ptr(hyperv_pcpu_input_arg);
-	output = *this_cpu_ptr(hyperv_pcpu_output_arg);
-	memset(input, 0, sizeof(*input));
+	hv_setup_inout(&input, sizeof(*input), &output, sizeof(*output));
 	input->partition_id = partition_id;
 	input->property_code = property_code;
 	status = hv_do_hypercall(HVCALL_GET_PARTITION_PROPERTY, input, output);

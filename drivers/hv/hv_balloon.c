@@ -1577,21 +1577,21 @@ static int hv_free_page_report(struct page_reporting_dev_info *pr_dev_info,
 {
 	unsigned long flags;
 	struct hv_memory_hint *hint;
-	int i, order;
+	int i, order, batch_size;
 	u64 status;
 	struct scatterlist *sg;
 
-	WARN_ON_ONCE(nents > HV_MEMORY_HINT_MAX_GPA_PAGE_RANGES);
 	WARN_ON_ONCE(sgl->length < (HV_HYP_PAGE_SIZE << page_reporting_order));
 	local_irq_save(flags);
-	hint = *this_cpu_ptr(hyperv_pcpu_input_arg);
+
+	batch_size = hv_setup_in_array(&hint, sizeof(*hint), sizeof(hint->ranges[0]));
 	if (!hint) {
 		local_irq_restore(flags);
 		return -ENOSPC;
 	}
+	WARN_ON_ONCE(nents > batch_size);
 
 	hint->heat_type = HV_EXTMEM_HEAT_HINT_COLD_DISCARD;
-	hint->reserved = 0;
 	for_each_sg(sgl, sg, nents, i) {
 		union hv_gpa_page_range *range;
 
