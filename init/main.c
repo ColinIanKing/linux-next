@@ -559,7 +559,7 @@ static int __init unknown_bootoption(char *param, char *val,
 
 	/* Handle bootloader identifier */
 	for (int i = 0; bootloader[i]; i++) {
-		if (!strncmp(param, bootloader[i], strlen(bootloader[i])))
+		if (strstarts(param, bootloader[i]))
 			return 0;
 	}
 
