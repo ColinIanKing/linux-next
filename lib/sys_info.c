@@ -55,7 +55,7 @@ int sysctl_sys_info_handler(const struct ctl_table *ro_table, int write,
 					  void *buffer, size_t *lenp,
 					  loff_t *ppos)
 {
-	char names[sizeof(sys_info_avail) + 1];
+	char names[sizeof(sys_info_avail)];
 	struct ctl_table table;
 	unsigned long *si_bits_global;
 
@@ -80,6 +80,9 @@ int sysctl_sys_info_handler(const struct ctl_table *ro_table, int write,
 		/* for 'read' operation */
 		char *delim = "";
 		int i, len = 0;
+
+		/* *si_bits_glabl could be 0 */
+		names[0] = '\0';
 
 		for (i = 0; i < ARRAY_SIZE(si_names); i++) {
 			if (*si_bits_global & si_names[i].bit) {
