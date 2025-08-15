@@ -3,6 +3,7 @@
 #define _LINUX_KERNEL_SPRINTF_H_
 
 #include <linux/compiler_attributes.h>
+#include <linux/stdarg.h>
 #include <linux/types.h>
 #include <linux/stdarg.h>
 
