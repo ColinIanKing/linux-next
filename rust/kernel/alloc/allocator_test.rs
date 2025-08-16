@@ -9,7 +9,7 @@
 
 #![allow(missing_docs)]
 
-use super::{flags::*, AllocError, Allocator, Flags};
+use super::{flags::*, AllocError, Allocator, Flags, NumaNode};
 use core::alloc::Layout;
 use core::cmp;
 use core::ptr;
