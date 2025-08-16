@@ -72,6 +72,9 @@
 #include "raid-stripe-tree.h"
 #include "fiemap.h"
 
+#define COW_FILE_RANGE_KEEP_LOCKED	(1UL << 0)
+#define COW_FILE_RANGE_NO_INLINE	(1UL << 1)
+
 struct btrfs_iget_args {
 	u64 ino;
 	struct btrfs_root *root;
@@ -401,10 +404,12 @@ static inline void btrfs_cleanup_ordered_extents(struct btrfs_inode *inode,
 
 	while (index <= end_index) {
 		folio = filemap_get_folio(inode->vfs_inode.i_mapping, index);
-		index++;
-		if (IS_ERR(folio))
+		if (IS_ERR(folio)) {
+			index++;
 			continue;
+		}
 
+		index = folio_end(folio) >> PAGE_SHIFT;
 		/*
 		 * Here we just clear all Ordered bits for every page in the
 		 * range, then btrfs_mark_ordered_io_finished() will handle
@@ -954,7 +959,7 @@ again:
 
 	/* Compression level is applied here. */
 	ret = btrfs_compress_folios(compress_type, compress_level,
-				    mapping, start, folios, &nr_folios, &total_in,
+				    inode, start, folios, &nr_folios, &total_in,
 				    &total_compressed);
 	if (ret)
 		goto mark_incompressible;
@@ -1243,18 +1248,18 @@ u64 btrfs_get_extent_allocation_hint(struct btrfs_inode *inode, u64 start,
  * locked_folio is the folio that writepage had locked already.  We use
  * it to make sure we don't do extra locks or unlocks.
  *
- * When this function fails, it unlocks all pages except @locked_folio.
+ * When this function fails, it unlocks all folios except @locked_folio.
  *
  * When this function successfully creates an inline extent, it returns 1 and
- * unlocks all pages including locked_folio and starts I/O on them.
- * (In reality inline extents are limited to a single page, so locked_folio is
- * the only page handled anyway).
+ * unlocks all folios including locked_folio and starts I/O on them.
+ * (In reality inline extents are limited to a single block, so locked_folio is
+ * the only folio handled anyway).
  *
- * When this function succeed and creates a normal extent, the page locking
+ * When this function succeed and creates a normal extent, the folio locking
  * status depends on the passed in flags:
  *
- * - If @keep_locked is set, all pages are kept locked.
- * - Else all pages except for @locked_folio are unlocked.
+ * - If COW_FILE_RANGE_KEEP_LOCKED flag is set, all folios are kept locked.
+ * - Else all folios except for @locked_folio are unlocked.
  *
  * When a failure happens in the second or later iteration of the
  * while-loop, the ordered extents created in previous iterations are cleaned up.
@@ -1262,7 +1267,7 @@ u64 btrfs_get_extent_allocation_hint(struct btrfs_inode *inode, u64 start,
 static noinline int cow_file_range(struct btrfs_inode *inode,
 				   struct folio *locked_folio, u64 start,
 				   u64 end, u64 *done_offset,
-				   bool keep_locked, bool no_inline)
+				   unsigned long flags)
 {
 	struct btrfs_root *root = inode->root;
 	struct btrfs_fs_info *fs_info = root->fs_info;
@@ -1290,7 +1295,7 @@ static noinline int cow_file_range(struct btrfs_inode *inode,
 
 	inode_should_defrag(inode, start, end, num_bytes, SZ_64K);
 
-	if (!no_inline) {
+	if (!(flags & COW_FILE_RANGE_NO_INLINE)) {
 		/* lets try to make an inline extent */
 		ret = cow_file_range_inline(inode, locked_folio, start, end, 0,
 					    BTRFS_COMPRESS_NONE, NULL, false);
@@ -1318,7 +1323,7 @@ static noinline int cow_file_range(struct btrfs_inode *inode,
 	 * Do set the Ordered (Private2) bit so we know this page was properly
 	 * setup for writepage.
 	 */
-	page_ops = (keep_locked ? 0 : PAGE_UNLOCK);
+	page_ops = ((flags & COW_FILE_RANGE_KEEP_LOCKED) ? 0 : PAGE_UNLOCK);
 	page_ops |= PAGE_SET_ORDERED;
 
 	/*
@@ -1685,7 +1690,7 @@ static noinline int run_delalloc_cow(struct btrfs_inode *inode,
 
 	while (start <= end) {
 		ret = cow_file_range(inode, locked_folio, start, end,
-				     &done_offset, true, false);
+				     &done_offset, COW_FILE_RANGE_KEEP_LOCKED);
 		if (ret)
 			return ret;
 		extent_write_locked_range(&inode->vfs_inode, locked_folio,
@@ -1767,8 +1772,8 @@ static int fallback_to_cow(struct btrfs_inode *inode,
 	 * is written out and unlocked directly and a normal NOCOW extent
 	 * doesn't work.
 	 */
-	ret = cow_file_range(inode, locked_folio, start, end, NULL, false,
-			     true);
+	ret = cow_file_range(inode, locked_folio, start, end, NULL,
+			     COW_FILE_RANGE_NO_INLINE);
 	ASSERT(ret != 1);
 	return ret;
 }
@@ -2013,7 +2018,7 @@ static int nocow_one_range(struct btrfs_inode *inode, struct folio *locked_folio
 	 * cleaered by the caller.
 	 */
 	if (ret < 0)
-		btrfs_cleanup_ordered_extents(inode, file_pos, end);
+		btrfs_cleanup_ordered_extents(inode, file_pos, len);
 	return ret;
 }
 
@@ -2347,8 +2352,7 @@ int btrfs_run_delalloc_range(struct btrfs_inode *inode, struct folio *locked_fol
 		ret = run_delalloc_cow(inode, locked_folio, start, end, wbc,
 				       true);
 	else
-		ret = cow_file_range(inode, locked_folio, start, end, NULL,
-				     false, false);
+		ret = cow_file_range(inode, locked_folio, start, end, NULL, 0);
 	return ret;
 }
 
@@ -3105,9 +3109,10 @@ int btrfs_finish_one_ordered(struct btrfs_ordered_extent *ordered_extent)
 		goto out;
 	}
 
-	if (btrfs_is_zoned(fs_info))
-		btrfs_zone_finish_endio(fs_info, ordered_extent->disk_bytenr,
-					ordered_extent->disk_num_bytes);
+	ret = btrfs_zone_finish_endio(fs_info, ordered_extent->disk_bytenr,
+				      ordered_extent->disk_num_bytes);
+	if (ret)
+		goto out;
 
 	if (test_bit(BTRFS_ORDERED_TRUNCATED, &ordered_extent->flags)) {
 		truncated = true;
@@ -4187,6 +4192,23 @@ int btrfs_update_inode_fallback(struct btrfs_trans_handle *trans,
 	return ret;
 }
 
+static void update_time_after_link_or_unlink(struct btrfs_inode *dir)
+{
+	struct timespec64 now;
+
+	/*
+	 * If we are replaying a log tree, we do not want to update the mtime
+	 * and ctime of the parent directory with the current time, since the
+	 * log replay procedure is responsible for setting them to their correct
+	 * values (the ones it had when the fsync was done).
+	 */
+	if (test_bit(BTRFS_FS_LOG_RECOVERING, &dir->root->fs_info->flags))
+		return;
+
+	now = inode_set_ctime_current(&dir->vfs_inode);
+	inode_set_mtime_to_ts(&dir->vfs_inode, now);
+}
+
 /*
  * unlink helper that gets used here in inode.c and in the tree logging
  * recovery code.  It remove a link in a directory with a given name, and
@@ -4287,7 +4309,7 @@ skip_backref:
 	inode_inc_iversion(&inode->vfs_inode);
 	inode_set_ctime_current(&inode->vfs_inode);
 	inode_inc_iversion(&dir->vfs_inode);
- 	inode_set_mtime_to_ts(&dir->vfs_inode, inode_set_ctime_current(&dir->vfs_inode));
+	update_time_after_link_or_unlink(dir);
 
 	return btrfs_update_inode(trans, dir);
 }
@@ -6640,7 +6662,7 @@ out:
  */
 int btrfs_add_link(struct btrfs_trans_handle *trans,
 		   struct btrfs_inode *parent_inode, struct btrfs_inode *inode,
-		   const struct fscrypt_str *name, int add_backref, u64 index)
+		   const struct fscrypt_str *name, bool add_backref, u64 index)
 {
 	int ret = 0;
 	struct btrfs_key key;
@@ -6681,15 +6703,7 @@ int btrfs_add_link(struct btrfs_trans_handle *trans,
 	btrfs_i_size_write(parent_inode, parent_inode->vfs_inode.i_size +
 			   name->len * 2);
 	inode_inc_iversion(&parent_inode->vfs_inode);
-	/*
-	 * If we are replaying a log tree, we do not want to update the mtime
-	 * and ctime of the parent directory with the current time, since the
-	 * log replay procedure is responsible for setting them to their correct
-	 * values (the ones it had when the fsync was done).
-	 */
-	if (!test_bit(BTRFS_FS_LOG_RECOVERING, &root->fs_info->flags))
-		inode_set_mtime_to_ts(&parent_inode->vfs_inode,
-				      inode_set_ctime_current(&parent_inode->vfs_inode));
+	update_time_after_link_or_unlink(parent_inode);
 
 	ret = btrfs_update_inode(trans, parent_inode);
 	if (ret)
@@ -6794,7 +6808,6 @@ static int btrfs_link(struct dentry *old_dentry, struct inode *dir,
 	struct fscrypt_name fname;
 	u64 index;
 	int ret;
-	int drop_inode = 0;
 
 	/* do not allow sys_link's with other subvols of the same device */
 	if (btrfs_root_id(root) != btrfs_root_id(BTRFS_I(inode)->root))
@@ -6826,44 +6839,44 @@ static int btrfs_link(struct dentry *old_dentry, struct inode *dir,
 
 	/* There are several dir indexes for this inode, clear the cache. */
 	BTRFS_I(inode)->dir_index = 0ULL;
-	inc_nlink(inode);
 	inode_inc_iversion(inode);
 	inode_set_ctime_current(inode);
-	ihold(inode);
 	set_bit(BTRFS_INODE_COPY_EVERYTHING, &BTRFS_I(inode)->runtime_flags);
 
 	ret = btrfs_add_link(trans, BTRFS_I(dir), BTRFS_I(inode),
 			     &fname.disk_name, 1, index);
+	if (ret)
+		goto fail;
 
+	/* Link added now we update the inode item with the new link count. */
+	inc_nlink(inode);
+	ret = btrfs_update_inode(trans, BTRFS_I(inode));
 	if (ret) {
-		drop_inode = 1;
-	} else {
-		struct dentry *parent = dentry->d_parent;
-
-		ret = btrfs_update_inode(trans, BTRFS_I(inode));
-		if (ret)
-			goto fail;
-		if (inode->i_nlink == 1) {
-			/*
-			 * If new hard link count is 1, it's a file created
-			 * with open(2) O_TMPFILE flag.
-			 */
-			ret = btrfs_orphan_del(trans, BTRFS_I(inode));
-			if (ret)
-				goto fail;
-		}
-		d_instantiate(dentry, inode);
-		btrfs_log_new_name(trans, old_dentry, NULL, 0, parent);
+		btrfs_abort_transaction(trans, ret);
+		goto fail;
 	}
+
+	if (inode->i_nlink == 1) {
+		/*
+		 * If the new hard link count is 1, it's a file created with the
+		 * open(2) O_TMPFILE flag.
+		 */
+		ret = btrfs_orphan_del(trans, BTRFS_I(inode));
+		if (ret) {
+			btrfs_abort_transaction(trans, ret);
+			goto fail;
+		}
+	}
+
+	/* Grab reference for the new dentry passed to d_instantiate(). */
+	ihold(inode);
+	d_instantiate(dentry, inode);
+	btrfs_log_new_name(trans, old_dentry, NULL, 0, dentry->d_parent);
 
 fail:
 	fscrypt_free_filename(&fname);
 	if (trans)
 		btrfs_end_transaction(trans);
-	if (drop_inode) {
-		inode_dec_link_count(inode);
-		iput(inode);
-	}
 	btrfs_btree_balance_dirty(fs_info);
 	return ret;
 }
@@ -7819,6 +7832,7 @@ struct inode *btrfs_alloc_inode(struct super_block *sb)
 	ei->last_sub_trans = 0;
 	ei->logged_trans = 0;
 	ei->delalloc_bytes = 0;
+	/* new_delalloc_bytes and last_dir_index_offset are in a union. */
 	ei->new_delalloc_bytes = 0;
 	ei->defrag_bytes = 0;
 	ei->disk_i_size = 0;
