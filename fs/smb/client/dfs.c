@@ -431,7 +431,7 @@ int cifs_tree_connect(const unsigned int xid, struct cifs_tcon *tcon)
 	}
 
 	sb = cifs_get_dfs_tcon_super(tcon);
-	if (!IS_ERR(sb))
+	if (!IS_ERR_OR_NULL(sb))
 		cifs_sb = CIFS_SB(sb);
 
 	/* Tree connect to last share in @tcon->tree_name if no DFS referral */
@@ -448,7 +448,7 @@ int cifs_tree_connect(const unsigned int xid, struct cifs_tcon *tcon)
 
 out:
 	kfree(tree);
-	cifs_put_tcp_super(sb);
+	cifs_put_super(sb);
 
 	if (rc) {
 		spin_lock(&tcon->tc_lock);
