@@ -423,7 +423,8 @@ enum bch_bkey_type_flags {
 	x(logged_op_truncate,	32,	BKEY_TYPE_strict_btree_checks)	\
 	x(logged_op_finsert,	33,	BKEY_TYPE_strict_btree_checks)	\
 	x(accounting,		34,	BKEY_TYPE_strict_btree_checks)	\
-	x(inode_alloc_cursor,	35,	BKEY_TYPE_strict_btree_checks)
+	x(inode_alloc_cursor,	35,	BKEY_TYPE_strict_btree_checks)	\
+	x(extent_whiteout,	36,	BKEY_TYPE_strict_btree_checks)
 
 enum bch_bkey_type {
 #define x(name, nr, ...) KEY_TYPE_##name	= nr,
@@ -437,6 +438,10 @@ struct bch_deleted {
 };
 
 struct bch_whiteout {
+	struct bch_val		v;
+};
+
+struct bch_extent_whiteout {
 	struct bch_val		v;
 };
 
@@ -700,7 +705,9 @@ struct bch_sb_field_ext {
 	x(extent_flags,			BCH_VERSION(1, 25))		\
 	x(snapshot_deletion_v2,		BCH_VERSION(1, 26))		\
 	x(fast_device_removal,		BCH_VERSION(1, 27))		\
-	x(inode_has_case_insensitive,	BCH_VERSION(1, 28))
+	x(inode_has_case_insensitive,	BCH_VERSION(1, 28))		\
+	x(extent_snapshot_whiteouts,	BCH_VERSION(1, 29))		\
+	x(31bit_dirent_offset,		BCH_VERSION(1, 30))
 
 enum bcachefs_metadata_version {
 	bcachefs_metadata_version_min = 9,
@@ -1340,6 +1347,7 @@ enum btree_id_flags {
 	  BTREE_IS_snapshots|							\
 	  BTREE_IS_data,							\
 	  BIT_ULL(KEY_TYPE_whiteout)|						\
+	  BIT_ULL(KEY_TYPE_extent_whiteout)|					\
 	  BIT_ULL(KEY_TYPE_error)|						\
 	  BIT_ULL(KEY_TYPE_cookie)|						\
 	  BIT_ULL(KEY_TYPE_extent)|						\
@@ -1371,7 +1379,8 @@ enum btree_id_flags {
 	  BIT_ULL(KEY_TYPE_alloc_v4))						\
 	x(quotas,		5,	0,					\
 	  BIT_ULL(KEY_TYPE_quota))						\
-	x(stripes,		6,	0,					\
+	x(stripes,		6,						\
+	  BTREE_IS_data,							\
 	  BIT_ULL(KEY_TYPE_stripe))						\
 	x(reflink,		7,						\
 	  BTREE_IS_extents|							\
@@ -1431,9 +1440,9 @@ enum btree_id {
  */
 #define BTREE_ID_NR_MAX		63
 
-static inline bool btree_id_is_alloc(enum btree_id id)
+static inline bool btree_id_is_alloc(enum btree_id btree)
 {
-	switch (id) {
+	switch (btree) {
 	case BTREE_ID_alloc:
 	case BTREE_ID_backpointers:
 	case BTREE_ID_need_discard:
@@ -1445,6 +1454,33 @@ static inline bool btree_id_is_alloc(enum btree_id id)
 	default:
 		return false;
 	}
+}
+
+/* We can reconstruct these btrees from information in other btrees */
+static inline bool btree_id_can_reconstruct(enum btree_id btree)
+{
+	if (btree_id_is_alloc(btree))
+		return true;
+
+	switch (btree) {
+	case BTREE_ID_snapshot_trees:
+	case BTREE_ID_deleted_inodes:
+	case BTREE_ID_rebalance_work:
+	case BTREE_ID_subvolume_children:
+		return true;
+	default:
+		return false;
+	}
+}
+
+/*
+ * We can reconstruct BTREE_ID_alloc, but reconstucting it from scratch is not
+ * so cheap and OOMs on huge filesystems (until we have online
+ * check_allocations)
+ */
+static inline bool btree_id_recovers_from_scan(enum btree_id btree)
+{
+	return btree == BTREE_ID_alloc || !btree_id_can_reconstruct(btree);
 }
 
 #define BTREE_MAX_DEPTH		4U
