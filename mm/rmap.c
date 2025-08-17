@@ -1703,7 +1703,7 @@ static __always_inline void __folio_remove_rmap(struct folio *folio,
 			nr = folio_sub_return_large_mapcount(folio, nr_pages, vma);
 			if (!nr) {
 				/* Now completely unmapped. */
-				nr = folio_nr_pages(folio);
+				nr = folio_large_nr_pages(folio);
 			} else {
 				partially_mapped = nr < folio_large_nr_pages(folio) &&
 						   !folio_entire_mapcount(folio);
