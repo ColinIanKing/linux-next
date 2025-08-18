@@ -11,6 +11,7 @@
 
 #include "i915_drv.h"
 #include "i915_reg.h"
+#include "i915_utils.h"
 #include "intel_dram.h"
 #include "intel_mchbar_regs.h"
 #include "intel_pcode.h"
@@ -709,13 +710,14 @@ static int xelpdp_get_dram_info(struct drm_i915_private *i915, struct dram_info 
 
 int intel_dram_detect(struct drm_i915_private *i915)
 {
+	struct intel_display *display = i915->display;
 	struct dram_info *dram_info;
 	int ret;
 
 	detect_fsb_freq(i915);
 	detect_mem_freq(i915);
 
-	if (GRAPHICS_VER(i915) < 9 || IS_DG2(i915) || !HAS_DISPLAY(i915))
+	if (GRAPHICS_VER(i915) < 9 || IS_DG2(i915) || !HAS_DISPLAY(display))
 		return 0;
 
 	dram_info = drmm_kzalloc(&i915->drm, sizeof(*dram_info), GFP_KERNEL);
@@ -730,7 +732,7 @@ int intel_dram_detect(struct drm_i915_private *i915)
 	 */
 	dram_info->wm_lv_0_adjust_needed = !IS_BROXTON(i915) && !IS_GEMINILAKE(i915);
 
-	if (DISPLAY_VER(i915) >= 14)
+	if (DISPLAY_VER(display) >= 14)
 		ret = xelpdp_get_dram_info(i915, dram_info);
 	else if (GRAPHICS_VER(i915) >= 12)
 		ret = gen12_get_dram_info(i915, dram_info);
