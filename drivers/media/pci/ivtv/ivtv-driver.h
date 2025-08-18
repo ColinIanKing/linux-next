@@ -322,6 +322,7 @@ struct ivtv_queue {
 };
 
 struct ivtv;				/* forward reference */
+struct ivtv_open_id;
 
 struct ivtv_stream {
 	/* These first four fields are always set, even if the stream
@@ -331,7 +332,7 @@ struct ivtv_stream {
 	const char *name;		/* name of the stream */
 	int type;			/* stream type */
 
-	struct v4l2_fh *fh;		/* pointer to the streaming filehandle */
+	struct ivtv_open_id *id;	/* pointer to the streaming ivtv_open_id */
 	spinlock_t qlock;		/* locks access to the queues */
 	unsigned long s_flags;		/* status flags, see above */
 	int dma;			/* can be PCI_DMA_TODEVICE, PCI_DMA_FROMDEVICE or PCI_DMA_NONE */
@@ -383,9 +384,9 @@ struct ivtv_open_id {
 	struct ivtv *itv;
 };
 
-static inline struct ivtv_open_id *fh2id(struct v4l2_fh *fh)
+static inline struct ivtv_open_id *file2id(struct file *filp)
 {
-	return container_of(fh, struct ivtv_open_id, fh);
+	return container_of(file_to_v4l2_fh(filp), struct ivtv_open_id, fh);
 }
 
 struct yuv_frame_info
