@@ -273,9 +273,11 @@ TEST_F(prctl_thp_disable_except_madvise, fork)
 	pid = fork();
 	ASSERT_GE(pid, 0);
 
-	if (!pid)
+	if (!pid) {
 		prctl_thp_disable_except_madvise_test(_metadata, self->pmdsize,
 						      variant->thp_policy);
+		return;
+	}
 
 	wait(&ret);
 	if (WIFEXITED(ret))
