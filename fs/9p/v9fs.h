@@ -10,6 +10,9 @@
 
 #include <linux/backing-dev.h>
 #include <linux/netfs.h>
+#include <linux/fs_parser.h>
+#include <net/9p/client.h>
+#include <net/9p/transport.h>
 
 /**
  * enum p9_session_flags - option flags for each 9P session
@@ -81,55 +84,6 @@ enum p9_cache_bits {
 	CACHE_FSCACHE       = 0b10000000,
 };
 
-/**
- * struct v9fs_session_info - per-instance session information
- * @flags: session options of type &p9_session_flags
- * @nodev: set to 1 to disable device mapping
- * @debug: debug level
- * @afid: authentication handle
- * @cache: cache mode of type &p9_cache_bits
- * @cachetag: the tag of the cache associated with this session
- * @fscache: session cookie associated with FS-Cache
- * @uname: string user name to mount hierarchy as
- * @aname: mount specifier for remote hierarchy
- * @maxdata: maximum data to be sent/recvd per protocol message
- * @dfltuid: default numeric userid to mount hierarchy as
- * @dfltgid: default numeric groupid to mount hierarchy as
- * @uid: if %V9FS_ACCESS_SINGLE, the numeric uid which mounted the hierarchy
- * @clnt: reference to 9P network client instantiated for this session
- * @slist: reference to list of registered 9p sessions
- *
- * This structure holds state for each session instance established during
- * a sys_mount() .
- *
- * Bugs: there seems to be a lot of state which could be condensed and/or
- * removed.
- */
-
-struct v9fs_session_info {
-	/* options */
-	unsigned int flags;
-	unsigned char nodev;
-	unsigned short debug;
-	unsigned int afid;
-	unsigned int cache;
-#ifdef CONFIG_9P_FSCACHE
-	char *cachetag;
-	struct fscache_volume *fscache;
-#endif
-
-	char *uname;		/* user name to mount as */
-	char *aname;		/* name of remote hierarchy being mounted */
-	unsigned int maxdata;	/* max data for client interface */
-	kuid_t dfltuid;		/* default uid/muid for legacy support */
-	kgid_t dfltgid;		/* default gid for legacy support */
-	kuid_t uid;		/* if ACCESS_SINGLE, the uid that has access */
-	struct p9_client *clnt;	/* 9p client */
-	struct list_head slist; /* list of sessions registered with v9fs */
-	struct rw_semaphore rename_sem;
-	long session_lock_timeout; /* retry interval for blocking locks */
-};
-
 /* cache_validity flags */
 #define V9FS_INO_INVALID_ATTR 0x01
 
@@ -163,11 +117,13 @@ static inline struct fscache_volume *v9fs_session_cache(struct v9fs_session_info
 #endif
 }
 
+extern const struct fs_parameter_spec v9fs_param_spec[];
 
+extern int v9fs_parse_param(struct fs_context *fc, struct fs_parameter *param);
 extern int v9fs_show_options(struct seq_file *m, struct dentry *root);
 
 struct p9_fid *v9fs_session_init(struct v9fs_session_info *v9ses,
-				 const char *dev_name, char *data);
+				 struct fs_context *fc);
 extern void v9fs_session_close(struct v9fs_session_info *v9ses);
 extern void v9fs_session_cancel(struct v9fs_session_info *v9ses);
 extern void v9fs_session_begin_cancel(struct v9fs_session_info *v9ses);

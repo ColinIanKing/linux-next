@@ -822,8 +822,8 @@ What:		/sys/fs/f2fs/<disk>/gc_valid_thresh_ratio
 Date:		September 2024
 Contact:	"Daeho Jeong" <daehojeong@google.com>
 Description:	It controls the valid block ratio threshold not to trigger excessive GC
-		for zoned deivces. The initial value of it is 95(%). F2FS will stop the
-		background GC thread from intiating GC for sections having valid blocks
+		for zoned devices. The initial value of it is 95(%). F2FS will stop the
+		background GC thread from initiating GC for sections having valid blocks
 		exceeding the ratio.
 
 What:		/sys/fs/f2fs/<disk>/max_read_extent_count
@@ -847,7 +847,7 @@ Description:	For several zoned storage devices, vendors will provide extra space
 		filesystem level GC. To do that, we can reserve the space using
 		reserved_blocks. However, it is not enough, since this extra space should
 		not be shown to users. So, with this new sysfs node, we can hide the space
-		by substracting reserved_blocks from total bytes.
+		by subtracting reserved_blocks from total bytes.
 
 What:		/sys/fs/f2fs/<disk>/encoding_flags
 Date:		April 2025
@@ -883,3 +883,31 @@ Date:		June 2025
 Contact:	"Daeho Jeong" <daehojeong@google.com>
 Description:	Control GC algorithm for boost GC. 0: cost benefit, 1: greedy
 		Default: 1
+
+What:		/sys/fs/f2fs/<disk>/effective_lookup_mode
+Date:		August 2025
+Contact:	"Daniel Lee" <chullee@google.com>
+Description:
+		This is a read-only entry to show the effective directory lookup mode
+		F2FS is currently using for casefolded directories.
+		This considers both the "lookup_mode" mount option and the on-disk
+		encoding flag, SB_ENC_NO_COMPAT_FALLBACK_FL.
+
+		Possible values are:
+		- "perf": Hash-only lookup.
+		- "compat": Hash-based lookup with a linear search fallback enabled
+		- "auto:perf": lookup_mode is auto and fallback is disabled on-disk
+		- "auto:compat": lookup_mode is auto and fallback is enabled on-disk
+
+What:		/sys/fs/f2fs/<disk>/bggc_io_aware
+Date:		August 2025
+Contact:	"Liao Yuanhong" <liaoyuanhong@vivo.com>
+Description:	Used to adjust the BG_GC priority when pending IO, with a default value
+		of 0. Specifically, for ZUFS, the default value is 1.
+
+		==================  ======================================================
+		value				description
+		bggc_io_aware = 0   skip background GC if there is any kind of pending IO
+		bggc_io_aware = 1   skip background GC if there is pending read IO
+		bggc_io_aware = 2   don't aware IO for background GC
+		==================  ======================================================

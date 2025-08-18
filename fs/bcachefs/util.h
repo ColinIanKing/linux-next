@@ -216,7 +216,8 @@ void bch2_prt_u64_base2(struct printbuf *, u64);
 
 void bch2_print_string_as_lines(const char *, const char *);
 
-typedef DARRAY(unsigned long) bch_stacktrace;
+DEFINE_DARRAY_NAMED(bch_stacktrace, unsigned long);
+
 int bch2_save_backtrace(bch_stacktrace *stack, struct task_struct *, unsigned, gfp_t);
 void bch2_prt_backtrace(struct printbuf *, bch_stacktrace *);
 int bch2_prt_task_backtrace(struct printbuf *, struct task_struct *, unsigned, gfp_t);
@@ -730,6 +731,13 @@ static inline void __clear_bit_le64(size_t bit, __le64 *addr)
 static inline bool test_bit_le64(size_t bit, __le64 *addr)
 {
 	return (addr[bit / 64] & cpu_to_le64(BIT_ULL(bit % 64))) != 0;
+}
+
+static inline bool __test_and_set_bit_le64(size_t bit, __le64 *addr)
+{
+	bool ret = test_bit_le64(bit, addr);
+	__set_bit_le64(bit, addr);
+	return ret;
 }
 
 static inline void memcpy_swab(void *_dst, void *_src, size_t len)
