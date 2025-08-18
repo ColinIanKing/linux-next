@@ -161,8 +161,10 @@ TEST_F(prctl_thp_disable_completely, fork)
 	pid = fork();
 	ASSERT_GE(pid, 0);
 
-	if (!pid)
+	if (!pid) {
 		prctl_thp_disable_completely_test(_metadata, self->pmdsize, variant->thp_policy);
+		return;
+	}
 
 	wait(&ret);
 	if (WIFEXITED(ret))
