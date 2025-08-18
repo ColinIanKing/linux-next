@@ -34,11 +34,9 @@ struct workspace {
 	int level;
 };
 
-static struct workspace_manager wsm;
-
-struct list_head *zlib_get_workspace(unsigned int level)
+struct list_head *zlib_get_workspace(struct btrfs_fs_info *fs_info, unsigned int level)
 {
-	struct list_head *ws = btrfs_get_workspace(BTRFS_COMPRESS_ZLIB, level);
+	struct list_head *ws = btrfs_get_workspace(fs_info, BTRFS_COMPRESS_ZLIB, level);
 	struct workspace *workspace = list_entry(ws, struct workspace, list);
 
 	workspace->level = level;
@@ -55,8 +53,9 @@ void zlib_free_workspace(struct list_head *ws)
 	kfree(workspace);
 }
 
-struct list_head *zlib_alloc_workspace(unsigned int level)
+struct list_head *zlib_alloc_workspace(struct btrfs_fs_info *fs_info, unsigned int level)
 {
+	const u32 blocksize = fs_info->sectorsize;
 	struct workspace *workspace;
 	int workspacesize;
 
@@ -80,8 +79,8 @@ struct list_head *zlib_alloc_workspace(unsigned int level)
 		workspace->buf_size = ZLIB_DFLTCC_BUF_SIZE;
 	}
 	if (!workspace->buf) {
-		workspace->buf = kmalloc(PAGE_SIZE, GFP_KERNEL);
-		workspace->buf_size = PAGE_SIZE;
+		workspace->buf = kmalloc(blocksize, GFP_KERNEL);
+		workspace->buf_size = blocksize;
 	}
 	if (!workspace->strm.workspace || !workspace->buf)
 		goto fail;
@@ -482,8 +481,7 @@ out:
 	return ret;
 }
 
-const struct btrfs_compress_op btrfs_zlib_compress = {
-	.workspace_manager	= &wsm,
+const struct btrfs_compress_levels btrfs_zlib_compress = {
 	.min_level		= 1,
 	.max_level		= 9,
 	.default_level		= BTRFS_ZLIB_DEFAULT_LEVEL,
