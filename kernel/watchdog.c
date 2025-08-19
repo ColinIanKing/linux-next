@@ -444,6 +444,13 @@ static void update_cpustat(void)
 		old_stat = __this_cpu_read(cpustat_old[i]);
 		new_stat = get_16bit_precision(cpustat[tracked_stats[i]]);
 		util = DIV_ROUND_UP(100 * (new_stat - old_stat), sample_period_16);
+		/* Since we use 16-bit precision, the raw data will undergo
+		 * integer division, which may sometimes result in data loss,
+		 * and then result might exceed 100%. To avoid confusion,
+		 * we enforce a 100% display cap when calculations exceed this threshold.
+		 */
+		if (util > 100)
+			util = 100;
 		__this_cpu_write(cpustat_util[tail][i], util);
 		__this_cpu_write(cpustat_old[i], new_stat);
 	}
@@ -455,17 +462,17 @@ static void print_cpustat(void)
 {
 	int i, group;
 	u8 tail = __this_cpu_read(cpustat_tail);
-	u64 sample_period_second = sample_period;
+	u64 sample_period_msecond = sample_period;
 
-	do_div(sample_period_second, NSEC_PER_SEC);
+	do_div(sample_period_msecond, NSEC_PER_MSEC);
 
 	/*
 	 * Outputting the "watchdog" prefix on every line is redundant and not
 	 * concise, and the original alarm information is sufficient for
 	 * positioning in logs, hence here printk() is used instead of pr_crit().
 	 */
-	printk(KERN_CRIT "CPU#%d Utilization every %llus during lockup:\n",
-	       smp_processor_id(), sample_period_second);
+	printk(KERN_CRIT "CPU#%d Utilization every %llums during lockup:\n",
+	       smp_processor_id(), sample_period_msecond);
 
 	for (i = 0; i < NUM_SAMPLE_PERIODS; i++) {
 		group = (tail + i) % NUM_SAMPLE_PERIODS;
