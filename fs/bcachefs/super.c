@@ -988,11 +988,7 @@ static int bch2_fs_opt_version_init(struct bch_fs *c)
 		}
 	}
 
-	if (c->cf_encoding)
-		prt_printf(&p, "\nUsing encoding defined by superblock: utf8-%u.%u.%u",
-			   unicode_major(BCH_FS_DEFAULT_UTF8_ENCODING),
-			   unicode_minor(BCH_FS_DEFAULT_UTF8_ENCODING),
-			   unicode_rev(BCH_FS_DEFAULT_UTF8_ENCODING));
+	/* cf_encoding log message should be here, but it breaks xfstests - sigh */
 
 	if (c->opts.journal_rewind)
 		prt_printf(&p, "\nrewinding journal, fsck required");
@@ -1059,6 +1055,14 @@ static int bch2_fs_opt_version_init(struct bch_fs *c)
 	set_bit(BCH_FS_in_recovery, &c->flags);
 
 	bch2_print_str(c, KERN_INFO, p.buf);
+
+	/* this really should be part of our one multi line mount message, but -
+	 * xfstests... */
+	if (c->cf_encoding)
+		bch_info(c, "Using encoding defined by superblock: utf8-%u.%u.%u",
+			   unicode_major(BCH_FS_DEFAULT_UTF8_ENCODING),
+			   unicode_minor(BCH_FS_DEFAULT_UTF8_ENCODING),
+			   unicode_rev(BCH_FS_DEFAULT_UTF8_ENCODING));
 
 	if (BCH_SB_INITIALIZED(c->disk_sb.sb)) {
 		if (!(c->sb.features & (1ULL << BCH_FEATURE_new_extent_overwrite))) {
