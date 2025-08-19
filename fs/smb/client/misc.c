@@ -1110,64 +1110,38 @@ int copy_path_name(char *dst, const char *src)
 	return name_len;
 }
 
-struct super_cb_data {
-	void *data;
+static struct super_block *cifs_get_tcon_super(struct cifs_tcon *tcon)
+{
 	struct super_block *sb;
-};
-
-static void tcon_super_cb(struct super_block *sb, void *arg)
-{
-	struct super_cb_data *sd = arg;
 	struct cifs_sb_info *cifs_sb;
-	struct cifs_tcon *t1 = sd->data, *t2;
 
-	if (sd->sb)
-		return;
+	if (!tcon)
+		return NULL;
 
-	cifs_sb = CIFS_SB(sb);
-	t2 = cifs_sb_master_tcon(cifs_sb);
+	spin_lock(&tcon->sb_list_lock);
+	list_for_each_entry(cifs_sb, &tcon->cifs_sb_list, tcon_sb_link) {
 
-	spin_lock(&t2->tc_lock);
-	if ((t1->ses == t2->ses ||
-	     t1->ses->dfs_root_ses == t2->ses->dfs_root_ses) &&
-	    t1->ses->server == t2->ses->server &&
-	    t2->origin_fullpath &&
-	    dfs_src_pathname_equal(t2->origin_fullpath, t1->origin_fullpath))
-		sd->sb = sb;
-	spin_unlock(&t2->tc_lock);
-}
+		if (!cifs_sb->vfs_sb)
+			continue;
 
-static struct super_block *__cifs_get_super(void (*f)(struct super_block *, void *),
-					    void *data)
-{
-	struct super_cb_data sd = {
-		.data = data,
-		.sb = NULL,
-	};
-	struct file_system_type **fs_type = (struct file_system_type *[]) {
-		&cifs_fs_type, &smb3_fs_type, NULL,
-	};
+		sb = cifs_sb->vfs_sb;
 
-	for (; *fs_type; fs_type++) {
-		iterate_supers_type(*fs_type, f, &sd);
-		if (sd.sb) {
-			/*
-			 * Grab an active reference in order to prevent automounts (DFS links)
-			 * of expiring and then freeing up our cifs superblock pointer while
-			 * we're doing failover.
-			 */
-			cifs_sb_active(sd.sb);
-			return sd.sb;
-		}
+		/* Safely increment s_active only if it's not zero.
+		 *
+		 * When s_active == 0, the super block is being deactivated
+		 * and should not be used. This prevents UAF scenarios
+		 * where we might grab a reference to a super block that's
+		 * in the middle of destruction.
+		 */
+		if (!atomic_add_unless(&sb->s_active, 1, 0))
+			continue;
+
+		spin_unlock(&tcon->sb_list_lock);
+		return sb;
 	}
-	pr_warn_once("%s: could not find dfs superblock\n", __func__);
-	return ERR_PTR(-EINVAL);
-}
+	spin_unlock(&tcon->sb_list_lock);
 
-static void __cifs_put_super(struct super_block *sb)
-{
-	if (!IS_ERR_OR_NULL(sb))
-		cifs_sb_deactive(sb);
+	return NULL;
 }
 
 struct super_block *cifs_get_dfs_tcon_super(struct cifs_tcon *tcon)
@@ -1178,12 +1152,14 @@ struct super_block *cifs_get_dfs_tcon_super(struct cifs_tcon *tcon)
 		return ERR_PTR(-ENOENT);
 	}
 	spin_unlock(&tcon->tc_lock);
-	return __cifs_get_super(tcon_super_cb, tcon);
+
+	return cifs_get_tcon_super(tcon);
 }
 
-void cifs_put_tcp_super(struct super_block *sb)
+void cifs_put_super(struct super_block *sb)
 {
-	__cifs_put_super(sb);
+	if (!IS_ERR_OR_NULL(sb))
+		deactivate_super(sb);
 }
 
 #ifdef CONFIG_CIFS_DFS_UPCALL
