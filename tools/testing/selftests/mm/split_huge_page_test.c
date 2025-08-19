@@ -38,6 +38,7 @@ unsigned int pmd_order;
 static bool is_backed_by_folio(char *vaddr, int order, int pagemap_fd,
 		int kpageflags_fd)
 {
+	const unsigned long nr_pages = 1UL << order;
 	unsigned long pfn_head;
 	uint64_t pfn_flags;
 	unsigned long pfn;
@@ -63,7 +64,7 @@ static bool is_backed_by_folio(char *vaddr, int order, int pagemap_fd,
 	if (!(pfn_flags & KPF_THP))
 		return false;
 
-	pfn_head = pfn & ~((1 << order) - 1);
+	pfn_head = pfn & ~(nr_pages - 1);
 
 	if (pageflags_get(pfn_head, kpageflags_fd, &pfn_flags))
 		goto fail;
@@ -73,7 +74,7 @@ static bool is_backed_by_folio(char *vaddr, int order, int pagemap_fd,
 		return false;
 
 	/* check all tail PFN flags */
-	for (i = 1; i < 1UL << order; i++) {
+	for (i = 1; i < nr_pages; i++) {
 		if (pageflags_get(pfn_head + i, kpageflags_fd, &pfn_flags))
 			goto fail;
 		if (!(pfn_flags & (KPF_THP | KPF_COMPOUND_TAIL)))
@@ -84,7 +85,7 @@ static bool is_backed_by_folio(char *vaddr, int order, int pagemap_fd,
 	 * check the PFN after this folio, but if its flags cannot be obtained,
 	 * assume this folio has the expected order
 	 */
-	if (pageflags_get(pfn_head + (1UL << order), kpageflags_fd, &pfn_flags))
+	if (pageflags_get(pfn_head + nr_pages, kpageflags_fd, &pfn_flags))
 		return true;
 
 	/* this folio is bigger than the given order */
