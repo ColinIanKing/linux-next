@@ -81,7 +81,6 @@ int sysctl_sys_info_handler(const struct ctl_table *ro_table, int write,
 		char *delim = "";
 		int i, len = 0;
 
-		/* *si_bits_glabl could be 0 */
 		names[0] = '\0';
 
 		for (i = 0; i < ARRAY_SIZE(si_names); i++) {
