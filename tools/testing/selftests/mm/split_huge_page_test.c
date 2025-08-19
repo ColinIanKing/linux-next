@@ -111,7 +111,7 @@ static void verify_rss_anon_split_huge_page_all_zeroes(char *one_page, int nr_hp
 	unsigned long rss_anon_before, rss_anon_after;
 	size_t i;
 
-	if (!check_huge_anon(one_page, 4, pmd_pagesize))
+	if (!check_huge_anon(one_page, nr_hpages, pmd_pagesize))
 		ksft_exit_fail_msg("No THP is allocated\n");
 
 	rss_anon_before = rss_anon();
@@ -296,10 +296,8 @@ void split_file_backed_thp(int order)
 		ksft_exit_fail_msg("Unable to create a tmpfs for testing\n");
 
 	status = snprintf(testfile, INPUT_MAX, "%s/thp_file", tmpfs_loc);
-	if (status >= INPUT_MAX) {
+	if (status >= INPUT_MAX)
 		ksft_exit_fail_msg("Fail to create file-backed THP split testing file\n");
-		goto cleanup;
-	}
 
 	fd = open(testfile, O_CREAT|O_RDWR, 0664);
 	if (fd == -1) {
