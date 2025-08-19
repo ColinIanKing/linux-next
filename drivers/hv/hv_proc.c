@@ -9,12 +9,6 @@
 #include <linux/export.h>
 #include <asm/mshyperv.h>
 
-/*
- * See struct hv_deposit_memory. The first u64 is partition ID, the rest
- * are GPAs.
- */
-#define HV_DEPOSIT_MAX (HV_HYP_PAGE_SIZE / sizeof(u64) - 1)
-
 /* Deposits exact number of pages. Must be called with interrupts enabled.  */
 int hv_call_deposit_pages(int node, u64 partition_id, u32 num_pages)
 {
@@ -25,11 +19,13 @@ int hv_call_deposit_pages(int node, u64 partition_id, u32 num_pages)
 	int order;
 	u64 status;
 	int ret;
-	u64 base_pfn;
+	u64 base_pfn, batch_size;
 	struct hv_deposit_memory *input_page;
 	unsigned long flags;
 
-	if (num_pages > HV_DEPOSIT_MAX)
+	batch_size = hv_get_input_batch_size(sizeof(*input_page),
+			   sizeof(input_page->gpa_page_list[0]));
+	if (num_pages > batch_size)
 		return -E2BIG;
 	if (!num_pages)
 		return 0;
@@ -40,7 +36,7 @@ int hv_call_deposit_pages(int node, u64 partition_id, u32 num_pages)
 		return -ENOMEM;
 	pages = page_address(page);
 
-	counts = kcalloc(HV_DEPOSIT_MAX, sizeof(int), GFP_KERNEL);
+	counts = kcalloc(batch_size, sizeof(int), GFP_KERNEL);
 	if (!counts) {
 		free_page((unsigned long)pages);
 		return -ENOMEM;
@@ -74,7 +70,9 @@ int hv_call_deposit_pages(int node, u64 partition_id, u32 num_pages)
 
 	local_irq_save(flags);
 
-	input_page = *this_cpu_ptr(hyperv_pcpu_input_arg);
+	/* Batch size is checked at the start of function; no need to repeat */
+	hv_setup_in_array(&input_page, sizeof(*input_page),
+			   sizeof(input_page->gpa_page_list[0]));
 
 	input_page->partition_id = partition_id;
 
@@ -126,9 +124,8 @@ int hv_call_add_logical_proc(int node, u32 lp_index, u32 apic_id)
 	do {
 		local_irq_save(flags);
 
-		input = *this_cpu_ptr(hyperv_pcpu_input_arg);
 		/* We don't do anything with the output right now */
-		output = *this_cpu_ptr(hyperv_pcpu_output_arg);
+		hv_setup_inout(&input, sizeof(*input), &output, sizeof(*output));
 
 		input->lp_index = lp_index;
 		input->apic_id = apic_id;
@@ -169,7 +166,7 @@ int hv_call_create_vp(int node, u64 partition_id, u32 vp_index, u32 flags)
 	do {
 		local_irq_save(irq_flags);
 
-		input = *this_cpu_ptr(hyperv_pcpu_input_arg);
+		hv_setup_in(&input, sizeof(*input));
 
 		input->partition_id = partition_id;
 		input->vp_index = vp_index;
