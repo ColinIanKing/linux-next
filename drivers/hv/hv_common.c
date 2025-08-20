@@ -58,11 +58,8 @@ EXPORT_SYMBOL_GPL(hv_vp_index);
 u32 hv_max_vp_index;
 EXPORT_SYMBOL_GPL(hv_max_vp_index);
 
-void * __percpu *hyperv_pcpu_input_arg;
-EXPORT_SYMBOL_GPL(hyperv_pcpu_input_arg);
-
-void * __percpu *hyperv_pcpu_output_arg;
-EXPORT_SYMBOL_GPL(hyperv_pcpu_output_arg);
+void * __percpu *hyperv_pcpu_arg;
+EXPORT_SYMBOL_GPL(hyperv_pcpu_arg);
 
 static void hv_kmsg_dump_unregister(void);
 
@@ -95,11 +92,8 @@ void __init hv_common_free(void)
 	kfree(hv_vp_index);
 	hv_vp_index = NULL;
 
-	free_percpu(hyperv_pcpu_output_arg);
-	hyperv_pcpu_output_arg = NULL;
-
-	free_percpu(hyperv_pcpu_input_arg);
-	hyperv_pcpu_input_arg = NULL;
+	free_percpu(hyperv_pcpu_arg);
+	hyperv_pcpu_arg = NULL;
 
 	free_percpu(hv_synic_eventring_tail);
 	hv_synic_eventring_tail = NULL;
@@ -255,11 +249,6 @@ static void hv_kmsg_dump_register(void)
 	}
 }
 
-static inline bool hv_output_page_exists(void)
-{
-	return hv_root_partition() || IS_ENABLED(CONFIG_HYPERV_VTL_MODE);
-}
-
 void __init hv_get_partition_id(void)
 {
 	struct hv_output_get_partition_id *output;
@@ -267,7 +256,7 @@ void __init hv_get_partition_id(void)
 	u64 status, pt_id;
 
 	local_irq_save(flags);
-	output = *this_cpu_ptr(hyperv_pcpu_input_arg);
+	hv_setup_inout(NULL, 0, &output, sizeof(*output));
 	status = hv_do_hypercall(HVCALL_GET_PARTITION_ID, NULL, output);
 	pt_id = output->partition_id;
 	local_irq_restore(flags);
@@ -288,13 +277,10 @@ u8 __init get_vtl(void)
 	u64 ret;
 
 	local_irq_save(flags);
-	input = *this_cpu_ptr(hyperv_pcpu_input_arg);
-	output = *this_cpu_ptr(hyperv_pcpu_output_arg);
-
-	memset(input, 0, struct_size(input, names, 1));
+	hv_setup_inout_array(&input, sizeof(*input), sizeof(input->names[0]),
+			     &output, sizeof(*output), sizeof(output->values[0]));
 	input->partition_id = HV_PARTITION_ID_SELF;
 	input->vp_index = HV_VP_INDEX_SELF;
-	input->input_vtl.as_uint8 = 0;
 	input->names[0] = HV_REGISTER_VSM_VP_STATUS;
 
 	ret = hv_do_hypercall(control, input, output);
@@ -368,16 +354,10 @@ int __init hv_common_init(void)
 	 * (per-CPU) hypercall input page and thus this failure is
 	 * fatal on Hyper-V.
 	 */
-	hyperv_pcpu_input_arg = alloc_percpu(void  *);
-	BUG_ON(!hyperv_pcpu_input_arg);
+	hyperv_pcpu_arg = alloc_percpu(void  *);
+	BUG_ON(!hyperv_pcpu_arg);
 
-	/* Allocate the per-CPU state for output arg for root */
-	if (hv_output_page_exists()) {
-		hyperv_pcpu_output_arg = alloc_percpu(void *);
-		BUG_ON(!hyperv_pcpu_output_arg);
-	}
-
-	if (hv_root_partition()) {
+	if (hv_parent_partition()) {
 		hv_synic_eventring_tail = alloc_percpu(u8 *);
 		BUG_ON(!hv_synic_eventring_tail);
 	}
@@ -469,32 +449,27 @@ error:
 
 int hv_common_cpu_init(unsigned int cpu)
 {
-	void **inputarg, **outputarg;
+	void **inputarg;
 	u8 **synic_eventring_tail;
 	u64 msr_vp_index;
 	gfp_t flags;
-	const int pgcount = hv_output_page_exists() ? 2 : 1;
+	const int pgcount = HV_HVCALL_ARG_PAGES;
 	void *mem;
 	int ret = 0;
 
 	/* hv_cpu_init() can be called with IRQs disabled from hv_resume() */
 	flags = irqs_disabled() ? GFP_ATOMIC : GFP_KERNEL;
 
-	inputarg = (void **)this_cpu_ptr(hyperv_pcpu_input_arg);
+	inputarg = (void **)this_cpu_ptr(hyperv_pcpu_arg);
 
 	/*
-	 * The per-cpu memory is already allocated if this CPU was previously
-	 * online and then taken offline
+	 * hyperv_pcpu_arg memory is already allocated if this CPU was
+	 * previously online and then taken offline
 	 */
 	if (!*inputarg) {
 		mem = kmalloc(pgcount * HV_HYP_PAGE_SIZE, flags);
 		if (!mem)
 			return -ENOMEM;
-
-		if (hv_output_page_exists()) {
-			outputarg = (void **)this_cpu_ptr(hyperv_pcpu_output_arg);
-			*outputarg = (char *)mem + HV_HYP_PAGE_SIZE;
-		}
 
 		if (!ms_hyperv.paravisor_present &&
 		    (hv_isolation_type_snp() || hv_isolation_type_tdx())) {
@@ -509,13 +484,13 @@ int hv_common_cpu_init(unsigned int cpu)
 
 		/*
 		 * In a fully enlightened TDX/SNP VM with more than 64 VPs, if
-		 * hyperv_pcpu_input_arg is not NULL, set_memory_decrypted() ->
+		 * hyperv_pcpu_arg is not NULL, set_memory_decrypted() ->
 		 * ... -> cpa_flush()-> ... -> __send_ipi_mask_ex() tries to
-		 * use hyperv_pcpu_input_arg as the hypercall input page, which
+		 * use hyperv_pcpu_arg as the hypercall input page, which
 		 * must be a decrypted page in such a VM, but the page is still
 		 * encrypted before set_memory_decrypted() returns. Fix this by
 		 * setting *inputarg after the above set_memory_decrypted(): if
-		 * hyperv_pcpu_input_arg is NULL, __send_ipi_mask_ex() returns
+		 * hyperv_pcpu_arg is NULL, __send_ipi_mask_ex() returns
 		 * HV_STATUS_INVALID_PARAMETER immediately, and the function
 		 * hv_send_ipi_mask() falls back to orig_apic.send_IPI_mask(),
 		 * which may be slightly slower than the hypercall, but still
@@ -531,7 +506,7 @@ int hv_common_cpu_init(unsigned int cpu)
 	if (msr_vp_index > hv_max_vp_index)
 		hv_max_vp_index = msr_vp_index;
 
-	if (hv_root_partition()) {
+	if (hv_parent_partition()) {
 		synic_eventring_tail = (u8 **)this_cpu_ptr(hv_synic_eventring_tail);
 		*synic_eventring_tail = kcalloc(HV_SYNIC_SINT_COUNT,
 						sizeof(u8), flags);
@@ -547,9 +522,8 @@ int hv_common_cpu_die(unsigned int cpu)
 {
 	u8 **synic_eventring_tail;
 	/*
-	 * The hyperv_pcpu_input_arg and hyperv_pcpu_output_arg memory
-	 * is not freed when the CPU goes offline as the hyperv_pcpu_input_arg
-	 * may be used by the Hyper-V vPCI driver in reassigning interrupts
+	 * The hyperv_pcpu_arg memory is not freed when the CPU goes offline as
+	 * it may be used by the Hyper-V vPCI driver in reassigning interrupts
 	 * as part of the offlining process.  The interrupt reassignment
 	 * happens *after* the CPUHP_AP_HYPERV_ONLINE state has run and
 	 * called this function.
@@ -558,7 +532,7 @@ int hv_common_cpu_die(unsigned int cpu)
 	 * originally allocated memory is reused in hv_common_cpu_init().
 	 */
 
-	if (hv_root_partition()) {
+	if (hv_parent_partition()) {
 		synic_eventring_tail = this_cpu_ptr(hv_synic_eventring_tail);
 		kfree(*synic_eventring_tail);
 		*synic_eventring_tail = NULL;
@@ -729,13 +703,17 @@ void hv_identify_partition_type(void)
 	 * the root partition setting if also a Confidential VM.
 	 */
 	if ((ms_hyperv.priv_high & HV_CREATE_PARTITIONS) &&
-	    (ms_hyperv.priv_high & HV_CPU_MANAGEMENT) &&
 	    !(ms_hyperv.priv_high & HV_ISOLATION)) {
-		pr_info("Hyper-V: running as root partition\n");
-		if (IS_ENABLED(CONFIG_MSHV_ROOT))
-			hv_curr_partition_type = HV_PARTITION_TYPE_ROOT;
-		else
+
+		if (!IS_ENABLED(CONFIG_MSHV_ROOT)) {
 			pr_crit("Hyper-V: CONFIG_MSHV_ROOT not enabled!\n");
+		} else if (ms_hyperv.priv_high & HV_CPU_MANAGEMENT) {
+			pr_info("Hyper-V: running as root partition\n");
+			hv_curr_partition_type = HV_PARTITION_TYPE_ROOT;
+		} else {
+			pr_info("Hyper-V: running as L1VH partition\n");
+			hv_curr_partition_type = HV_PARTITION_TYPE_L1VH;
+		}
 	}
 }
 
