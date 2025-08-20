@@ -1104,7 +1104,7 @@ static irqreturn_t opt4060_trigger_handler(int irq, void *p)
 		}
 	}
 
-	iio_push_to_buffers_with_timestamp(idev, &raw, pf->timestamp);
+	iio_push_to_buffers_with_ts(idev, &raw, sizeof(raw), pf->timestamp);
 err_read:
 	iio_trigger_notify_done(idev->trig);
 	return IRQ_HANDLED;
@@ -1299,8 +1299,7 @@ static int opt4060_probe(struct i2c_client *client)
 
 	ret = devm_add_action_or_reset(dev, opt4060_chip_off_action, chip);
 	if (ret < 0)
-		return dev_err_probe(dev, ret,
-				     "Failed to setup power off action\n");
+		return ret;
 
 	ret = opt4060_setup_buffer(chip, indio_dev);
 	if (ret)
