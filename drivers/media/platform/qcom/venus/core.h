@@ -535,7 +535,7 @@ struct venus_inst {
 
 static inline struct venus_inst *to_inst(struct file *filp)
 {
-	return container_of(filp->private_data, struct venus_inst, fh);
+	return container_of(file_to_v4l2_fh(filp), struct venus_inst, fh);
 }
 
 static inline void *to_hfi_priv(struct venus_core *core)
@@ -573,5 +573,5 @@ is_fw_rev_or_older(struct venus_core *core, u32 vmajor, u32 vminor, u32 vrev)
 		(core)->venus_ver.rev <= vrev);
 }
 
-void venus_close_common(struct venus_inst *inst);
+void venus_close_common(struct venus_inst *inst, struct file *filp);
 #endif
