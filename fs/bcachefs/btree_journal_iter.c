@@ -5,6 +5,7 @@
 #include "bset.h"
 #include "btree_cache.h"
 #include "btree_journal_iter.h"
+#include "disk_accounting.h"
 #include "journal_io.h"
 
 #include <linux/sort.h>
@@ -45,21 +46,22 @@ static size_t __bch2_journal_key_search(struct journal_keys *keys,
 					enum btree_id id, unsigned level,
 					struct bpos pos)
 {
+	struct bch_fs *c = container_of(keys, struct bch_fs, journal_keys);
 	size_t l = 0, r = keys->nr, m;
 
 	while (l < r) {
 		m = l + ((r - l) >> 1);
-		if (__journal_key_cmp(id, level, pos, idx_to_key(keys, m)) > 0)
+		if (__journal_key_cmp(c, id, level, pos, idx_to_key(keys, m)) > 0)
 			l = m + 1;
 		else
 			r = m;
 	}
 
 	BUG_ON(l < keys->nr &&
-	       __journal_key_cmp(id, level, pos, idx_to_key(keys, l)) > 0);
+	       __journal_key_cmp(c, id, level, pos, idx_to_key(keys, l)) > 0);
 
 	BUG_ON(l &&
-	       __journal_key_cmp(id, level, pos, idx_to_key(keys, l - 1)) <= 0);
+	       __journal_key_cmp(c, id, level, pos, idx_to_key(keys, l - 1)) <= 0);
 
 	return l;
 }
@@ -71,10 +73,20 @@ static size_t bch2_journal_key_search(struct journal_keys *keys,
 	return idx_to_pos(keys, __bch2_journal_key_search(keys, id, level, pos));
 }
 
+static inline struct journal_key_range_overwritten *__overwrite_range(struct journal_keys *keys, u32 idx)
+{
+	return idx ? keys->overwrites.data + idx : NULL;
+}
+
+static inline struct journal_key_range_overwritten *overwrite_range(struct journal_keys *keys, u32 idx)
+{
+	return idx ? rcu_dereference(keys->overwrites.data) + idx : NULL;
+}
+
 /* Returns first non-overwritten key >= search key: */
-struct bkey_i *bch2_journal_keys_peek_max(struct bch_fs *c, enum btree_id btree_id,
-					   unsigned level, struct bpos pos,
-					   struct bpos end_pos, size_t *idx)
+const struct bkey_i *bch2_journal_keys_peek_max(struct bch_fs *c, enum btree_id btree_id,
+						unsigned level, struct bpos pos,
+						struct bpos end_pos, size_t *idx)
 {
 	struct journal_keys *keys = &c->journal_keys;
 	unsigned iters = 0;
@@ -86,7 +98,7 @@ search:
 		*idx = __bch2_journal_key_search(keys, btree_id, level, pos);
 
 	while (*idx &&
-	       __journal_key_cmp(btree_id, level, end_pos, idx_to_key(keys, *idx - 1)) <= 0) {
+	       __journal_key_cmp(c, btree_id, level, end_pos, idx_to_key(keys, *idx - 1)) <= 0) {
 		--(*idx);
 		iters++;
 		if (iters == 10) {
@@ -95,23 +107,23 @@ search:
 		}
 	}
 
-	struct bkey_i *ret = NULL;
+	const struct bkey_i *ret = NULL;
 	rcu_read_lock(); /* for overwritten_ranges */
 
 	while ((k = *idx < keys->nr ? idx_to_key(keys, *idx) : NULL)) {
-		if (__journal_key_cmp(btree_id, level, end_pos, k) < 0)
+		if (__journal_key_cmp(c, btree_id, level, end_pos, k) < 0)
 			break;
 
 		if (k->overwritten) {
 			if (k->overwritten_range)
-				*idx = rcu_dereference(k->overwritten_range)->end;
+				*idx = overwrite_range(keys, k->overwritten_range)->end;
 			else
 				*idx += 1;
 			continue;
 		}
 
-		if (__journal_key_cmp(btree_id, level, pos, k) <= 0) {
-			ret = k->k;
+		if (__journal_key_cmp(c, btree_id, level, pos, k) <= 0) {
+			ret = journal_key_k(c, k);
 			break;
 		}
 
@@ -128,9 +140,9 @@ search:
 	return ret;
 }
 
-struct bkey_i *bch2_journal_keys_peek_prev_min(struct bch_fs *c, enum btree_id btree_id,
-					   unsigned level, struct bpos pos,
-					   struct bpos end_pos, size_t *idx)
+const struct bkey_i *bch2_journal_keys_peek_prev_min(struct bch_fs *c, enum btree_id btree_id,
+						     unsigned level, struct bpos pos,
+						     struct bpos end_pos, size_t *idx)
 {
 	struct journal_keys *keys = &c->journal_keys;
 	unsigned iters = 0;
@@ -145,7 +157,7 @@ search:
 		*idx = __bch2_journal_key_search(keys, btree_id, level, pos);
 
 	while (*idx < keys->nr &&
-	       __journal_key_cmp(btree_id, level, end_pos, idx_to_key(keys, *idx)) >= 0) {
+	       __journal_key_cmp(c, btree_id, level, end_pos, idx_to_key(keys, *idx)) >= 0) {
 		(*idx)++;
 		iters++;
 		if (iters == 10) {
@@ -157,25 +169,25 @@ search:
 	if (*idx == keys->nr)
 		--(*idx);
 
-	struct bkey_i *ret = NULL;
+	const struct bkey_i *ret = NULL;
 	rcu_read_lock(); /* for overwritten_ranges */
 
 	while (true) {
 		k = idx_to_key(keys, *idx);
-		if (__journal_key_cmp(btree_id, level, end_pos, k) > 0)
+		if (__journal_key_cmp(c, btree_id, level, end_pos, k) > 0)
 			break;
 
 		if (k->overwritten) {
 			if (k->overwritten_range)
-				*idx = rcu_dereference(k->overwritten_range)->start;
+				*idx = overwrite_range(keys, k->overwritten_range)->start;
 			if (!*idx)
 				break;
 			--(*idx);
 			continue;
 		}
 
-		if (__journal_key_cmp(btree_id, level, pos, k) >= 0) {
-			ret = k->k;
+		if (__journal_key_cmp(c, btree_id, level, pos, k) >= 0) {
+			ret = journal_key_k(c, k);
 			break;
 		}
 
@@ -193,8 +205,8 @@ search:
 	return ret;
 }
 
-struct bkey_i *bch2_journal_keys_peek_slot(struct bch_fs *c, enum btree_id btree_id,
-					   unsigned level, struct bpos pos)
+const struct bkey_i *bch2_journal_keys_peek_slot(struct bch_fs *c, enum btree_id btree_id,
+						 unsigned level, struct bpos pos)
 {
 	size_t idx = 0;
 
@@ -263,13 +275,8 @@ int bch2_journal_key_insert_take(struct bch_fs *c, enum btree_id id,
 	struct journal_key n = {
 		.btree_id	= id,
 		.level		= level,
-		.k		= k,
 		.allocated	= true,
-		/*
-		 * Ensure these keys are done last by journal replay, to unblock
-		 * journal reclaim:
-		 */
-		.journal_seq	= U64_MAX,
+		.allocated_k	= k,
 	};
 	struct journal_keys *keys = &c->journal_keys;
 	size_t idx = bch2_journal_key_search(keys, id, level, k->k.p);
@@ -277,13 +284,24 @@ int bch2_journal_key_insert_take(struct bch_fs *c, enum btree_id id,
 	BUG_ON(test_bit(BCH_FS_rw, &c->flags));
 
 	if (idx < keys->size &&
-	    journal_key_cmp(&n, &keys->data[idx]) == 0) {
+	    journal_key_cmp(c, &n, &keys->data[idx]) == 0) {
+		struct bkey_i *o = journal_key_k(c, &keys->data[idx]);
+
+		if (k->k.type == KEY_TYPE_accounting &&
+		    o->k.type == KEY_TYPE_accounting) {
+			if (!keys->data[idx].allocated)
+				goto insert;
+
+			bch2_accounting_accumulate(bkey_i_to_accounting(k),
+						   bkey_i_to_s_c_accounting(o));
+		}
+
 		if (keys->data[idx].allocated)
-			kfree(keys->data[idx].k);
+			kfree(keys->data[idx].allocated_k);
 		keys->data[idx] = n;
 		return 0;
 	}
-
+insert:
 	if (idx > keys->gap)
 		idx -= keys->size - keys->nr;
 
@@ -364,17 +382,20 @@ int bch2_journal_key_delete(struct bch_fs *c, enum btree_id id,
 bool bch2_key_deleted_in_journal(struct btree_trans *trans, enum btree_id btree,
 				 unsigned level, struct bpos pos)
 {
-	struct journal_keys *keys = &trans->c->journal_keys;
-	size_t idx = bch2_journal_key_search(keys, btree, level, pos);
-
 	if (!trans->journal_replay_not_finished)
 		return false;
 
-	return (idx < keys->size &&
-		keys->data[idx].btree_id	== btree &&
-		keys->data[idx].level		== level &&
-		bpos_eq(keys->data[idx].k->k.p, pos) &&
-		bkey_deleted(&keys->data[idx].k->k));
+	struct bch_fs *c = trans->c;
+	struct journal_keys *keys = &c->journal_keys;
+	size_t idx = bch2_journal_key_search(keys, btree, level, pos);
+
+	if (idx >= keys->size ||
+	    keys->data[idx].btree_id	!= btree ||
+	    keys->data[idx].level	!= level)
+		return false;
+
+	struct bkey_i *k = journal_key_k(c, &keys->data[idx]);
+	return bpos_eq(k->k.p, pos) && bkey_deleted(&k->k);
 }
 
 static void __bch2_journal_key_overwritten(struct journal_keys *keys, size_t pos)
@@ -391,9 +412,9 @@ static void __bch2_journal_key_overwritten(struct journal_keys *keys, size_t pos
 	bool next_overwritten = next && next->overwritten;
 
 	struct journal_key_range_overwritten *prev_range =
-		prev_overwritten ? prev->overwritten_range : NULL;
+		prev_overwritten ? __overwrite_range(keys, prev->overwritten_range) : NULL;
 	struct journal_key_range_overwritten *next_range =
-		next_overwritten ? next->overwritten_range : NULL;
+		next_overwritten ? __overwrite_range(keys, next->overwritten_range) : NULL;
 
 	BUG_ON(prev_range && prev_range->end != idx);
 	BUG_ON(next_range && next_range->start != idx + 1);
@@ -401,37 +422,47 @@ static void __bch2_journal_key_overwritten(struct journal_keys *keys, size_t pos
 	if (prev_range && next_range) {
 		prev_range->end = next_range->end;
 
-		keys->data[pos].overwritten_range = prev_range;
+		keys->data[pos].overwritten_range = prev->overwritten_range;
+
+		u32 old = next->overwritten_range;
+
 		for (size_t i = next_range->start; i < next_range->end; i++) {
 			struct journal_key *ip = keys->data + idx_to_pos(keys, i);
-			BUG_ON(ip->overwritten_range != next_range);
-			ip->overwritten_range = prev_range;
+			BUG_ON(ip->overwritten_range != old);
+			ip->overwritten_range = prev->overwritten_range;
 		}
-
-		kfree_rcu_mightsleep(next_range);
 	} else if (prev_range) {
 		prev_range->end++;
-		k->overwritten_range = prev_range;
+		k->overwritten_range = prev->overwritten_range;
 		if (next_overwritten) {
 			prev_range->end++;
-			next->overwritten_range = prev_range;
+			next->overwritten_range = prev->overwritten_range;
 		}
 	} else if (next_range) {
 		next_range->start--;
-		k->overwritten_range = next_range;
+		k->overwritten_range = next->overwritten_range;
 		if (prev_overwritten) {
 			next_range->start--;
-			prev->overwritten_range = next_range;
+			prev->overwritten_range = next->overwritten_range;
 		}
 	} else if (prev_overwritten || next_overwritten) {
-		struct journal_key_range_overwritten *r = kmalloc(sizeof(*r), GFP_KERNEL);
-		if (!r)
+		/* 0 is a sentinel value */
+		if (darray_resize_rcu(&keys->overwrites, max(keys->overwrites.nr + 1, 2)))
 			return;
 
-		r->start = idx - (size_t) prev_overwritten;
-		r->end = idx + 1 + (size_t) next_overwritten;
+		if (!keys->overwrites.nr)
+			darray_push(&keys->overwrites, (struct journal_key_range_overwritten) {});
 
-		rcu_assign_pointer(k->overwritten_range, r);
+		darray_push(&keys->overwrites, ((struct journal_key_range_overwritten) {
+			.start	= idx - (size_t) prev_overwritten,
+			.end	= idx + 1 + (size_t) next_overwritten,
+		}));
+
+		smp_wmb();
+		u32 r = keys->overwrites.nr - 1;
+
+		k->overwritten_range = r;
+
 		if (prev_overwritten)
 			prev->overwritten_range = r;
 		if (next_overwritten)
@@ -445,14 +476,17 @@ void bch2_journal_key_overwritten(struct bch_fs *c, enum btree_id btree,
 	struct journal_keys *keys = &c->journal_keys;
 	size_t idx = bch2_journal_key_search(keys, btree, level, pos);
 
-	if (idx < keys->size &&
-	    keys->data[idx].btree_id	== btree &&
-	    keys->data[idx].level	== level &&
-	    bpos_eq(keys->data[idx].k->k.p, pos) &&
-	    !keys->data[idx].overwritten) {
-		mutex_lock(&keys->overwrite_lock);
+	if (idx				>= keys->size ||
+	    keys->data[idx].btree_id	!= btree ||
+	    keys->data[idx].level	!= level ||
+	    keys->data[idx].overwritten)
+		return;
+
+	struct bkey_i *k = journal_key_k(c, &keys->data[idx]);
+
+	if (bpos_eq(k->k.p, pos)) {
+		guard(mutex)(&keys->overwrite_lock);
 		__bch2_journal_key_overwritten(keys, idx);
-		mutex_unlock(&keys->overwrite_lock);
 	}
 }
 
@@ -465,7 +499,7 @@ static void bch2_journal_iter_advance(struct journal_iter *iter)
 	}
 }
 
-static struct bkey_s_c bch2_journal_iter_peek(struct journal_iter *iter)
+static struct bkey_s_c bch2_journal_iter_peek(struct bch_fs *c, struct journal_iter *iter)
 {
 	journal_iter_verify(iter);
 
@@ -479,10 +513,10 @@ static struct bkey_s_c bch2_journal_iter_peek(struct journal_iter *iter)
 		BUG_ON(cmp);
 
 		if (!k->overwritten)
-			return bkey_i_to_s_c(k->k);
+			return bkey_i_to_s_c(journal_key_k(c, k));
 
 		if (k->overwritten_range)
-			iter->idx = idx_to_pos(iter->keys, rcu_dereference(k->overwritten_range)->end);
+			iter->idx = idx_to_pos(iter->keys, overwrite_range(iter->keys, k->overwritten_range)->end);
 		else
 			bch2_journal_iter_advance(iter);
 	}
@@ -543,7 +577,7 @@ static void btree_and_journal_iter_prefetch(struct btree_and_journal_iter *_iter
 
 	while (nr--) {
 		bch2_btree_and_journal_iter_advance(&iter);
-		struct bkey_s_c k = bch2_btree_and_journal_iter_peek(&iter);
+		struct bkey_s_c k = bch2_btree_and_journal_iter_peek(c, &iter);
 		if (!k.k)
 			break;
 
@@ -554,7 +588,7 @@ static void btree_and_journal_iter_prefetch(struct btree_and_journal_iter *_iter
 	bch2_bkey_buf_exit(&tmp, c);
 }
 
-struct bkey_s_c bch2_btree_and_journal_iter_peek(struct btree_and_journal_iter *iter)
+struct bkey_s_c bch2_btree_and_journal_iter_peek(struct bch_fs *c, struct btree_and_journal_iter *iter)
 {
 	struct bkey_s_c btree_k, journal_k = bkey_s_c_null, ret;
 	size_t iters = 0;
@@ -575,7 +609,7 @@ again:
 		bch2_journal_iter_advance_btree(iter);
 
 	if (iter->trans->journal_replay_not_finished)
-		while ((journal_k = bch2_journal_iter_peek(&iter->journal)).k &&
+		while ((journal_k = bch2_journal_iter_peek(c, &iter->journal)).k &&
 		       bpos_lt(journal_k.k->p, iter->pos))
 			bch2_journal_iter_advance(&iter->journal);
 
@@ -647,15 +681,22 @@ void bch2_btree_and_journal_iter_init_node_iter(struct btree_trans *trans,
 /*
  * When keys compare equal, oldest compares first:
  */
-static int journal_sort_key_cmp(const void *_l, const void *_r)
+static int journal_sort_key_cmp(const void *_l, const void *_r, const void *priv)
 {
+	struct bch_fs *c = (void *) priv;
 	const struct journal_key *l = _l;
 	const struct journal_key *r = _r;
 	int rewind = l->rewind && r->rewind ? -1 : 1;
 
-	return  journal_key_cmp(l, r) ?:
-		((cmp_int(l->journal_seq, r->journal_seq) ?:
-		  cmp_int(l->journal_offset, r->journal_offset)) * rewind);
+	int cmp = journal_key_cmp(c, l, r);
+	if (cmp)
+		return cmp;
+
+	if (l->allocated || r->allocated)
+		return cmp_int(l->allocated, r->allocated);
+
+	return ((cmp_int(l->journal_seq_offset, r->journal_seq_offset) ?:
+		 cmp_int(l->journal_offset, r->journal_offset)) * rewind);
 }
 
 void bch2_journal_keys_put(struct bch_fs *c)
@@ -669,19 +710,15 @@ void bch2_journal_keys_put(struct bch_fs *c)
 
 	move_gap(keys, keys->nr);
 
-	darray_for_each(*keys, i) {
-		if (i->overwritten_range &&
-		    (i == &darray_last(*keys) ||
-		     i->overwritten_range != i[1].overwritten_range))
-			kfree(i->overwritten_range);
-
+	darray_for_each(*keys, i)
 		if (i->allocated)
-			kfree(i->k);
-	}
+			kfree(i->allocated_k);
 
 	kvfree(keys->data);
 	keys->data = NULL;
 	keys->nr = keys->gap = keys->size = 0;
+
+	darray_exit(&keys->overwrites);
 
 	struct journal_replay **i;
 	struct genradix_iter iter;
@@ -693,8 +730,10 @@ void bch2_journal_keys_put(struct bch_fs *c)
 
 static void __journal_keys_sort(struct journal_keys *keys)
 {
-	sort_nonatomic(keys->data, keys->nr, sizeof(keys->data[0]),
-		       journal_sort_key_cmp, NULL);
+	struct bch_fs *c = container_of(keys, struct bch_fs, journal_keys);
+
+	sort_r_nonatomic(keys->data, keys->nr, sizeof(keys->data[0]),
+			 journal_sort_key_cmp, NULL, c);
 
 	cond_resched();
 
@@ -706,9 +745,10 @@ static void __journal_keys_sort(struct journal_keys *keys)
 		 * compare each individual accounting key against the version in
 		 * the btree during replay:
 		 */
-		if (src->k->k.type != KEY_TYPE_accounting &&
+		struct bkey_i *k = journal_key_k(c, src);
+		if (k->k.type != KEY_TYPE_accounting &&
 		    src + 1 < &darray_top(*keys) &&
-		    !journal_key_cmp(src, src + 1))
+		    !journal_key_cmp(c, src, src + 1))
 			continue;
 
 		*dst++ = *src;
@@ -752,8 +792,7 @@ int bch2_journal_keys_sort(struct bch_fs *c)
 					.btree_id	= entry->btree_id,
 					.level		= entry->level,
 					.rewind		= rewind,
-					.k		= k,
-					.journal_seq	= le64_to_cpu(i->j.seq),
+					.journal_seq_offset = journal_entry_radix_idx(c, le64_to_cpu(i->j.seq)),
 					.journal_offset	= k->_data - i->j._data,
 				};
 
@@ -790,20 +829,25 @@ void bch2_shoot_down_journal_keys(struct bch_fs *c, enum btree_id btree,
 
 	move_gap(keys, keys->nr);
 
-	darray_for_each(*keys, i)
+	darray_for_each(*keys, i) {
+		struct bkey_i *k = journal_key_k(c, i);
+
 		if (!(i->btree_id == btree &&
 		      i->level >= level_min &&
 		      i->level <= level_max &&
-		      bpos_ge(i->k->k.p, start) &&
-		      bpos_le(i->k->k.p, end)))
+		      bpos_ge(k->k.p, start) &&
+		      bpos_le(k->k.p, end)))
 			keys->data[dst++] = *i;
+		else if (i->allocated)
+			kfree(i->allocated_k);
+	}
 	keys->nr = keys->gap = dst;
 }
 
 void bch2_journal_keys_dump(struct bch_fs *c)
 {
 	struct journal_keys *keys = &c->journal_keys;
-	struct printbuf buf = PRINTBUF;
+	CLASS(printbuf, buf)();
 
 	pr_info("%zu keys:", keys->nr);
 
@@ -814,10 +858,9 @@ void bch2_journal_keys_dump(struct bch_fs *c)
 		prt_printf(&buf, "btree=");
 		bch2_btree_id_to_text(&buf, i->btree_id);
 		prt_printf(&buf, " l=%u ", i->level);
-		bch2_bkey_val_to_text(&buf, c, bkey_i_to_s_c(i->k));
+		bch2_bkey_val_to_text(&buf, c, bkey_i_to_s_c(journal_key_k(c, i)));
 		pr_err("%s", buf.buf);
 	}
-	printbuf_exit(&buf);
 }
 
 void bch2_fs_journal_keys_init(struct bch_fs *c)
