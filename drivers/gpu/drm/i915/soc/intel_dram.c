@@ -11,6 +11,7 @@
 
 #include "i915_drv.h"
 #include "i915_reg.h"
+#include "i915_utils.h"
 #include "intel_dram.h"
 #include "intel_mchbar_regs.h"
 #include "intel_pcode.h"
@@ -135,25 +136,21 @@ static unsigned int vlv_mem_freq(struct drm_i915_private *i915)
 	return 0;
 }
 
-static void detect_mem_freq(struct drm_i915_private *i915)
+unsigned int intel_mem_freq(struct drm_i915_private *i915)
 {
 	if (IS_PINEVIEW(i915))
-		i915->mem_freq = pnv_mem_freq(i915);
+		return pnv_mem_freq(i915);
 	else if (GRAPHICS_VER(i915) == 5)
-		i915->mem_freq = ilk_mem_freq(i915);
+		return ilk_mem_freq(i915);
 	else if (IS_CHERRYVIEW(i915))
-		i915->mem_freq = chv_mem_freq(i915);
+		return chv_mem_freq(i915);
 	else if (IS_VALLEYVIEW(i915))
-		i915->mem_freq = vlv_mem_freq(i915);
-
-	if (IS_PINEVIEW(i915))
-		i915->is_ddr3 = pnv_is_ddr3(i915);
-
-	if (i915->mem_freq)
-		drm_dbg(&i915->drm, "DDR speed: %d kHz\n", i915->mem_freq);
+		return vlv_mem_freq(i915);
+	else
+		return 0;
 }
 
-unsigned int i9xx_fsb_freq(struct drm_i915_private *i915)
+static unsigned int i9xx_fsb_freq(struct drm_i915_private *i915)
 {
 	u32 fsb;
 
@@ -235,15 +232,30 @@ static unsigned int ilk_fsb_freq(struct drm_i915_private *dev_priv)
 	}
 }
 
-static void detect_fsb_freq(struct drm_i915_private *i915)
+unsigned int intel_fsb_freq(struct drm_i915_private *i915)
 {
 	if (GRAPHICS_VER(i915) == 5)
-		i915->fsb_freq = ilk_fsb_freq(i915);
+		return ilk_fsb_freq(i915);
 	else if (GRAPHICS_VER(i915) == 3 || GRAPHICS_VER(i915) == 4)
-		i915->fsb_freq = i9xx_fsb_freq(i915);
+		return i9xx_fsb_freq(i915);
+	else
+		return 0;
+}
 
-	if (i915->fsb_freq)
-		drm_dbg(&i915->drm, "FSB frequency: %d kHz\n", i915->fsb_freq);
+static int i915_get_dram_info(struct drm_i915_private *i915, struct dram_info *dram_info)
+{
+	dram_info->fsb_freq = intel_fsb_freq(i915);
+	if (dram_info->fsb_freq)
+		drm_dbg(&i915->drm, "FSB frequency: %d kHz\n", dram_info->fsb_freq);
+
+	dram_info->mem_freq = intel_mem_freq(i915);
+	if (dram_info->mem_freq)
+		drm_dbg(&i915->drm, "DDR speed: %d kHz\n", dram_info->mem_freq);
+
+	if (IS_PINEVIEW(i915) && pnv_is_ddr3(i915))
+		dram_info->type = INTEL_DRAM_DDR3;
+
+	return 0;
 }
 
 static int intel_dimm_num_devices(const struct dram_dimm_info *dimm)
@@ -709,13 +721,11 @@ static int xelpdp_get_dram_info(struct drm_i915_private *i915, struct dram_info 
 
 int intel_dram_detect(struct drm_i915_private *i915)
 {
+	struct intel_display *display = i915->display;
 	struct dram_info *dram_info;
 	int ret;
 
-	detect_fsb_freq(i915);
-	detect_mem_freq(i915);
-
-	if (GRAPHICS_VER(i915) < 9 || IS_DG2(i915) || !HAS_DISPLAY(i915))
+	if (IS_DG2(i915) || !HAS_DISPLAY(display))
 		return 0;
 
 	dram_info = drmm_kzalloc(&i915->drm, sizeof(*dram_info), GFP_KERNEL);
@@ -730,7 +740,7 @@ int intel_dram_detect(struct drm_i915_private *i915)
 	 */
 	dram_info->wm_lv_0_adjust_needed = !IS_BROXTON(i915) && !IS_GEMINILAKE(i915);
 
-	if (DISPLAY_VER(i915) >= 14)
+	if (DISPLAY_VER(display) >= 14)
 		ret = xelpdp_get_dram_info(i915, dram_info);
 	else if (GRAPHICS_VER(i915) >= 12)
 		ret = gen12_get_dram_info(i915, dram_info);
@@ -738,8 +748,10 @@ int intel_dram_detect(struct drm_i915_private *i915)
 		ret = gen11_get_dram_info(i915, dram_info);
 	else if (IS_BROXTON(i915) || IS_GEMINILAKE(i915))
 		ret = bxt_get_dram_info(i915, dram_info);
-	else
+	else if (GRAPHICS_VER(i915) >= 9)
 		ret = skl_get_dram_info(i915, dram_info);
+	else
+		ret = i915_get_dram_info(i915, dram_info);
 
 	drm_dbg_kms(&i915->drm, "DRAM type: %s\n",
 		    intel_dram_type_str(dram_info->type));
