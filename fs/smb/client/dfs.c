@@ -333,9 +333,26 @@ static int target_share_matches_server(struct TCP_Server_Info *server, char *sha
 	return rc;
 }
 
+static int update_tcon_super_prepaths(struct cifs_tcon *tcon, const char *prefix)
+{
+	struct cifs_sb_info *cifs_sb;
+	int rc = 0;
+
+	spin_lock(&tcon->sb_list_lock);
+	list_for_each_entry(cifs_sb, &tcon->cifs_sb_list, tcon_sb_link) {
+		rc = cifs_update_super_prepath(cifs_sb, (char *)prefix);
+		if (rc) {
+			cifs_dbg(VFS, "Failed to update prepath for superblock: %d\n", rc);
+			break;
+		}
+	}
+	spin_unlock(&tcon->sb_list_lock);
+
+	return rc;
+}
+
 static int tree_connect_dfs_target(const unsigned int xid,
 				   struct cifs_tcon *tcon,
-				   struct cifs_sb_info *cifs_sb,
 				   char *tree, bool islink,
 				   struct dfs_cache_tgt_list *tl)
 {
@@ -372,8 +389,8 @@ static int tree_connect_dfs_target(const unsigned int xid,
 		scnprintf(tree, MAX_TREE_SIZE, "\\%s", share);
 		rc = ops->tree_connect(xid, tcon->ses, tree,
 				       tcon, tcon->ses->local_nls);
-		if (islink && !rc && cifs_sb)
-			rc = cifs_update_super_prepath(cifs_sb, prefix);
+		if (islink && !rc && READ_ONCE(tcon->origin_fullpath))
+			rc = update_tcon_super_prepaths(tcon, prefix);
 		break;
 	}
 
@@ -389,8 +406,6 @@ int cifs_tree_connect(const unsigned int xid, struct cifs_tcon *tcon)
 	struct TCP_Server_Info *server = tcon->ses->server;
 	const struct smb_version_operations *ops = server->ops;
 	DFS_CACHE_TGT_LIST(tl);
-	struct cifs_sb_info *cifs_sb = NULL;
-	struct super_block *sb = NULL;
 	struct dfs_info3_param ref = {0};
 	char *tree;
 
@@ -430,10 +445,6 @@ int cifs_tree_connect(const unsigned int xid, struct cifs_tcon *tcon)
 		goto out;
 	}
 
-	sb = cifs_get_dfs_tcon_super(tcon);
-	if (!IS_ERR(sb))
-		cifs_sb = CIFS_SB(sb);
-
 	/* Tree connect to last share in @tcon->tree_name if no DFS referral */
 	if (!server->leaf_fullpath ||
 	    dfs_cache_noreq_find(server->leaf_fullpath + 1, &ref, &tl)) {
@@ -442,13 +453,12 @@ int cifs_tree_connect(const unsigned int xid, struct cifs_tcon *tcon)
 		goto out;
 	}
 
-	rc = tree_connect_dfs_target(xid, tcon, cifs_sb, tree, ref.server_type == DFS_TYPE_LINK,
+	rc = tree_connect_dfs_target(xid, tcon, tree, ref.server_type == DFS_TYPE_LINK,
 				     &tl);
 	free_dfs_info_param(&ref);
 
 out:
 	kfree(tree);
-	cifs_put_tcp_super(sb);
 
 	if (rc) {
 		spin_lock(&tcon->tc_lock);
