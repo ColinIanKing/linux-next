@@ -151,7 +151,7 @@ static int rzt2h_pinctrl_set_mux(struct pinctrl_dev *pctldev,
 				 unsigned int group_selector)
 {
 	struct rzt2h_pinctrl *pctrl = pinctrl_dev_get_drvdata(pctldev);
-	struct function_desc *func;
+	const struct function_desc *func;
 	struct group_desc *group;
 	const unsigned int *pins;
 	unsigned int i;
