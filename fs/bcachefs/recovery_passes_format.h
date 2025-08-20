@@ -32,19 +32,19 @@
 	x(check_allocations,			 5, PASS_FSCK_ALLOC)			\
 	x(trans_mark_dev_sbs,			 6, PASS_ALWAYS|PASS_SILENT|PASS_ALLOC)	\
 	x(fs_journal_alloc,			 7, PASS_ALWAYS|PASS_SILENT|PASS_ALLOC)	\
+	x(reconstruct_snapshots,		38, 0)					\
+	x(check_snapshot_trees,			18, PASS_ONLINE|PASS_FSCK)		\
+	x(check_snapshots,			19, PASS_ONLINE|PASS_FSCK)		\
 	x(set_may_go_rw,			 8, PASS_ALWAYS|PASS_SILENT)		\
 	x(journal_replay,			 9, PASS_ALWAYS)			\
 	x(check_alloc_info,			10, PASS_ONLINE|PASS_FSCK_ALLOC)	\
 	x(check_lrus,				11, PASS_ONLINE|PASS_FSCK_ALLOC)	\
 	x(check_btree_backpointers,		12, PASS_ONLINE|PASS_FSCK_ALLOC)	\
-	x(check_backpointers_to_extents,	13, PASS_ONLINE|PASS_FSCK_DEBUG)	\
+	x(check_backpointers_to_extents,	13, PASS_ONLINE)			\
 	x(check_extents_to_backpointers,	14, PASS_ONLINE|PASS_FSCK_ALLOC)	\
 	x(check_alloc_to_lru_refs,		15, PASS_ONLINE|PASS_FSCK_ALLOC)	\
 	x(fs_freespace_init,			16, PASS_ALWAYS|PASS_SILENT)		\
 	x(bucket_gens_init,			17, 0)					\
-	x(reconstruct_snapshots,		38, 0)					\
-	x(check_snapshot_trees,			18, PASS_ONLINE|PASS_FSCK)		\
-	x(check_snapshots,			19, PASS_ONLINE|PASS_FSCK)		\
 	x(check_subvols,			20, PASS_ONLINE|PASS_FSCK)		\
 	x(check_subvol_children,		35, PASS_ONLINE|PASS_FSCK)		\
 	x(delete_dead_snapshots,		21, PASS_ONLINE|PASS_FSCK)		\
