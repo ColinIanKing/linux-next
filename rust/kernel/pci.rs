@@ -10,10 +10,11 @@ use crate::{
     devres::Devres,
     driver,
     error::{from_result, to_result, Result},
-    io::Io,
-    io::IoRaw,
+    io::{Io, IoRaw},
+    irq::{self, IrqRequest},
     str::CStr,
-    types::{ARef, Opaque},
+    sync::aref::ARef,
+    types::Opaque,
     ThisModule,
 };
 use core::{
@@ -60,7 +61,7 @@ impl<T: Driver + 'static> Adapter<T> {
     extern "C" fn probe_callback(
         pdev: *mut bindings::pci_dev,
         id: *const bindings::pci_device_id,
-    ) -> kernel::ffi::c_int {
+    ) -> c_int {
         // SAFETY: The PCI bus only ever calls the probe callback with a valid pointer to a
         // `struct pci_dev`.
         //
@@ -347,7 +348,7 @@ impl<const SIZE: usize> Bar<SIZE> {
         // `ioptr` is valid by the safety requirements.
         // `num` is valid by the safety requirements.
         unsafe {
-            bindings::pci_iounmap(pdev.as_raw(), ioptr as *mut kernel::ffi::c_void);
+            bindings::pci_iounmap(pdev.as_raw(), ioptr as *mut c_void);
             bindings::pci_release_region(pdev.as_raw(), num);
         }
     }
@@ -388,15 +389,63 @@ impl<Ctx: device::DeviceContext> Device<Ctx> {
 
 impl Device {
     /// Returns the PCI vendor ID.
+    #[inline]
     pub fn vendor_id(&self) -> u16 {
-        // SAFETY: `self.as_raw` is a valid pointer to a `struct pci_dev`.
+        // SAFETY: By its type invariant `self.as_raw` is always a valid pointer to a
+        // `struct pci_dev`.
         unsafe { (*self.as_raw()).vendor }
     }
 
     /// Returns the PCI device ID.
+    #[inline]
     pub fn device_id(&self) -> u16 {
-        // SAFETY: `self.as_raw` is a valid pointer to a `struct pci_dev`.
+        // SAFETY: By its type invariant `self.as_raw` is always a valid pointer to a
+        // `struct pci_dev`.
         unsafe { (*self.as_raw()).device }
+    }
+
+    /// Returns the PCI revision ID.
+    #[inline]
+    pub fn revision_id(&self) -> u8 {
+        // SAFETY: By its type invariant `self.as_raw` is always a valid pointer to a
+        // `struct pci_dev`.
+        unsafe { (*self.as_raw()).revision }
+    }
+
+    /// Returns the PCI bus device/function.
+    #[inline]
+    pub fn dev_id(&self) -> u16 {
+        // SAFETY: By its type invariant `self.as_raw` is always a valid pointer to a
+        // `struct pci_dev`.
+        unsafe { bindings::pci_dev_id(self.as_raw()) }
+    }
+
+    /// Returns the PCI subsystem vendor ID.
+    #[inline]
+    pub fn subsystem_vendor_id(&self) -> u16 {
+        // SAFETY: By its type invariant `self.as_raw` is always a valid pointer to a
+        // `struct pci_dev`.
+        unsafe { (*self.as_raw()).subsystem_vendor }
+    }
+
+    /// Returns the PCI subsystem device ID.
+    #[inline]
+    pub fn subsystem_device_id(&self) -> u16 {
+        // SAFETY: By its type invariant `self.as_raw` is always a valid pointer to a
+        // `struct pci_dev`.
+        unsafe { (*self.as_raw()).subsystem_device }
+    }
+
+    /// Returns the start of the given PCI bar resource.
+    pub fn resource_start(&self, bar: u32) -> Result<bindings::resource_size_t> {
+        if !Bar::index_is_valid(bar) {
+            return Err(EINVAL);
+        }
+
+        // SAFETY:
+        // - `bar` is a valid bar number, as guaranteed by the above call to `Bar::index_is_valid`,
+        // - by its type invariant `self.as_raw` is always a valid pointer to a `struct pci_dev`.
+        Ok(unsafe { bindings::pci_resource_start(self.as_raw(), bar.try_into()?) })
     }
 
     /// Returns the size of the given PCI bar resource.
@@ -431,6 +480,47 @@ impl Device<device::Bound> {
     ) -> impl PinInit<Devres<Bar>, Error> + 'a {
         self.iomap_region_sized::<0>(bar, name)
     }
+
+    /// Returns an [`IrqRequest`] for the IRQ vector at the given index, if any.
+    pub fn irq_vector(&self, index: u32) -> Result<IrqRequest<'_>> {
+        // SAFETY: `self.as_raw` returns a valid pointer to a `struct pci_dev`.
+        let irq = unsafe { crate::bindings::pci_irq_vector(self.as_raw(), index) };
+        if irq < 0 {
+            return Err(crate::error::Error::from_errno(irq));
+        }
+        // SAFETY: `irq` is guaranteed to be a valid IRQ number for `&self`.
+        Ok(unsafe { IrqRequest::new(self.as_ref(), irq as u32) })
+    }
+
+    /// Returns a [`kernel::irq::Registration`] for the IRQ vector at the given
+    /// index.
+    pub fn request_irq<'a, T: crate::irq::Handler + 'static>(
+        &'a self,
+        index: u32,
+        flags: irq::Flags,
+        name: &'static CStr,
+        handler: impl PinInit<T, Error> + 'a,
+    ) -> Result<impl PinInit<irq::Registration<T>, Error> + 'a> {
+        let request = self.irq_vector(index)?;
+
+        Ok(irq::Registration::<T>::new(request, flags, name, handler))
+    }
+
+    /// Returns a [`kernel::irq::ThreadedRegistration`] for the IRQ vector at
+    /// the given index.
+    pub fn request_threaded_irq<'a, T: crate::irq::ThreadedHandler + 'static>(
+        &'a self,
+        index: u32,
+        flags: irq::Flags,
+        name: &'static CStr,
+        handler: impl PinInit<T, Error> + 'a,
+    ) -> Result<impl PinInit<irq::ThreadedRegistration<T>, Error> + 'a> {
+        let request = self.irq_vector(index)?;
+
+        Ok(irq::ThreadedRegistration::<T>::new(
+            request, flags, name, handler,
+        ))
+    }
 }
 
 impl Device<device::Core> {
@@ -455,7 +545,7 @@ kernel::impl_device_context_into_aref!(Device);
 impl crate::dma::Device for Device<device::Core> {}
 
 // SAFETY: Instances of `Device` are always reference-counted.
-unsafe impl crate::types::AlwaysRefCounted for Device {
+unsafe impl crate::sync::aref::AlwaysRefCounted for Device {
     fn inc_ref(&self) {
         // SAFETY: The existence of a shared reference guarantees that the refcount is non-zero.
         unsafe { bindings::pci_dev_get(self.as_raw()) };
