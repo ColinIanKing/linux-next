@@ -953,7 +953,7 @@ struct dma_fence *xe_vma_rebind(struct xe_vm *vm, struct xe_vma *vma, u8 tile_ma
 	for_each_tile(tile, vm->xe, id) {
 		vops.pt_update_ops[id].wait_vm_bookkeep = true;
 		vops.pt_update_ops[tile->id].q =
-			xe_tile_migrate_exec_queue(tile);
+			xe_migrate_exec_queue(tile->migrate);
 	}
 
 	err = xe_vm_ops_add_rebind(&vops, vma, tile_mask);
@@ -1043,7 +1043,7 @@ struct dma_fence *xe_vm_range_rebind(struct xe_vm *vm,
 	for_each_tile(tile, vm->xe, id) {
 		vops.pt_update_ops[id].wait_vm_bookkeep = true;
 		vops.pt_update_ops[tile->id].q =
-			xe_tile_migrate_exec_queue(tile);
+			xe_migrate_exec_queue(tile->migrate);
 	}
 
 	err = xe_vm_ops_add_range_rebind(&vops, vma, range, tile_mask);
@@ -1126,7 +1126,7 @@ struct dma_fence *xe_vm_range_unbind(struct xe_vm *vm,
 	for_each_tile(tile, vm->xe, id) {
 		vops.pt_update_ops[id].wait_vm_bookkeep = true;
 		vops.pt_update_ops[tile->id].q =
-			xe_tile_migrate_exec_queue(tile);
+			xe_migrate_exec_queue(tile->migrate);
 	}
 
 	err = xe_vm_ops_add_range_unbind(&vops, range);
@@ -1512,14 +1512,39 @@ static u64 pte_encode_ps(u32 pt_level)
 	return 0;
 }
 
-static u64 xelp_pde_encode_bo(struct xe_bo *bo, u64 bo_offset,
-			      const u16 pat_index)
+static u16 pde_pat_index(struct xe_bo *bo)
+{
+	struct xe_device *xe = xe_bo_device(bo);
+	u16 pat_index;
+
+	/*
+	 * We only have two bits to encode the PAT index in non-leaf nodes, but
+	 * these only point to other paging structures so we only need a minimal
+	 * selection of options. The user PAT index is only for encoding leaf
+	 * nodes, where we have use of more bits to do the encoding. The
+	 * non-leaf nodes are instead under driver control so the chosen index
+	 * here should be distict from the user PAT index. Also the
+	 * corresponding coherency of the PAT index should be tied to the
+	 * allocation type of the page table (or at least we should pick
+	 * something which is always safe).
+	 */
+	if (!xe_bo_is_vram(bo) && bo->ttm.ttm->caching == ttm_cached)
+		pat_index = xe->pat.idx[XE_CACHE_WB];
+	else
+		pat_index = xe->pat.idx[XE_CACHE_NONE];
+
+	xe_assert(xe, pat_index <= 3);
+
+	return pat_index;
+}
+
+static u64 xelp_pde_encode_bo(struct xe_bo *bo, u64 bo_offset)
 {
 	u64 pde;
 
 	pde = xe_bo_addr(bo, bo_offset, XE_PAGE_SIZE);
 	pde |= XE_PAGE_PRESENT | XE_PAGE_RW;
-	pde |= pde_encode_pat_index(pat_index);
+	pde |= pde_encode_pat_index(pde_pat_index(bo));
 
 	return pde;
 }
@@ -1640,7 +1665,7 @@ static void xe_vm_free_scratch(struct xe_vm *vm)
 	}
 }
 
-struct xe_vm *xe_vm_create(struct xe_device *xe, u32 flags)
+struct xe_vm *xe_vm_create(struct xe_device *xe, u32 flags, struct xe_file *xef)
 {
 	struct drm_gem_object *vm_resv_obj;
 	struct xe_vm *vm;
@@ -1661,9 +1686,10 @@ struct xe_vm *xe_vm_create(struct xe_device *xe, u32 flags)
 	vm->xe = xe;
 
 	vm->size = 1ull << xe->info.va_bits;
-
 	vm->flags = flags;
 
+	if (xef)
+		vm->xef = xe_file_get(xef);
 	/**
 	 * GSC VMs are kernel-owned, only used for PXP ops and can sometimes be
 	 * manipulated under the PXP mutex. However, the PXP mutex can be taken
@@ -1794,6 +1820,20 @@ struct xe_vm *xe_vm_create(struct xe_device *xe, u32 flags)
 	if (number_tiles > 1)
 		vm->composite_fence_ctx = dma_fence_context_alloc(1);
 
+	if (xef && xe->info.has_asid) {
+		u32 asid;
+
+		down_write(&xe->usm.lock);
+		err = xa_alloc_cyclic(&xe->usm.asid_to_vm, &asid, vm,
+				      XA_LIMIT(1, XE_MAX_ASID - 1),
+				      &xe->usm.next_asid, GFP_KERNEL);
+		up_write(&xe->usm.lock);
+		if (err < 0)
+			goto err_unlock_close;
+
+		vm->usm.asid = asid;
+	}
+
 	trace_xe_vm_create(vm);
 
 	return vm;
@@ -1814,6 +1854,8 @@ err_no_resv:
 	for_each_tile(tile, xe, id)
 		xe_range_fence_tree_fini(&vm->rftree[id]);
 	ttm_lru_bulk_move_fini(&xe->ttm, &vm->lru_bulk_move);
+	if (vm->xef)
+		xe_file_put(vm->xef);
 	kfree(vm);
 	if (flags & XE_VM_FLAG_LR_MODE)
 		xe_pm_runtime_put(xe);
@@ -2024,8 +2066,7 @@ struct xe_vm *xe_vm_lookup(struct xe_file *xef, u32 id)
 
 u64 xe_vm_pdp4_descriptor(struct xe_vm *vm, struct xe_tile *tile)
 {
-	return vm->pt_ops->pde_encode_bo(vm->pt_root[tile->id]->bo, 0,
-					 tile_to_xe(tile)->pat.idx[XE_CACHE_WB]);
+	return vm->pt_ops->pde_encode_bo(vm->pt_root[tile->id]->bo, 0);
 }
 
 static struct xe_exec_queue *
@@ -2059,16 +2100,15 @@ int xe_vm_create_ioctl(struct drm_device *dev, void *data,
 	struct xe_device *xe = to_xe_device(dev);
 	struct xe_file *xef = to_xe_file(file);
 	struct drm_xe_vm_create *args = data;
-	struct xe_tile *tile;
 	struct xe_vm *vm;
-	u32 id, asid;
+	u32 id;
 	int err;
 	u32 flags = 0;
 
 	if (XE_IOCTL_DBG(xe, args->extensions))
 		return -EINVAL;
 
-	if (XE_WA(xe_root_mmio_gt(xe), 14016763929))
+	if (XE_GT_WA(xe_root_mmio_gt(xe), 14016763929))
 		args->flags |= DRM_XE_VM_CREATE_FLAG_SCRATCH_PAGE;
 
 	if (XE_IOCTL_DBG(xe, args->flags & DRM_XE_VM_CREATE_FLAG_FAULT_MODE &&
@@ -2097,28 +2137,9 @@ int xe_vm_create_ioctl(struct drm_device *dev, void *data,
 	if (args->flags & DRM_XE_VM_CREATE_FLAG_FAULT_MODE)
 		flags |= XE_VM_FLAG_FAULT_MODE;
 
-	vm = xe_vm_create(xe, flags);
+	vm = xe_vm_create(xe, flags, xef);
 	if (IS_ERR(vm))
 		return PTR_ERR(vm);
-
-	if (xe->info.has_asid) {
-		down_write(&xe->usm.lock);
-		err = xa_alloc_cyclic(&xe->usm.asid_to_vm, &asid, vm,
-				      XA_LIMIT(1, XE_MAX_ASID - 1),
-				      &xe->usm.next_asid, GFP_KERNEL);
-		up_write(&xe->usm.lock);
-		if (err < 0)
-			goto err_close_and_put;
-
-		vm->usm.asid = asid;
-	}
-
-	vm->xef = xe_file_get(xef);
-
-	/* Record BO memory for VM pagetable created against client */
-	for_each_tile(tile, xe, id)
-		if (vm->pt_root[id])
-			xe_drm_client_add_bo(vm->xef->client, vm->pt_root[id]->bo);
 
 #if IS_ENABLED(CONFIG_DRM_XE_DEBUG_MEM)
 	/* Warning: Security issue - never enable by default */
@@ -3428,6 +3449,7 @@ static int vm_bind_ioctl_check_args(struct xe_device *xe, struct xe_vm *vm,
 free_bind_ops:
 	if (args->num_binds > 1)
 		kvfree(*bind_ops);
+	*bind_ops = NULL;
 	return err;
 }
 
@@ -3534,7 +3556,7 @@ int xe_vm_bind_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 	struct xe_exec_queue *q = NULL;
 	u32 num_syncs, num_ufence = 0;
 	struct xe_sync_entry *syncs = NULL;
-	struct drm_xe_vm_bind_op *bind_ops;
+	struct drm_xe_vm_bind_op *bind_ops = NULL;
 	struct xe_vma_ops vops;
 	struct dma_fence *fence;
 	int err;
@@ -3552,7 +3574,7 @@ int xe_vm_bind_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 		q = xe_exec_queue_lookup(xef, args->exec_queue_id);
 		if (XE_IOCTL_DBG(xe, !q)) {
 			err = -ENOENT;
-			goto put_vm;
+			goto free_bind_ops;
 		}
 
 		if (XE_IOCTL_DBG(xe, !(q->flags & EXEC_QUEUE_FLAG_VM))) {
@@ -3598,7 +3620,7 @@ int xe_vm_bind_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 			       __GFP_RETRY_MAYFAIL | __GFP_NOWARN);
 		if (!ops) {
 			err = -ENOMEM;
-			goto release_vm_lock;
+			goto free_bos;
 		}
 	}
 
@@ -3732,17 +3754,20 @@ free_syncs:
 put_obj:
 	for (i = 0; i < args->num_binds; ++i)
 		xe_bo_put(bos[i]);
+
+	kvfree(ops);
+free_bos:
+	kvfree(bos);
 release_vm_lock:
 	up_write(&vm->lock);
 put_exec_queue:
 	if (q)
 		xe_exec_queue_put(q);
-put_vm:
-	xe_vm_put(vm);
-	kvfree(bos);
-	kvfree(ops);
+free_bind_ops:
 	if (args->num_binds > 1)
 		kvfree(bind_ops);
+put_vm:
+	xe_vm_put(vm);
 	return err;
 }
 
