@@ -6,7 +6,6 @@
 #include <linux/debugfs.h>
 
 #include <drm/drm_blend.h>
-#include <drm/drm_file.h>
 #include <drm/drm_print.h>
 
 #include "soc/intel_dram.h"
@@ -2273,6 +2272,11 @@ static int skl_max_wm0_lines(const struct intel_crtc_state *crtc_state)
 	return wm0_lines;
 }
 
+/*
+ * TODO: In case we use PKG_C_LATENCY to allow C-states when the delayed vblank
+ * size is too small for the package C exit latency we need to notify PSR about
+ * the scenario to apply Wa_16025596647.
+ */
 static int skl_max_wm_level_for_vblank(struct intel_crtc_state *crtc_state,
 				       int wm0_lines)
 {
@@ -4033,14 +4037,14 @@ DEFINE_SHOW_ATTRIBUTE(intel_sagv_status);
 
 void skl_watermark_debugfs_register(struct intel_display *display)
 {
-	struct drm_minor *minor = display->drm->primary;
+	struct dentry *debugfs_root = display->drm->debugfs_root;
 
 	if (HAS_IPC(display))
-		debugfs_create_file("i915_ipc_status", 0644, minor->debugfs_root,
+		debugfs_create_file("i915_ipc_status", 0644, debugfs_root,
 				    display, &skl_watermark_ipc_status_fops);
 
 	if (HAS_SAGV(display))
-		debugfs_create_file("i915_sagv_status", 0444, minor->debugfs_root,
+		debugfs_create_file("i915_sagv_status", 0444, debugfs_root,
 				    display, &intel_sagv_status_fops);
 }
 
