@@ -287,10 +287,10 @@ static int reset_flow_steering(void)
 	 * the exit status.
 	 */
 
-	run_command("sudo ethtool -K %s ntuple off >&2", ifname);
-	run_command("sudo ethtool -K %s ntuple on >&2", ifname);
+	run_command("ethtool -K %s ntuple off >&2", ifname);
+	run_command("ethtool -K %s ntuple on >&2", ifname);
 	run_command(
-		"sudo ethtool -n %s | grep 'Filter:' | awk '{print $2}' | xargs -n1 ethtool -N %s delete >&2",
+		"ethtool -n %s | grep 'Filter:' | awk '{print $2}' | xargs -n1 ethtool -N %s delete >&2",
 		ifname, ifname);
 	return 0;
 }
@@ -351,12 +351,86 @@ static int configure_headersplit(bool on)
 
 static int configure_rss(void)
 {
-	return run_command("sudo ethtool -X %s equal %d >&2", ifname, start_queue);
+	return run_command("ethtool -X %s equal %d >&2", ifname, start_queue);
 }
 
 static int configure_channels(unsigned int rx, unsigned int tx)
 {
-	return run_command("sudo ethtool -L %s rx %u tx %u", ifname, rx, tx);
+	struct ethtool_channels_get_req *gchan;
+	struct ethtool_channels_set_req *schan;
+	struct ethtool_channels_get_rsp *chan;
+	struct ynl_error yerr;
+	struct ynl_sock *ys;
+	int ret;
+
+	fprintf(stderr, "setting channel count rx:%u tx:%u\n", rx, tx);
+
+	ys = ynl_sock_create(&ynl_ethtool_family, &yerr);
+	if (!ys) {
+		fprintf(stderr, "YNL: %s\n", yerr.msg);
+		return -1;
+	}
+
+	gchan = ethtool_channels_get_req_alloc();
+	if (!gchan) {
+		ret = -1;
+		goto exit_close_sock;
+	}
+
+	ethtool_channels_get_req_set_header_dev_index(gchan, ifindex);
+	chan = ethtool_channels_get(ys, gchan);
+	ethtool_channels_get_req_free(gchan);
+	if (!chan) {
+		fprintf(stderr, "YNL get channels: %s\n", ys->err.msg);
+		ret = -1;
+		goto exit_close_sock;
+	}
+
+	schan =	ethtool_channels_set_req_alloc();
+	if (!schan) {
+		ret = -1;
+		goto exit_free_chan;
+	}
+
+	ethtool_channels_set_req_set_header_dev_index(schan, ifindex);
+
+	if (chan->_present.combined_count) {
+		if (chan->_present.rx_count || chan->_present.tx_count) {
+			ethtool_channels_set_req_set_rx_count(schan, 0);
+			ethtool_channels_set_req_set_tx_count(schan, 0);
+		}
+
+		if (rx == tx) {
+			ethtool_channels_set_req_set_combined_count(schan, rx);
+		} else if (rx > tx) {
+			ethtool_channels_set_req_set_combined_count(schan, tx);
+			ethtool_channels_set_req_set_rx_count(schan, rx - tx);
+		} else {
+			ethtool_channels_set_req_set_combined_count(schan, rx);
+			ethtool_channels_set_req_set_tx_count(schan, tx - rx);
+		}
+
+		ret = ethtool_channels_set(ys, schan);
+		if (ret)
+			fprintf(stderr, "YNL set channels: %s\n", ys->err.msg);
+	} else if (chan->_present.rx_count) {
+		ethtool_channels_set_req_set_rx_count(schan, rx);
+		ethtool_channels_set_req_set_tx_count(schan, tx);
+
+		ret = ethtool_channels_set(ys, schan);
+		if (ret)
+			fprintf(stderr, "YNL set channels: %s\n", ys->err.msg);
+	} else {
+		fprintf(stderr, "Error: device has neither combined nor rx channels\n");
+		ret = -1;
+	}
+	ethtool_channels_set_req_free(schan);
+exit_free_chan:
+	ethtool_channels_get_rsp_free(chan);
+exit_close_sock:
+	ynl_sock_destroy(ys);
+
+	return ret;
 }
 
 static int configure_flow_steering(struct sockaddr_in6 *server_sin)
@@ -374,7 +448,7 @@ static int configure_flow_steering(struct sockaddr_in6 *server_sin)
 	}
 
 	/* Try configure 5-tuple */
-	if (run_command("sudo ethtool -N %s flow-type %s %s %s dst-ip %s %s %s dst-port %s queue %d >&2",
+	if (run_command("ethtool -N %s flow-type %s %s %s dst-ip %s %s %s dst-port %s queue %d >&2",
 			   ifname,
 			   type,
 			   client_ip ? "src-ip" : "",
@@ -384,7 +458,7 @@ static int configure_flow_steering(struct sockaddr_in6 *server_sin)
 			   client_ip ? port : "",
 			   port, start_queue))
 		/* If that fails, try configure 3-tuple */
-		if (run_command("sudo ethtool -N %s flow-type %s dst-ip %s dst-port %s queue %d >&2",
+		if (run_command("ethtool -N %s flow-type %s dst-ip %s dst-port %s queue %d >&2",
 				ifname,
 				type,
 				server_addr,
@@ -752,7 +826,7 @@ void run_devmem_tests(void)
 		error(1, 0, "Failed to bind\n");
 
 	/* Deactivating a bound queue should not be legal */
-	if (!configure_channels(num_queues, num_queues - 1))
+	if (!configure_channels(num_queues, num_queues))
 		error(1, 0, "Deactivating a bound queue should be illegal.\n");
 
 	/* Closing the netlink socket does an implicit unbind */
