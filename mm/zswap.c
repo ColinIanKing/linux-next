@@ -45,7 +45,7 @@
 /* The number of pages currently stored in zswap */
 atomic_long_t zswap_stored_pages = ATOMIC_LONG_INIT(0);
 /* The number of incompressible pages currently stored in zswap */
-atomic_long_t zswap_stored_incompressible_pages = ATOMIC_LONG_INIT(0);
+static atomic_long_t zswap_stored_incompressible_pages = ATOMIC_LONG_INIT(0);
 
 /*
  * The statistics below are not protected from concurrent access for
