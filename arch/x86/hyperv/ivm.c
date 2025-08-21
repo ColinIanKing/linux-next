@@ -489,30 +489,30 @@ static int hv_mark_gpa_visibility(u16 count, const u64 pfn[],
 {
 	struct hv_gpa_range_for_visibility *input;
 	u64 hv_status;
+	int batch_size;
 	unsigned long flags;
 
 	/* no-op if partition isolation is not enabled */
 	if (!hv_is_isolation_supported())
 		return 0;
 
-	if (count > HV_MAX_MODIFY_GPA_REP_COUNT) {
-		pr_err("Hyper-V: GPA count:%d exceeds supported:%lu\n", count,
-			HV_MAX_MODIFY_GPA_REP_COUNT);
+	local_irq_save(flags);
+	batch_size = hv_setup_in_array(&input, sizeof(*input),
+					sizeof(input->gpa_page_list[0]));
+	if (unlikely(!input)) {
+		local_irq_restore(flags);
 		return -EINVAL;
 	}
 
-	local_irq_save(flags);
-	input = *this_cpu_ptr(hyperv_pcpu_input_arg);
-
-	if (unlikely(!input)) {
+	if (count > batch_size) {
+		pr_err("Hyper-V: GPA count:%d exceeds supported:%u\n", count,
+		       batch_size);
 		local_irq_restore(flags);
 		return -EINVAL;
 	}
 
 	input->partition_id = HV_PARTITION_ID_SELF;
 	input->host_visibility = visibility;
-	input->reserved0 = 0;
-	input->reserved1 = 0;
 	memcpy((void *)input->gpa_page_list, pfn, count * sizeof(*pfn));
 	hv_status = hv_do_rep_hypercall(
 			HVCALL_MODIFY_SPARSE_GPA_PAGE_HOST_VISIBILITY, count,
