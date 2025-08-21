@@ -179,6 +179,26 @@ static const struct ctl_table kernel_io_uring_disabled_table[] = {
 };
 #endif
 
+static void io_poison_cached_req(struct io_kiocb *req)
+{
+	req->ctx = IO_URING_PTR_POISON;
+	req->tctx = IO_URING_PTR_POISON;
+	req->file = IO_URING_PTR_POISON;
+	req->creds = IO_URING_PTR_POISON;
+	req->io_task_work.func = IO_URING_PTR_POISON;
+	req->apoll = IO_URING_PTR_POISON;
+}
+
+static void io_poison_req(struct io_kiocb *req)
+{
+	io_poison_cached_req(req);
+	req->async_data = IO_URING_PTR_POISON;
+	req->kbuf = IO_URING_PTR_POISON;
+	req->comp_list.next = IO_URING_PTR_POISON;
+	req->file_node = IO_URING_PTR_POISON;
+	req->link = IO_URING_PTR_POISON;
+}
+
 static inline unsigned int __io_cqring_events(struct io_ring_ctx *ctx)
 {
 	return ctx->cached_cq_tail - READ_ONCE(ctx->rings->cq.head);
@@ -235,6 +255,8 @@ static inline void req_fail_link_node(struct io_kiocb *req, int res)
 
 static inline void io_req_add_to_cache(struct io_kiocb *req, struct io_ring_ctx *ctx)
 {
+	if (IS_ENABLED(CONFIG_KASAN))
+		io_poison_cached_req(req);
 	wq_stack_add_head(&req->comp_list, &ctx->submit_state.free_list);
 }
 
@@ -985,7 +1007,7 @@ void io_req_defer_failed(struct io_kiocb *req, s32 res)
 	lockdep_assert_held(&req->ctx->uring_lock);
 
 	req_set_fail(req);
-	io_req_set_res(req, res, io_put_kbuf(req, res, IO_URING_F_UNLOCKED));
+	io_req_set_res(req, res, io_put_kbuf(req, res, NULL));
 	if (def->fail)
 		def->fail(req);
 	io_req_complete_defer(req);
@@ -2003,11 +2025,9 @@ fail:
 
 	switch (io_arm_poll_handler(req, 0)) {
 	case IO_APOLL_READY:
-		io_kbuf_recycle(req, 0);
 		io_req_task_queue(req);
 		break;
 	case IO_APOLL_ABORTED:
-		io_kbuf_recycle(req, 0);
 		io_queue_iowq(req);
 		break;
 	case IO_APOLL_OK:
@@ -2766,6 +2786,7 @@ static __cold void __io_req_caches_free(struct io_ring_ctx *ctx)
 
 	while (!io_req_cache_empty(ctx)) {
 		req = io_extract_req(ctx);
+		io_poison_req(req);
 		kmem_cache_free(req_cachep, req);
 		nr++;
 	}
