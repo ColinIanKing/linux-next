@@ -62,8 +62,6 @@ static u64 zswap_written_back_pages;
 static u64 zswap_reject_reclaim_fail;
 /* Store failed due to compression algorithm failure */
 static u64 zswap_reject_compress_fail;
-/* Compression failed by the crypto library */
-static u64 zswap_crypto_compress_fail;
 /* Compressed page was too big for the allocator to (optimally) store */
 static u64 zswap_reject_compress_poor;
 /* Load or writeback failed due to decompression failure */
@@ -990,14 +988,12 @@ static bool zswap_compress(struct page *page, struct zswap_entry *entry,
 	 * only adds metadata overhead.  swap_writeout() will put the page back
 	 * to the active LRU list in the case.
 	 */
-	if (comp_ret || !dlen) {
-		zswap_crypto_compress_fail++;
+	if (comp_ret || !dlen)
 		dlen = PAGE_SIZE;
-	}
 	if (dlen >= PAGE_SIZE) {
 		if (!mem_cgroup_zswap_writeback_enabled(
 					folio_memcg(page_folio(page)))) {
-			comp_ret = -EINVAL;
+			comp_ret = comp_ret ? comp_ret : -EINVAL;
 			goto unlock;
 		}
 		comp_ret = 0;
@@ -1855,8 +1851,6 @@ static int zswap_debugfs_init(void)
 			   zswap_debugfs_root, &zswap_reject_kmemcache_fail);
 	debugfs_create_u64("reject_compress_fail", 0444,
 			   zswap_debugfs_root, &zswap_reject_compress_fail);
-	debugfs_create_u64("crypto_compress_fail", 0444,
-			   zswap_debugfs_root, &zswap_crypto_compress_fail);
 	debugfs_create_u64("reject_compress_poor", 0444,
 			   zswap_debugfs_root, &zswap_reject_compress_poor);
 	debugfs_create_u64("decompress_fail", 0444,
