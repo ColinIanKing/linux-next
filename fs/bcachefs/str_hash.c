@@ -18,16 +18,14 @@ static int bch2_dirent_has_target(struct btree_trans *trans, struct bkey_s_c_dir
 			return ret;
 		return !ret;
 	} else {
-		struct btree_iter iter;
-		struct bkey_s_c k = bch2_bkey_get_iter(trans, &iter, BTREE_ID_inodes,
+		CLASS(btree_iter, iter)(trans, BTREE_ID_inodes,
 				SPOS(0, le64_to_cpu(d.v->d_inum), d.k->p.snapshot), 0);
+		struct bkey_s_c k = bch2_btree_iter_peek_slot(&iter);
 		int ret = bkey_err(k);
 		if (ret)
 			return ret;
 
-		ret = bkey_is_inode(k.k);
-		bch2_trans_iter_exit(trans, &iter);
-		return ret;
+		return bkey_is_inode(k.k);
 	}
 }
 
@@ -123,9 +121,8 @@ int bch2_repair_inode_hash_info(struct btree_trans *trans,
 				struct bch_inode_unpacked *snapshot_root)
 {
 	struct bch_fs *c = trans->c;
-	struct btree_iter iter;
 	struct bkey_s_c k;
-	struct printbuf buf = PRINTBUF;
+	CLASS(printbuf, buf)();
 	bool need_commit = false;
 	int ret = 0;
 
@@ -180,10 +177,10 @@ int bch2_repair_inode_hash_info(struct btree_trans *trans,
 	}
 
 	if (ret)
-		goto err;
+		return ret;
 
 	if (!need_commit) {
-		struct printbuf buf = PRINTBUF;
+		printbuf_reset(&buf);
 		bch2_log_msg_start(c, &buf);
 
 		prt_printf(&buf, "inode %llu hash info mismatch with root, but mismatch not found\n",
@@ -198,17 +195,12 @@ int bch2_repair_inode_hash_info(struct btree_trans *trans,
 		prt_printf(&buf, " %llx %llx", hash_info->siphash_key.k0, hash_info->siphash_key.k1);
 #endif
 		bch2_print_str(c, KERN_ERR, buf.buf);
-		printbuf_exit(&buf);
-		ret = bch_err_throw(c, fsck_repair_unimplemented);
-		goto err;
+		return bch_err_throw(c, fsck_repair_unimplemented);
 	}
 
 	ret = bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc) ?:
-		-BCH_ERR_transaction_restart_nested;
-err:
+		bch_err_throw(c, transaction_restart_nested);
 fsck_err:
-	printbuf_exit(&buf);
-	bch2_trans_iter_exit(trans, &iter);
 	return ret;
 }
 
@@ -244,7 +236,7 @@ int bch2_str_hash_repair_key(struct btree_trans *trans,
 			     bool *updated_before_k_pos)
 {
 	struct bch_fs *c = trans->c;
-	struct printbuf buf = PRINTBUF;
+	CLASS(printbuf, buf)();
 	bool free_snapshots_seen = false;
 	int ret = 0;
 
@@ -292,7 +284,7 @@ int bch2_str_hash_repair_key(struct btree_trans *trans,
 					    BTREE_UPDATE_internal_snapshot_node) ?:
 			bch2_fsck_update_backpointers(trans, s, *desc, hash_info, new) ?:
 			bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc) ?:
-			-BCH_ERR_transaction_restart_commit;
+			bch_err_throw(c, transaction_restart_commit);
 	} else {
 duplicate_entries:
 		ret = hash_pick_winner(trans, *desc, hash_info, k, dup_k);
@@ -326,12 +318,11 @@ duplicate_entries:
 		}
 
 		ret = bch2_trans_commit(trans, NULL, NULL, 0) ?:
-			-BCH_ERR_transaction_restart_commit;
+			bch_err_throw(c, transaction_restart_commit);
 	}
 out:
 fsck_err:
-	bch2_trans_iter_exit(trans, dup_iter);
-	printbuf_exit(&buf);
+	bch2_trans_iter_exit(dup_iter);
 	if (free_snapshots_seen)
 		darray_exit(&s->ids);
 	return ret;
@@ -346,7 +337,7 @@ int __bch2_str_hash_check_key(struct btree_trans *trans,
 {
 	struct bch_fs *c = trans->c;
 	struct btree_iter iter = {};
-	struct printbuf buf = PRINTBUF;
+	CLASS(printbuf, buf)();
 	struct bkey_s_c k;
 	int ret = 0;
 
@@ -354,10 +345,14 @@ int __bch2_str_hash_check_key(struct btree_trans *trans,
 	if (hash_k.k->p.offset < hash)
 		goto bad_hash;
 
-	for_each_btree_key_norestart(trans, iter, desc->btree_id,
-				     SPOS(hash_k.k->p.inode, hash, hash_k.k->p.snapshot),
-				     BTREE_ITER_slots|
-				     BTREE_ITER_with_updates, k, ret) {
+	bch2_trans_iter_init(trans, &iter, desc->btree_id,
+			     SPOS(hash_k.k->p.inode, hash, hash_k.k->p.snapshot),
+			     BTREE_ITER_slots|
+			     BTREE_ITER_with_updates);
+
+	for_each_btree_key_continue_norestart(iter,
+			BTREE_ITER_slots|
+			BTREE_ITER_with_updates, k, ret) {
 		if (bkey_eq(k.k->p, hash_k.k->p))
 			break;
 
@@ -374,19 +369,17 @@ int __bch2_str_hash_check_key(struct btree_trans *trans,
 		if (bkey_deleted(k.k))
 			goto bad_hash;
 	}
-	bch2_trans_iter_exit(trans, &iter);
-out:
+	bch2_trans_iter_exit(&iter);
 fsck_err:
-	printbuf_exit(&buf);
 	return ret;
 bad_hash:
-	bch2_trans_iter_exit(trans, &iter);
+	bch2_trans_iter_exit(&iter);
 	/*
 	 * Before doing any repair, check hash_info itself:
 	 */
 	ret = check_inode_hash_info_matches_root(trans, hash_k.k->p.inode, hash_info);
 	if (ret)
-		goto out;
+		return ret;
 
 	if (fsck_err(trans, hash_table_key_wrong_offset,
 		     "hash table key at wrong offset: should be at %llu\n%s",
@@ -396,5 +389,5 @@ bad_hash:
 					       k_iter, hash_k,
 					       &iter, bkey_s_c_null,
 					       updated_before_k_pos);
-	goto out;
+	return ret;
 }
