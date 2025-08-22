@@ -393,224 +393,9 @@ MODULE_PARM_DESC(quirks, "Chip quirks (default = 0"
 	", IR wake unreliable = "	__stringify(QUIRK_IR_WAKE)
 	")");
 
-#define OHCI_PARAM_DEBUG_AT_AR		1
-#define OHCI_PARAM_DEBUG_SELFIDS	2
-#define OHCI_PARAM_DEBUG_IRQS		4
-
-static int param_debug;
-module_param_named(debug, param_debug, int, 0644);
-MODULE_PARM_DESC(debug, "Verbose logging, deprecated in v6.11 kernel or later. (default = 0"
-	", AT/AR events = "	__stringify(OHCI_PARAM_DEBUG_AT_AR)
-	", self-IDs = "		__stringify(OHCI_PARAM_DEBUG_SELFIDS)
-	", IRQs = "		__stringify(OHCI_PARAM_DEBUG_IRQS)
-	", or a combination, or all = -1)");
-
 static bool param_remote_dma;
 module_param_named(remote_dma, param_remote_dma, bool, 0444);
 MODULE_PARM_DESC(remote_dma, "Enable unfiltered remote DMA (default = N)");
-
-static void log_irqs(struct fw_ohci *ohci, u32 evt)
-{
-	if (likely(!(param_debug & OHCI_PARAM_DEBUG_IRQS)))
-		return;
-
-	ohci_notice(ohci, "IRQ %08x%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s\n", evt,
-	    evt & OHCI1394_selfIDComplete	? " selfID"		: "",
-	    evt & OHCI1394_RQPkt		? " AR_req"		: "",
-	    evt & OHCI1394_RSPkt		? " AR_resp"		: "",
-	    evt & OHCI1394_reqTxComplete	? " AT_req"		: "",
-	    evt & OHCI1394_respTxComplete	? " AT_resp"		: "",
-	    evt & OHCI1394_isochRx		? " IR"			: "",
-	    evt & OHCI1394_isochTx		? " IT"			: "",
-	    evt & OHCI1394_postedWriteErr	? " postedWriteErr"	: "",
-	    evt & OHCI1394_cycleTooLong		? " cycleTooLong"	: "",
-	    evt & OHCI1394_cycle64Seconds	? " cycle64Seconds"	: "",
-	    evt & OHCI1394_cycleInconsistent	? " cycleInconsistent"	: "",
-	    evt & OHCI1394_regAccessFail	? " regAccessFail"	: "",
-	    evt & OHCI1394_unrecoverableError	? " unrecoverableError"	: "",
-	    evt & OHCI1394_busReset		? " busReset"		: "",
-	    evt & ~(OHCI1394_selfIDComplete | OHCI1394_RQPkt |
-		    OHCI1394_RSPkt | OHCI1394_reqTxComplete |
-		    OHCI1394_respTxComplete | OHCI1394_isochRx |
-		    OHCI1394_isochTx | OHCI1394_postedWriteErr |
-		    OHCI1394_cycleTooLong | OHCI1394_cycle64Seconds |
-		    OHCI1394_cycleInconsistent |
-		    OHCI1394_regAccessFail | OHCI1394_busReset)
-						? " ?"			: "");
-}
-
-static void log_selfids(struct fw_ohci *ohci, int generation, int self_id_count)
-{
-	static const char *const speed[] = {
-		[0] = "S100", [1] = "S200", [2] = "S400",    [3] = "beta",
-	};
-	static const char *const power[] = {
-		[0] = "+0W",  [1] = "+15W", [2] = "+30W",    [3] = "+45W",
-		[4] = "-3W",  [5] = " ?W",  [6] = "-3..-6W", [7] = "-3..-10W",
-	};
-	static const char port[] = {
-		[PHY_PACKET_SELF_ID_PORT_STATUS_NONE] = '.',
-		[PHY_PACKET_SELF_ID_PORT_STATUS_NCONN] = '-',
-		[PHY_PACKET_SELF_ID_PORT_STATUS_PARENT] = 'p',
-		[PHY_PACKET_SELF_ID_PORT_STATUS_CHILD] = 'c',
-	};
-	struct self_id_sequence_enumerator enumerator = {
-		.cursor = ohci->self_id_buffer,
-		.quadlet_count = self_id_count,
-	};
-
-	if (likely(!(param_debug & OHCI_PARAM_DEBUG_SELFIDS)))
-		return;
-
-	ohci_notice(ohci, "%d selfIDs, generation %d, local node ID %04x\n",
-		    self_id_count, generation, ohci->node_id);
-
-	while (enumerator.quadlet_count > 0) {
-		unsigned int quadlet_count;
-		unsigned int port_index;
-		const u32 *s;
-		int i;
-
-		s = self_id_sequence_enumerator_next(&enumerator, &quadlet_count);
-		if (IS_ERR(s))
-			break;
-
-		ohci_notice(ohci,
-		    "selfID 0: %08x, phy %d [%c%c%c] %s gc=%d %s %s%s%s\n",
-		    *s,
-		    phy_packet_self_id_get_phy_id(*s),
-		    port[self_id_sequence_get_port_status(s, quadlet_count, 0)],
-		    port[self_id_sequence_get_port_status(s, quadlet_count, 1)],
-		    port[self_id_sequence_get_port_status(s, quadlet_count, 2)],
-		    speed[*s >> 14 & 3], *s >> 16 & 63,
-		    power[*s >> 8 & 7], *s >> 22 & 1 ? "L" : "",
-		    *s >> 11 & 1 ? "c" : "", *s & 2 ? "i" : "");
-
-		port_index = 3;
-		for (i = 1; i < quadlet_count; ++i) {
-			ohci_notice(ohci,
-			    "selfID n: %08x, phy %d [%c%c%c%c%c%c%c%c]\n",
-			    s[i],
-			    phy_packet_self_id_get_phy_id(s[i]),
-			    port[self_id_sequence_get_port_status(s, quadlet_count, port_index)],
-			    port[self_id_sequence_get_port_status(s, quadlet_count, port_index + 1)],
-			    port[self_id_sequence_get_port_status(s, quadlet_count, port_index + 2)],
-			    port[self_id_sequence_get_port_status(s, quadlet_count, port_index + 3)],
-			    port[self_id_sequence_get_port_status(s, quadlet_count, port_index + 4)],
-			    port[self_id_sequence_get_port_status(s, quadlet_count, port_index + 5)],
-			    port[self_id_sequence_get_port_status(s, quadlet_count, port_index + 6)],
-			    port[self_id_sequence_get_port_status(s, quadlet_count, port_index + 7)]
-			);
-
-			port_index += 8;
-		}
-	}
-}
-
-static const char *evts[] = {
-	[0x00] = "evt_no_status",	[0x01] = "-reserved-",
-	[0x02] = "evt_long_packet",	[0x03] = "evt_missing_ack",
-	[0x04] = "evt_underrun",	[0x05] = "evt_overrun",
-	[0x06] = "evt_descriptor_read",	[0x07] = "evt_data_read",
-	[0x08] = "evt_data_write",	[0x09] = "evt_bus_reset",
-	[0x0a] = "evt_timeout",		[0x0b] = "evt_tcode_err",
-	[0x0c] = "-reserved-",		[0x0d] = "-reserved-",
-	[0x0e] = "evt_unknown",		[0x0f] = "evt_flushed",
-	[0x10] = "-reserved-",		[0x11] = "ack_complete",
-	[0x12] = "ack_pending ",	[0x13] = "-reserved-",
-	[0x14] = "ack_busy_X",		[0x15] = "ack_busy_A",
-	[0x16] = "ack_busy_B",		[0x17] = "-reserved-",
-	[0x18] = "-reserved-",		[0x19] = "-reserved-",
-	[0x1a] = "-reserved-",		[0x1b] = "ack_tardy",
-	[0x1c] = "-reserved-",		[0x1d] = "ack_data_error",
-	[0x1e] = "ack_type_error",	[0x1f] = "-reserved-",
-	[0x20] = "pending/cancelled",
-};
-
-static void log_ar_at_event(struct fw_ohci *ohci,
-			    char dir, int speed, u32 *header, int evt)
-{
-	static const char *const tcodes[] = {
-		[TCODE_WRITE_QUADLET_REQUEST]	= "QW req",
-		[TCODE_WRITE_BLOCK_REQUEST]	= "BW req",
-		[TCODE_WRITE_RESPONSE]		= "W resp",
-		[0x3]				= "-reserved-",
-		[TCODE_READ_QUADLET_REQUEST]	= "QR req",
-		[TCODE_READ_BLOCK_REQUEST]	= "BR req",
-		[TCODE_READ_QUADLET_RESPONSE]	= "QR resp",
-		[TCODE_READ_BLOCK_RESPONSE]	= "BR resp",
-		[TCODE_CYCLE_START]		= "cycle start",
-		[TCODE_LOCK_REQUEST]		= "Lk req",
-		[TCODE_STREAM_DATA]		= "async stream packet",
-		[TCODE_LOCK_RESPONSE]		= "Lk resp",
-		[0xc]				= "-reserved-",
-		[0xd]				= "-reserved-",
-		[TCODE_LINK_INTERNAL]		= "link internal",
-		[0xf]				= "-reserved-",
-	};
-	int tcode = async_header_get_tcode(header);
-	char specific[12];
-
-	if (likely(!(param_debug & OHCI_PARAM_DEBUG_AT_AR)))
-		return;
-
-	if (unlikely(evt >= ARRAY_SIZE(evts)))
-		evt = 0x1f;
-
-	if (evt == OHCI1394_evt_bus_reset) {
-		ohci_notice(ohci, "A%c evt_bus_reset, generation %d\n",
-			    dir, (header[2] >> 16) & 0xff);
-		return;
-	}
-
-	switch (tcode) {
-	case TCODE_WRITE_QUADLET_REQUEST:
-	case TCODE_READ_QUADLET_RESPONSE:
-	case TCODE_CYCLE_START:
-		snprintf(specific, sizeof(specific), " = %08x",
-			 be32_to_cpu((__force __be32)header[3]));
-		break;
-	case TCODE_WRITE_BLOCK_REQUEST:
-	case TCODE_READ_BLOCK_REQUEST:
-	case TCODE_READ_BLOCK_RESPONSE:
-	case TCODE_LOCK_REQUEST:
-	case TCODE_LOCK_RESPONSE:
-		snprintf(specific, sizeof(specific), " %x,%x",
-			 async_header_get_data_length(header),
-			 async_header_get_extended_tcode(header));
-		break;
-	default:
-		specific[0] = '\0';
-	}
-
-	switch (tcode) {
-	case TCODE_STREAM_DATA:
-		ohci_notice(ohci, "A%c %s, %s\n",
-			    dir, evts[evt], tcodes[tcode]);
-		break;
-	case TCODE_LINK_INTERNAL:
-		ohci_notice(ohci, "A%c %s, PHY %08x %08x\n",
-			    dir, evts[evt], header[1], header[2]);
-		break;
-	case TCODE_WRITE_QUADLET_REQUEST:
-	case TCODE_WRITE_BLOCK_REQUEST:
-	case TCODE_READ_QUADLET_REQUEST:
-	case TCODE_READ_BLOCK_REQUEST:
-	case TCODE_LOCK_REQUEST:
-		ohci_notice(ohci,
-			    "A%c spd %x tl %02x, %04x -> %04x, %s, %s, %012llx%s\n",
-			    dir, speed, async_header_get_tlabel(header),
-			    async_header_get_source(header), async_header_get_destination(header),
-			    evts[evt], tcodes[tcode], async_header_get_offset(header), specific);
-		break;
-	default:
-		ohci_notice(ohci,
-			    "A%c spd %x tl %02x, %04x -> %04x, %s, %s%s\n",
-			    dir, speed, async_header_get_tlabel(header),
-			    async_header_get_source(header), async_header_get_destination(header),
-			    evts[evt], tcodes[tcode], specific);
-	}
-}
 
 static inline void reg_write(const struct fw_ohci *ohci, int offset, u32 data)
 {
@@ -956,8 +741,6 @@ static __le32 *handle_ar_packet(struct ar_context *ctx, __le32 *buffer)
 	p.speed      = (status >> 21) & 0x7;
 	p.timestamp  = status & 0xffff;
 	p.generation = ohci->request_generation;
-
-	log_ar_at_event(ohci, 'R', p.speed, p.header, evt);
 
 	/*
 	 * Several controllers, notably from NEC and VIA, forget to
@@ -1566,8 +1349,6 @@ static int handle_at_packet(struct context *context,
 	evt = le16_to_cpu(last->transfer_status) & 0x1f;
 	packet->timestamp = le16_to_cpu(last->res_count);
 
-	log_ar_at_event(ohci, 'T', packet->speed, packet->header, evt);
-
 	switch (evt) {
 	case OHCI1394_evt_timeout:
 		/* Async response transmit timed out. */
@@ -1772,6 +1553,25 @@ static void at_context_transmit(struct at_context *ctx, struct fw_packet *packet
 static void detect_dead_context(struct fw_ohci *ohci,
 				const char *name, unsigned int regs)
 {
+	static const char *const evts[] = {
+		[0x00] = "evt_no_status",	[0x01] = "-reserved-",
+		[0x02] = "evt_long_packet",	[0x03] = "evt_missing_ack",
+		[0x04] = "evt_underrun",	[0x05] = "evt_overrun",
+		[0x06] = "evt_descriptor_read",	[0x07] = "evt_data_read",
+		[0x08] = "evt_data_write",	[0x09] = "evt_bus_reset",
+		[0x0a] = "evt_timeout",		[0x0b] = "evt_tcode_err",
+		[0x0c] = "-reserved-",		[0x0d] = "-reserved-",
+		[0x0e] = "evt_unknown",		[0x0f] = "evt_flushed",
+		[0x10] = "-reserved-",		[0x11] = "ack_complete",
+		[0x12] = "ack_pending ",	[0x13] = "-reserved-",
+		[0x14] = "ack_busy_X",		[0x15] = "ack_busy_A",
+		[0x16] = "ack_busy_B",		[0x17] = "-reserved-",
+		[0x18] = "-reserved-",		[0x19] = "-reserved-",
+		[0x1a] = "-reserved-",		[0x1b] = "ack_tardy",
+		[0x1c] = "-reserved-",		[0x1d] = "ack_data_error",
+		[0x1e] = "ack_type_error",	[0x1f] = "-reserved-",
+		[0x20] = "pending/cancelled",
+	};
 	u32 ctl;
 
 	ctl = reg_read(ohci, CONTROL_SET(regs));
@@ -2195,8 +1995,6 @@ static void bus_reset_work(struct work_struct *work)
 	if (free_rom)
 		dmam_free_coherent(ohci->card.device, CONFIG_ROM_SIZE, free_rom, free_rom_bus);
 
-	log_selfids(ohci, generation, self_id_count);
-
 	fw_core_handle_bus_reset(&ohci->card, ohci->node_id, generation,
 				 self_id_count, ohci->self_id_buffer,
 				 ohci->csr_state_setclear_abdicate);
@@ -2214,11 +2012,6 @@ static irqreturn_t irq_handler(int irq, void *data)
 	if (!event || !~event)
 		return IRQ_NONE;
 
-	if (unlikely(param_debug > 0)) {
-		dev_notice_ratelimited(ohci->card.device,
-				       "The debug parameter is superseded by tracepoints events, and deprecated.");
-	}
-
 	/*
 	 * busReset and postedWriteErr events must not be cleared yet
 	 * (OHCI 1.1 clauses 7.2.3.2 and 13.2.8.1)
@@ -2226,7 +2019,7 @@ static irqreturn_t irq_handler(int irq, void *data)
 	reg_write(ohci, OHCI1394_IntEventClear,
 		  event & ~(OHCI1394_busReset | OHCI1394_postedWriteErr));
 	trace_irqs(ohci->card.index, event);
-	log_irqs(ohci, event);
+
 	// The flag is masked again at bus_reset_work() scheduled by selfID event.
 	if (event & OHCI1394_busReset)
 		reg_write(ohci, OHCI1394_IntMaskClear, OHCI1394_busReset);
@@ -2705,7 +2498,6 @@ static int ohci_cancel_packet(struct fw_card *card, struct fw_packet *packet)
 		dma_unmap_single(ohci->card.device, packet->payload_bus,
 				 packet->payload_length, DMA_TO_DEVICE);
 
-	log_ar_at_event(ohci, 'T', packet->speed, packet->header, 0x20);
 	driver_data->packet = NULL;
 	packet->ack = RCODE_CANCELLED;
 
