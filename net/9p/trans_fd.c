@@ -22,7 +22,7 @@
 #include <linux/uaccess.h>
 #include <linux/inet.h>
 #include <linux/file.h>
-#include <linux/parser.h>
+#include <linux/fs_context.h>
 #include <linux/slab.h>
 #include <linux/seq_file.h>
 #include <net/9p/9p.h>
@@ -31,47 +31,11 @@
 
 #include <linux/syscalls.h> /* killme */
 
-#define P9_PORT 564
 #define MAX_SOCK_BUF (1024*1024)
 #define MAXPOLLWADDR	2
 
 static struct p9_trans_module p9_tcp_trans;
 static struct p9_trans_module p9_fd_trans;
-
-/**
- * struct p9_fd_opts - per-transport options
- * @rfd: file descriptor for reading (trans=fd)
- * @wfd: file descriptor for writing (trans=fd)
- * @port: port to connect to (trans=tcp)
- * @privport: port is privileged
- */
-
-struct p9_fd_opts {
-	int rfd;
-	int wfd;
-	u16 port;
-	bool privport;
-};
-
-/*
-  * Option Parsing (code inspired by NFS code)
-  *  - a little lazy - parse all fd-transport options
-  */
-
-enum {
-	/* Options that take integer arguments */
-	Opt_port, Opt_rfdno, Opt_wfdno, Opt_err,
-	/* Options that take no arguments */
-	Opt_privport,
-};
-
-static const match_table_t tokens = {
-	{Opt_port, "port=%u"},
-	{Opt_rfdno, "rfdno=%u"},
-	{Opt_wfdno, "wfdno=%u"},
-	{Opt_privport, "privport"},
-	{Opt_err, NULL},
-};
 
 enum {
 	Rworksched = 1,		/* read work scheduled or running */
@@ -726,10 +690,10 @@ static int p9_fd_cancelled(struct p9_client *client, struct p9_req_t *req)
 	p9_debug(P9_DEBUG_TRANS, "client %p req %p\n", client, req);
 
 	spin_lock(&m->req_lock);
-	/* Ignore cancelled request if message has been received
-	 * before lock.
-	 */
-	if (req->status == REQ_STATUS_RCVD) {
+	/* Ignore cancelled request if status changed since the request was
+	 * processed in p9_client_flush()
+	*/
+	if (req->status != REQ_STATUS_SENT) {
 		spin_unlock(&m->req_lock);
 		return 0;
 	}
@@ -749,7 +713,7 @@ static int p9_fd_cancelled(struct p9_client *client, struct p9_req_t *req)
 static int p9_fd_show_options(struct seq_file *m, struct p9_client *clnt)
 {
 	if (clnt->trans_mod == &p9_tcp_trans) {
-		if (clnt->trans_opts.tcp.port != P9_PORT)
+		if (clnt->trans_opts.tcp.port != P9_FD_PORT)
 			seq_printf(m, ",port=%u", clnt->trans_opts.tcp.port);
 	} else if (clnt->trans_mod == &p9_fd_trans) {
 		if (clnt->trans_opts.fd.rfd != ~0)
@@ -757,73 +721,6 @@ static int p9_fd_show_options(struct seq_file *m, struct p9_client *clnt)
 		if (clnt->trans_opts.fd.wfd != ~0)
 			seq_printf(m, ",wfd=%u", clnt->trans_opts.fd.wfd);
 	}
-	return 0;
-}
-
-/**
- * parse_opts - parse mount options into p9_fd_opts structure
- * @params: options string passed from mount
- * @opts: fd transport-specific structure to parse options into
- *
- * Returns 0 upon success, -ERRNO upon failure
- */
-
-static int parse_opts(char *params, struct p9_fd_opts *opts)
-{
-	char *p;
-	substring_t args[MAX_OPT_ARGS];
-	int option;
-	char *options, *tmp_options;
-
-	opts->port = P9_PORT;
-	opts->rfd = ~0;
-	opts->wfd = ~0;
-	opts->privport = false;
-
-	if (!params)
-		return 0;
-
-	tmp_options = kstrdup(params, GFP_KERNEL);
-	if (!tmp_options) {
-		p9_debug(P9_DEBUG_ERROR,
-			 "failed to allocate copy of option string\n");
-		return -ENOMEM;
-	}
-	options = tmp_options;
-
-	while ((p = strsep(&options, ",")) != NULL) {
-		int token;
-		int r;
-		if (!*p)
-			continue;
-		token = match_token(p, tokens, args);
-		if ((token != Opt_err) && (token != Opt_privport)) {
-			r = match_int(&args[0], &option);
-			if (r < 0) {
-				p9_debug(P9_DEBUG_ERROR,
-					 "integer field, but no integer?\n");
-				continue;
-			}
-		}
-		switch (token) {
-		case Opt_port:
-			opts->port = option;
-			break;
-		case Opt_rfdno:
-			opts->rfd = option;
-			break;
-		case Opt_wfdno:
-			opts->wfd = option;
-			break;
-		case Opt_privport:
-			opts->privport = true;
-			break;
-		default:
-			continue;
-		}
-	}
-
-	kfree(tmp_options);
 	return 0;
 }
 
@@ -981,17 +878,18 @@ static int p9_bind_privport(struct socket *sock)
 }
 
 static int
-p9_fd_create_tcp(struct p9_client *client, const char *addr, char *args)
+p9_fd_create_tcp(struct p9_client *client, struct fs_context *fc)
 {
+	const char *addr = fc->source;
+	struct v9fs_context *ctx = fc->fs_private;
 	int err;
 	char port_str[6];
 	struct socket *csocket;
 	struct sockaddr_storage stor = { 0 };
 	struct p9_fd_opts opts;
 
-	err = parse_opts(args, &opts);
-	if (err < 0)
-		return err;
+	/* opts are already parsed in context */
+	opts = ctx->fd_opts;
 
 	if (!addr)
 		return -EINVAL;
@@ -1038,8 +936,9 @@ p9_fd_create_tcp(struct p9_client *client, const char *addr, char *args)
 }
 
 static int
-p9_fd_create_unix(struct p9_client *client, const char *addr, char *args)
+p9_fd_create_unix(struct p9_client *client, struct fs_context *fc)
 {
+	const char *addr = fc->source;
 	int err;
 	struct socket *csocket;
 	struct sockaddr_un sun_server;
@@ -1078,14 +977,12 @@ p9_fd_create_unix(struct p9_client *client, const char *addr, char *args)
 }
 
 static int
-p9_fd_create(struct p9_client *client, const char *addr, char *args)
+p9_fd_create(struct p9_client *client, struct fs_context *fc)
 {
+	struct v9fs_context *ctx = fc->fs_private;
+	struct p9_fd_opts opts = ctx->fd_opts;
 	int err;
-	struct p9_fd_opts opts;
 
-	err = parse_opts(args, &opts);
-	if (err < 0)
-		return err;
 	client->trans_opts.fd.rfd = opts.rfd;
 	client->trans_opts.fd.wfd = opts.wfd;
 
