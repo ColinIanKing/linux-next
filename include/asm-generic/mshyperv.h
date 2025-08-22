@@ -31,6 +31,7 @@
 enum hv_partition_type {
 	HV_PARTITION_TYPE_GUEST,
 	HV_PARTITION_TYPE_ROOT,
+	HV_PARTITION_TYPE_L1VH,
 };
 
 struct ms_hyperv_info {
@@ -67,8 +68,7 @@ extern bool hv_nested;
 extern u64 hv_current_partition_id;
 extern enum hv_partition_type hv_curr_partition_type;
 
-extern void * __percpu *hyperv_pcpu_input_arg;
-extern void * __percpu *hyperv_pcpu_output_arg;
+extern void * __percpu *hyperv_pcpu_arg;
 
 u64 hv_do_hypercall(u64 control, void *inputaddr, void *outputaddr);
 u64 hv_do_fast_hypercall8(u16 control, u64 input8);
@@ -150,6 +150,110 @@ static inline u64 hv_do_rep_hypercall(u16 code, u16 rep_count, u16 varhead_size,
 
 	return status;
 }
+
+/*
+ * Hypercall input and output argument setup
+ */
+
+/*
+ * Allocate one page that is shared between input and output args, which is
+ * sufficient for all current hypercalls. If a future hypercall requires
+ * more space, change this value to "2" and everything will work.
+ */
+#define HV_HVCALL_ARG_PAGES 1
+
+/*
+ * Allocate space for hypercall input and output arguments from the
+ * pre-allocated per-cpu hyperv_pcpu_args page(s). A NULL value for the input
+ * or output indicates to allocate no space for that argument. For input and
+ * for output, specify the size of the fixed portion, and the size of an
+ * element in a variable size array. A zero value for entry_size indicates
+ * there is no array. The fixed size space for the input is zero'ed.
+ *
+ * When variable size arrays are present, the function returns the number of
+ * elements (i.e, the batch size) that fit in the available space.
+ *
+ * The four "size" arguments must be constants so the compiler can do most of
+ * the calculations. Then the generated inline code is no larger than if open
+ * coding the access to the hyperv_pcpu_arg and doing memset() on the input.
+ *
+ * This function must be called with interrupts disabled so the thread is not
+ * rescheduled onto another vCPU while accessing the per-cpu args page.
+ */
+static __always_inline int hv_setup_inout_array(void *input, u32 in_size,
+						u32 in_entry_size, void *output,
+						u32 out_size, u32 out_entry_size)
+{
+	u32 in_batch_count = 0, out_batch_count = 0, batch_count;
+	u32 in_total_size, out_total_size, offset;
+	u32 batch_space = HV_HYP_PAGE_SIZE * HV_HVCALL_ARG_PAGES;
+	void *space;
+
+	/*
+	 * If input and output have arrays, allocate half the space to input
+	 * and half to output. If only input has an array, the array can use
+	 * all the space except for the fixed size output (but not to exceed
+	 * one page), and vice versa.
+	 */
+	if (in_entry_size && out_entry_size)
+		batch_space = batch_space / 2;
+	else if (in_entry_size)
+		batch_space = min(HV_HYP_PAGE_SIZE, batch_space - out_size);
+	else if (out_entry_size)
+		batch_space = min(HV_HYP_PAGE_SIZE, batch_space - in_size);
+
+	if (in_entry_size)
+		in_batch_count = (batch_space - in_size) / in_entry_size;
+	if (out_entry_size)
+		out_batch_count = (batch_space - out_size) / out_entry_size;
+
+	/*
+	 * If input and output have arrays, use the smaller of the two batch
+	 * counts, in case they are different. If only one has an array, use
+	 * that batch count. batch_count will be zero if neither has an array.
+	 */
+	if (in_batch_count && out_batch_count)
+		batch_count = min(in_batch_count, out_batch_count);
+	else
+		batch_count = in_batch_count | out_batch_count;
+
+	in_total_size = ALIGN(in_size + (in_entry_size * batch_count), 8);
+	out_total_size = ALIGN(out_size + (out_entry_size * batch_count), 8);
+
+	space = *this_cpu_ptr(hyperv_pcpu_arg);
+	if (input) {
+		*(void **)input = space;
+		if (space)
+			/* Zero the fixed size portion, not any array portion */
+			memset(space, 0, ALIGN(in_size, 8));
+	}
+
+	if (output) {
+		if (in_total_size + out_total_size <= HV_HYP_PAGE_SIZE) {
+			offset = in_total_size;
+		} else {
+			offset = HV_HYP_PAGE_SIZE;
+			/* Need more than 1 page, but only 1 was allocated */
+			BUILD_BUG_ON(HV_HVCALL_ARG_PAGES == 1);
+		}
+		*(void **)output = space + offset;
+	}
+
+	return batch_count;
+}
+
+/* Wrappers for some of the simpler cases with only input, or with no arrays */
+#define hv_setup_in(input, in_size) \
+	hv_setup_inout_array(input, in_size, 0, NULL, 0, 0)
+
+#define hv_setup_inout(input, in_size, output, out_size) \
+	hv_setup_inout_array(input, in_size, 0, output, out_size, 0)
+
+#define hv_setup_in_array(input, in_size, in_entry_size) \
+	hv_setup_inout_array(input, in_size, in_entry_size, NULL, 0, 0)
+
+#define hv_get_input_batch_size(in_size, in_entry_size) \
+	hv_setup_inout_array(NULL, in_size, in_entry_size, NULL, 0, 0)
 
 /* Generate the guest OS identifier as described in the Hyper-V TLFS */
 static inline u64 hv_generate_guest_id(u64 kernel_version)
@@ -354,12 +458,22 @@ static inline bool hv_root_partition(void)
 {
 	return hv_curr_partition_type == HV_PARTITION_TYPE_ROOT;
 }
+static inline bool hv_l1vh_partition(void)
+{
+	return hv_curr_partition_type == HV_PARTITION_TYPE_L1VH;
+}
+static inline bool hv_parent_partition(void)
+{
+	return hv_root_partition() || hv_l1vh_partition();
+}
 int hv_call_deposit_pages(int node, u64 partition_id, u32 num_pages);
 int hv_call_add_logical_proc(int node, u32 lp_index, u32 acpi_id);
 int hv_call_create_vp(int node, u64 partition_id, u32 vp_index, u32 flags);
 
 #else /* CONFIG_MSHV_ROOT */
 static inline bool hv_root_partition(void) { return false; }
+static inline bool hv_l1vh_partition(void) { return false; }
+static inline bool hv_parent_partition(void) { return false; }
 static inline int hv_call_deposit_pages(int node, u64 partition_id, u32 num_pages)
 {
 	return -EOPNOTSUPP;

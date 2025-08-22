@@ -109,21 +109,19 @@ static bool __send_ipi_mask_ex(const struct cpumask *mask, int vector,
 {
 	struct hv_send_ipi_ex *ipi_arg;
 	unsigned long flags;
-	int nr_bank = 0;
+	int batch_size, nr_bank = 0;
 	u64 status = HV_STATUS_INVALID_PARAMETER;
 
 	if (!(ms_hyperv.hints & HV_X64_EX_PROCESSOR_MASKS_RECOMMENDED))
 		return false;
 
 	local_irq_save(flags);
-	ipi_arg = *this_cpu_ptr(hyperv_pcpu_input_arg);
-
+	batch_size = hv_setup_in_array(&ipi_arg, sizeof(*ipi_arg),
+					sizeof(ipi_arg->vp_set.bank_contents[0]));
 	if (unlikely(!ipi_arg))
 		goto ipi_mask_ex_done;
 
 	ipi_arg->vector = vector;
-	ipi_arg->reserved = 0;
-	ipi_arg->vp_set.valid_bank_mask = 0;
 
 	/*
 	 * Use HV_GENERIC_SET_ALL and avoid converting cpumask to VP_SET
@@ -140,7 +138,7 @@ static bool __send_ipi_mask_ex(const struct cpumask *mask, int vector,
 		 * represented in VP_SET. Return an error and fall back to
 		 * native (architectural) method of sending IPIs.
 		 */
-		if (nr_bank <= 0)
+		if (nr_bank <= 0 || nr_bank > batch_size)
 			goto ipi_mask_ex_done;
 	} else {
 		ipi_arg->vp_set.format = HV_GENERIC_SET_ALL;

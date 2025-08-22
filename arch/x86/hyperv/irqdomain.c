@@ -21,15 +21,15 @@ static int hv_map_interrupt(union hv_device_id device_id, bool level,
 	struct hv_device_interrupt_descriptor *intr_desc;
 	unsigned long flags;
 	u64 status;
-	int nr_bank, var_size;
+	int batch_size, nr_bank, var_size;
 
 	local_irq_save(flags);
 
-	input = *this_cpu_ptr(hyperv_pcpu_input_arg);
-	output = *this_cpu_ptr(hyperv_pcpu_output_arg);
+	batch_size = hv_setup_inout_array(&input, sizeof(*input),
+			sizeof(input->interrupt_descriptor.target.vp_set.bank_contents[0]),
+			&output, sizeof(*output), 0);
 
 	intr_desc = &input->interrupt_descriptor;
-	memset(input, 0, sizeof(*input));
 	input->partition_id = hv_current_partition_id;
 	input->device_id = device_id.as_uint64;
 	intr_desc->interrupt_type = HV_X64_INTERRUPT_TYPE_FIXED;
@@ -41,12 +41,16 @@ static int hv_map_interrupt(union hv_device_id device_id, bool level,
 	else
 		intr_desc->trigger_mode = HV_INTERRUPT_TRIGGER_MODE_EDGE;
 
-	intr_desc->target.vp_set.valid_bank_mask = 0;
 	intr_desc->target.vp_set.format = HV_GENERIC_SET_SPARSE_4K;
 	nr_bank = cpumask_to_vpset(&(intr_desc->target.vp_set), cpumask_of(cpu));
 	if (nr_bank < 0) {
 		local_irq_restore(flags);
 		pr_err("%s: unable to generate VP set\n", __func__);
+		return -EINVAL;
+	}
+	if (nr_bank > batch_size) {
+		local_irq_restore(flags);
+		pr_err("%s: nr_bank too large\n", __func__);
 		return -EINVAL;
 	}
 	intr_desc->target.flags = HV_DEVICE_INTERRUPT_TARGET_PROCESSOR_SET;
@@ -78,9 +82,8 @@ static int hv_unmap_interrupt(u64 id, struct hv_interrupt_entry *old_entry)
 	u64 status;
 
 	local_irq_save(flags);
-	input = *this_cpu_ptr(hyperv_pcpu_input_arg);
 
-	memset(input, 0, sizeof(*input));
+	hv_setup_in(&input, sizeof(*input));
 	intr_entry = &input->interrupt_entry;
 	input->partition_id = hv_current_partition_id;
 	input->device_id = id;

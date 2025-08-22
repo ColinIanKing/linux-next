@@ -18,6 +18,7 @@
 #include <linux/clockchips.h>
 #include <linux/delay.h>
 #include <linux/interrupt.h>
+#include <linux/export.h>
 #include <clocksource/hyperv_timer.h>
 #include <asm/mshyperv.h>
 #include <linux/set_memory.h>
@@ -25,6 +26,7 @@
 
 /* The one and only */
 struct hv_context hv_context;
+EXPORT_SYMBOL_GPL(hv_context);
 
 /*
  * hv_init - Main initialization routine.
@@ -60,13 +62,15 @@ int hv_post_message(union hv_connection_id connection_id,
 	/*
 	 * A TDX VM with the paravisor must use the decrypted post_msg_page: see
 	 * the comment in struct hv_per_cpu_context. A SNP VM with the paravisor
-	 * can use the encrypted hyperv_pcpu_input_arg because it copies the
+	 * can use the encrypted hyperv_pcpu_arg because it copies the
 	 * input into the GHCB page, which has been decrypted by the paravisor.
 	 */
 	if (hv_isolation_type_tdx() && ms_hyperv.paravisor_present)
 		aligned_msg = this_cpu_ptr(hv_context.cpu_context)->post_msg_page;
 	else
-		aligned_msg = *this_cpu_ptr(hyperv_pcpu_input_arg);
+		hv_setup_in_array(&aligned_msg,
+				   offsetof(typeof(*aligned_msg), payload),
+				   sizeof(aligned_msg->payload[0]));
 
 	aligned_msg->connectionid = connection_id;
 	aligned_msg->reserved = 0;
@@ -95,6 +99,7 @@ int hv_post_message(union hv_connection_id connection_id,
 
 	return hv_result(status);
 }
+EXPORT_SYMBOL_GPL(hv_post_message);
 
 int hv_synic_alloc(void)
 {
