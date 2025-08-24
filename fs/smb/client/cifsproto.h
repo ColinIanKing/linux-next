@@ -176,8 +176,8 @@ extern int cifs_get_writable_path(struct cifs_tcon *tcon, const char *name,
 				  int flags,
 				  struct cifsFileInfo **ret_file);
 extern struct cifsFileInfo *find_readable_file(struct cifsInodeInfo *, bool);
-extern int cifs_get_readable_path(struct cifs_tcon *tcon, const char *name,
-				  struct cifsFileInfo **ret_file);
+int cifs_get_readable_path(struct cifs_tcon *tcon, const char *name,
+			   unsigned int flags, struct cifsFileInfo **ret_file);
 extern int cifs_get_hardlink_path(struct cifs_tcon *tcon, struct inode *inode,
 				  struct file *file);
 extern unsigned int smbCalcSize(void *buf);

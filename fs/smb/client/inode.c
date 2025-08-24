@@ -2003,7 +2003,11 @@ retry_std_delete:
 		goto psx_del_no_retry;
 	}
 
-	rc = server->ops->unlink(xid, tcon, full_path, cifs_sb, dentry);
+	if (server->vals->protocol_id > SMB10_PROT_ID &&
+	    d_is_positive(dentry) && d_count(dentry) > 2)
+		rc = -EBUSY;
+	else
+		rc = server->ops->unlink(xid, tcon, full_path, cifs_sb, dentry);
 
 psx_del_no_retry:
 	if (!rc) {
