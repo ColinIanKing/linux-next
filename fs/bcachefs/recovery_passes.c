@@ -237,19 +237,21 @@ static int bch2_lookup_root_inode(struct bch_fs *c)
 	subvol_inum inum = BCACHEFS_ROOT_SUBVOL_INUM;
 	struct bch_inode_unpacked inode_u;
 	struct bch_subvolume subvol;
+	CLASS(btree_trans, trans)(c);
 
-	return bch2_trans_do(c,
+	return lockrestart_do(trans,
 		bch2_subvolume_get(trans, inum.subvol, true, &subvol) ?:
 		bch2_inode_find_by_inum_trans(trans, inum, &inode_u));
 }
 
 struct recovery_pass_fn {
 	int		(*fn)(struct bch_fs *);
+	const char	*name;
 	unsigned	when;
 };
 
 static struct recovery_pass_fn recovery_pass_fns[] = {
-#define x(_fn, _id, _when)	{ .fn = bch2_##_fn, .when = _when },
+#define x(_fn, _id, _when)	{ .fn = bch2_##_fn, .name = #_fn, .when = _when },
 	BCH_RECOVERY_PASSES()
 #undef x
 };
@@ -338,7 +340,8 @@ static bool recovery_pass_needs_set(struct bch_fs *c,
 int __bch2_run_explicit_recovery_pass(struct bch_fs *c,
 				      struct printbuf *out,
 				      enum bch_recovery_pass pass,
-				      enum bch_run_recovery_pass_flags flags)
+				      enum bch_run_recovery_pass_flags flags,
+				      bool *write_sb)
 {
 	struct bch_fs_recovery *r = &c->recovery;
 	int ret = 0;
@@ -346,13 +349,11 @@ int __bch2_run_explicit_recovery_pass(struct bch_fs *c,
 	lockdep_assert_held(&c->sb_lock);
 
 	bch2_printbuf_make_room(out, 1024);
-	out->atomic++;
-
-	unsigned long lockflags;
-	spin_lock_irqsave(&r->lock, lockflags);
+	guard(printbuf_atomic)(out);
+	guard(spinlock_irq)(&r->lock);
 
 	if (!recovery_pass_needs_set(c, pass, &flags))
-		goto out;
+		return 0;
 
 	bool in_recovery = test_bit(BCH_FS_in_recovery, &c->flags);
 	bool rewind = in_recovery &&
@@ -362,15 +363,15 @@ int __bch2_run_explicit_recovery_pass(struct bch_fs *c,
 
 	if (!(flags & RUN_RECOVERY_PASS_nopersistent)) {
 		struct bch_sb_field_ext *ext = bch2_sb_field_get(c->disk_sb.sb, ext);
-		__set_bit_le64(bch2_recovery_pass_to_stable(pass), ext->recovery_passes_required);
+		*write_sb |= !__test_and_set_bit_le64(bch2_recovery_pass_to_stable(pass),
+						     ext->recovery_passes_required);
 	}
 
 	if (pass < BCH_RECOVERY_PASS_set_may_go_rw &&
 	    (!in_recovery || r->curr_pass >= BCH_RECOVERY_PASS_set_may_go_rw)) {
 		prt_printf(out, "need recovery pass %s (%u), but already rw\n",
 			   bch2_recovery_passes[pass], pass);
-		ret = bch_err_throw(c, cannot_rewind_recovery);
-		goto out;
+		return bch_err_throw(c, cannot_rewind_recovery);
 	}
 
 	if (ratelimit)
@@ -400,9 +401,7 @@ int __bch2_run_explicit_recovery_pass(struct bch_fs *c,
 		if (p->when & PASS_ONLINE)
 			bch2_run_async_recovery_passes(c);
 	}
-out:
-	spin_unlock_irqrestore(&r->lock, lockflags);
-	--out->atomic;
+
 	return ret;
 }
 
@@ -411,14 +410,19 @@ int bch2_run_explicit_recovery_pass(struct bch_fs *c,
 				    enum bch_recovery_pass pass,
 				    enum bch_run_recovery_pass_flags flags)
 {
-	int ret = 0;
+	/*
+	 * With RUN_RECOVERY_PASS_ratelimit, recovery_pass_needs_set needs
+	 * sb_lock
+	 */
+	if (!(flags & RUN_RECOVERY_PASS_ratelimit) &&
+	    !recovery_pass_needs_set(c, pass, &flags))
+		return 0;
 
-	if (recovery_pass_needs_set(c, pass, &flags)) {
-		guard(mutex)(&c->sb_lock);
-		ret = __bch2_run_explicit_recovery_pass(c, out, pass, flags);
+	guard(mutex)(&c->sb_lock);
+	bool write_sb = false;
+	int ret = __bch2_run_explicit_recovery_pass(c, out, pass, flags, &write_sb);
+	if (write_sb)
 		bch2_write_super(c);
-	}
-
 	return ret;
 }
 
@@ -441,14 +445,13 @@ int bch2_require_recovery_pass(struct bch_fs *c,
 		return 0;
 
 	enum bch_run_recovery_pass_flags flags = 0;
-	int ret = 0;
 
-	if (recovery_pass_needs_set(c, pass, &flags)) {
-		ret = __bch2_run_explicit_recovery_pass(c, out, pass, flags);
+	bool write_sb = false;
+	int ret = __bch2_run_explicit_recovery_pass(c, out, pass, flags, &write_sb) ?:
+		bch_err_throw(c, recovery_pass_will_run);
+	if (write_sb)
 		bch2_write_super(c);
-	}
-
-	return ret ?: bch_err_throw(c, recovery_pass_will_run);
+	return ret;
 }
 
 int bch2_run_print_explicit_recovery_pass(struct bch_fs *c, enum bch_recovery_pass pass)
@@ -458,16 +461,16 @@ int bch2_run_print_explicit_recovery_pass(struct bch_fs *c, enum bch_recovery_pa
 	if (!recovery_pass_needs_set(c, pass, &flags))
 		return 0;
 
-	struct printbuf buf = PRINTBUF;
+	CLASS(printbuf, buf)();
 	bch2_log_msg_start(c, &buf);
 
-	mutex_lock(&c->sb_lock);
+	guard(mutex)(&c->sb_lock);
+	bool write_sb = false;
 	int ret = __bch2_run_explicit_recovery_pass(c, &buf, pass,
-						RUN_RECOVERY_PASS_nopersistent);
-	mutex_unlock(&c->sb_lock);
+						RUN_RECOVERY_PASS_nopersistent,
+						&write_sb);
 
 	bch2_print_str(c, KERN_NOTICE, buf.buf);
-	printbuf_exit(&buf);
 	return ret;
 }
 
@@ -486,6 +489,7 @@ static int bch2_run_recovery_pass(struct bch_fs *c, enum bch_recovery_pass pass)
 	r->passes_to_run &= ~BIT_ULL(pass);
 
 	if (ret) {
+		bch_err(c, "%s(): error %s", p->name, bch2_err_str(ret));
 		r->passes_failing |= BIT_ULL(pass);
 		return ret;
 	}
@@ -635,6 +639,8 @@ void bch2_recovery_pass_status_to_text(struct printbuf *out, struct bch_fs *c)
 		prt_printf(out, "Current pass:\t%s\n", bch2_recovery_passes[r->curr_pass]);
 		prt_passes(out, "Current passes", r->passes_to_run);
 	}
+
+	prt_printf(out, "Pass done:\t%s\n", bch2_recovery_passes[r->pass_done]);
 }
 
 void bch2_fs_recovery_passes_init(struct bch_fs *c)
