@@ -1886,6 +1886,9 @@ static inline bool is_replayable_error(int error)
 #define FIND_WR_FSUID_ONLY  1
 #define FIND_WR_WITH_DELETE 2
 
+/* cifs_get_readable_path() flags */
+#define FIND_RD_NO_PENDING_DELETE 1
+
 #define   MID_FREE 0
 #define   MID_REQUEST_ALLOCATED 1
 #define   MID_REQUEST_SUBMITTED 2
@@ -2343,6 +2346,8 @@ struct smb2_compound_vars {
 	struct kvec qi_iov;
 	struct kvec io_iov[SMB2_IOCTL_IOV_SIZE];
 	struct kvec si_iov[SMB2_SET_INFO_IOV_SIZE];
+	struct kvec fdis_iov[SMB2_SET_INFO_IOV_SIZE];
+	struct kvec rename_iov[SMB2_SET_INFO_IOV_SIZE];
 	struct kvec close_iov;
 	struct smb2_file_rename_info_hdr rename_info;
 	struct smb2_file_link_info_hdr link_info;
