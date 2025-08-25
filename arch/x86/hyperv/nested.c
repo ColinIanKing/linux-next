@@ -30,15 +30,13 @@ int hyperv_flush_guest_mapping(u64 as)
 
 	local_irq_save(flags);
 
-	flush = *this_cpu_ptr(hyperv_pcpu_input_arg);
-
+	hv_setup_in(&flush, sizeof(*flush));
 	if (unlikely(!flush)) {
 		local_irq_restore(flags);
 		goto fault;
 	}
 
 	flush->address_space = as;
-	flush->flags = 0;
 
 	status = hv_do_hypercall(HVCALL_FLUSH_GUEST_PHYSICAL_ADDRESS_SPACE,
 				 flush, NULL);
@@ -91,25 +89,23 @@ int hyperv_flush_guest_mapping_range(u64 as,
 	u64 status;
 	unsigned long flags;
 	int ret = -ENOTSUPP;
-	int gpa_n = 0;
+	int batch_size, gpa_n = 0;
 
 	if (!hv_hypercall_pg || !fill_flush_list_func)
 		goto fault;
 
 	local_irq_save(flags);
 
-	flush = *this_cpu_ptr(hyperv_pcpu_input_arg);
-
+	batch_size = hv_setup_in_array(&flush, sizeof(*flush),
+					sizeof(flush->gpa_list[0]));
 	if (unlikely(!flush)) {
 		local_irq_restore(flags);
 		goto fault;
 	}
 
 	flush->address_space = as;
-	flush->flags = 0;
-
 	gpa_n = fill_flush_list_func(flush, data);
-	if (gpa_n < 0) {
+	if (gpa_n < 0 || gpa_n > batch_size) {
 		local_irq_restore(flags);
 		goto fault;
 	}

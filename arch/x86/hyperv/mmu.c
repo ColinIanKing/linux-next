@@ -72,7 +72,7 @@ static void hyperv_flush_tlb_multi(const struct cpumask *cpus,
 
 	local_irq_save(flags);
 
-	flush = *this_cpu_ptr(hyperv_pcpu_input_arg);
+	max_gvas = hv_setup_in_array(&flush, sizeof(*flush), sizeof(flush->gva_list[0]));
 
 	if (unlikely(!flush)) {
 		local_irq_restore(flags);
@@ -86,13 +86,10 @@ static void hyperv_flush_tlb_multi(const struct cpumask *cpus,
 		 */
 		flush->address_space = virt_to_phys(info->mm->pgd);
 		flush->address_space &= CR3_ADDR_MASK;
-		flush->flags = 0;
 	} else {
-		flush->address_space = 0;
 		flush->flags = HV_FLUSH_ALL_VIRTUAL_ADDRESS_SPACES;
 	}
 
-	flush->processor_mask = 0;
 	if (cpumask_equal(cpus, cpu_present_mask)) {
 		flush->flags |= HV_FLUSH_ALL_PROCESSORS;
 	} else {
@@ -139,8 +136,6 @@ static void hyperv_flush_tlb_multi(const struct cpumask *cpus,
 	 * We can flush not more than max_gvas with one hypercall. Flush the
 	 * whole address space if we were asked to do more.
 	 */
-	max_gvas = (PAGE_SIZE - sizeof(*flush)) / sizeof(flush->gva_list[0]);
-
 	if (info->end == TLB_FLUSH_ALL) {
 		flush->flags |= HV_FLUSH_NON_GLOBAL_MAPPINGS_ONLY;
 		status = hv_do_hypercall(HVCALL_FLUSH_VIRTUAL_ADDRESS_SPACE,
@@ -179,7 +174,7 @@ static u64 hyperv_flush_tlb_others_ex(const struct cpumask *cpus,
 	if (!(ms_hyperv.hints & HV_X64_EX_PROCESSOR_MASKS_RECOMMENDED))
 		return HV_STATUS_INVALID_PARAMETER;
 
-	flush = *this_cpu_ptr(hyperv_pcpu_input_arg);
+	max_gvas = hv_setup_in_array(&flush, sizeof(*flush), sizeof(flush->gva_list[0]));
 
 	if (info->mm) {
 		/*
@@ -188,13 +183,9 @@ static u64 hyperv_flush_tlb_others_ex(const struct cpumask *cpus,
 		 */
 		flush->address_space = virt_to_phys(info->mm->pgd);
 		flush->address_space &= CR3_ADDR_MASK;
-		flush->flags = 0;
 	} else {
-		flush->address_space = 0;
 		flush->flags = HV_FLUSH_ALL_VIRTUAL_ADDRESS_SPACES;
 	}
-
-	flush->hv_vp_set.valid_bank_mask = 0;
 
 	flush->hv_vp_set.format = HV_GENERIC_SET_SPARSE_4K;
 	nr_bank = cpumask_to_vpset_skip(&flush->hv_vp_set, cpus,
@@ -210,10 +201,10 @@ static u64 hyperv_flush_tlb_others_ex(const struct cpumask *cpus,
 	 * of flush->hv_vp_set as part of the fixed size input header.
 	 * So the variable input header size is equal to nr_bank.
 	 */
-	max_gvas =
-		(PAGE_SIZE - sizeof(*flush) - nr_bank *
-		 sizeof(flush->hv_vp_set.bank_contents[0])) /
+	max_gvas -= (nr_bank * sizeof(flush->hv_vp_set.bank_contents[0])) /
 		sizeof(flush->gva_list[0]);
+	if (max_gvas <= 0)
+		return HV_STATUS_INVALID_PARAMETER;
 
 	if (info->end == TLB_FLUSH_ALL) {
 		flush->flags |= HV_FLUSH_NON_GLOBAL_MAPPINGS_ONLY;

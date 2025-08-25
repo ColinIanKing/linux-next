@@ -620,7 +620,7 @@ static void hv_irq_retarget_interrupt(struct irq_data *data)
 	struct pci_dev *pdev;
 	unsigned long flags;
 	u32 var_size = 0;
-	int cpu, nr_bank;
+	int cpu, nr_bank, batch_size;
 	u64 res;
 
 	dest = irq_data_get_effective_affinity_mask(data);
@@ -636,8 +636,8 @@ static void hv_irq_retarget_interrupt(struct irq_data *data)
 
 	local_irq_save(flags);
 
-	params = *this_cpu_ptr(hyperv_pcpu_input_arg);
-	memset(params, 0, sizeof(*params));
+	batch_size = hv_setup_in_array(&params, sizeof(*params),
+					sizeof(params->int_target.vp_set.bank_contents[0]));
 	params->partition_id = HV_PARTITION_ID_SELF;
 	params->int_entry.source = HV_INTERRUPT_SOURCE_MSI;
 	params->int_entry.msi_entry.address.as_uint32 = int_desc->address & 0xffffffff;
@@ -669,7 +669,7 @@ static void hv_irq_retarget_interrupt(struct irq_data *data)
 		nr_bank = cpumask_to_vpset(&params->int_target.vp_set, tmp);
 		free_cpumask_var(tmp);
 
-		if (nr_bank <= 0) {
+		if (nr_bank <= 0 || nr_bank > batch_size) {
 			res = 1;
 			goto out;
 		}
@@ -1102,11 +1102,9 @@ static void hv_pci_read_mmio(struct device *dev, phys_addr_t gpa, int size, u32 
 
 	/*
 	 * Must be called with interrupts disabled so it is safe
-	 * to use the per-cpu input argument page.  Use it for
-	 * both input and output.
+	 * to use the per-cpu argument page.
 	 */
-	in = *this_cpu_ptr(hyperv_pcpu_input_arg);
-	out = *this_cpu_ptr(hyperv_pcpu_input_arg) + sizeof(*in);
+	hv_setup_inout(&in, sizeof(*in), &out, sizeof(*out));
 	in->gpa = gpa;
 	in->size = size;
 
@@ -1135,9 +1133,9 @@ static void hv_pci_write_mmio(struct device *dev, phys_addr_t gpa, int size, u32
 
 	/*
 	 * Must be called with interrupts disabled so it is safe
-	 * to use the per-cpu input argument memory.
+	 * to use the per-cpu argument page.
 	 */
-	in = *this_cpu_ptr(hyperv_pcpu_input_arg);
+	hv_setup_in_array(&in, offsetof(typeof(*in), data), sizeof(in->data[0]));
 	in->gpa = gpa;
 	in->size = size;
 	switch (size) {
