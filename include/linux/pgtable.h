@@ -1997,7 +1997,6 @@ static inline const char *pgtable_level_to_str(enum pgtable_level level)
 	case PGTABLE_LEVEL_PGD:
 		return "pgd";
 	default:
-		VM_WARN_ON_ONCE(1);
 		return "unknown";
 	}
 }
