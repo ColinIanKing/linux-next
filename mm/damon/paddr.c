@@ -135,6 +135,18 @@ static bool damon_pa_invalid_damos_folio(struct folio *folio, struct damos *s)
 	return false;
 }
 
+/* convert physical address to core-layer address */
+static unsigned long damon_pa_core_addr(phys_addr_t pa,
+		unsigned long addr_unit)
+{
+#ifdef __i386__
+	do_div(pa, addr_unit);
+	return pa;
+#else
+	return pa / addr_unit;
+#endif
+}
+
 static unsigned long damon_pa_pageout(struct damon_region *r,
 		unsigned long addr_unit, struct damos *s,
 		unsigned long *sz_filter_passed)
@@ -190,7 +202,7 @@ put_folio:
 	applied = reclaim_pages(&folio_list);
 	cond_resched();
 	s->last_applied = folio;
-	return applied * PAGE_SIZE / addr_unit;
+	return damon_pa_core_addr(applied * PAGE_SIZE, addr_unit);
 }
 
 static inline unsigned long damon_pa_mark_accessed_or_deactivate(
