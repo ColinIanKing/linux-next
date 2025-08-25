@@ -183,3 +183,11 @@ sphinx_*/
 
 # Rust analyzer configuration
 /rust-project.json
+
+#
+# Coding assistants
+#
+/CLAUDE.md
+/.claude/
+/GEMINI.md
+/.gemini/
