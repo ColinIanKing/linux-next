@@ -293,8 +293,18 @@ static int menu_select(struct cpuidle_driver *drv, struct cpuidle_device *dev,
 	 * in a shallow idle state for a long time as a result of it.  In that
 	 * case, say we might mispredict and use the known time till the closest
 	 * timer event for the idle state selection.
+	 *
+	 * However, on nohz_full CPUs the tick does not run as a rule and the
+	 * time till the closest timer event may always be effectively infinite,
+	 * so using it as a replacement for the predicted idle duration would
+	 * effectively always cause the prediction results to be discarded and
+	 * deep idle states to be selected all the time.  That might introduce
+	 * unwanted latency into the workload and cause more energy than
+	 * necessary to be consumed if the discarded prediction results are
+	 * actually accurate, so skip nohz_full CPUs here.
 	 */
-	if (tick_nohz_tick_stopped() && predicted_ns < TICK_NSEC)
+	if (tick_nohz_tick_stopped() && !tick_nohz_full_cpu(dev->cpu) &&
+	    predicted_ns < TICK_NSEC)
 		predicted_ns = data->next_timer_ns;
 
 	/*
@@ -314,45 +324,47 @@ static int menu_select(struct cpuidle_driver *drv, struct cpuidle_device *dev,
 		if (s->exit_latency_ns > latency_req)
 			break;
 
-		if (s->target_residency_ns > predicted_ns) {
-			/*
-			 * Use a physical idle state, not busy polling, unless
-			 * a timer is going to trigger soon enough.
-			 */
-			if ((drv->states[idx].flags & CPUIDLE_FLAG_POLLING) &&
-			    s->target_residency_ns <= data->next_timer_ns) {
-				predicted_ns = s->target_residency_ns;
-				idx = i;
-				break;
-			}
-			if (predicted_ns < TICK_NSEC)
-				break;
-
-			if (!tick_nohz_tick_stopped()) {
-				/*
-				 * If the state selected so far is shallow,
-				 * waking up early won't hurt, so retain the
-				 * tick in that case and let the governor run
-				 * again in the next iteration of the loop.
-				 */
-				predicted_ns = drv->states[idx].target_residency_ns;
-				break;
-			}
-
-			/*
-			 * If the state selected so far is shallow and this
-			 * state's target residency matches the time till the
-			 * closest timer event, select this one to avoid getting
-			 * stuck in the shallow one for too long.
-			 */
-			if (drv->states[idx].target_residency_ns < TICK_NSEC &&
-			    s->target_residency_ns <= delta_tick)
-				idx = i;
-
-			return idx;
+		if (s->target_residency_ns <= predicted_ns) {
+			idx = i;
+			continue;
 		}
 
-		idx = i;
+		/*
+		 * Use a physical idle state, not busy polling, unless a timer
+		 * is going to trigger soon enough.
+		 */
+		if ((drv->states[idx].flags & CPUIDLE_FLAG_POLLING) &&
+		    s->target_residency_ns <= data->next_timer_ns) {
+			predicted_ns = s->target_residency_ns;
+			idx = i;
+			break;
+		}
+
+		if (predicted_ns < TICK_NSEC)
+			break;
+
+		if (!tick_nohz_tick_stopped()) {
+			/*
+			 * If the state selected so far is shallow, waking up
+			 * early won't hurt, so retain the tick in that case and
+			 * let the governor run again in the next iteration of
+			 * the idle loop.
+			 */
+			predicted_ns = drv->states[idx].target_residency_ns;
+			break;
+		}
+
+		/*
+		 * If the state selected so far is shallow and this state's
+		 * target residency matches the time till the closest timer
+		 * event, select this one to avoid getting stuck in the shallow
+		 * one for too long.
+		 */
+		if (drv->states[idx].target_residency_ns < TICK_NSEC &&
+		    s->target_residency_ns <= delta_tick)
+			idx = i;
+
+		return idx;
 	}
 
 	if (idx == -1)
