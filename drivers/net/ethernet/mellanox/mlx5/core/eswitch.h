@@ -197,6 +197,11 @@ static inline struct mlx5_vport *mlx5_devlink_port_vport_get(struct devlink_port
 	return mlx5_devlink_port_get(dl_port)->vport;
 }
 
+#define MLX5_VHCA_ID_INVALID (-1)
+
+#define MLX5_VPORT_INVAL_VHCA_ID(vport) \
+	((vport)->vhca_id == MLX5_VHCA_ID_INVALID)
+
 struct mlx5_vport {
 	struct mlx5_core_dev    *dev;
 	struct hlist_head       uc_list[MLX5_L2_ADDR_HASH_SIZE];
@@ -209,6 +214,7 @@ struct mlx5_vport {
 	struct vport_egress     egress;
 	u32                     default_metadata;
 	u32                     metadata;
+	int                     vhca_id;
 
 	struct mlx5_vport_info  info;
 
@@ -323,6 +329,7 @@ struct mlx5_host_work {
 
 struct mlx5_esw_functions {
 	struct mlx5_nb		nb;
+	bool			host_funcs_disabled;
 	u16			num_vfs;
 	u16			num_ec_vfs;
 };
@@ -817,9 +824,12 @@ struct devlink_port *mlx5_esw_offloads_devlink_port(struct mlx5_eswitch *esw, u1
 
 int mlx5_esw_sf_max_hpf_functions(struct mlx5_core_dev *dev, u16 *max_sfs, u16 *sf_base_id);
 
-int mlx5_esw_vport_vhca_id_set(struct mlx5_eswitch *esw, u16 vport_num);
-void mlx5_esw_vport_vhca_id_clear(struct mlx5_eswitch *esw, u16 vport_num);
+int mlx5_esw_vport_vhca_id_map(struct mlx5_eswitch *esw,
+			       struct mlx5_vport *vport);
+void mlx5_esw_vport_vhca_id_unmap(struct mlx5_eswitch *esw,
+				  struct mlx5_vport *vport);
 int mlx5_eswitch_vhca_id_to_vport(struct mlx5_eswitch *esw, u16 vhca_id, u16 *vport_num);
+bool mlx5_esw_vport_vhca_id(struct mlx5_eswitch *esw, u16 vportn, u16 *vhca_id);
 
 /**
  * struct mlx5_esw_event_info - Indicates eswitch mode changed/changing.
@@ -893,6 +903,7 @@ int mlx5_esw_ipsec_vf_packet_offload_set(struct mlx5_eswitch *esw, struct mlx5_v
 					 bool enable);
 int mlx5_esw_ipsec_vf_packet_offload_supported(struct mlx5_core_dev *dev,
 					       u16 vport_num);
+bool mlx5_esw_host_functions_enabled(const struct mlx5_core_dev *dev);
 #else  /* CONFIG_MLX5_ESWITCH */
 /* eswitch API stubs */
 static inline int  mlx5_eswitch_init(struct mlx5_core_dev *dev) { return 0; }
@@ -960,6 +971,19 @@ static inline bool mlx5_eswitch_block_ipsec(struct mlx5_core_dev *dev)
 }
 
 static inline void mlx5_eswitch_unblock_ipsec(struct mlx5_core_dev *dev) {}
+
+static inline bool
+mlx5_esw_host_functions_enabled(const struct mlx5_core_dev *dev)
+{
+	return true;
+}
+
+static inline bool
+mlx5_esw_vport_vhca_id(struct mlx5_eswitch *esw, u16 vportn, u16 *vhca_id)
+{
+	return -EOPNOTSUPP;
+}
+
 #endif /* CONFIG_MLX5_ESWITCH */
 
 #endif /* __MLX5_ESWITCH_H__ */
