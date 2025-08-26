@@ -146,8 +146,6 @@
 
 #ifndef __ASSEMBLER__
 
-#include <linux/mm.h>
-
 #include <soc/arc/arc_aux.h>
 
 /* Helpers */
