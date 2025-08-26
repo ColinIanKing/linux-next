@@ -449,7 +449,7 @@ int main(int argc, char **argv)
 	bytes = atol(argv[2]) * 1024 * 1024;
 
 	if (test_type == TEST_HUGETLB &&
-	   get_free_hugepages() < bytes / page_size) {
+	   get_free_hugepages() < 2 * (bytes / page_size) + 10) {
 		printf("skip: Skipping userfaultfd... not enough hugepages\n");
 		return KSFT_SKIP;
 	}
