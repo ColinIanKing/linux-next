@@ -176,8 +176,8 @@ extern int cifs_get_writable_path(struct cifs_tcon *tcon, const char *name,
 				  int flags,
 				  struct cifsFileInfo **ret_file);
 extern struct cifsFileInfo *find_readable_file(struct cifsInodeInfo *, bool);
-extern int cifs_get_readable_path(struct cifs_tcon *tcon, const char *name,
-				  struct cifsFileInfo **ret_file);
+int cifs_get_readable_path(struct cifs_tcon *tcon, const char *name,
+			   unsigned int flags, struct cifsFileInfo **ret_file);
 extern int cifs_get_hardlink_path(struct cifs_tcon *tcon, struct inode *inode,
 				  struct file *file);
 extern unsigned int smbCalcSize(void *buf);
@@ -679,8 +679,6 @@ int smb2_parse_query_directory(struct cifs_tcon *tcon, struct kvec *rsp_iov,
 			       int resp_buftype,
 			       struct cifs_search_info *srch_inf);
 
-struct super_block *cifs_get_dfs_tcon_super(struct cifs_tcon *tcon);
-void cifs_put_tcp_super(struct super_block *sb);
 int cifs_update_super_prepath(struct cifs_sb_info *cifs_sb, char *prefix);
 char *extract_hostname(const char *unc);
 char *extract_sharename(const char *unc);

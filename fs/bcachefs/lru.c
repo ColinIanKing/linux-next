@@ -9,6 +9,7 @@
 #include "ec.h"
 #include "error.h"
 #include "lru.h"
+#include "progress.h"
 #include "recovery.h"
 
 /* KEY_TYPE_lru is obsolete: */
@@ -86,11 +87,9 @@ int bch2_lru_check_set(struct btree_trans *trans,
 		       struct bkey_buf *last_flushed)
 {
 	struct bch_fs *c = trans->c;
-	struct printbuf buf = PRINTBUF;
-	struct btree_iter lru_iter;
-	struct bkey_s_c lru_k =
-		bch2_bkey_get_iter(trans, &lru_iter, BTREE_ID_lru,
-				   lru_pos(lru_id, dev_bucket, time), 0);
+	CLASS(printbuf, buf)();
+	CLASS(btree_iter, lru_iter)(trans, BTREE_ID_lru, lru_pos(lru_id, dev_bucket, time), 0);
+	struct bkey_s_c lru_k = bch2_btree_iter_peek_slot(&lru_iter);
 	int ret = bkey_err(lru_k);
 	if (ret)
 		return ret;
@@ -98,7 +97,7 @@ int bch2_lru_check_set(struct btree_trans *trans,
 	if (lru_k.k->type != KEY_TYPE_set) {
 		ret = bch2_btree_write_buffer_maybe_flush(trans, referring_k, last_flushed);
 		if (ret)
-			goto err;
+			return ret;
 
 		if (fsck_err(trans, alloc_key_to_missing_lru_entry,
 			     "missing %s lru entry\n%s",
@@ -106,13 +105,10 @@ int bch2_lru_check_set(struct btree_trans *trans,
 			     (bch2_bkey_val_to_text(&buf, c, referring_k), buf.buf))) {
 			ret = bch2_lru_set(trans, lru_id, dev_bucket, time);
 			if (ret)
-				goto err;
+				return ret;
 		}
 	}
-err:
 fsck_err:
-	bch2_trans_iter_exit(trans, &lru_iter);
-	printbuf_exit(&buf);
 	return ret;
 }
 
@@ -166,16 +162,16 @@ static int bch2_check_lru_key(struct btree_trans *trans,
 			      struct bkey_buf *last_flushed)
 {
 	struct bch_fs *c = trans->c;
-	struct printbuf buf1 = PRINTBUF;
-	struct printbuf buf2 = PRINTBUF;
+	CLASS(printbuf, buf1)();
+	CLASS(printbuf, buf2)();
 
 	struct bbpos bp = lru_pos_to_bp(lru_k);
 
-	struct btree_iter iter;
-	struct bkey_s_c k = bch2_bkey_get_iter(trans, &iter, bp.btree, bp.pos, 0);
+	CLASS(btree_iter, iter)(trans, bp.btree, bp.pos, 0);
+	struct bkey_s_c k = bch2_btree_iter_peek_slot(&iter);
 	int ret = bkey_err(k);
 	if (ret)
-		goto err;
+		return ret;
 
 	enum bch_lru_type type = lru_type(lru_k);
 	u64 idx = bkey_lru_type_idx(c, type, k);
@@ -183,7 +179,7 @@ static int bch2_check_lru_key(struct btree_trans *trans,
 	if (lru_pos_time(lru_k.k->p) != idx) {
 		ret = bch2_btree_write_buffer_maybe_flush(trans, lru_k, last_flushed);
 		if (ret)
-			goto err;
+			return ret;
 
 		if (fsck_err(trans, lru_entry_bad,
 			     "incorrect lru entry: lru %s time %llu\n"
@@ -193,13 +189,9 @@ static int bch2_check_lru_key(struct btree_trans *trans,
 			     lru_pos_time(lru_k.k->p),
 			     (bch2_bkey_val_to_text(&buf1, c, lru_k), buf1.buf),
 			     (bch2_bkey_val_to_text(&buf2, c, k), buf2.buf)))
-			ret = bch2_btree_bit_mod_buffered(trans, BTREE_ID_lru, lru_iter->pos, false);
+			return bch2_btree_bit_mod_buffered(trans, BTREE_ID_lru, lru_iter->pos, false);
 	}
-err:
 fsck_err:
-	bch2_trans_iter_exit(trans, &iter);
-	printbuf_exit(&buf2);
-	printbuf_exit(&buf1);
 	return ret;
 }
 
@@ -210,14 +202,18 @@ int bch2_check_lrus(struct bch_fs *c)
 	bch2_bkey_buf_init(&last_flushed);
 	bkey_init(&last_flushed.k->k);
 
-	int ret = bch2_trans_run(c,
-		for_each_btree_key_commit(trans, iter,
+	struct progress_indicator_state progress;
+	bch2_progress_init(&progress, c, BIT_ULL(BTREE_ID_lru));
+
+	CLASS(btree_trans, trans)(c);
+	int ret = for_each_btree_key_commit(trans, iter,
 				BTREE_ID_lru, POS_MIN, BTREE_ITER_prefetch, k,
-				NULL, NULL, BCH_TRANS_COMMIT_no_enospc,
-			bch2_check_lru_key(trans, &iter, k, &last_flushed)));
+				NULL, NULL, BCH_TRANS_COMMIT_no_enospc, ({
+		progress_update_iter(trans, &progress, &iter);
+		bch2_check_lru_key(trans, &iter, k, &last_flushed);
+	}));
 
 	bch2_bkey_buf_exit(&last_flushed, c);
-	bch_err_fn(c, ret);
 	return ret;
 
 }
