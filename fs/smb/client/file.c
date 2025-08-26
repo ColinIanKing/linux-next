@@ -1000,7 +1000,7 @@ int cifs_open(struct inode *inode, struct file *file)
 	if (OPEN_FMODE(file->f_flags) & FMODE_WRITE) {
 		rc = cifs_get_writable_path(tcon, full_path, FIND_WR_FSUID_ONLY, &cfile);
 	} else {
-		rc = cifs_get_readable_path(tcon, full_path, &cfile);
+		rc = cifs_get_readable_path(tcon, full_path, 0, &cfile);
 	}
 	if (rc == 0) {
 		unsigned int oflags = file->f_flags & ~(O_CREAT|O_EXCL|O_TRUNC);
@@ -2622,9 +2622,8 @@ cifs_get_writable_path(struct cifs_tcon *tcon, const char *name,
 	return -ENOENT;
 }
 
-int
-cifs_get_readable_path(struct cifs_tcon *tcon, const char *name,
-		       struct cifsFileInfo **ret_file)
+int cifs_get_readable_path(struct cifs_tcon *tcon, const char *name,
+			   unsigned int flags, struct cifsFileInfo **ret_file)
 {
 	struct cifsFileInfo *cfile;
 	void *page = alloc_dentry_path();
@@ -2647,6 +2646,17 @@ cifs_get_readable_path(struct cifs_tcon *tcon, const char *name,
 		spin_unlock(&tcon->open_file_lock);
 		free_dentry_path(page);
 		*ret_file = find_readable_file(cinode, 0);
+		if (*ret_file) {
+			spin_lock(&cinode->open_file_lock);
+			if ((flags & FIND_RD_NO_PENDING_DELETE) &&
+			    (*ret_file)->status_file_deleted) {
+				spin_unlock(&cinode->open_file_lock);
+				cifsFileInfo_put(*ret_file);
+				*ret_file = NULL;
+			} else {
+				spin_unlock(&cinode->open_file_lock);
+			}
+		}
 		return *ret_file ? 0 : -ENOENT;
 	}
 
