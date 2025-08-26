@@ -3,8 +3,8 @@
 #define _LINUX_KERNEL_SPRINTF_H_
 
 #include <linux/compiler_attributes.h>
-#include <linux/types.h>
 #include <linux/stdarg.h>
+#include <linux/types.h>
 
 int num_to_str(char *buf, int size, unsigned long long num, unsigned int width);
 
