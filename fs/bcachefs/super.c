@@ -55,6 +55,7 @@
 #include "replicas.h"
 #include "sb-clean.h"
 #include "sb-counters.h"
+#include "sb-downgrade.h"
 #include "sb-errors.h"
 #include "sb-members.h"
 #include "snapshot.h"
@@ -103,9 +104,32 @@ const char * const bch2_dev_write_refs[] = {
 };
 #undef x
 
-static void __bch2_print_str(struct bch_fs *c, const char *prefix,
-			     const char *str)
+static bool should_print_loglevel(struct bch_fs *c, const char *fmt)
 {
+	unsigned loglevel_opt = c->loglevel ?: c->opts.verbose ? 7: 6;
+
+	bool have_soh = fmt[0] == KERN_SOH[0];
+	bool have_loglevel = have_soh && fmt[1] >= '0' && fmt[1] <= '9';
+
+	unsigned loglevel = have_loglevel
+		? fmt[1] - '0'
+		: c->prev_loglevel;
+
+	if (have_loglevel)
+		c->prev_loglevel = loglevel;
+
+	return loglevel <= loglevel_opt;
+}
+
+void bch2_print_str(struct bch_fs *c, const char *prefix, const char *str)
+{
+	if (!should_print_loglevel(c, prefix))
+		return;
+
+#ifndef __KERNEL__
+	prefix = "";
+#endif
+
 #ifdef __KERNEL__
 	struct stdio_redirect *stdio = bch2_fs_stdio_redirect(c);
 
@@ -114,12 +138,7 @@ static void __bch2_print_str(struct bch_fs *c, const char *prefix,
 		return;
 	}
 #endif
-	bch2_print_string_as_lines(KERN_ERR, str);
-}
-
-void bch2_print_str(struct bch_fs *c, const char *prefix, const char *str)
-{
-	__bch2_print_str(c, prefix, str);
+	bch2_print_string_as_lines(prefix, str);
 }
 
 __printf(2, 0)
@@ -149,6 +168,14 @@ void bch2_print_opts(struct bch_opts *opts, const char *fmt, ...)
 
 void __bch2_print(struct bch_fs *c, const char *fmt, ...)
 {
+	if (!should_print_loglevel(c, fmt))
+		return;
+
+#ifndef __KERNEL__
+	if (fmt[0] == KERN_SOH[0])
+		fmt += 2;
+#endif
+
 	struct stdio_redirect *stdio = bch2_fs_stdio_redirect(c);
 
 	va_list args;
@@ -210,6 +237,7 @@ static int bch2_dev_alloc(struct bch_fs *, unsigned);
 static int bch2_dev_sysfs_online(struct bch_fs *, struct bch_dev *);
 static void bch2_dev_io_ref_stop(struct bch_dev *, int);
 static void __bch2_dev_read_only(struct bch_fs *, struct bch_dev *);
+static int bch2_dev_attach_bdev(struct bch_fs *, struct bch_sb_handle *, struct printbuf *);
 
 struct bch_fs *bch2_dev_to_fs(dev_t dev)
 {
@@ -241,14 +269,11 @@ static struct bch_fs *__bch2_uuid_to_fs(__uuid_t uuid)
 
 struct bch_fs *bch2_uuid_to_fs(__uuid_t uuid)
 {
-	struct bch_fs *c;
+	guard(mutex)(&bch_fs_list_lock);
 
-	mutex_lock(&bch_fs_list_lock);
-	c = __bch2_uuid_to_fs(uuid);
+	struct bch_fs *c = __bch2_uuid_to_fs(uuid);
 	if (c)
 		closure_get(&c->cl);
-	mutex_unlock(&bch_fs_list_lock);
-
 	return c;
 }
 
@@ -392,9 +417,8 @@ void bch2_fs_read_only(struct bch_fs *c)
 		bch2_fs_mark_clean(c);
 	} else {
 		/* Make sure error counts/counters are persisted */
-		mutex_lock(&c->sb_lock);
+		guard(mutex)(&c->sb_lock);
 		bch2_write_super(c);
-		mutex_unlock(&c->sb_lock);
 
 		bch_verbose(c, "done going read-only, filesystem not clean");
 	}
@@ -405,9 +429,8 @@ static void bch2_fs_read_only_work(struct work_struct *work)
 	struct bch_fs *c =
 		container_of(work, struct bch_fs, read_only_work);
 
-	down_write(&c->state_lock);
+	guard(rwsem_write)(&c->state_lock);
 	bch2_fs_read_only(c);
-	up_write(&c->state_lock);
 }
 
 static void bch2_fs_read_only_async(struct bch_fs *c)
@@ -487,11 +510,15 @@ static int __bch2_fs_read_write(struct bch_fs *c, bool early)
 
 	ret = bch2_fs_init_rw(c);
 	if (ret)
-		goto err;
+		return ret;
 
 	ret = bch2_sb_members_v2_init(c);
 	if (ret)
-		goto err;
+		return ret;
+
+	ret = bch2_fs_mark_dirty(c);
+	if (ret)
+		return ret;
 
 	clear_bit(BCH_FS_clean_shutdown, &c->flags);
 
@@ -510,15 +537,16 @@ static int __bch2_fs_read_write(struct bch_fs *c, bool early)
 	 * overwriting whatever was there previously, and there must always be
 	 * at least one non-flush write in the journal or recovery will fail:
 	 */
-	spin_lock(&c->journal.lock);
-	set_bit(JOURNAL_need_flush_write, &c->journal.flags);
-	set_bit(JOURNAL_running, &c->journal.flags);
-	bch2_journal_space_available(&c->journal);
-	spin_unlock(&c->journal.lock);
+	scoped_guard(spinlock, &c->journal.lock) {
+		set_bit(JOURNAL_need_flush_write, &c->journal.flags);
+		set_bit(JOURNAL_running, &c->journal.flags);
+		bch2_journal_space_available(&c->journal);
+	}
 
-	ret = bch2_fs_mark_dirty(c);
-	if (ret)
-		goto err;
+	/*
+	 * Don't jump to our error path, and call bch2_fs_read_only(), unless we
+	 * successfully marked the filesystem dirty
+	 */
 
 	ret = bch2_journal_reclaim_start(&c->journal);
 	if (ret)
@@ -571,11 +599,8 @@ int bch2_fs_read_write(struct bch_fs *c)
 
 int bch2_fs_read_write_early(struct bch_fs *c)
 {
-	down_write(&c->state_lock);
-	int ret = __bch2_fs_read_write(c, true);
-	up_write(&c->state_lock);
-
-	return ret;
+	guard(rwsem_write)(&c->state_lock);
+	return __bch2_fs_read_write(c, true);
 }
 
 /* Filesystem startup/shutdown: */
@@ -585,7 +610,7 @@ static void __bch2_fs_free(struct bch_fs *c)
 	for (unsigned i = 0; i < BCH_TIME_STAT_NR; i++)
 		bch2_time_stats_exit(&c->times[i]);
 
-#ifdef CONFIG_UNICODE
+#if IS_ENABLED(CONFIG_UNICODE)
 	utf8_unload(c->cf_encoding);
 #endif
 
@@ -630,7 +655,6 @@ static void __bch2_fs_free(struct bch_fs *c)
 		free_percpu(c->online_reserved);
 	}
 
-	darray_exit(&c->incompat_versions_requested);
 	darray_exit(&c->btree_roots_extra);
 	free_percpu(c->pcpu);
 	free_percpu(c->usage);
@@ -673,9 +697,8 @@ void __bch2_fs_stop(struct bch_fs *c)
 
 	set_bit(BCH_FS_stopping, &c->flags);
 
-	down_write(&c->state_lock);
-	bch2_fs_read_only(c);
-	up_write(&c->state_lock);
+	scoped_guard(rwsem_write, &c->state_lock)
+		bch2_fs_read_only(c);
 
 	for (unsigned i = 0; i < c->sb.nr_devices; i++) {
 		struct bch_dev *ca = rcu_dereference_protected(c->devs[i], true);
@@ -707,13 +730,14 @@ void __bch2_fs_stop(struct bch_fs *c)
 		cancel_work_sync(&ca->io_error_work);
 
 	cancel_work_sync(&c->read_only_work);
+
+	flush_work(&c->btree_interior_update_work);
 }
 
 void bch2_fs_free(struct bch_fs *c)
 {
-	mutex_lock(&bch_fs_list_lock);
-	list_del(&c->list);
-	mutex_unlock(&bch_fs_list_lock);
+	scoped_guard(mutex, &bch_fs_list_lock)
+		list_del(&c->list);
 
 	closure_sync(&c->cl);
 	closure_debug_destroy(&c->cl);
@@ -775,21 +799,19 @@ static int bch2_fs_online(struct bch_fs *c)
 		return ret;
 	}
 
-	down_write(&c->state_lock);
+	guard(rwsem_write)(&c->state_lock);
 
 	for_each_member_device(c, ca) {
 		ret = bch2_dev_sysfs_online(c, ca);
 		if (ret) {
 			bch_err(c, "error creating sysfs objects");
 			bch2_dev_put(ca);
-			goto err;
+			return ret;
 		}
 	}
 
 	BUG_ON(!list_empty(&c->list));
 	list_add(&c->list, &bch_fs_list);
-err:
-	up_write(&c->state_lock);
 	return ret;
 }
 
@@ -822,12 +844,250 @@ int bch2_fs_init_rw(struct bch_fs *c)
 	return 0;
 }
 
+static bool check_version_upgrade(struct bch_fs *c)
+{
+	unsigned latest_version	= bcachefs_metadata_version_current;
+	unsigned latest_compatible = min(latest_version,
+					 bch2_latest_compatible_version(c->sb.version));
+	unsigned old_version = c->sb.version_upgrade_complete ?: c->sb.version;
+	unsigned new_version = 0;
+	bool ret = false;
+
+	if (old_version < bcachefs_metadata_required_upgrade_below) {
+		if (c->opts.version_upgrade == BCH_VERSION_UPGRADE_incompatible ||
+		    latest_compatible < bcachefs_metadata_required_upgrade_below)
+			new_version = latest_version;
+		else
+			new_version = latest_compatible;
+	} else {
+		switch (c->opts.version_upgrade) {
+		case BCH_VERSION_UPGRADE_compatible:
+			new_version = latest_compatible;
+			break;
+		case BCH_VERSION_UPGRADE_incompatible:
+			new_version = latest_version;
+			break;
+		case BCH_VERSION_UPGRADE_none:
+			new_version = min(old_version, latest_version);
+			break;
+		}
+	}
+
+	if (new_version > old_version) {
+		CLASS(printbuf, buf)();
+
+		if (old_version < bcachefs_metadata_required_upgrade_below)
+			prt_str(&buf, "Version upgrade required:\n");
+
+		if (old_version != c->sb.version) {
+			prt_str(&buf, "Version upgrade from ");
+			bch2_version_to_text(&buf, c->sb.version_upgrade_complete);
+			prt_str(&buf, " to ");
+			bch2_version_to_text(&buf, c->sb.version);
+			prt_str(&buf, " incomplete\n");
+		}
+
+		prt_printf(&buf, "Doing %s version upgrade from ",
+			   BCH_VERSION_MAJOR(old_version) != BCH_VERSION_MAJOR(new_version)
+			   ? "incompatible" : "compatible");
+		bch2_version_to_text(&buf, old_version);
+		prt_str(&buf, " to ");
+		bch2_version_to_text(&buf, new_version);
+		prt_newline(&buf);
+
+		struct bch_sb_field_ext *ext = bch2_sb_field_get(c->disk_sb.sb, ext);
+		__le64 passes = ext->recovery_passes_required[0];
+		bch2_sb_set_upgrade(c, old_version, new_version);
+		passes = ext->recovery_passes_required[0] & ~passes;
+
+		if (passes) {
+			prt_str(&buf, "  running recovery passes: ");
+			prt_bitflags(&buf, bch2_recovery_passes,
+				     bch2_recovery_passes_from_stable(le64_to_cpu(passes)));
+		}
+
+		bch_notice(c, "%s", buf.buf);
+		ret = true;
+	}
+
+	if (new_version > c->sb.version_incompat_allowed &&
+	    c->opts.version_upgrade == BCH_VERSION_UPGRADE_incompatible) {
+		CLASS(printbuf, buf)();
+
+		prt_str(&buf, "Now allowing incompatible features up to ");
+		bch2_version_to_text(&buf, new_version);
+		prt_str(&buf, ", previously allowed up to ");
+		bch2_version_to_text(&buf, c->sb.version_incompat_allowed);
+		prt_newline(&buf);
+
+		bch_notice(c, "%s", buf.buf);
+		ret = true;
+	}
+
+	if (ret)
+		bch2_sb_upgrade(c, new_version,
+				c->opts.version_upgrade == BCH_VERSION_UPGRADE_incompatible);
+
+	return ret;
+}
+
+noinline_for_stack
+static int bch2_fs_opt_version_init(struct bch_fs *c)
+{
+	int ret = 0;
+
+	if (c->opts.norecovery) {
+		c->opts.recovery_pass_last = c->opts.recovery_pass_last
+			? min(c->opts.recovery_pass_last, BCH_RECOVERY_PASS_snapshots_read)
+			: BCH_RECOVERY_PASS_snapshots_read;
+		c->opts.nochanges = true;
+	}
+
+	if (c->opts.nochanges)
+		c->opts.read_only = true;
+
+	if (c->opts.journal_rewind)
+		c->opts.fsck = true;
+
+	CLASS(printbuf, p)();
+	bch2_log_msg_start(c, &p);
+
+	prt_str(&p, "starting version ");
+	bch2_version_to_text(&p, c->sb.version);
+
+	bool first = true;
+	for (enum bch_opt_id i = 0; i < bch2_opts_nr; i++) {
+		const struct bch_option *opt = &bch2_opt_table[i];
+		u64 v = bch2_opt_get_by_id(&c->opts, i);
+
+		if (!(opt->flags & OPT_MOUNT))
+			continue;
+
+		if (v == bch2_opt_get_by_id(&bch2_opts_default, i))
+			continue;
+
+		prt_str(&p, first ? " opts=" : ",");
+		first = false;
+		bch2_opt_to_text(&p, c, c->disk_sb.sb, opt, v, OPT_SHOW_MOUNT_STYLE);
+	}
+
+	if (c->sb.version_incompat_allowed != c->sb.version) {
+		prt_printf(&p, "\nallowing incompatible features above ");
+		bch2_version_to_text(&p, c->sb.version_incompat_allowed);
+	}
+
+	if (c->opts.verbose) {
+		prt_printf(&p, "\nfeatures: ");
+		prt_bitflags(&p, bch2_sb_features, c->sb.features);
+	}
+
+	if (c->sb.multi_device) {
+		prt_printf(&p, "\nwith devices");
+		for_each_online_member(c, ca, BCH_DEV_READ_REF_bch2_online_devs) {
+			prt_char(&p, ' ');
+			prt_str(&p, ca->name);
+		}
+	}
+
+	/* cf_encoding log message should be here, but it breaks xfstests - sigh */
+
+	if (c->opts.journal_rewind)
+		prt_printf(&p, "\nrewinding journal, fsck required");
+
+	scoped_guard(mutex, &c->sb_lock) {
+		struct bch_sb_field_ext *ext = bch2_sb_field_get_minsize(&c->disk_sb, ext,
+				sizeof(struct bch_sb_field_ext) / sizeof(u64));
+		if (!ext)
+			return bch_err_throw(c, ENOSPC_sb);
+
+		ret = bch2_sb_members_v2_init(c);
+		if (ret)
+			return ret;
+
+		__le64 now = cpu_to_le64(ktime_get_real_seconds());
+		scoped_guard(rcu)
+			for_each_online_member_rcu(c, ca)
+				bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx)->last_mount = now;
+
+		if (BCH_SB_HAS_TOPOLOGY_ERRORS(c->disk_sb.sb))
+			ext->recovery_passes_required[0] |=
+				cpu_to_le64(bch2_recovery_passes_to_stable(BIT_ULL(BCH_RECOVERY_PASS_check_topology)));
+
+		u64 sb_passes = bch2_recovery_passes_from_stable(le64_to_cpu(ext->recovery_passes_required[0]));
+		if (sb_passes) {
+			prt_str(&p, "\nsuperblock requires following recovery passes to be run:\n  ");
+			prt_bitflags(&p, bch2_recovery_passes, sb_passes);
+		}
+
+		u64 btrees_lost_data = le64_to_cpu(ext->btrees_lost_data);
+		if (btrees_lost_data) {
+			prt_str(&p, "\nsuperblock indicates damage to following btrees:\n  ");
+			prt_bitflags(&p, __bch2_btree_ids, btrees_lost_data);
+		}
+
+		if (bch2_check_version_downgrade(c)) {
+			prt_str(&p, "\nVersion downgrade required:");
+
+			__le64 passes = ext->recovery_passes_required[0];
+			bch2_sb_set_downgrade(c,
+					      BCH_VERSION_MINOR(bcachefs_metadata_version_current),
+					      BCH_VERSION_MINOR(c->sb.version));
+			passes = ext->recovery_passes_required[0] & ~passes;
+			if (passes) {
+				prt_str(&p, "\nrunning recovery passes: ");
+				prt_bitflags(&p, bch2_recovery_passes,
+					     bch2_recovery_passes_from_stable(le64_to_cpu(passes)));
+			}
+		}
+
+		check_version_upgrade(c);
+
+		c->opts.recovery_passes |= bch2_recovery_passes_from_stable(le64_to_cpu(ext->recovery_passes_required[0]));
+
+		if (c->sb.version_upgrade_complete < bcachefs_metadata_version_autofix_errors)
+			SET_BCH_SB_ERROR_ACTION(c->disk_sb.sb, BCH_ON_ERROR_fix_safe);
+
+		/* Don't write the superblock, defer that until we go rw */
+	}
+
+	if (c->sb.clean)
+		set_bit(BCH_FS_clean_recovery, &c->flags);
+	if (c->opts.fsck)
+		set_bit(BCH_FS_in_fsck, &c->flags);
+	set_bit(BCH_FS_in_recovery, &c->flags);
+
+	bch2_print_str(c, KERN_INFO, p.buf);
+
+	/* this really should be part of our one multi line mount message, but -
+	 * xfstests... */
+	if (c->cf_encoding)
+		bch_info(c, "Using encoding defined by superblock: utf8-%u.%u.%u",
+			   unicode_major(BCH_FS_DEFAULT_UTF8_ENCODING),
+			   unicode_minor(BCH_FS_DEFAULT_UTF8_ENCODING),
+			   unicode_rev(BCH_FS_DEFAULT_UTF8_ENCODING));
+
+	if (BCH_SB_INITIALIZED(c->disk_sb.sb)) {
+		if (!(c->sb.features & (1ULL << BCH_FEATURE_new_extent_overwrite))) {
+			bch_err(c, "feature new_extent_overwrite not set, filesystem no longer supported");
+			return -EINVAL;
+		}
+
+		if (!c->sb.clean &&
+		    !(c->sb.features & (1ULL << BCH_FEATURE_extents_above_btree_updates))) {
+			bch_err(c, "filesystem needs recovery from older version; run fsck from older bcachefs-tools to fix");
+			return -EINVAL;
+		}
+	}
+
+	return 0;
+}
+
 static struct bch_fs *bch2_fs_alloc(struct bch_sb *sb, struct bch_opts *opts,
 				    bch_sb_handles *sbs)
 {
 	struct bch_fs *c;
-	struct printbuf name = PRINTBUF;
 	unsigned i, iter_size;
+	CLASS(printbuf, name)();
 	int ret = 0;
 
 	c = kvmalloc(sizeof(struct bch_fs), GFP_KERNEL|__GFP_ZERO);
@@ -914,9 +1174,8 @@ static struct bch_fs *bch2_fs_alloc(struct bch_sb *sb, struct bch_opts *opts,
 	if (ret)
 		goto err;
 
-	mutex_lock(&c->sb_lock);
-	ret = bch2_sb_to_fs(c, sb);
-	mutex_unlock(&c->sb_lock);
+	scoped_guard(mutex, &c->sb_lock)
+		ret = bch2_sb_to_fs(c, sb);
 
 	if (ret)
 		goto err;
@@ -968,7 +1227,6 @@ static struct bch_fs *bch2_fs_alloc(struct bch_sb *sb, struct bch_opts *opts,
 		goto err;
 
 	strscpy(c->name, name.buf, sizeof(c->name));
-	printbuf_exit(&name);
 
 	iter_size = sizeof(struct sort_iter) +
 		(btree_blocks(c) + 1) * 2 *
@@ -995,6 +1253,7 @@ static struct bch_fs *bch2_fs_alloc(struct bch_sb *sb, struct bch_opts *opts,
 
 	ret =
 	    bch2_fs_async_obj_init(c) ?:
+	    bch2_blacklist_table_initialize(c) ?:
 	    bch2_fs_btree_cache_init(c) ?:
 	    bch2_fs_btree_iter_init(c) ?:
 	    bch2_fs_btree_key_cache_init(&c->btree_key_cache) ?:
@@ -1024,8 +1283,8 @@ static struct bch_fs *bch2_fs_alloc(struct bch_sb *sb, struct bch_opts *opts,
 			goto err;
 	}
 
-#ifdef CONFIG_UNICODE
-	if (bch2_fs_casefold_enabled(c)) {
+#if IS_ENABLED(CONFIG_UNICODE)
+	if (!bch2_fs_casefold_enabled(c)) {
 		/* Default encoding until we can potentially have more as an option. */
 		c->cf_encoding = utf8_load(BCH_FS_DEFAULT_UTF8_ENCODING);
 		if (IS_ERR(c->cf_encoding)) {
@@ -1045,7 +1304,7 @@ static struct bch_fs *bch2_fs_alloc(struct bch_sb *sb, struct bch_opts *opts,
 	}
 #endif
 
-	for (i = 0; i < c->sb.nr_devices; i++) {
+	for (unsigned i = 0; i < c->sb.nr_devices; i++) {
 		if (!bch2_member_exists(c->disk_sb.sb, i))
 			continue;
 		ret = bch2_dev_alloc(c, i);
@@ -1060,65 +1319,43 @@ static struct bch_fs *bch2_fs_alloc(struct bch_sb *sb, struct bch_opts *opts,
 			&c->clock_journal_res,
 			(sizeof(struct jset_entry_clock) / sizeof(u64)) * 2);
 
-	mutex_lock(&bch_fs_list_lock);
-	ret = bch2_fs_online(c);
-	mutex_unlock(&bch_fs_list_lock);
+	scoped_guard(rwsem_write, &c->state_lock)
+		darray_for_each(*sbs, sb) {
+			CLASS(printbuf, err)();
+			ret = bch2_dev_attach_bdev(c, sb, &err);
+			if (ret) {
+				bch_err(bch2_dev_locked(c, sb->sb->dev_idx), "%s", err.buf);
+				goto err;
+			}
+		}
+
+	ret = bch2_fs_opt_version_init(c);
+	if (ret)
+		goto err;
+
+	/*
+	 * start workqueues/kworkers early - kthread creation checks for pending
+	 * signals, which is _very_ annoying
+	 */
+	if (go_rw_in_recovery(c)) {
+		ret = bch2_fs_init_rw(c);
+		if (ret)
+			goto err;
+	}
+
+	scoped_guard(mutex, &bch_fs_list_lock)
+		ret = bch2_fs_online(c);
 
 	if (ret)
 		goto err;
+
+	c->recovery_task = current;
 out:
 	return c;
 err:
 	bch2_fs_free(c);
 	c = ERR_PTR(ret);
 	goto out;
-}
-
-noinline_for_stack
-static void print_mount_opts(struct bch_fs *c)
-{
-	enum bch_opt_id i;
-	CLASS(printbuf, p)();
-	bch2_log_msg_start(c, &p);
-
-	prt_str(&p, "starting version ");
-	bch2_version_to_text(&p, c->sb.version);
-
-	bool first = true;
-	for (i = 0; i < bch2_opts_nr; i++) {
-		const struct bch_option *opt = &bch2_opt_table[i];
-		u64 v = bch2_opt_get_by_id(&c->opts, i);
-
-		if (!(opt->flags & OPT_MOUNT))
-			continue;
-
-		if (v == bch2_opt_get_by_id(&bch2_opts_default, i))
-			continue;
-
-		prt_str(&p, first ? " opts=" : ",");
-		first = false;
-		bch2_opt_to_text(&p, c, c->disk_sb.sb, opt, v, OPT_SHOW_MOUNT_STYLE);
-	}
-
-	if (c->sb.version_incompat_allowed != c->sb.version) {
-		prt_printf(&p, "\nallowing incompatible features above ");
-		bch2_version_to_text(&p, c->sb.version_incompat_allowed);
-	}
-
-	if (c->opts.verbose) {
-		prt_printf(&p, "\nfeatures: ");
-		prt_bitflags(&p, bch2_sb_features, c->sb.features);
-	}
-
-	if (c->sb.multi_device) {
-		prt_printf(&p, "\nwith devices");
-		for_each_online_member(c, ca, BCH_DEV_READ_REF_bch2_online_devs) {
-			prt_char(&p, ' ');
-			prt_str(&p, ca->name);
-		}
-	}
-
-	bch2_print_str(c, KERN_INFO, p.buf);
 }
 
 static bool bch2_fs_may_start(struct bch_fs *c)
@@ -1133,8 +1370,8 @@ static bool bch2_fs_may_start(struct bch_fs *c)
 	case BCH_DEGRADED_yes:
 		flags |= BCH_FORCE_IF_DEGRADED;
 		break;
-	default:
-		mutex_lock(&c->sb_lock);
+	default: {
+		guard(mutex)(&c->sb_lock);
 		for (unsigned i = 0; i < c->disk_sb.sb->nr_devices; i++) {
 			if (!bch2_member_exists(c->disk_sb.sb, i))
 				continue;
@@ -1143,72 +1380,39 @@ static bool bch2_fs_may_start(struct bch_fs *c)
 
 			if (!bch2_dev_is_online(ca) &&
 			    (ca->mi.state == BCH_MEMBER_STATE_rw ||
-			     ca->mi.state == BCH_MEMBER_STATE_ro)) {
-				mutex_unlock(&c->sb_lock);
+			     ca->mi.state == BCH_MEMBER_STATE_ro))
 				return false;
-			}
 		}
-		mutex_unlock(&c->sb_lock);
 		break;
 	}
+	}
 
-	return bch2_have_enough_devs(c, c->online_devs, flags, true);
+	CLASS(printbuf, err)();
+	bool ret = bch2_have_enough_devs(c, c->online_devs, flags, &err);
+	if (!ret)
+		bch2_print_str(c, KERN_ERR, err.buf);
+	return ret;
 }
 
 int bch2_fs_start(struct bch_fs *c)
 {
-	time64_t now = ktime_get_real_seconds();
 	int ret = 0;
 
-	print_mount_opts(c);
-
-	if (c->cf_encoding)
-		bch_info(c, "Using encoding defined by superblock: utf8-%u.%u.%u",
-			 unicode_major(BCH_FS_DEFAULT_UTF8_ENCODING),
-			 unicode_minor(BCH_FS_DEFAULT_UTF8_ENCODING),
-			 unicode_rev(BCH_FS_DEFAULT_UTF8_ENCODING));
+	BUG_ON(test_bit(BCH_FS_started, &c->flags));
 
 	if (!bch2_fs_may_start(c))
 		return bch_err_throw(c, insufficient_devices_to_start);
 
-	down_write(&c->state_lock);
-	mutex_lock(&c->sb_lock);
+	scoped_guard(rwsem_write, &c->state_lock) {
+		scoped_guard(rcu)
+			for_each_online_member_rcu(c, ca) {
+				if (ca->mi.state == BCH_MEMBER_STATE_rw)
+					bch2_dev_allocator_add(c, ca);
+			}
 
-	BUG_ON(test_bit(BCH_FS_started, &c->flags));
-
-	if (!bch2_sb_field_get_minsize(&c->disk_sb, ext,
-			sizeof(struct bch_sb_field_ext) / sizeof(u64))) {
-		mutex_unlock(&c->sb_lock);
-		up_write(&c->state_lock);
-		ret = bch_err_throw(c, ENOSPC_sb);
-		goto err;
+		bch2_recalc_capacity(c);
 	}
 
-	ret = bch2_sb_members_v2_init(c);
-	if (ret) {
-		mutex_unlock(&c->sb_lock);
-		up_write(&c->state_lock);
-		goto err;
-	}
-
-	scoped_guard(rcu)
-		for_each_online_member_rcu(c, ca)
-			bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx)->last_mount =
-			cpu_to_le64(now);
-
-	/*
-	 * Dno't write superblock yet: recovery might have to downgrade
-	 */
-	mutex_unlock(&c->sb_lock);
-
-	scoped_guard(rcu)
-		for_each_online_member_rcu(c, ca)
-			if (ca->mi.state == BCH_MEMBER_STATE_rw)
-				bch2_dev_allocator_add(c, ca);
-	bch2_recalc_capacity(c);
-	up_write(&c->state_lock);
-
-	c->recovery_task = current;
 	ret = BCH_SB_INITIALIZED(c->disk_sb.sb)
 		? bch2_fs_recovery(c)
 		: bch2_fs_initialize(c);
@@ -1229,13 +1433,12 @@ int bch2_fs_start(struct bch_fs *c)
 	set_bit(BCH_FS_started, &c->flags);
 	wake_up(&c->ro_ref_wait);
 
-	down_write(&c->state_lock);
-	if (c->opts.read_only)
-		bch2_fs_read_only(c);
-	else if (!test_bit(BCH_FS_rw, &c->flags))
-		ret = bch2_fs_read_write(c);
-	up_write(&c->state_lock);
-
+	scoped_guard(rwsem_write, &c->state_lock) {
+		if (c->opts.read_only)
+			bch2_fs_read_only(c);
+		else if (!test_bit(BCH_FS_rw, &c->flags))
+			ret = bch2_fs_read_write(c);
+	}
 err:
 	if (ret)
 		bch_err_msg(c, ret, "starting filesystem");
@@ -1280,7 +1483,7 @@ static int bch2_dev_in_fs(struct bch_sb_handle *fs,
 
 	if (fs->sb->seq == sb->sb->seq &&
 	    fs->sb->write_time != sb->sb->write_time) {
-		struct printbuf buf = PRINTBUF;
+		CLASS(printbuf, buf)();
 
 		prt_str(&buf, "Split brain detected between ");
 		prt_bdevname(&buf, sb->bdev);
@@ -1305,7 +1508,6 @@ static int bch2_dev_in_fs(struct bch_sb_handle *fs,
 			prt_printf(&buf, "Not using older sb");
 
 		pr_err("%s", buf.buf);
-		printbuf_exit(&buf);
 
 		if (!opts->no_splitbrain_check)
 			return -BCH_ERR_device_splitbrain;
@@ -1316,7 +1518,7 @@ static int bch2_dev_in_fs(struct bch_sb_handle *fs,
 	u64 seq_from_member	= le64_to_cpu(sb->sb->seq);
 
 	if (seq_from_fs && seq_from_fs < seq_from_member) {
-		struct printbuf buf = PRINTBUF;
+		CLASS(printbuf, buf)();
 
 		prt_str(&buf, "Split brain detected between ");
 		prt_bdevname(&buf, sb->bdev);
@@ -1338,7 +1540,6 @@ static int bch2_dev_in_fs(struct bch_sb_handle *fs,
 		}
 
 		pr_err("%s", buf.buf);
-		printbuf_exit(&buf);
 
 		if (!opts->no_splitbrain_check)
 			return -BCH_ERR_device_splitbrain;
@@ -1553,33 +1754,35 @@ static int bch2_dev_alloc(struct bch_fs *c, unsigned dev_idx)
 	struct bch_dev *ca = NULL;
 
 	if (bch2_fs_init_fault("dev_alloc"))
-		goto err;
+		return bch_err_throw(c, ENOMEM_dev_alloc);
 
 	ca = __bch2_dev_alloc(c, &member);
 	if (!ca)
-		goto err;
+		return bch_err_throw(c, ENOMEM_dev_alloc);
 
 	ca->fs = c;
 
 	bch2_dev_attach(c, ca, dev_idx);
 	return 0;
-err:
-	return bch_err_throw(c, ENOMEM_dev_alloc);
 }
 
-static int __bch2_dev_attach_bdev(struct bch_dev *ca, struct bch_sb_handle *sb)
+static int __bch2_dev_attach_bdev(struct bch_dev *ca, struct bch_sb_handle *sb,
+				  struct printbuf *err)
 {
 	unsigned ret;
 
 	if (bch2_dev_is_online(ca)) {
-		bch_err(ca, "already have device online in slot %u",
-			sb->sb->dev_idx);
+		prt_printf(err, "already have device online in slot %u\n",
+			   sb->sb->dev_idx);
 		return bch_err_throw(ca->fs, device_already_online);
 	}
 
 	if (get_capacity(sb->bdev->bd_disk) <
 	    ca->mi.bucket_size * ca->mi.nbuckets) {
-		bch_err(ca, "cannot online: device too small");
+		prt_printf(err, "cannot online: device too small (capacity %llu filesystem size %llu nbuckets %llu)\n",
+			get_capacity(sb->bdev->bd_disk),
+			ca->mi.bucket_size * ca->mi.nbuckets,
+			ca->mi.nbuckets);
 		return bch_err_throw(ca->fs, device_size_too_small);
 	}
 
@@ -1590,10 +1793,9 @@ static int __bch2_dev_attach_bdev(struct bch_dev *ca, struct bch_sb_handle *sb)
 	if (ret)
 		return ret;
 
-	struct printbuf name = PRINTBUF;
+	CLASS(printbuf, name)();
 	prt_bdevname(&name, sb->bdev);
 	strscpy(ca->name, name.buf, sizeof(ca->name));
-	printbuf_exit(&name);
 
 	/* Commit: */
 	ca->disk_sb = *sb;
@@ -1613,7 +1815,8 @@ static int __bch2_dev_attach_bdev(struct bch_dev *ca, struct bch_sb_handle *sb)
 	return 0;
 }
 
-static int bch2_dev_attach_bdev(struct bch_fs *c, struct bch_sb_handle *sb)
+static int bch2_dev_attach_bdev(struct bch_fs *c, struct bch_sb_handle *sb,
+				struct printbuf *err)
 {
 	struct bch_dev *ca;
 	int ret;
@@ -1628,7 +1831,7 @@ static int bch2_dev_attach_bdev(struct bch_fs *c, struct bch_sb_handle *sb)
 
 	ca = bch2_dev_locked(c, sb->sb->dev_idx);
 
-	ret = __bch2_dev_attach_bdev(ca, sb);
+	ret = __bch2_dev_attach_bdev(ca, sb, err);
 	if (ret)
 		return ret;
 
@@ -1652,7 +1855,8 @@ static int bch2_dev_attach_bdev(struct bch_fs *c, struct bch_sb_handle *sb)
  * because we got an error or what have you?
  */
 bool bch2_dev_state_allowed(struct bch_fs *c, struct bch_dev *ca,
-			    enum bch_member_state new_state, int flags)
+			    enum bch_member_state new_state, int flags,
+			    struct printbuf *err)
 {
 	struct bch_devs_mask new_online_devs;
 	int nr_rw = 0, required;
@@ -1689,7 +1893,7 @@ bool bch2_dev_state_allowed(struct bch_fs *c, struct bch_dev *ca,
 		new_online_devs = c->online_devs;
 		__clear_bit(ca->dev_idx, new_online_devs.d);
 
-		return bch2_have_enough_devs(c, new_online_devs, flags, false);
+		return bch2_have_enough_devs(c, new_online_devs, flags, err);
 	default:
 		BUG();
 	}
@@ -1723,15 +1927,15 @@ static void __bch2_dev_read_write(struct bch_fs *c, struct bch_dev *ca)
 }
 
 int __bch2_dev_set_state(struct bch_fs *c, struct bch_dev *ca,
-			 enum bch_member_state new_state, int flags)
+			 enum bch_member_state new_state, int flags,
+			 struct printbuf *err)
 {
-	struct bch_member *m;
 	int ret = 0;
 
 	if (ca->mi.state == new_state)
 		return 0;
 
-	if (!bch2_dev_state_allowed(c, ca, new_state, flags))
+	if (!bch2_dev_state_allowed(c, ca, new_state, flags, err))
 		return bch_err_throw(c, device_state_not_allowed);
 
 	if (new_state != BCH_MEMBER_STATE_rw)
@@ -1739,11 +1943,11 @@ int __bch2_dev_set_state(struct bch_fs *c, struct bch_dev *ca,
 
 	bch_notice(ca, "%s", bch2_member_states[new_state]);
 
-	mutex_lock(&c->sb_lock);
-	m = bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx);
-	SET_BCH_MEMBER_STATE(m, new_state);
-	bch2_write_super(c);
-	mutex_unlock(&c->sb_lock);
+	scoped_guard(mutex, &c->sb_lock) {
+		struct bch_member *m = bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx);
+		SET_BCH_MEMBER_STATE(m, new_state);
+		bch2_write_super(c);
+	}
 
 	if (new_state == BCH_MEMBER_STATE_rw)
 		__bch2_dev_read_write(c, ca);
@@ -1754,28 +1958,24 @@ int __bch2_dev_set_state(struct bch_fs *c, struct bch_dev *ca,
 }
 
 int bch2_dev_set_state(struct bch_fs *c, struct bch_dev *ca,
-		       enum bch_member_state new_state, int flags)
+		       enum bch_member_state new_state, int flags,
+		       struct printbuf *err)
 {
-	int ret;
-
-	down_write(&c->state_lock);
-	ret = __bch2_dev_set_state(c, ca, new_state, flags);
-	up_write(&c->state_lock);
-
-	return ret;
+	guard(rwsem_write)(&c->state_lock);
+	return __bch2_dev_set_state(c, ca, new_state, flags, err);
 }
 
 /* Device add/removal: */
 
-int bch2_dev_remove(struct bch_fs *c, struct bch_dev *ca, int flags)
+int bch2_dev_remove(struct bch_fs *c, struct bch_dev *ca, int flags,
+		    struct printbuf *err)
 {
-	struct bch_member *m;
 	unsigned dev_idx = ca->dev_idx, data;
 	bool fast_device_removal = !bch2_request_incompat_feature(c,
 					bcachefs_metadata_version_fast_device_removal);
 	int ret;
 
-	down_write(&c->state_lock);
+	guard(rwsem_write)(&c->state_lock);
 
 	/*
 	 * We consume a reference to ca->ref, regardless of whether we succeed
@@ -1783,8 +1983,8 @@ int bch2_dev_remove(struct bch_fs *c, struct bch_dev *ca, int flags)
 	 */
 	bch2_dev_put(ca);
 
-	if (!bch2_dev_state_allowed(c, ca, BCH_MEMBER_STATE_failed, flags)) {
-		bch_err(ca, "Cannot remove without losing data");
+	if (!bch2_dev_state_allowed(c, ca, BCH_MEMBER_STATE_failed, flags, NULL)) {
+		prt_printf(err, "Cannot remove without losing data\n");
 		ret = bch_err_throw(c, device_state_not_allowed);
 		goto err;
 	}
@@ -1804,16 +2004,17 @@ int bch2_dev_remove(struct bch_fs *c, struct bch_dev *ca, int flags)
 		if (!data_type_is_empty(i) &&
 		    !data_type_is_hidden(i) &&
 		    usage.buckets[i]) {
-			bch_err(ca, "Remove failed: still has data (%s, %llu buckets)",
-				__bch2_data_types[i], usage.buckets[i]);
+			prt_printf(err, "Remove failed: still has data (%s, %llu buckets)\n",
+				   __bch2_data_types[i], usage.buckets[i]);
 			ret = -EBUSY;
 			goto err;
 		}
 
 	ret = bch2_dev_remove_alloc(c, ca);
-	bch_err_msg(ca, ret, "bch2_dev_remove_alloc()");
-	if (ret)
+	if (ret) {
+		prt_printf(err, "bch2_dev_remove_alloc() error: %s\n", bch2_err_str(ret));
 		goto err;
+	}
 
 	/*
 	 * We need to flush the entire journal to get rid of keys that reference
@@ -1826,36 +2027,36 @@ int bch2_dev_remove(struct bch_fs *c, struct bch_dev *ca, int flags)
 	 * calls, and could be cleaned up:
 	 */
 	ret = bch2_journal_flush_device_pins(&c->journal, ca->dev_idx);
-	bch_err_msg(ca, ret, "bch2_journal_flush_device_pins()");
-	if (ret)
+	if (ret) {
+		prt_printf(err, "bch2_journal_flush_device_pins() error: %s\n", bch2_err_str(ret));
 		goto err;
+	}
 
 	ret = bch2_journal_flush(&c->journal);
-	bch_err_msg(ca, ret, "bch2_journal_flush()");
-	if (ret)
+	if (ret) {
+		prt_printf(err, "bch2_journal_flush() error: %s\n", bch2_err_str(ret));
 		goto err;
+	}
 
 	ret = bch2_replicas_gc2(c);
-	bch_err_msg(ca, ret, "bch2_replicas_gc2()");
-	if (ret)
+	if (ret) {
+		prt_printf(err, "bch2_replicas_gc2() error: %s\n", bch2_err_str(ret));
 		goto err;
+	}
 
 	data = bch2_dev_has_data(c, ca);
 	if (data) {
-		struct printbuf data_has = PRINTBUF;
-
-		prt_bitflags(&data_has, __bch2_data_types, data);
-		bch_err(ca, "Remove failed, still has data (%s)", data_has.buf);
-		printbuf_exit(&data_has);
+		prt_str(err, "Remove failed, still has data (");
+		prt_bitflags(err, __bch2_data_types, data);
+		prt_str(err, ")\n");
 		ret = -EBUSY;
 		goto err;
 	}
 
 	__bch2_dev_offline(c, ca);
 
-	mutex_lock(&c->sb_lock);
-	rcu_assign_pointer(c->devs[ca->dev_idx], NULL);
-	mutex_unlock(&c->sb_lock);
+	scoped_guard(mutex, &c->sb_lock)
+		rcu_assign_pointer(c->devs[ca->dev_idx], NULL);
 
 #ifndef CONFIG_BCACHEFS_DEBUG
 	percpu_ref_kill(&ca->ref);
@@ -1871,42 +2072,40 @@ int bch2_dev_remove(struct bch_fs *c, struct bch_dev *ca, int flags)
 	 * Free this device's slot in the bch_member array - all pointers to
 	 * this device must be gone:
 	 */
-	mutex_lock(&c->sb_lock);
-	m = bch2_members_v2_get_mut(c->disk_sb.sb, dev_idx);
+	scoped_guard(mutex, &c->sb_lock) {
+		struct bch_member *m = bch2_members_v2_get_mut(c->disk_sb.sb, dev_idx);
 
-	if (fast_device_removal)
-		m->uuid = BCH_SB_MEMBER_DELETED_UUID;
-	else
-		memset(&m->uuid, 0, sizeof(m->uuid));
+		if (fast_device_removal)
+			m->uuid = BCH_SB_MEMBER_DELETED_UUID;
+		else
+			memset(&m->uuid, 0, sizeof(m->uuid));
 
-	bch2_write_super(c);
+		bch2_write_super(c);
+	}
 
-	mutex_unlock(&c->sb_lock);
-	up_write(&c->state_lock);
 	return 0;
 err:
 	if (test_bit(BCH_FS_rw, &c->flags) &&
 	    ca->mi.state == BCH_MEMBER_STATE_rw &&
 	    !enumerated_ref_is_zero(&ca->io_ref[READ]))
 		__bch2_dev_read_write(c, ca);
-	up_write(&c->state_lock);
 	return ret;
 }
 
 /* Add new device to running filesystem: */
-int bch2_dev_add(struct bch_fs *c, const char *path)
+int bch2_dev_add(struct bch_fs *c, const char *path, struct printbuf *err)
 {
 	struct bch_opts opts = bch2_opts_empty();
 	struct bch_sb_handle sb = {};
 	struct bch_dev *ca = NULL;
-	struct printbuf errbuf = PRINTBUF;
-	struct printbuf label = PRINTBUF;
+	CLASS(printbuf, label)();
 	int ret = 0;
 
 	ret = bch2_read_super(path, &opts, &sb);
-	bch_err_msg(c, ret, "reading super");
-	if (ret)
+	if (ret) {
+		prt_printf(err, "error reading superblock: %s\n", bch2_err_str(ret));
 		goto err;
+	}
 
 	struct bch_member dev_mi = bch2_sb_member_get(sb.sb, sb.sb->dev_idx);
 
@@ -1919,15 +2118,15 @@ int bch2_dev_add(struct bch_fs *c, const char *path)
 	}
 
 	if (list_empty(&c->list)) {
-		mutex_lock(&bch_fs_list_lock);
-		if (__bch2_uuid_to_fs(c->sb.uuid))
-			ret = bch_err_throw(c, filesystem_uuid_already_open);
-		else
-			list_add(&c->list, &bch_fs_list);
-		mutex_unlock(&bch_fs_list_lock);
+		scoped_guard(mutex, &bch_fs_list_lock) {
+			if (__bch2_uuid_to_fs(c->sb.uuid))
+				ret = bch_err_throw(c, filesystem_uuid_already_open);
+			else
+				list_add(&c->list, &bch_fs_list);
+		}
 
 		if (ret) {
-			bch_err(c, "filesystem UUID already open");
+			prt_printf(err, "cannot go multidevice: filesystem UUID already open\n");
 			goto err;
 		}
 	}
@@ -1942,111 +2141,109 @@ int bch2_dev_add(struct bch_fs *c, const char *path)
 		goto err;
 	}
 
-	ret = __bch2_dev_attach_bdev(ca, &sb);
+	ret = __bch2_dev_attach_bdev(ca, &sb, err);
 	if (ret)
 		goto err;
 
-	down_write(&c->state_lock);
-	mutex_lock(&c->sb_lock);
-	SET_BCH_SB_MULTI_DEVICE(c->disk_sb.sb, true);
+	scoped_guard(rwsem_write, &c->state_lock) {
+		scoped_guard(mutex, &c->sb_lock) {
+			SET_BCH_SB_MULTI_DEVICE(c->disk_sb.sb, true);
 
-	ret = bch2_sb_from_fs(c, ca);
-	bch_err_msg(c, ret, "setting up new superblock");
-	if (ret)
-		goto err_unlock;
+			ret = bch2_sb_from_fs(c, ca);
+			if (ret) {
+				prt_printf(err, "error setting up new superblock: %s\n", bch2_err_str(ret));
+				goto err;
+			}
 
-	if (dynamic_fault("bcachefs:add:no_slot"))
-		goto err_unlock;
+			if (dynamic_fault("bcachefs:add:no_slot"))
+				goto err;
 
-	ret = bch2_sb_member_alloc(c);
-	if (ret < 0) {
-		bch_err_msg(c, ret, "setting up new superblock");
-		goto err_unlock;
-	}
-	unsigned dev_idx = ret;
-	ret = 0;
+			ret = bch2_sb_member_alloc(c);
+			if (ret < 0) {
+				prt_printf(err, "error allocating superblock member slot: %s\n", bch2_err_str(ret));
+				goto err;
+			}
+			unsigned dev_idx = ret;
+			ret = 0;
 
-	/* success: */
+			/* success: */
 
-	dev_mi.last_mount = cpu_to_le64(ktime_get_real_seconds());
-	*bch2_members_v2_get_mut(c->disk_sb.sb, dev_idx) = dev_mi;
+			dev_mi.last_mount = cpu_to_le64(ktime_get_real_seconds());
+			*bch2_members_v2_get_mut(c->disk_sb.sb, dev_idx) = dev_mi;
 
-	ca->disk_sb.sb->dev_idx	= dev_idx;
-	bch2_dev_attach(c, ca, dev_idx);
+			ca->disk_sb.sb->dev_idx	= dev_idx;
+			bch2_dev_attach(c, ca, dev_idx);
 
-	if (BCH_MEMBER_GROUP(&dev_mi)) {
-		ret = __bch2_dev_group_set(c, ca, label.buf);
-		bch_err_msg(c, ret, "creating new label");
-		if (ret)
-			goto err_unlock;
-	}
+			set_bit(ca->dev_idx, c->online_devs.d);
 
-	bch2_write_super(c);
-	mutex_unlock(&c->sb_lock);
+			if (BCH_MEMBER_GROUP(&dev_mi)) {
+				ret = __bch2_dev_group_set(c, ca, label.buf);
+				prt_printf(err, "error creating new label: %s\n", bch2_err_str(ret));
+				if (ret)
+					goto err_late;
+			}
 
-	if (test_bit(BCH_FS_started, &c->flags)) {
+			bch2_write_super(c);
+		}
+
 		ret = bch2_dev_usage_init(ca, false);
 		if (ret)
 			goto err_late;
 
-		ret = bch2_trans_mark_dev_sb(c, ca, BTREE_TRIGGER_transactional);
-		bch_err_msg(ca, ret, "marking new superblock");
-		if (ret)
-			goto err_late;
+		if (test_bit(BCH_FS_started, &c->flags)) {
+			ret = bch2_trans_mark_dev_sb(c, ca, BTREE_TRIGGER_transactional);
+			if (ret) {
+				prt_printf(err, "error marking new superblock: %s\n", bch2_err_str(ret));
+				goto err_late;
+			}
 
-		ret = bch2_fs_freespace_init(c);
-		bch_err_msg(ca, ret, "initializing free space");
-		if (ret)
-			goto err_late;
+			ret = bch2_fs_freespace_init(c);
+			if (ret) {
+				prt_printf(err, "error initializing free space: %s\n", bch2_err_str(ret));
+				goto err_late;
+			}
 
-		if (ca->mi.state == BCH_MEMBER_STATE_rw)
-			__bch2_dev_read_write(c, ca);
+			if (ca->mi.state == BCH_MEMBER_STATE_rw)
+				__bch2_dev_read_write(c, ca);
 
-		ret = bch2_dev_journal_alloc(ca, false);
-		bch_err_msg(c, ret, "allocating journal");
-		if (ret)
-			goto err_late;
+			ret = bch2_dev_journal_alloc(ca, false);
+			if (ret) {
+				prt_printf(err, "error allocating journal: %s\n", bch2_err_str(ret));
+				goto err_late;
+			}
+		}
+
+		/*
+		 * We just changed the superblock UUID, invalidate cache and send a
+		 * uevent to update /dev/disk/by-uuid
+		 */
+		invalidate_bdev(ca->disk_sb.bdev);
+
+		char uuid_str[37];
+		snprintf(uuid_str, sizeof(uuid_str), "UUID=%pUb", &c->sb.uuid);
+
+		char *envp[] = {
+			"CHANGE=uuid",
+			uuid_str,
+			NULL,
+		};
+		kobject_uevent_env(&ca->disk_sb.bdev->bd_device.kobj, KOBJ_CHANGE, envp);
 	}
-
-	/*
-	 * We just changed the superblock UUID, invalidate cache and send a
-	 * uevent to update /dev/disk/by-uuid
-	 */
-	invalidate_bdev(ca->disk_sb.bdev);
-
-	char uuid_str[37];
-	snprintf(uuid_str, sizeof(uuid_str), "UUID=%pUb", &c->sb.uuid);
-
-	char *envp[] = {
-		"CHANGE=uuid",
-		uuid_str,
-		NULL,
-	};
-	kobject_uevent_env(&ca->disk_sb.bdev->bd_device.kobj, KOBJ_CHANGE, envp);
-
-	up_write(&c->state_lock);
 out:
-	printbuf_exit(&label);
-	printbuf_exit(&errbuf);
 	bch_err_fn(c, ret);
 	return ret;
-
-err_unlock:
-	mutex_unlock(&c->sb_lock);
-	up_write(&c->state_lock);
 err:
 	if (ca)
 		bch2_dev_free(ca);
 	bch2_free_super(&sb);
 	goto out;
 err_late:
-	up_write(&c->state_lock);
 	ca = NULL;
 	goto err;
 }
 
 /* Hot add existing device to running filesystem: */
-int bch2_dev_online(struct bch_fs *c, const char *path)
+int bch2_dev_online(struct bch_fs *c, const char *path, struct printbuf *err)
 {
 	struct bch_opts opts = bch2_opts_empty();
 	struct bch_sb_handle sb = { NULL };
@@ -2054,82 +2251,80 @@ int bch2_dev_online(struct bch_fs *c, const char *path)
 	unsigned dev_idx;
 	int ret;
 
-	down_write(&c->state_lock);
+	guard(rwsem_write)(&c->state_lock);
 
 	ret = bch2_read_super(path, &opts, &sb);
 	if (ret) {
-		up_write(&c->state_lock);
+		prt_printf(err, "error reading superblock: %s\n", bch2_err_str(ret));
 		return ret;
 	}
 
 	dev_idx = sb.sb->dev_idx;
 
 	ret = bch2_dev_in_fs(&c->disk_sb, &sb, &c->opts);
-	bch_err_msg(c, ret, "bringing %s online", path);
-	if (ret)
+	if (ret) {
+		prt_printf(err, "device not a member of fs: %s\n", bch2_err_str(ret));
 		goto err;
+	}
 
-	ret = bch2_dev_attach_bdev(c, &sb);
+	ret = bch2_dev_attach_bdev(c, &sb, err);
 	if (ret)
 		goto err;
 
 	ca = bch2_dev_locked(c, dev_idx);
 
 	ret = bch2_trans_mark_dev_sb(c, ca, BTREE_TRIGGER_transactional);
-	bch_err_msg(c, ret, "bringing %s online: error from bch2_trans_mark_dev_sb", path);
-	if (ret)
+	if (ret) {
+		prt_printf(err, "bch2_trans_mark_dev_sb() error: %s\n", bch2_err_str(ret));
 		goto err;
+	}
 
 	if (ca->mi.state == BCH_MEMBER_STATE_rw)
 		__bch2_dev_read_write(c, ca);
 
 	if (!ca->mi.freespace_initialized) {
 		ret = bch2_dev_freespace_init(c, ca, 0, ca->mi.nbuckets);
-		bch_err_msg(ca, ret, "initializing free space");
-		if (ret)
+		if (ret) {
+			prt_printf(err, "bch2_dev_freespace_init() error: %s\n", bch2_err_str(ret));
 			goto err;
+		}
 	}
 
 	if (!ca->journal.nr) {
 		ret = bch2_dev_journal_alloc(ca, false);
-		bch_err_msg(ca, ret, "allocating journal");
-		if (ret)
+		if (ret) {
+			prt_printf(err, "bch2_dev_journal_alloc() error: %s\n", bch2_err_str(ret));
 			goto err;
+		}
 	}
 
-	mutex_lock(&c->sb_lock);
-	bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx)->last_mount =
-		cpu_to_le64(ktime_get_real_seconds());
-	bch2_write_super(c);
-	mutex_unlock(&c->sb_lock);
+	scoped_guard(mutex, &c->sb_lock) {
+		bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx)->last_mount =
+			cpu_to_le64(ktime_get_real_seconds());
+		bch2_write_super(c);
+	}
 
-	up_write(&c->state_lock);
 	return 0;
 err:
-	up_write(&c->state_lock);
 	bch2_free_super(&sb);
 	return ret;
 }
 
-int bch2_dev_offline(struct bch_fs *c, struct bch_dev *ca, int flags)
+int bch2_dev_offline(struct bch_fs *c, struct bch_dev *ca, int flags, struct printbuf *err)
 {
-	down_write(&c->state_lock);
+	guard(rwsem_write)(&c->state_lock);
 
 	if (!bch2_dev_is_online(ca)) {
-		bch_err(ca, "Already offline");
-		up_write(&c->state_lock);
+		prt_printf(err, "Already offline\n");
 		return 0;
 	}
 
-	if (!bch2_dev_state_allowed(c, ca, BCH_MEMBER_STATE_failed, flags)) {
-		bch_err(ca, "Cannot offline required disk");
-		up_write(&c->state_lock);
+	if (!bch2_dev_state_allowed(c, ca, BCH_MEMBER_STATE_failed, flags, NULL)) {
+		prt_printf(err, "Cannot offline required disk\n");
 		return bch_err_throw(c, device_state_not_allowed);
 	}
 
 	__bch2_dev_offline(c, ca);
-
-	up_write(&c->state_lock);
 	return 0;
 }
 
@@ -2145,62 +2340,63 @@ static int __bch2_dev_resize_alloc(struct bch_dev *ca, u64 old_nbuckets, u64 new
 		bch2_dev_freespace_init(c, ca, old_nbuckets, new_nbuckets);
 }
 
-int bch2_dev_resize(struct bch_fs *c, struct bch_dev *ca, u64 nbuckets)
+int bch2_dev_resize(struct bch_fs *c, struct bch_dev *ca, u64 nbuckets, struct printbuf *err)
 {
-	struct bch_member *m;
 	u64 old_nbuckets;
 	int ret = 0;
 
-	down_write(&c->state_lock);
+	guard(rwsem_write)(&c->state_lock);
 	old_nbuckets = ca->mi.nbuckets;
 
 	if (nbuckets < ca->mi.nbuckets) {
-		bch_err(ca, "Cannot shrink yet");
-		ret = -EINVAL;
-		goto err;
+		prt_printf(err, "Cannot shrink yet\n");
+		return -EINVAL;
 	}
 
 	if (nbuckets > BCH_MEMBER_NBUCKETS_MAX) {
-		bch_err(ca, "New device size too big (%llu greater than max %u)",
-			nbuckets, BCH_MEMBER_NBUCKETS_MAX);
-		ret = bch_err_throw(c, device_size_too_big);
-		goto err;
+		prt_printf(err, "New device size too big (%llu greater than max %u)\n",
+			   nbuckets, BCH_MEMBER_NBUCKETS_MAX);
+		return bch_err_throw(c, device_size_too_big);
 	}
 
 	if (bch2_dev_is_online(ca) &&
 	    get_capacity(ca->disk_sb.bdev->bd_disk) <
 	    ca->mi.bucket_size * nbuckets) {
-		bch_err(ca, "New size larger than device");
-		ret = bch_err_throw(c, device_size_too_small);
-		goto err;
+		prt_printf(err, "New size %llu larger than device size %llu\n",
+			   ca->mi.bucket_size * nbuckets,
+			   get_capacity(ca->disk_sb.bdev->bd_disk));
+		return bch_err_throw(c, device_size_too_small);
 	}
 
 	ret = bch2_dev_buckets_resize(c, ca, nbuckets);
-	bch_err_msg(ca, ret, "resizing buckets");
-	if (ret)
-		goto err;
+	if (ret) {
+		prt_printf(err, "bch2_dev_buckets_resize() error: %s\n", bch2_err_str(ret));
+		return ret;
+	}
 
 	ret = bch2_trans_mark_dev_sb(c, ca, BTREE_TRIGGER_transactional);
-	if (ret)
-		goto err;
+	if (ret) {
+		prt_printf(err, "bch2_trans_mark_dev_sb() error: %s\n", bch2_err_str(ret));
+		return ret;
+	}
 
-	mutex_lock(&c->sb_lock);
-	m = bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx);
-	m->nbuckets = cpu_to_le64(nbuckets);
+	scoped_guard(mutex, &c->sb_lock) {
+		struct bch_member *m = bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx);
+		m->nbuckets = cpu_to_le64(nbuckets);
 
-	bch2_write_super(c);
-	mutex_unlock(&c->sb_lock);
+		bch2_write_super(c);
+	}
 
 	if (ca->mi.freespace_initialized) {
 		ret = __bch2_dev_resize_alloc(ca, old_nbuckets, nbuckets);
-		if (ret)
-			goto err;
+		if (ret) {
+			prt_printf(err, "__bch2_dev_resize_alloc() error: %s\n", bch2_err_str(ret));
+			return ret;
+		}
 	}
 
 	bch2_recalc_capacity(c);
-err:
-	up_write(&c->state_lock);
-	return ret;
+	return 0;
 }
 
 int bch2_fs_resize_on_mount(struct bch_fs *c)
@@ -2218,26 +2414,24 @@ int bch2_fs_resize_on_mount(struct bch_fs *c)
 			if (ret) {
 				enumerated_ref_put(&ca->io_ref[READ],
 						   BCH_DEV_READ_REF_fs_resize_on_mount);
-				up_write(&c->state_lock);
 				return ret;
 			}
 
-			mutex_lock(&c->sb_lock);
-			struct bch_member *m =
-				bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx);
-			m->nbuckets = cpu_to_le64(new_nbuckets);
-			SET_BCH_MEMBER_RESIZE_ON_MOUNT(m, false);
+			scoped_guard(mutex, &c->sb_lock) {
+				struct bch_member *m =
+					bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx);
+				m->nbuckets = cpu_to_le64(new_nbuckets);
+				SET_BCH_MEMBER_RESIZE_ON_MOUNT(m, false);
 
-			c->disk_sb.sb->features[0] &= ~cpu_to_le64(BIT_ULL(BCH_FEATURE_small_image));
-			bch2_write_super(c);
-			mutex_unlock(&c->sb_lock);
+				c->disk_sb.sb->features[0] &= ~cpu_to_le64(BIT_ULL(BCH_FEATURE_small_image));
+				bch2_write_super(c);
+			}
 
 			if (ca->mi.freespace_initialized) {
 				ret = __bch2_dev_resize_alloc(ca, old_nbuckets, new_nbuckets);
 				if (ret) {
 					enumerated_ref_put(&ca->io_ref[READ],
 							BCH_DEV_READ_REF_fs_resize_on_mount);
-					up_write(&c->state_lock);
 					return ret;
 				}
 			}
@@ -2276,6 +2470,10 @@ static struct bch_fs *bdev_get_fs(struct block_device *bdev)
 	return c;
 }
 
+DEFINE_CLASS(bdev_get_fs, struct bch_fs *,
+	     bch2_ro_ref_put(_T), bdev_get_fs(bdev),
+	     struct block_device *bdev);
+
 /* returns with ref on ca->ref */
 static struct bch_dev *bdev_to_bch_dev(struct bch_fs *c, struct block_device *bdev)
 {
@@ -2287,7 +2485,7 @@ static struct bch_dev *bdev_to_bch_dev(struct bch_fs *c, struct block_device *bd
 
 static void bch2_fs_bdev_mark_dead(struct block_device *bdev, bool surprise)
 {
-	struct bch_fs *c = bdev_get_fs(bdev);
+	CLASS(bdev_get_fs, c)(bdev);
 	if (!c)
 		return;
 
@@ -2301,48 +2499,44 @@ static void bch2_fs_bdev_mark_dead(struct block_device *bdev, bool surprise)
 		down_read(&sb->s_umount);
 	}
 
-	down_write(&c->state_lock);
+	guard(rwsem_write)(&c->state_lock);
+
 	struct bch_dev *ca = bdev_to_bch_dev(c, bdev);
-	if (!ca)
-		goto unlock;
+	if (ca) {
+		CLASS(printbuf, buf)();
+		__bch2_log_msg_start(ca->name, &buf);
+		prt_printf(&buf, "offline from block layer\n");
 
-	bool dev = bch2_dev_state_allowed(c, ca,
-					  BCH_MEMBER_STATE_failed,
-					  BCH_FORCE_IF_DEGRADED);
+		bool dev = bch2_dev_state_allowed(c, ca,
+						  BCH_MEMBER_STATE_failed,
+						  BCH_FORCE_IF_DEGRADED,
+						  &buf);
+		if (!dev && sb) {
+			if (!surprise)
+				sync_filesystem(sb);
+			shrink_dcache_sb(sb);
+			evict_inodes(sb);
+		}
 
-	if (!dev && sb) {
-		if (!surprise)
-			sync_filesystem(sb);
-		shrink_dcache_sb(sb);
-		evict_inodes(sb);
+		if (dev) {
+			__bch2_dev_offline(c, ca);
+		} else {
+			bch2_journal_flush(&c->journal);
+			bch2_fs_emergency_read_only2(c, &buf);
+		}
+
+		bch2_print_str(c, KERN_ERR, buf.buf);
+
+		bch2_dev_put(ca);
 	}
 
-	struct printbuf buf = PRINTBUF;
-	__bch2_log_msg_start(ca->name, &buf);
-
-	prt_printf(&buf, "offline from block layer");
-
-	if (dev) {
-		__bch2_dev_offline(c, ca);
-	} else {
-		bch2_journal_flush(&c->journal);
-		bch2_fs_emergency_read_only2(c, &buf);
-	}
-
-	bch2_print_str(c, KERN_ERR, buf.buf);
-	printbuf_exit(&buf);
-
-	bch2_dev_put(ca);
-unlock:
 	if (sb)
 		up_read(&sb->s_umount);
-	up_write(&c->state_lock);
-	bch2_ro_ref_put(c);
 }
 
 static void bch2_fs_bdev_sync(struct block_device *bdev)
 {
-	struct bch_fs *c = bdev_get_fs(bdev);
+	CLASS(bdev_get_fs, c)(bdev);
 	if (!c)
 		return;
 
@@ -2353,12 +2547,9 @@ static void bch2_fs_bdev_sync(struct block_device *bdev)
 		 * unmounted - we only take this to avoid a warning in
 		 * sync_filesystem:
 		 */
-		down_read(&sb->s_umount);
+		guard(rwsem_read)(&sb->s_umount);
 		sync_filesystem(sb);
-		up_read(&sb->s_umount);
 	}
-
-	bch2_ro_ref_put(c);
 }
 
 const struct blk_holder_ops bch2_sb_handle_bdev_ops = {
@@ -2380,7 +2571,6 @@ struct bch_fs *bch2_fs_open(darray_const_str *devices,
 	bch_sb_handles sbs = {};
 	struct bch_fs *c = NULL;
 	struct bch_sb_handle *best = NULL;
-	struct printbuf errbuf = PRINTBUF;
 	int ret = 0;
 
 	if (!try_module_get(THIS_MODULE))
@@ -2403,11 +2593,6 @@ struct bch_fs *bch2_fs_open(darray_const_str *devices,
 			goto err;
 
 		BUG_ON(darray_push(&sbs, sb));
-	}
-
-	if (opts->nochanges && !opts->read_only) {
-		ret = bch_err_throw(c, erofs_nochanges);
-		goto err_print;
 	}
 
 	darray_for_each(sbs, sb)
@@ -2435,16 +2620,6 @@ struct bch_fs *bch2_fs_open(darray_const_str *devices,
 	if (ret)
 		goto err;
 
-	down_write(&c->state_lock);
-	darray_for_each(sbs, sb) {
-		ret = bch2_dev_attach_bdev(c, sb);
-		if (ret) {
-			up_write(&c->state_lock);
-			goto err;
-		}
-	}
-	up_write(&c->state_lock);
-
 	if (!c->opts.nostart) {
 		ret = bch2_fs_start(c);
 		if (ret)
@@ -2454,7 +2629,6 @@ out:
 	darray_for_each(sbs, sb)
 		bch2_free_super(sb);
 	darray_exit(&sbs);
-	printbuf_exit(&errbuf);
 	module_put(THIS_MODULE);
 	return c;
 err_print:
@@ -2526,6 +2700,8 @@ static int bch2_param_get_static_key_t(char *buffer, const struct kernel_param *
 	return sprintf(buffer, "%c\n", static_key_enabled(key) ? 'N' : 'Y');
 }
 
+/* this is unused in userspace - silence the warning */
+__maybe_unused
 static const struct kernel_param_ops bch2_param_ops_static_key_t = {
 	.flags = KERNEL_PARAM_OPS_FL_NOARG,
 	.set = bch2_param_set_static_key_t,

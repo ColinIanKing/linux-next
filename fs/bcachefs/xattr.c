@@ -4,6 +4,7 @@
 #include "acl.h"
 #include "bkey_methods.h"
 #include "btree_update.h"
+#include "dirent.h"
 #include "extents.h"
 #include "fs.h"
 #include "rebalance.h"
@@ -25,7 +26,7 @@ static u64 bch2_xattr_hash(const struct bch_hash_info *info,
 	bch2_str_hash_update(&ctx, info, &key->type, sizeof(key->type));
 	bch2_str_hash_update(&ctx, info, key->name.name, key->name.len);
 
-	return bch2_str_hash_end(&ctx, info);
+	return bch2_str_hash_end(&ctx, info, false);
 }
 
 static u64 xattr_hash_key(const struct bch_hash_info *info, const void *key)
@@ -157,7 +158,7 @@ static int bch2_xattr_get_trans(struct btree_trans *trans, struct bch_inode_info
 		else
 			memcpy(buffer, xattr_val(xattr.v), ret);
 	}
-	bch2_trans_iter_exit(trans, &iter);
+	bch2_trans_iter_exit(&iter);
 	return ret;
 }
 
@@ -168,7 +169,7 @@ int bch2_xattr_set(struct btree_trans *trans, subvol_inum inum,
 		   int type, int flags)
 {
 	struct bch_fs *c = trans->c;
-	struct btree_iter inode_iter = {};
+	struct btree_iter inode_iter = { NULL };
 	int ret;
 
 	ret   = bch2_subvol_is_ro_trans(trans, inum.subvol) ?:
@@ -184,7 +185,7 @@ int bch2_xattr_set(struct btree_trans *trans, subvol_inum inum,
 	inode_u->bi_ctime = bch2_current_time(c);
 
 	ret = bch2_inode_write(trans, &inode_iter, inode_u);
-	bch2_trans_iter_exit(trans, &inode_iter);
+	bch2_trans_iter_exit(&inode_iter);
 
 	if (ret)
 		return ret;
@@ -313,8 +314,8 @@ ssize_t bch2_xattr_list(struct dentry *dentry, char *buffer, size_t buffer_size)
 	struct xattr_buf buf = { .buf = buffer, .len = buffer_size };
 	u64 offset = 0, inum = inode->ei_inode.bi_inum;
 
-	int ret = bch2_trans_run(c,
-		for_each_btree_key_in_subvolume_max(trans, iter, BTREE_ID_xattrs,
+	CLASS(btree_trans, trans)(c);
+	int ret = for_each_btree_key_in_subvolume_max(trans, iter, BTREE_ID_xattrs,
 				   POS(inum, offset),
 				   POS(inum, U64_MAX),
 				   inode->ei_inum.subvol, 0, k, ({
@@ -322,7 +323,7 @@ ssize_t bch2_xattr_list(struct dentry *dentry, char *buffer, size_t buffer_size)
 				continue;
 
 			bch2_xattr_emit(dentry, bkey_s_c_to_xattr(k).v, &buf);
-		}))) ?:
+		})) ?:
 		bch2_xattr_list_bcachefs(c, &inode->ei_inode, &buf, false) ?:
 		bch2_xattr_list_bcachefs(c, &inode->ei_inode, &buf, true);
 
@@ -335,9 +336,10 @@ static int bch2_xattr_get_handler(const struct xattr_handler *handler,
 {
 	struct bch_inode_info *inode = to_bch_ei(vinode);
 	struct bch_fs *c = inode->v.i_sb->s_fs_info;
-	int ret = bch2_trans_do(c,
-		bch2_xattr_get_trans(trans, inode, name, buffer, size, handler->flags));
+	CLASS(btree_trans, trans)(c);
 
+	int ret = lockrestart_do(trans,
+		bch2_xattr_get_trans(trans, inode, name, buffer, size, handler->flags));
 	if (ret < 0 && bch2_err_matches(ret, ENOENT))
 		ret = -ENODATA;
 
@@ -356,12 +358,12 @@ static int bch2_xattr_set_handler(const struct xattr_handler *handler,
 	struct bch_inode_unpacked inode_u;
 	int ret;
 
-	ret = bch2_trans_run(c,
-		commit_do(trans, NULL, NULL, 0,
+	CLASS(btree_trans, trans)(c);
+	ret = commit_do(trans, NULL, NULL, 0,
 			bch2_xattr_set(trans, inode_inum(inode), &inode_u,
 				       &hash, name, value, size,
 				       handler->flags, flags)) ?:
-		(bch2_inode_update_after_write(trans, inode, &inode_u, ATTR_CTIME), 0));
+		(bch2_inode_update_after_write(trans, inode, &inode_u, ATTR_CTIME), 0);
 
 	return bch2_err_class(ret);
 }
@@ -418,7 +420,6 @@ static int __bch2_xattr_bcachefs_get(const struct xattr_handler *handler,
 		bch2_inode_opts_to_opts(&inode->ei_inode);
 	const struct bch_option *opt;
 	int id, inode_opt_id;
-	struct printbuf out = PRINTBUF;
 	int ret;
 	u64 v;
 
@@ -439,6 +440,7 @@ static int __bch2_xattr_bcachefs_get(const struct xattr_handler *handler,
 	    !(inode->ei_inode.bi_fields_set & (1 << inode_opt_id)))
 		return -ENODATA;
 
+	CLASS(printbuf, out)();
 	v = bch2_opt_get_by_id(&opts, id);
 	bch2_opt_to_text(&out, c, c->disk_sb.sb, opt, v, 0);
 
@@ -453,7 +455,6 @@ static int __bch2_xattr_bcachefs_get(const struct xattr_handler *handler,
 			memcpy(buffer, out.buf, out.pos);
 	}
 
-	printbuf_exit(&out);
 	return ret;
 }
 
@@ -482,6 +483,22 @@ static int inode_opt_set_fn(struct btree_trans *trans,
 		int ret = bch2_inode_set_casefold(trans, inode_inum(inode), bi, s->v);
 		if (ret)
 			return ret;
+	}
+
+	if (s->id == Inode_opt_inodes_32bit &&
+	    !bch2_request_incompat_feature(trans->c, bcachefs_metadata_version_31bit_dirent_offset)) {
+		/*
+		 * Make sure the dir is empty, as otherwise we'd need to
+		 * rehash everything and update the dirent keys.
+		 */
+		int ret = bch2_empty_dir_trans(trans, inode_inum(inode));
+		if (ret < 0)
+			return ret;
+
+		if (s->defined)
+			bi->bi_flags |= BCH_INODE_31bit_dirent_offset;
+		else
+			bi->bi_flags &= ~BCH_INODE_31bit_dirent_offset;
 	}
 
 	if (s->defined)
@@ -532,11 +549,11 @@ static int bch2_xattr_bcachefs_set(const struct xattr_handler *handler,
 		kfree(buf);
 
 		if (ret < 0)
-			goto err_class_exit;
+			goto err;
 
 		ret = bch2_opt_hook_pre_set(c, NULL, opt_id, v);
 		if (ret < 0)
-			goto err_class_exit;
+			goto err;
 
 		s.v = v + 1;
 		s.defined = true;
@@ -548,7 +565,7 @@ static int bch2_xattr_bcachefs_set(const struct xattr_handler *handler,
 		 * rename() also has to deal with keeping inherited options up
 		 * to date - see bch2_reinherit_attrs()
 		 */
-		spin_lock(&dentry->d_lock);
+		guard(spinlock)(&dentry->d_lock);
 		if (!IS_ROOT(dentry)) {
 			struct bch_inode_info *dir =
 				to_bch_ei(d_inode(dentry->d_parent));
@@ -557,26 +574,24 @@ static int bch2_xattr_bcachefs_set(const struct xattr_handler *handler,
 		} else {
 			s.v = 0;
 		}
-		spin_unlock(&dentry->d_lock);
 
 		s.defined = false;
 	}
 
-	mutex_lock(&inode->ei_update_lock);
-	if (inode_opt_id == Inode_opt_project) {
-		/*
-		 * inode fields accessible via the xattr interface are stored
-		 * with a +1 bias, so that 0 means unset:
-		 */
-		ret = bch2_set_projid(c, inode, s.v ? s.v - 1 : 0);
-		if (ret)
-			goto err;
-	}
+	scoped_guard(mutex, &inode->ei_update_lock) {
+		if (inode_opt_id == Inode_opt_project) {
+			/*
+			 * inode fields accessible via the xattr interface are stored
+			 * with a +1 bias, so that 0 means unset:
+			 */
+			ret = bch2_set_projid(c, inode, s.v ? s.v - 1 : 0);
+			if (ret)
+				goto err;
+		}
 
-	ret = bch2_write_inode(c, inode, inode_opt_set_fn, &s, 0);
+		ret = bch2_write_inode(c, inode, inode_opt_set_fn, &s, 0);
+	}
 err:
-	mutex_unlock(&inode->ei_update_lock);
-err_class_exit:
 	return bch2_err_class(ret);
 }
 
