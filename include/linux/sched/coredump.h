@@ -2,7 +2,6 @@
 #ifndef _LINUX_SCHED_COREDUMP_H
 #define _LINUX_SCHED_COREDUMP_H
 
-#include <linux/compiler_types.h>
 #include <linux/mm_types.h>
 
 #define SUID_DUMP_DISABLE	0	/* No setuid dumping */
@@ -20,9 +19,7 @@ static inline unsigned long __mm_flags_get_dumpable(struct mm_struct *mm)
 
 static inline void __mm_flags_set_mask_dumpable(struct mm_struct *mm, int value)
 {
-	unsigned long *bitmap = ACCESS_PRIVATE(&mm->_flags, __mm_flags);
-
-	set_mask_bits(bitmap, MMF_DUMPABLE_MASK, value);
+	__mm_flags_set_mask_bits_word(mm, MMF_DUMPABLE_MASK, value);
 }
 
 extern void set_dumpable(struct mm_struct *mm, int value);
