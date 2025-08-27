@@ -744,7 +744,7 @@ static void vhost_workers_free(struct vhost_dev *dev)
 
 static void vhost_task_wakeup(struct vhost_worker *worker)
 {
-	return vhost_task_wake(worker->vtsk);
+	return __vhost_task_wake(worker->vtsk);
 }
 
 static void vhost_kthread_wakeup(struct vhost_worker *worker)

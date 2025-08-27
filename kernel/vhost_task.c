@@ -67,15 +67,51 @@ static int vhost_task_fn(void *data)
 	do_exit(0);
 }
 
+static void vhost_task_wake_up_process(struct vhost_task *vtsk)
+{
+	wake_up_process(vtsk->task);
+}
+
 /**
- * vhost_task_wake - wakeup the vhost_task
+ * __vhost_task_wake - wakeup the vhost_task
  * @vtsk: vhost_task to wake
  *
- * wake up the vhost_task worker thread
+ * Wake up the vhost_task worker thread.  The caller is responsible for ensuring
+ * that the task hasn't exited.
+ */
+void __vhost_task_wake(struct vhost_task *vtsk)
+{
+	/*
+	 * Checking VHOST_TASK_FLAGS_KILLED can race with signal delivery, but
+	 * a race can only result in false negatives and this is just a sanity
+	 * check, i.e. if KILLED is set, the caller is buggy no matter what.
+	 */
+	if (WARN_ON_ONCE(test_bit(VHOST_TASK_FLAGS_KILLED, &vtsk->flags)))
+		return;
+
+	vhost_task_wake_up_process(vtsk);
+}
+EXPORT_SYMBOL_GPL(__vhost_task_wake);
+
+/**
+ * vhost_task_wake - wakeup the vhost_task if it hasn't been killed
+ * @vtsk: vhost_task to wake
+ *
+ * Wake up the vhost_task worker thread if the task hasn't exited, e.g. due to
+ * a signal.
  */
 void vhost_task_wake(struct vhost_task *vtsk)
 {
-	wake_up_process(vtsk->task);
+	guard(mutex)(&vtsk->exit_mutex);
+
+	/* Attempting to wake a task that has been explicitly stopped is a bug. */
+	if (WARN_ON_ONCE(test_bit(VHOST_TASK_FLAGS_STOP, &vtsk->flags)))
+		return;
+
+	if (test_bit(VHOST_TASK_FLAGS_KILLED, &vtsk->flags))
+		return;
+
+	vhost_task_wake_up_process(vtsk);
 }
 EXPORT_SYMBOL_GPL(vhost_task_wake);
 
@@ -91,7 +127,7 @@ void vhost_task_stop(struct vhost_task *vtsk)
 	mutex_lock(&vtsk->exit_mutex);
 	if (!test_bit(VHOST_TASK_FLAGS_KILLED, &vtsk->flags)) {
 		set_bit(VHOST_TASK_FLAGS_STOP, &vtsk->flags);
-		vhost_task_wake(vtsk);
+		vhost_task_wake_up_process(vtsk);
 	}
 	mutex_unlock(&vtsk->exit_mutex);
 
