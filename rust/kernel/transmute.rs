@@ -47,7 +47,32 @@ impl_frombytes! {
 ///
 /// Values of this type may not contain any uninitialized bytes. This type must not have interior
 /// mutability.
-pub unsafe trait AsBytes {}
+pub unsafe trait AsBytes {
+    /// Returns `self` as a slice of bytes.
+    fn as_bytes(&self) -> &[u8] {
+        // CAST: `Self` implements `AsBytes` thus all bytes of `self` are initialized.
+        let data = core::ptr::from_ref(self).cast::<u8>();
+        let len = core::mem::size_of_val(self);
+
+        // SAFETY: `data` is non-null and valid for reads of `len * sizeof::<u8>()` bytes.
+        unsafe { core::slice::from_raw_parts(data, len) }
+    }
+
+    /// Returns `self` as a mutable slice of bytes.
+    fn as_bytes_mut(&mut self) -> &mut [u8]
+    where
+        Self: FromBytes,
+    {
+        // CAST: `Self` implements both `AsBytes` and `FromBytes` thus making `Self`
+        // bi-directionally transmutable to `[u8; size_of_val(self)]`.
+        let data = core::ptr::from_mut(self).cast::<u8>();
+        let len = core::mem::size_of_val(self);
+
+        // SAFETY: `data` is non-null and valid for read and writes of `len * sizeof::<u8>()`
+        // bytes.
+        unsafe { core::slice::from_raw_parts_mut(data, len) }
+    }
+}
 
 macro_rules! impl_asbytes {
     ($($({$($generics:tt)*})? $t:ty, )*) => {
