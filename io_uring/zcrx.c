@@ -554,8 +554,9 @@ int io_register_zcrx_ifq(struct io_ring_ctx *ctx,
 		return -EPERM;
 
 	/* mandatory io_uring features for zc rx */
-	if (!(ctx->flags & IORING_SETUP_DEFER_TASKRUN &&
-	      ctx->flags & IORING_SETUP_CQE32))
+	if (!(ctx->flags & IORING_SETUP_DEFER_TASKRUN))
+		return -EINVAL;
+	if (!(ctx->flags & (IORING_SETUP_CQE32|IORING_SETUP_CQE_MIXED)))
 		return -EINVAL;
 	if (copy_from_user(&reg, arg, sizeof(reg)))
 		return -EFAULT;
