@@ -2,21 +2,47 @@
 #ifndef _BCACHEFS_BTREE_JOURNAL_ITER_TYPES_H
 #define _BCACHEFS_BTREE_JOURNAL_ITER_TYPES_H
 
+struct journal_ptr {
+	bool		csum_good;
+	struct bch_csum	csum;
+	u8		dev;
+	u32		bucket;
+	u32		bucket_offset;
+	u64		sector;
+};
+
+/*
+ * Only used for holding the journal entries we read in btree_journal_read()
+ * during cache_registration
+ */
+struct journal_replay {
+	DARRAY_PREALLOCATED(struct journal_ptr, 8) ptrs;
+
+	bool			csum_good;
+	bool			ignore_blacklisted;
+	bool			ignore_not_dirty;
+	/* must be last: */
+	struct jset		j;
+};
+
 struct journal_key_range_overwritten {
 	size_t			start, end;
 };
 
 struct journal_key {
-	u64			journal_seq;
-	u32			journal_offset;
+	union {
+	struct {
+		u32		journal_seq_offset;
+		u32		journal_offset;
+	};
+		struct bkey_i	*allocated_k;
+	};
 	enum btree_id		btree_id:8;
 	unsigned		level:8;
 	bool			allocated:1;
 	bool			overwritten:1;
 	bool			rewind:1;
-	struct journal_key_range_overwritten __rcu *
-				overwritten_range;
-	struct bkey_i		*k;
+	u32			overwritten_range;
 };
 
 struct journal_keys {
@@ -31,7 +57,9 @@ struct journal_keys {
 	size_t			gap;
 	atomic_t		ref;
 	bool			initial_ref_held;
+
 	struct mutex		overwrite_lock;
+	DARRAY(struct journal_key_range_overwritten) overwrites;
 };
 
 #endif /* _BCACHEFS_BTREE_JOURNAL_ITER_TYPES_H */
