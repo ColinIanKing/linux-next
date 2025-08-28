@@ -614,7 +614,10 @@ static inline struct bch_extent_ptr *bch2_bkey_has_device(struct bkey_s k, unsig
 	return (void *) bch2_bkey_has_device_c(k.s_c, dev);
 }
 
+bool bch2_bkey_devs_rw(struct bch_fs *, struct bkey_s_c);
+
 bool bch2_bkey_has_target(struct bch_fs *, struct bkey_s_c, unsigned);
+bool bch2_bkey_in_target(struct bch_fs *, struct bkey_s_c, unsigned);
 
 void bch2_bkey_extent_entry_drop(struct bkey_i *, union bch_extent_entry *);
 
@@ -647,6 +650,7 @@ void bch2_bkey_drop_ptr(struct bkey_s, struct bch_extent_ptr *);
 
 void bch2_bkey_drop_device_noerror(struct bkey_s, unsigned);
 void bch2_bkey_drop_device(struct bkey_s, unsigned);
+void bch2_bkey_drop_ec(struct bkey_i *k, unsigned);
 
 #define bch2_bkey_drop_ptrs_noerror(_k, _ptr, _cond)			\
 do {									\
