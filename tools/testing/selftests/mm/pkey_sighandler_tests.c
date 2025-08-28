@@ -41,11 +41,12 @@ static siginfo_t siginfo = {0};
  * syscall will attempt to access the PLT in order to call a library function
  * which is protected by MPK 0 which we don't have access to.
  */
-static inline __always_inline
+#ifdef __x86_64__
+static __always_inline
 long syscall_raw(long n, long a1, long a2, long a3, long a4, long a5, long a6)
 {
 	unsigned long ret;
-#ifdef __x86_64__
+
 	register long r10 asm("r10") = a4;
 	register long r8 asm("r8") = a5;
 	register long r9 asm("r9") = a6;
@@ -53,12 +54,26 @@ long syscall_raw(long n, long a1, long a2, long a3, long a4, long a5, long a6)
 		      : "=a"(ret)
 		      : "a"(n), "D"(a1), "S"(a2), "d"(a3), "r"(r10), "r"(r8), "r"(r9)
 		      : "rcx", "r11", "memory");
+	return ret;
+}
 #elif defined __i386__
+static __always_inline
+long syscall_raw(long n, long a1, long a2, long a3, long a4, long a5, long __unused a6)
+{
+	unsigned long ret;
+
 	asm volatile ("int $0x80"
 		      : "=a"(ret)
 		      : "a"(n), "b"(a1), "c"(a2), "d"(a3), "S"(a4), "D"(a5)
 		      : "memory");
+	return ret;
+}
 #elif defined __aarch64__
+static __always_inline
+long syscall_raw(long n, long a1, long a2, long a3, long a4, long a5, long a6)
+{
+	unsigned long ret;
+
 	register long x0 asm("x0") = a1;
 	register long x1 asm("x1") = a2;
 	register long x2 asm("x2") = a3;
@@ -71,11 +86,11 @@ long syscall_raw(long n, long a1, long a2, long a3, long a4, long a5, long a6)
 		      : "r"(x0), "r"(x1), "r"(x2), "r"(x3), "r"(x4), "r"(x5), "r"(x8)
 		      : "memory");
 	ret = x0;
+	return ret;
+}
 #else
 # error syscall_raw() not implemented
 #endif
-	return ret;
-}
 
 static inline long clone_raw(unsigned long flags, void *stack,
 			     int *parent_tid, int *child_tid)
@@ -110,7 +125,7 @@ static inline u64 pkey_reg_restrictive_default(void)
 	return set_pkey_bits(PKEY_REG_ALLOW_NONE, 0, PKEY_DISABLE_ACCESS);
 }
 
-static void sigsegv_handler(int signo, siginfo_t *info, void *ucontext)
+static void sigsegv_handler(int __unused signo, siginfo_t *info, void __unused *ucontext)
 {
 	pthread_mutex_lock(&mutex);
 
@@ -122,7 +137,7 @@ static void sigsegv_handler(int signo, siginfo_t *info, void *ucontext)
 	syscall_raw(SYS_exit, 0, 0, 0, 0, 0, 0);
 }
 
-static void sigusr1_handler(int signo, siginfo_t *info, void *ucontext)
+static void sigusr1_handler(int __unused signo, siginfo_t *info, void __unused *ucontext)
 {
 	pthread_mutex_lock(&mutex);
 
@@ -132,7 +147,7 @@ static void sigusr1_handler(int signo, siginfo_t *info, void *ucontext)
 	pthread_mutex_unlock(&mutex);
 }
 
-static void sigusr2_handler(int signo, siginfo_t *info, void *ucontext)
+static void sigusr2_handler(int __unused signo, siginfo_t __unused *info, void __unused *ucontext)
 {
 	/*
 	 * pkru should be the init_pkru value which enabled MPK 0 so
@@ -155,7 +170,7 @@ static void raise_sigusr2(void)
 	 */
 }
 
-static void *thread_segv_with_pkey0_disabled(void *ptr)
+static void *thread_segv_with_pkey0_disabled(void __unused *ptr)
 {
 	/* Disable MPK 0 (and all others too) */
 	__write_pkey_reg(pkey_reg_restrictive_default());
@@ -165,7 +180,7 @@ static void *thread_segv_with_pkey0_disabled(void *ptr)
 	return NULL;
 }
 
-static void *thread_segv_pkuerr_stack(void *ptr)
+static void *thread_segv_pkuerr_stack(void __unused *ptr)
 {
 	/* Disable MPK 0 (and all others too) */
 	__write_pkey_reg(pkey_reg_restrictive_default());
@@ -528,7 +543,7 @@ static void (*pkey_tests[])(void) = {
 	test_pkru_sigreturn
 };
 
-int main(int argc, char *argv[])
+int main(void)
 {
 	int i;
 

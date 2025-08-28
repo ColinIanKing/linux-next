@@ -797,7 +797,7 @@ static inline void account_freepages(struct zone *zone, int nr_pages,
 
 	if (is_migrate_cma(migratetype))
 		__mod_zone_page_state(zone, NR_FREE_CMA_PAGES, nr_pages);
-	else if (is_migrate_highatomic(migratetype))
+	else if (migratetype == MIGRATE_HIGHATOMIC)
 		WRITE_ONCE(zone->nr_free_highatomic,
 			   zone->nr_free_highatomic + nr_pages);
 }
@@ -950,7 +950,7 @@ static inline void __free_one_page(struct page *page,
 	bool to_tail;
 
 	VM_BUG_ON(!zone_is_initialized(zone));
-	VM_BUG_ON_PAGE(page->flags & PAGE_FLAGS_CHECK_AT_PREP, page);
+	VM_BUG_ON_PAGE(page->flags.f & PAGE_FLAGS_CHECK_AT_PREP, page);
 
 	VM_BUG_ON(migratetype == -1);
 	VM_BUG_ON_PAGE(pfn & ((1 << order) - 1), page);
@@ -1043,7 +1043,7 @@ static inline bool page_expected_state(struct page *page,
 			page->memcg_data |
 #endif
 			page_pool_page_is_pp(page) |
-			(page->flags & check_flags)))
+			(page->flags.f & check_flags)))
 		return false;
 
 	return true;
@@ -1059,7 +1059,7 @@ static const char *page_bad_reason(struct page *page, unsigned long flags)
 		bad_reason = "non-NULL mapping";
 	if (unlikely(page_ref_count(page) != 0))
 		bad_reason = "nonzero _refcount";
-	if (unlikely(page->flags & flags)) {
+	if (unlikely(page->flags.f & flags)) {
 		if (flags == PAGE_FLAGS_CHECK_AT_PREP)
 			bad_reason = "PAGE_FLAGS_CHECK_AT_PREP flag(s) set";
 		else
@@ -1358,7 +1358,7 @@ __always_inline bool free_pages_prepare(struct page *page,
 		int i;
 
 		if (compound) {
-			page[1].flags &= ~PAGE_FLAGS_SECOND;
+			page[1].flags.f &= ~PAGE_FLAGS_SECOND;
 #ifdef NR_PAGES_IN_LARGE_FOLIO
 			folio->_nr_pages = 0;
 #endif
@@ -1372,7 +1372,7 @@ __always_inline bool free_pages_prepare(struct page *page,
 					continue;
 				}
 			}
-			(page + i)->flags &= ~PAGE_FLAGS_CHECK_AT_PREP;
+			(page + i)->flags.f &= ~PAGE_FLAGS_CHECK_AT_PREP;
 		}
 	}
 	if (folio_test_anon(folio)) {
@@ -1391,7 +1391,7 @@ __always_inline bool free_pages_prepare(struct page *page,
 	}
 
 	page_cpupid_reset_last(page);
-	page->flags &= ~PAGE_FLAGS_CHECK_AT_PREP;
+	page->flags.f &= ~PAGE_FLAGS_CHECK_AT_PREP;
 	reset_page_owner(page, order);
 	page_table_check_free(page, order);
 	pgalloc_tag_sub(page, 1 << order);
@@ -4408,7 +4408,7 @@ gfp_to_alloc_flags(gfp_t gfp_mask, unsigned int order)
 		if (!(gfp_mask & __GFP_NOMEMALLOC)) {
 			alloc_flags |= ALLOC_NON_BLOCK;
 
-			if (order > 0)
+			if (order > 0 && (alloc_flags & ALLOC_MIN_RESERVE))
 				alloc_flags |= ALLOC_HIGHATOMIC;
 		}
 
@@ -5946,7 +5946,6 @@ static void per_cpu_pages_init(struct per_cpu_pages *pcp, struct per_cpu_zonesta
 	pcp->high_min = BOOT_PAGESET_HIGH;
 	pcp->high_max = BOOT_PAGESET_HIGH;
 	pcp->batch = BOOT_PAGESET_BATCH;
-	pcp->free_count = 0;
 }
 
 static void __zone_set_pageset_high_and_batch(struct zone *zone, unsigned long high_min,
@@ -6236,16 +6235,13 @@ static void calculate_totalreserve_pages(void)
 			unsigned long managed_pages = zone_managed_pages(zone);
 
 			/* Find valid and maximum lowmem_reserve in the zone */
-			for (j = i; j < MAX_NR_ZONES; j++) {
-				if (zone->lowmem_reserve[j] > max)
-					max = zone->lowmem_reserve[j];
-			}
+			for (j = i; j < MAX_NR_ZONES; j++)
+				max = max(max, zone->lowmem_reserve[j]);
 
 			/* we treat the high watermark as reserved pages. */
 			max += high_wmark_pages(zone);
 
-			if (max > managed_pages)
-				max = managed_pages;
+			max = min_t(unsigned long, max, managed_pages);
 
 			pgdat->totalreserve_pages += max;
 
