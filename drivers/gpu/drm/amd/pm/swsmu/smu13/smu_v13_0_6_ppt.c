@@ -145,7 +145,7 @@ static const struct cmn2asic_msg_mapping smu_v13_0_6_message_map[SMU_MSG_MAX_COU
 	MSG_MAP(GetDpmFreqByIndex,		     PPSMC_MSG_GetDpmFreqByIndex,		1),
 	MSG_MAP(SetPptLimit,			     PPSMC_MSG_SetPptLimit,			0),
 	MSG_MAP(GetPptLimit,			     PPSMC_MSG_GetPptLimit,			1),
-	MSG_MAP(GfxDeviceDriverReset,		     PPSMC_MSG_GfxDriverReset,			SMU_MSG_RAS_PRI),
+	MSG_MAP(GfxDeviceDriverReset,		     PPSMC_MSG_GfxDriverReset,			SMU_MSG_RAS_PRI | SMU_MSG_NO_PRECHECK),
 	MSG_MAP(DramLogSetDramAddrHigh,		     PPSMC_MSG_DramLogSetDramAddrHigh,		0),
 	MSG_MAP(DramLogSetDramAddrLow,		     PPSMC_MSG_DramLogSetDramAddrLow,		0),
 	MSG_MAP(DramLogSetDramSize,		     PPSMC_MSG_DramLogSetDramSize,		0),
@@ -177,7 +177,7 @@ static const struct cmn2asic_msg_mapping smu_v13_0_6_message_map[SMU_MSG_MAX_COU
 	MSG_MAP(SetThrottlingPolicy,                 PPSMC_MSG_SetThrottlingPolicy,             0),
 	MSG_MAP(ResetSDMA,                           PPSMC_MSG_ResetSDMA,                       0),
 	MSG_MAP(ResetVCN,                            PPSMC_MSG_ResetVCN,                       0),
-	MSG_MAP(GetStaticMetricsTable,               PPSMC_MSG_GetStaticMetricsTable,           0),
+	MSG_MAP(GetStaticMetricsTable,               PPSMC_MSG_GetStaticMetricsTable,           1),
 };
 
 // clang-format on
@@ -312,6 +312,8 @@ static void smu_v13_0_14_init_caps(struct smu_context *smu)
 		smu_v13_0_6_cap_set(smu, SMU_CAP(PER_INST_METRICS));
 	if (fw_ver >= 0x5551200)
 		smu_v13_0_6_cap_set(smu, SMU_CAP(SDMA_RESET));
+	if (fw_ver >= 0x5551800)
+		smu_v13_0_6_cap_set(smu, SMU_CAP(VCN_RESET));
 	if (fw_ver >= 0x5551600) {
 		smu_v13_0_6_cap_set(smu, SMU_CAP(STATIC_METRICS));
 		smu_v13_0_6_cap_set(smu, SMU_CAP(BOARD_VOLTAGE));
@@ -349,6 +351,13 @@ static void smu_v13_0_12_init_caps(struct smu_context *smu)
 	if (fw_ver >= 0x04560100) {
 		smu_v13_0_6_cap_set(smu, SMU_CAP(BOARD_VOLTAGE));
 		smu_v13_0_6_cap_set(smu, SMU_CAP(PLDM_VERSION));
+	}
+
+	if (fw_ver >= 0x04560700) {
+		if (!amdgpu_sriov_vf(smu->adev))
+			smu_v13_0_6_cap_set(smu, SMU_CAP(TEMP_METRICS));
+	} else {
+		smu_v13_0_12_tables_fini(smu);
 	}
 }
 
@@ -402,19 +411,37 @@ static void smu_v13_0_6_init_caps(struct smu_context *smu)
 		if ((pgm == 7 && fw_ver >= 0x7550E00) ||
 		    (pgm == 0 && fw_ver >= 0x00557E00))
 			smu_v13_0_6_cap_set(smu, SMU_CAP(HST_LIMIT_METRICS));
-		if ((pgm == 0 && fw_ver >= 0x00557F01) ||
-		    (pgm == 7 && fw_ver >= 0x7551000)) {
-			smu_v13_0_6_cap_set(smu, SMU_CAP(STATIC_METRICS));
-			smu_v13_0_6_cap_set(smu, SMU_CAP(BOARD_VOLTAGE));
+
+		if (amdgpu_sriov_vf(adev)) {
+			if ((pgm == 0 && fw_ver >= 0x00558000) ||
+			    (pgm == 7 && fw_ver >= 0x7551000)) {
+				smu_v13_0_6_cap_set(smu,
+						    SMU_CAP(STATIC_METRICS));
+				smu_v13_0_6_cap_set(smu,
+						    SMU_CAP(BOARD_VOLTAGE));
+				smu_v13_0_6_cap_set(smu, SMU_CAP(PLDM_VERSION));
+			}
+		} else {
+			if ((pgm == 0 && fw_ver >= 0x00557F01) ||
+			    (pgm == 7 && fw_ver >= 0x7551000)) {
+				smu_v13_0_6_cap_set(smu,
+						    SMU_CAP(STATIC_METRICS));
+				smu_v13_0_6_cap_set(smu,
+						    SMU_CAP(BOARD_VOLTAGE));
+			}
+			if ((pgm == 0 && fw_ver >= 0x00558000) ||
+			    (pgm == 7 && fw_ver >= 0x7551000))
+				smu_v13_0_6_cap_set(smu, SMU_CAP(PLDM_VERSION));
 		}
-		if ((pgm == 0 && fw_ver >= 0x00558000) ||
-		    (pgm == 7 && fw_ver >= 0x7551000))
-			smu_v13_0_6_cap_set(smu, SMU_CAP(PLDM_VERSION));
 	}
 	if (((pgm == 7) && (fw_ver >= 0x7550700)) ||
 	    ((pgm == 0) && (fw_ver >= 0x00557900)) ||
 	    ((pgm == 4) && (fw_ver >= 0x4557000)))
 		smu_v13_0_6_cap_set(smu, SMU_CAP(SDMA_RESET));
+
+	if (((pgm == 0) && (fw_ver >= 0x00558200)) ||
+	    ((pgm == 4) && (fw_ver >= 0x04557100)))
+		smu_v13_0_6_cap_set(smu, SMU_CAP(VCN_RESET));
 }
 
 static void smu_v13_0_x_init_caps(struct smu_context *smu)
@@ -513,6 +540,7 @@ static int smu_v13_0_6_tables_init(struct smu_context *smu)
 	struct smu_table *tables = smu_table->tables;
 	struct amdgpu_device *adev = smu->adev;
 	int gpu_metrcs_size = METRICS_TABLE_SIZE;
+	int ret;
 
 	if (!(adev->flags & AMD_IS_APU))
 		SMU_TABLE_INIT(tables, SMU_TABLE_PMSTATUSLOG, SMU13_TOOL_SIZE,
@@ -547,6 +575,16 @@ static int smu_v13_0_6_tables_init(struct smu_context *smu)
 		kfree(smu_table->metrics_table);
 		kfree(smu_table->gpu_metrics_table);
 		return -ENOMEM;
+	}
+
+	if (amdgpu_ip_version(smu->adev, MP1_HWIP, 0) ==
+	    IP_VERSION(13, 0, 12)) {
+		ret = smu_v13_0_12_tables_init(smu);
+		if (ret) {
+			kfree(smu_table->metrics_table);
+			kfree(smu_table->gpu_metrics_table);
+			return ret;
+		}
 	}
 
 	return 0;
@@ -677,6 +715,13 @@ static int smu_v13_0_6_init_smc_tables(struct smu_context *smu)
 	return ret;
 }
 
+static int smu_v13_0_6_fini_smc_tables(struct smu_context *smu)
+{
+	if (amdgpu_ip_version(smu->adev, MP1_HWIP, 0) == IP_VERSION(13, 0, 12))
+		smu_v13_0_12_tables_fini(smu);
+	return smu_v13_0_fini_smc_tables(smu);
+}
+
 static int smu_v13_0_6_get_allowed_feature_mask(struct smu_context *smu,
 						uint32_t *feature_mask,
 						uint32_t num)
@@ -803,7 +848,7 @@ static int smu_v13_0_6_setup_driver_pptable(struct smu_context *smu)
 	struct PPTable_t *pptable =
 		(struct PPTable_t *)smu_table->driver_pptable;
 	int version = smu_v13_0_6_get_metrics_version(smu);
-	int ret, i, retry = 100;
+	int ret, i, retry = 100, n;
 	uint32_t table_version;
 	uint16_t max_speed;
 	uint8_t max_width;
@@ -864,6 +909,23 @@ static int smu_v13_0_6_setup_driver_pptable(struct smu_context *smu)
 		/* use AID0 serial number by default */
 		pptable->PublicSerialNumber_AID =
 			GET_METRIC_FIELD(PublicSerialNumber_AID, version)[0];
+
+		amdgpu_device_set_uid(smu->adev->uid_info, AMDGPU_UID_TYPE_SOC,
+				      0, pptable->PublicSerialNumber_AID);
+		n = ARRAY_SIZE(metrics_v0->PublicSerialNumber_AID);
+		for (i = 0; i < n; i++) {
+			amdgpu_device_set_uid(
+				smu->adev->uid_info, AMDGPU_UID_TYPE_AID, i,
+				GET_METRIC_FIELD(PublicSerialNumber_AID,
+						 version)[i]);
+		}
+		n = ARRAY_SIZE(metrics_v0->PublicSerialNumber_XCD);
+		for (i = 0; i < n; i++) {
+			amdgpu_device_set_uid(
+				smu->adev->uid_info, AMDGPU_UID_TYPE_XCD, i,
+				GET_METRIC_FIELD(PublicSerialNumber_XCD,
+						 version)[i]);
+		}
 
 		pptable->Init = true;
 		if (smu_v13_0_6_cap_supported(smu, SMU_CAP(STATIC_METRICS))) {
@@ -3076,7 +3138,7 @@ static inline bool smu_v13_0_6_is_link_reset_supported(struct smu_context *smu)
 	struct amdgpu_device *adev = smu->adev;
 	int var = (adev->pdev->device & 0xF);
 
-	if (var == 0x1)
+	if (var == 0x0 || var == 0x1 || var == 0x3)
 		return true;
 
 	return false;
@@ -3150,6 +3212,11 @@ static int smu_v13_0_6_reset_sdma(struct smu_context *smu, uint32_t inst_mask)
 			inst_mask);
 
 	return ret;
+}
+
+static bool smu_v13_0_6_reset_vcn_is_supported(struct smu_context *smu)
+{
+	return smu_v13_0_6_cap_supported(smu, SMU_CAP(VCN_RESET));
 }
 
 static int smu_v13_0_6_reset_vcn(struct smu_context *smu, uint32_t inst_mask)
@@ -3797,7 +3864,7 @@ static const struct pptable_funcs smu_v13_0_6_ppt_funcs = {
 	.init_microcode = smu_v13_0_6_init_microcode,
 	.fini_microcode = smu_v13_0_fini_microcode,
 	.init_smc_tables = smu_v13_0_6_init_smc_tables,
-	.fini_smc_tables = smu_v13_0_fini_smc_tables,
+	.fini_smc_tables = smu_v13_0_6_fini_smc_tables,
 	.init_power = smu_v13_0_init_power,
 	.fini_power = smu_v13_0_fini_power,
 	.check_fw_status = smu_v13_0_6_check_fw_status,
@@ -3840,6 +3907,7 @@ static const struct pptable_funcs smu_v13_0_6_ppt_funcs = {
 	.reset_sdma = smu_v13_0_6_reset_sdma,
 	.reset_sdma_is_supported = smu_v13_0_6_reset_sdma_is_supported,
 	.dpm_reset_vcn = smu_v13_0_6_reset_vcn,
+	.reset_vcn_is_supported = smu_v13_0_6_reset_vcn_is_supported,
 };
 
 void smu_v13_0_6_set_ppt_funcs(struct smu_context *smu)
@@ -3856,4 +3924,10 @@ void smu_v13_0_6_set_ppt_funcs(struct smu_context *smu)
 	smu_v13_0_set_smu_mailbox_registers(smu);
 	amdgpu_mca_smu_init_funcs(smu->adev, &smu_v13_0_6_mca_smu_funcs);
 	amdgpu_aca_set_smu_funcs(smu->adev, &smu_v13_0_6_aca_smu_funcs);
+}
+
+void smu_v13_0_6_set_temp_funcs(struct smu_context *smu)
+{
+	smu->smu_temp.temp_funcs = (amdgpu_ip_version(smu->adev, MP1_HWIP, 0)
+			== IP_VERSION(13, 0, 12)) ? &smu_v13_0_12_temp_funcs : NULL;
 }
