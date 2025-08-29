@@ -269,7 +269,9 @@ static int fprobe_entry(struct ftrace_graph_ent *trace, struct fgraph_ops *gops,
 	if (WARN_ON_ONCE(!fregs))
 		return 0;
 
+	rcu_read_lock();
 	head = rhltable_lookup(&fprobe_ip_table, &func, fprobe_rht_params);
+	rcu_read_unlock();
 	reserved_words = 0;
 	rhl_for_each_entry_rcu(node, pos, head, hlist) {
 		if (node->addr != func)
