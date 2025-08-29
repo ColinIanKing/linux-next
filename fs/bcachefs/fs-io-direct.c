@@ -127,7 +127,7 @@ static int bch2_direct_IO_read(struct kiocb *req, struct iov_iter *iter)
 	 * the dirtying of requests that are internal from the kernel (i.e. from
 	 * loopback), because we'll deadlock on page_lock.
 	 */
-	dio->should_dirty = iter_is_iovec(iter);
+	dio->should_dirty = user_backed_iter(iter);
 
 	blk_start_plug(&plug);
 
@@ -252,12 +252,10 @@ static bool bch2_check_range_allocated(struct bch_fs *c, subvol_inum inum,
 				       u64 offset, u64 size,
 				       unsigned nr_replicas, bool compressed)
 {
-	struct btree_trans *trans = bch2_trans_get(c);
-	struct btree_iter iter;
+	CLASS(btree_trans, trans)(c);
 	struct bkey_s_c k;
 	u64 end = offset + size;
 	u32 snapshot;
-	bool ret = true;
 	int err;
 retry:
 	bch2_trans_begin(trans);
@@ -269,25 +267,21 @@ retry:
 	for_each_btree_key_norestart(trans, iter, BTREE_ID_extents,
 			   SPOS(inum.inum, offset, snapshot),
 			   BTREE_ITER_slots, k, err) {
+		offset = iter.pos.offset;
+
 		if (bkey_ge(bkey_start_pos(k.k), POS(inum.inum, end)))
 			break;
 
 		if (k.k->p.snapshot != snapshot ||
 		    nr_replicas > bch2_bkey_replicas(c, k) ||
-		    (!compressed && bch2_bkey_sectors_compressed(k))) {
-			ret = false;
-			break;
-		}
+		    (!compressed && bch2_bkey_sectors_compressed(k)))
+			return false;
 	}
-
-	offset = iter.pos.offset;
-	bch2_trans_iter_exit(trans, &iter);
 err:
 	if (bch2_err_matches(err, BCH_ERR_transaction_restart))
 		goto retry;
-	bch2_trans_put(trans);
 
-	return err ? false : ret;
+	return !err;
 }
 
 static noinline bool bch2_dio_write_check_allocated(struct dio_write *dio)
@@ -428,17 +422,15 @@ static __always_inline void bch2_dio_write_end(struct dio_write *dio)
 	dio->written	+= dio->op.written;
 
 	if (dio->extending) {
-		spin_lock(&inode->v.i_lock);
+		guard(spinlock)(&inode->v.i_lock);
 		if (req->ki_pos > inode->v.i_size)
 			i_size_write(&inode->v, req->ki_pos);
-		spin_unlock(&inode->v.i_lock);
 	}
 
 	if (dio->op.i_sectors_delta || dio->quota_res.sectors) {
-		mutex_lock(&inode->ei_quota_lock);
+		guard(mutex)(&inode->ei_quota_lock);
 		__bch2_i_sectors_acct(c, inode, &dio->quota_res, dio->op.i_sectors_delta);
 		__bch2_quota_reservation_put(c, inode, &dio->quota_res);
-		mutex_unlock(&inode->ei_quota_lock);
 	}
 
 	bio_release_pages(bio, false);
