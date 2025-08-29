@@ -3376,7 +3376,7 @@ int tcp_disconnect(struct sock *sk, int flags)
 	WRITE_ONCE(tp->write_seq, seq);
 
 	icsk->icsk_backoff = 0;
-	icsk->icsk_probes_out = 0;
+	WRITE_ONCE(icsk->icsk_probes_out, 0);
 	icsk->icsk_probes_tstamp = 0;
 	icsk->icsk_rto = TCP_TIMEOUT_INIT;
 	WRITE_ONCE(icsk->icsk_rto_min, TCP_RTO_MIN);
@@ -3760,7 +3760,7 @@ int tcp_sock_set_maxseg(struct sock *sk, int val)
 	if (val && (val < TCP_MIN_MSS || val > MAX_TCP_WINDOW))
 		return -EINVAL;
 
-	tcp_sk(sk)->rx_opt.user_mss = val;
+	WRITE_ONCE(tcp_sk(sk)->rx_opt.user_mss, val);
 	return 0;
 }
 
@@ -3890,15 +3890,13 @@ int do_tcp_setsockopt(struct sock *sk, int level, int optname,
 		WRITE_ONCE(inet_csk(sk)->icsk_delack_max, delack_max);
 		return 0;
 	}
+	case TCP_MAXSEG:
+		return tcp_sock_set_maxseg(sk, val);
 	}
 
 	sockopt_lock_sock(sk);
 
 	switch (optname) {
-	case TCP_MAXSEG:
-		err = tcp_sock_set_maxseg(sk, val);
-		break;
-
 	case TCP_NODELAY:
 		__tcp_sock_set_nodelay(sk, val);
 		break;
@@ -4348,7 +4346,8 @@ struct sk_buff *tcp_get_timestamping_opt_stats(const struct sock *sk,
 	nla_put_u32(stats, TCP_NLA_REORDERING, tp->reordering);
 	nla_put_u32(stats, TCP_NLA_MIN_RTT, tcp_min_rtt(tp));
 
-	nla_put_u8(stats, TCP_NLA_RECUR_RETRANS, inet_csk(sk)->icsk_retransmits);
+	nla_put_u8(stats, TCP_NLA_RECUR_RETRANS,
+		   READ_ONCE(inet_csk(sk)->icsk_retransmits));
 	nla_put_u8(stats, TCP_NLA_DELIVERY_RATE_APP_LMT, !!tp->rate_app_limited);
 	nla_put_u32(stats, TCP_NLA_SND_SSTHRESH, tp->snd_ssthresh);
 	nla_put_u32(stats, TCP_NLA_DELIVERED, tp->delivered);
@@ -4383,6 +4382,7 @@ int do_tcp_getsockopt(struct sock *sk, int level,
 	struct inet_connection_sock *icsk = inet_csk(sk);
 	struct tcp_sock *tp = tcp_sk(sk);
 	struct net *net = sock_net(sk);
+	int user_mss;
 	int val, len;
 
 	if (copy_from_sockptr(&len, optlen, sizeof(int)))
@@ -4396,9 +4396,10 @@ int do_tcp_getsockopt(struct sock *sk, int level,
 	switch (optname) {
 	case TCP_MAXSEG:
 		val = tp->mss_cache;
-		if (tp->rx_opt.user_mss &&
+		user_mss = READ_ONCE(tp->rx_opt.user_mss);
+		if (user_mss &&
 		    ((1 << sk->sk_state) & (TCPF_CLOSE | TCPF_LISTEN)))
-			val = tp->rx_opt.user_mss;
+			val = user_mss;
 		if (tp->repair)
 			val = tp->rx_opt.mss_clamp;
 		break;
