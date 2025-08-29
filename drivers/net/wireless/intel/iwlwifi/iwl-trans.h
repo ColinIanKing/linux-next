@@ -275,16 +275,6 @@ static inline void iwl_free_rxb(struct iwl_rx_cmd_buffer *r)
 #define IWL_9000_MAX_RX_HW_QUEUES	1
 
 /**
- * enum iwl_d3_status - WoWLAN image/device status
- * @IWL_D3_STATUS_ALIVE: firmware is still running after resume
- * @IWL_D3_STATUS_RESET: device was reset while suspended
- */
-enum iwl_d3_status {
-	IWL_D3_STATUS_ALIVE,
-	IWL_D3_STATUS_RESET,
-};
-
-/**
  * enum iwl_trans_status: transport status flags
  * @STATUS_SYNC_HCMD_ACTIVE: a SYNC command is being processed
  * @STATUS_DEVICE_ENABLED: APM is enabled
@@ -302,8 +292,6 @@ enum iwl_d3_status {
  *	the firmware state yet
  * @STATUS_TRANS_RESET_IN_PROGRESS: reset is still in progress, don't
  *	attempt another reset yet
- * @STATUS_SUSPENDED: device is suspended, don't send commands that
- *	aren't marked accordingly
  */
 enum iwl_trans_status {
 	STATUS_SYNC_HCMD_ACTIVE,
@@ -318,7 +306,6 @@ enum iwl_trans_status {
 	STATUS_IN_SW_RESET,
 	STATUS_RESET_PENDING,
 	STATUS_TRANS_RESET_IN_PROGRESS,
-	STATUS_SUSPENDED,
 };
 
 static inline int
@@ -658,8 +645,6 @@ struct iwl_pc_data {
  * @restart_required: indicates debug restart is required
  * @last_tp_resetfw: last handling of reset during debug timepoint
  * @imr_data: IMR debug data allocation
- * @dump_file_name_ext: dump file name extension
- * @dump_file_name_ext_valid: dump file name extension if valid or not
  * @num_pc: number of program counter for cpu
  * @pc_data: details of the program counter
  * @yoyo_bin_loaded: tells if a yoyo debug file has been loaded
@@ -698,8 +683,6 @@ struct iwl_trans_debug {
 	bool restart_required;
 	u32 last_tp_resetfw;
 	struct iwl_imr_data imr_data;
-	u8 dump_file_name_ext[IWL_FW_INI_MAX_NAME];
-	bool dump_file_name_ext_valid;
 	u32 num_pc;
 	struct iwl_pc_data *pc_data;
 	bool yoyo_bin_loaded;
@@ -956,10 +939,9 @@ int iwl_trans_start_fw(struct iwl_trans *trans, const struct iwl_fw *fw,
 
 void iwl_trans_stop_device(struct iwl_trans *trans);
 
-int iwl_trans_d3_suspend(struct iwl_trans *trans, bool test, bool reset);
+int iwl_trans_d3_suspend(struct iwl_trans *trans, bool reset);
 
-int iwl_trans_d3_resume(struct iwl_trans *trans, enum iwl_d3_status *status,
-			bool test, bool reset);
+int iwl_trans_d3_resume(struct iwl_trans *trans, bool reset);
 
 struct iwl_trans_dump_data *
 iwl_trans_dump_data(struct iwl_trans *trans, u32 dump_mask,
