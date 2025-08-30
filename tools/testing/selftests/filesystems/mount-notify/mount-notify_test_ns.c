@@ -11,7 +11,7 @@
 #include <unistd.h>
 #include <sys/syscall.h>
 
-#include "../../kselftest_harness.h"
+#include "kselftest_harness.h"
 #include "../../pidfd/pidfd.h"
 #include "../statmount/statmount.h"
 #include "../utils.h"

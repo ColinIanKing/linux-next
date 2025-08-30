@@ -24,7 +24,7 @@
 #include <unistd.h>
 #include <sys/syscall.h>
 
-#include "../kselftest.h"
+#include "kselftest.h"
 
 static long syscall_clock_getres(clockid_t _clkid, struct timespec *_ts)
 {

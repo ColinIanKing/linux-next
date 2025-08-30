@@ -29,7 +29,7 @@
 #define SELFTESTS_SYNCTEST_H
 
 #include <stdio.h>
-#include "../kselftest.h"
+#include "kselftest.h"
 
 #define ASSERT(cond, msg) do { \
 	if (!(cond)) { \
