@@ -442,7 +442,7 @@ replay_again:
 							   ses->Suid, full_path);
 			break;
 		case SMB2_OP_RENAME:
-			rqst[num_rqst].rq_iov = &vars->si_iov[0];
+			rqst[num_rqst].rq_iov = vars->rename_iov;
 			rqst[num_rqst].rq_nvec = 2;
 
 			len = in_iov[i].iov_len;
@@ -595,6 +595,41 @@ replay_again:
 			num_rqst++;
 			trace_smb3_query_wsl_ea_compound_enter(xid, tcon->tid,
 							       ses->Suid, full_path);
+			break;
+		case SMB2_OP_SET_FILE_DISP:
+			rqst[num_rqst].rq_iov = vars->fdis_iov;
+			rqst[num_rqst].rq_nvec = 1;
+
+			size[0] = in_iov[i].iov_len;
+			data[0] = in_iov[i].iov_base;
+
+			if (cfile) {
+				rc = SMB2_set_info_init(tcon, server,
+							&rqst[num_rqst],
+							cfile->fid.persistent_fid,
+							cfile->fid.volatile_fid,
+							current->tgid,
+							FILE_DISPOSITION_INFORMATION,
+							SMB2_O_INFO_FILE, 0,
+							data, size);
+			} else {
+				rc = SMB2_set_info_init(tcon, server,
+							&rqst[num_rqst],
+							COMPOUND_FID,
+							COMPOUND_FID,
+							current->tgid,
+							FILE_DISPOSITION_INFORMATION,
+							SMB2_O_INFO_FILE, 0,
+							data, size);
+			}
+			if (!rc && (!cfile || num_rqst > 1)) {
+				smb2_set_next_command(tcon, &rqst[num_rqst]);
+				smb2_set_related(&rqst[num_rqst]);
+			} else if (rc) {
+				goto finished;
+			}
+			num_rqst++;
+			trace_smb3_set_file_disp_enter(xid, tcon->tid, ses->Suid, full_path);
 			break;
 		default:
 			cifs_dbg(VFS, "Invalid command\n");
@@ -844,6 +879,13 @@ finished:
 								     ses->Suid, rc);
 			}
 			SMB2_query_info_free(&rqst[num_rqst++]);
+			break;
+		case SMB2_OP_SET_FILE_DISP:
+			if (!rc)
+				trace_smb3_set_file_disp_done(xid, tcon->tid, ses->Suid);
+			else
+				trace_smb3_set_file_disp_err(xid, tcon->tid, ses->Suid, rc);
+			SMB2_set_info_free(&rqst[num_rqst++]);
 			break;
 		}
 	}
@@ -1439,5 +1481,114 @@ int smb2_query_reparse_point(const unsigned int xid,
 	data.reparse.io.buftype = CIFS_NO_BUFFER;
 out:
 	cifs_free_open_info(&data);
+	return rc;
+}
+
+static inline __le16 *utf16_smb2_path(struct cifs_sb_info *cifs_sb,
+				      const char *name, size_t namelen)
+{
+	int len;
+
+	if (*name == '\\' ||
+	    (cifs_sb_master_tlink(cifs_sb) &&
+	     cifs_sb_master_tcon(cifs_sb)->posix_extensions && *name == '/'))
+		name++;
+	return cifs_strndup_to_utf16(name, namelen, &len,
+				     cifs_sb->local_nls,
+				     cifs_remap(cifs_sb));
+}
+
+int smb2_rename_pending_delete(const char *full_path,
+			       struct dentry *dentry,
+			       const unsigned int xid)
+{
+	struct cifs_sb_info *cifs_sb = CIFS_SB(d_inode(dentry)->i_sb);
+	struct cifsInodeInfo *cinode = CIFS_I(d_inode(dentry));
+	__le16 *utf16_path __free(kfree) = NULL;
+	__u32 co = file_create_options(dentry);
+	int cmds[] = {
+		SMB2_OP_SET_INFO,
+		SMB2_OP_RENAME,
+		SMB2_OP_SET_FILE_DISP,
+	};
+	const int num_cmds = ARRAY_SIZE(cmds);
+	char *to_name __free(kfree) = NULL;
+	struct kvec iov[ARRAY_SIZE(cmds)];
+	__u32 attrs = cinode->cifsAttrs;
+	struct cifs_open_parms oparms;
+	static atomic_t sillycounter;
+	struct cifsFileInfo *cfile;
+	struct tcon_link *tlink;
+	__u8 delete_pending = 1;
+	struct cifs_tcon *tcon;
+	const char *ppath;
+	void *page;
+	size_t len;
+	int rc;
+
+	tlink = cifs_sb_tlink(cifs_sb);
+	if (IS_ERR(tlink))
+		return PTR_ERR(tlink);
+	tcon = tlink_tcon(tlink);
+
+	page = alloc_dentry_path();
+
+	ppath = build_path_from_dentry(dentry->d_parent, page);
+	if (IS_ERR(ppath)) {
+		rc = PTR_ERR(ppath);
+		goto out;
+	}
+
+	len = strlen(ppath) + strlen("/.__smb1234") + 1;
+	to_name = kmalloc(len, GFP_KERNEL);
+	if (!to_name) {
+		rc = -ENOMEM;
+		goto out;
+	}
+
+	scnprintf(to_name, len, "%s%c.__smb%04X", ppath, CIFS_DIR_SEP(cifs_sb),
+		  atomic_inc_return(&sillycounter) & 0xffff);
+
+	utf16_path = utf16_smb2_path(cifs_sb, to_name, len);
+	if (!utf16_path) {
+		rc = -ENOMEM;
+		goto out;
+	}
+
+	drop_cached_dir_by_name(xid, tcon, full_path, cifs_sb);
+	oparms = CIFS_OPARMS(cifs_sb, tcon, full_path,
+			     DELETE | FILE_WRITE_ATTRIBUTES,
+			     FILE_OPEN, co, ACL_NO_MODE);
+
+	attrs &= ~ATTR_READONLY;
+	iov[0].iov_base = &(FILE_BASIC_INFO) {
+		.Attributes = cpu_to_le32((attrs ?: ATTR_NORMAL) | ATTR_HIDDEN),
+	};
+	iov[0].iov_len = sizeof(FILE_BASIC_INFO);
+	iov[1].iov_base = utf16_path;
+	iov[1].iov_len = sizeof(*utf16_path) * UniStrlen((wchar_t *)utf16_path);
+	iov[2].iov_base = &delete_pending;
+	iov[2].iov_len = sizeof(delete_pending);
+
+	cifs_get_writable_path(tcon, full_path, FIND_WR_WITH_DELETE, &cfile);
+	rc = smb2_compound_op(xid, tcon, cifs_sb, full_path, &oparms, iov,
+			      cmds, num_cmds, cfile, NULL, NULL, dentry);
+	if (rc == -EINVAL) {
+		cifs_dbg(FYI, "invalid lease key, resending request without lease\n");
+		cifs_get_writable_path(tcon, full_path,
+				       FIND_WR_WITH_DELETE, &cfile);
+		rc = smb2_compound_op(xid, tcon, cifs_sb, full_path, &oparms, iov,
+				      cmds, num_cmds, cfile, NULL, NULL, NULL);
+	}
+	if (!rc) {
+		set_bit(CIFS_INO_DELETE_PENDING, &cinode->flags);
+	} else {
+		cifs_tcon_dbg(FYI, "%s: failed to rename '%s' to '%s': %d\n",
+			      __func__, full_path, to_name, rc);
+		rc = -EIO;
+	}
+out:
+	cifs_put_tlink(tlink);
+	free_dentry_path(page);
 	return rc;
 }
