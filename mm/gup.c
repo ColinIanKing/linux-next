@@ -2291,6 +2291,8 @@ static unsigned long collect_longterm_unpinnable_folios(
 	struct folio *folio;
 	long i = 0;
 
+	lru_add_drain();
+
 	for (folio = pofs_get_folio(pofs, i); folio;
 	     folio = pofs_next_folio(folio, pofs, &i)) {
 
