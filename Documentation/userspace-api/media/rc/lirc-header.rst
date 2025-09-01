@@ -6,7 +6,5 @@
 LIRC Header File
 ****************
 
-.. kernel-include:: include/uapi/linux/lirc.h
-    :generate-cross-refs:
-    :exception-file: lirc.h.rst.exceptions
+.. kernel-include:: $BUILDDIR/lirc.h.rst
 
