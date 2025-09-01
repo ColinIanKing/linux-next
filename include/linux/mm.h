@@ -2180,8 +2180,8 @@ static inline int folio_expected_ref_count(const struct folio *folio)
 	} else {
 		/* One reference per page from the pagecache. */
 		ref_count += !!folio->mapping << order;
-		/* One reference from PG_private. */
-		ref_count += folio_test_private(folio);
+		/* One reference from PG_private or PG_private_2. */
+		ref_count += folio_has_private(folio);
 	}
 
 	/* One reference per page table mapping. */
