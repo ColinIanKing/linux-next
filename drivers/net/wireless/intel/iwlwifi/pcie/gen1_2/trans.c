@@ -32,6 +32,46 @@
 #include "pcie/iwl-context-info-v2.h"
 #include "pcie/utils.h"
 
+#define IWL_HOST_MON_BLOCK_PEMON	0x00
+#define IWL_HOST_MON_BLOCK_HIPM		0x22
+
+#define IWL_HOST_MON_BLOCK_PEMON_VEC0	0x00
+#define IWL_HOST_MON_BLOCK_PEMON_VEC1	0x01
+#define IWL_HOST_MON_BLOCK_PEMON_WFPM	0x06
+
+static void iwl_dump_host_monitor_block(struct iwl_trans *trans,
+					u32 block, u32 vec, u32 iter)
+{
+	int i;
+
+	IWL_ERR(trans, "Host monitor block 0x%x vector 0x%x\n", block, vec);
+	iwl_write32(trans, CSR_MONITOR_CFG_REG, (block << 8) | vec);
+	for (i = 0; i < iter; i++)
+		IWL_ERR(trans, "    value [iter %d]: 0x%08x\n",
+			i, iwl_read32(trans, CSR_MONITOR_STATUS_REG));
+}
+
+static void iwl_pcie_dump_host_monitor(struct iwl_trans *trans)
+{
+	switch (trans->mac_cfg->device_family) {
+	case IWL_DEVICE_FAMILY_22000:
+	case IWL_DEVICE_FAMILY_AX210:
+		IWL_ERR(trans, "CSR_RESET = 0x%x\n",
+			iwl_read32(trans, CSR_RESET));
+		iwl_dump_host_monitor_block(trans, IWL_HOST_MON_BLOCK_PEMON,
+					    IWL_HOST_MON_BLOCK_PEMON_VEC0, 15);
+		iwl_dump_host_monitor_block(trans, IWL_HOST_MON_BLOCK_PEMON,
+					    IWL_HOST_MON_BLOCK_PEMON_VEC1, 15);
+		iwl_dump_host_monitor_block(trans, IWL_HOST_MON_BLOCK_PEMON,
+					    IWL_HOST_MON_BLOCK_PEMON_WFPM, 15);
+		iwl_dump_host_monitor_block(trans, IWL_HOST_MON_BLOCK_HIPM,
+					    IWL_HOST_MON_BLOCK_PEMON_VEC0, 1);
+		break;
+	default:
+		return;
+	}
+}
+
 /* extended range in FW SRAM */
 #define IWL_FW_MEM_EXTENDED_START	0x40000
 #define IWL_FW_MEM_EXTENDED_END		0x57FFF
@@ -1397,16 +1437,9 @@ void iwl_trans_pcie_rf_kill(struct iwl_trans *trans, bool state, bool from_irq)
 }
 
 static void iwl_pcie_d3_complete_suspend(struct iwl_trans *trans,
-					 bool test, bool reset)
+					 bool reset)
 {
 	iwl_disable_interrupts(trans);
-
-	/*
-	 * in testing mode, the host stays awake and the
-	 * hardware won't be reset (not even partially)
-	 */
-	if (test)
-		return;
 
 	iwl_pcie_disable_ict(trans);
 
@@ -1478,7 +1511,7 @@ static int iwl_pcie_d3_handshake(struct iwl_trans *trans, bool suspend)
 	return ret;
 }
 
-int iwl_trans_pcie_d3_suspend(struct iwl_trans *trans, bool test, bool reset)
+int iwl_trans_pcie_d3_suspend(struct iwl_trans *trans, bool reset)
 {
 	int ret;
 
@@ -1491,25 +1524,17 @@ int iwl_trans_pcie_d3_suspend(struct iwl_trans *trans, bool test, bool reset)
 	if (ret)
 		return ret;
 
-	iwl_pcie_d3_complete_suspend(trans, test, reset);
+	iwl_pcie_d3_complete_suspend(trans, reset);
 
 	return 0;
 }
 
 int iwl_trans_pcie_d3_resume(struct iwl_trans *trans,
-			     enum iwl_d3_status *status,
-			     bool test,  bool reset)
+			     bool reset)
 {
 	struct iwl_trans_pcie *trans_pcie =  IWL_TRANS_GET_PCIE_TRANS(trans);
 	u32 val;
 	int ret;
-
-	if (test) {
-		iwl_enable_interrupts(trans);
-		*status = IWL_D3_STATUS_ALIVE;
-		ret = 0;
-		goto out;
-	}
 
 	if (trans->mac_cfg->device_family >= IWL_DEVICE_FAMILY_BZ)
 		iwl_set_bit(trans, CSR_GP_CNTRL,
@@ -1519,8 +1544,11 @@ int iwl_trans_pcie_d3_resume(struct iwl_trans *trans,
 			    CSR_GP_CNTRL_REG_FLAG_MAC_ACCESS_REQ);
 
 	ret = iwl_finish_nic_init(trans);
-	if (ret)
+	if (ret) {
+		IWL_ERR(trans, "Failed to init nic upon resume. err = %d\n",
+			ret);
 		return ret;
+	}
 
 	/*
 	 * Reconfigure IVAR table in case of MSIX or reset ict table in
@@ -1554,18 +1582,13 @@ int iwl_trans_pcie_d3_resume(struct iwl_trans *trans,
 			iwl_read_umac_prph(trans, WFPM_GP2));
 
 	val = iwl_read32(trans, CSR_RESET);
-	if (val & CSR_RESET_REG_FLAG_NEVO_RESET)
-		*status = IWL_D3_STATUS_RESET;
-	else
-		*status = IWL_D3_STATUS_ALIVE;
-
-out:
-	if (*status == IWL_D3_STATUS_ALIVE)
-		ret = iwl_pcie_d3_handshake(trans, false);
-	else
+	if (val & CSR_RESET_REG_FLAG_NEVO_RESET) {
+		IWL_INFO(trans, "Device was reset during suspend\n");
 		trans->state = IWL_TRANS_NO_FW;
+		return -ENOENT;
+	}
 
-	return ret;
+	return iwl_pcie_d3_handshake(trans, false);
 }
 
 static void
@@ -4270,4 +4293,53 @@ int iwl_pci_gen1_2_probe(struct pci_dev *pdev,
 out_free_trans:
 	iwl_trans_pcie_free(iwl_trans);
 	return ret;
+}
+
+int iwl_pcie_gen1_2_finish_nic_init(struct iwl_trans *trans)
+{
+	const struct iwl_mac_cfg *mac_cfg = trans->mac_cfg;
+	u32 poll_ready;
+	int err;
+
+	if (mac_cfg->bisr_workaround) {
+		/* ensure the TOP FSM isn't still in previous reset */
+		mdelay(2);
+	}
+
+	/*
+	 * Set "initialization complete" bit to move adapter from
+	 * D0U* --> D0A* (powered-up active) state.
+	 */
+	if (mac_cfg->device_family >= IWL_DEVICE_FAMILY_BZ) {
+		iwl_set_bit(trans, CSR_GP_CNTRL,
+			    CSR_GP_CNTRL_REG_FLAG_BZ_MAC_ACCESS_REQ |
+			    CSR_GP_CNTRL_REG_FLAG_MAC_INIT);
+		poll_ready = CSR_GP_CNTRL_REG_FLAG_MAC_STATUS;
+	} else {
+		iwl_set_bit(trans, CSR_GP_CNTRL,
+			    CSR_GP_CNTRL_REG_FLAG_INIT_DONE);
+		poll_ready = CSR_GP_CNTRL_REG_FLAG_MAC_CLOCK_READY;
+	}
+
+	if (mac_cfg->device_family == IWL_DEVICE_FAMILY_8000)
+		udelay(2);
+
+	/*
+	 * Wait for clock stabilization; once stabilized, access to
+	 * device-internal resources is supported, e.g. iwl_write_prph()
+	 * and accesses to uCode SRAM.
+	 */
+	err = iwl_poll_bits(trans, CSR_GP_CNTRL, poll_ready, 25000);
+	if (err < 0) {
+		IWL_DEBUG_INFO(trans, "Failed to wake NIC\n");
+
+		iwl_pcie_dump_host_monitor(trans);
+	}
+
+	if (mac_cfg->bisr_workaround) {
+		/* ensure BISR shift has finished */
+		udelay(200);
+	}
+
+	return err;
 }
