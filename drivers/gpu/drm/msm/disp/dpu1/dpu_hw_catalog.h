@@ -24,7 +24,7 @@
 #define DPU_MAX_IMG_WIDTH 0x3fff
 #define DPU_MAX_IMG_HEIGHT 0x3fff
 
-#define CRTC_DUAL_MIXERS	2
+#define CRTC_QUAD_MIXERS	4
 
 #define MAX_XIN_COUNT 16
 
@@ -307,7 +307,6 @@ struct dpu_sspp_sub_blks {
  * @blendstage_base:        Blend-stage register base offset
  */
 struct dpu_lm_sub_blks {
-	u32 maxwidth;
 	u32 maxblendstages;
 	u32 blendstage_base[MAX_BLOCKS];
 };
