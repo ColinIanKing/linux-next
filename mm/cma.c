@@ -778,7 +778,8 @@ static void cma_debug_show_areas(struct cma *cma)
 
 static int cma_range_alloc(struct cma *cma, struct cma_memrange *cmr,
 				unsigned long count, unsigned int align,
-				struct page **pagep, gfp_t gfp)
+				struct page **pagep, gfp_t gfp,
+				acr_flags_t alloc_flags)
 {
 	unsigned long bitmap_maxno, bitmap_no, bitmap_count;
 	unsigned long start, pfn, mask, offset;
@@ -836,7 +837,7 @@ static int cma_range_alloc(struct cma *cma, struct cma_memrange *cmr,
 		spin_unlock_irq(&cma->lock);
 
 		mutex_lock(&cma->alloc_mutex);
-		ret = alloc_contig_range(pfn, pfn + count, ACR_FLAGS_CMA, gfp);
+		ret = alloc_contig_range(pfn, pfn + count, alloc_flags, gfp);
 		mutex_unlock(&cma->alloc_mutex);
 		if (!ret)
 			break;
@@ -857,7 +858,7 @@ out:
 }
 
 static struct page *__cma_alloc(struct cma *cma, unsigned long count,
-		       unsigned int align, gfp_t gfp)
+		       unsigned int align, gfp_t gfp, acr_flags_t alloc_flags)
 {
 	struct page *page = NULL;
 	int ret = -ENOMEM, r;
@@ -879,7 +880,7 @@ static struct page *__cma_alloc(struct cma *cma, unsigned long count,
 		page = NULL;
 
 		ret = cma_range_alloc(cma, &cma->ranges[r], count, align,
-				       &page, gfp);
+				       &page, gfp, alloc_flags);
 		if (ret != -EBUSY || page)
 			break;
 	}
@@ -927,7 +928,9 @@ static struct page *__cma_alloc(struct cma *cma, unsigned long count,
 struct page *cma_alloc(struct cma *cma, unsigned long count,
 		       unsigned int align, bool no_warn)
 {
-	return __cma_alloc(cma, count, align, GFP_KERNEL | (no_warn ? __GFP_NOWARN : 0));
+	return __cma_alloc(cma, count, align,
+			   GFP_KERNEL | (no_warn ? __GFP_NOWARN : 0),
+			   ACR_FLAGS_CMA);
 }
 
 struct folio *cma_alloc_folio(struct cma *cma, int order, gfp_t gfp)
@@ -937,7 +940,7 @@ struct folio *cma_alloc_folio(struct cma *cma, int order, gfp_t gfp)
 	if (WARN_ON(!order || !(gfp & __GFP_COMP)))
 		return NULL;
 
-	page = __cma_alloc(cma, 1 << order, order, gfp);
+	page = __cma_alloc(cma, 1 << order, order, gfp, ACR_FLAGS_CMA);
 
 	return page ? page_folio(page) : NULL;
 }
