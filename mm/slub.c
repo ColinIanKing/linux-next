@@ -481,7 +481,6 @@ struct slub_percpu_sheaves {
 	struct slab_sheaf *main; /* never NULL when unlocked */
 	struct slab_sheaf *spare; /* empty or full, may be NULL */
 	struct slab_sheaf *rcu_free; /* for batching kfree_rcu() */
-	struct node_barn *barn;
 };
 
 /*
@@ -502,6 +501,12 @@ struct kmem_cache_node {
 static inline struct kmem_cache_node *get_node(struct kmem_cache *s, int node)
 {
 	return s->node[node];
+}
+
+/* Get the barn of the current cpu's memory node */
+static inline struct node_barn *get_barn(struct kmem_cache *s)
+{
+	return get_node(s, numa_mem_id())->barn;
 }
 
 /*
@@ -4717,6 +4722,7 @@ __pcs_replace_empty_main(struct kmem_cache *s, struct slub_percpu_sheaves *pcs, 
 {
 	struct slab_sheaf *empty = NULL;
 	struct slab_sheaf *full;
+	struct node_barn *barn;
 	bool can_alloc;
 
 	lockdep_assert_held(this_cpu_ptr(&s->cpu_sheaves->lock));
@@ -4726,7 +4732,9 @@ __pcs_replace_empty_main(struct kmem_cache *s, struct slub_percpu_sheaves *pcs, 
 		return pcs;
 	}
 
-	full = barn_replace_empty_sheaf(pcs->barn, pcs->main);
+	barn = get_barn(s);
+
+	full = barn_replace_empty_sheaf(barn, pcs->main);
 
 	if (full) {
 		stat(s, BARN_GET);
@@ -4743,7 +4751,7 @@ __pcs_replace_empty_main(struct kmem_cache *s, struct slub_percpu_sheaves *pcs, 
 			empty = pcs->spare;
 			pcs->spare = NULL;
 		} else {
-			empty = barn_get_empty_sheaf(pcs->barn);
+			empty = barn_get_empty_sheaf(barn);
 		}
 	}
 
@@ -4785,7 +4793,7 @@ __pcs_replace_empty_main(struct kmem_cache *s, struct slub_percpu_sheaves *pcs, 
 	 */
 
 	if (pcs->main->size == 0) {
-		barn_put_empty_sheaf(pcs->barn, pcs->main);
+		barn_put_empty_sheaf(barn, pcs->main);
 		pcs->main = full;
 		return pcs;
 	}
@@ -4796,12 +4804,12 @@ __pcs_replace_empty_main(struct kmem_cache *s, struct slub_percpu_sheaves *pcs, 
 	}
 
 	if (pcs->spare->size == 0) {
-		barn_put_empty_sheaf(pcs->barn, pcs->spare);
+		barn_put_empty_sheaf(barn, pcs->spare);
 		pcs->spare = full;
 		return pcs;
 	}
 
-	barn_put_full_sheaf(pcs->barn, full);
+	barn_put_full_sheaf(barn, full);
 	stat(s, BARN_PUT);
 
 	return pcs;
@@ -4902,7 +4910,7 @@ next_batch:
 			goto do_alloc;
 		}
 
-		full = barn_replace_empty_sheaf(pcs->barn, pcs->main);
+		full = barn_replace_empty_sheaf(get_barn(s), pcs->main);
 
 		if (full) {
 			stat(s, BARN_GET);
@@ -5099,7 +5107,7 @@ kmem_cache_prefill_sheaf(struct kmem_cache *s, gfp_t gfp, unsigned int size)
 		stat(s, SHEAF_PREFILL_FAST);
 	} else {
 		stat(s, SHEAF_PREFILL_SLOW);
-		sheaf = barn_get_full_or_empty_sheaf(pcs->barn);
+		sheaf = barn_get_full_or_empty_sheaf(get_barn(s));
 		if (sheaf && sheaf->size)
 			stat(s, BARN_GET);
 		else
@@ -5150,6 +5158,7 @@ void kmem_cache_return_sheaf(struct kmem_cache *s, gfp_t gfp,
 
 	local_lock(&s->cpu_sheaves->lock);
 	pcs = this_cpu_ptr(s->cpu_sheaves);
+	barn = get_barn(s);
 
 	if (!pcs->spare) {
 		pcs->spare = sheaf;
@@ -5164,14 +5173,11 @@ void kmem_cache_return_sheaf(struct kmem_cache *s, gfp_t gfp,
 
 	stat(s, SHEAF_RETURN_SLOW);
 
-	/* Accessing pcs->barn outside local_lock is safe. */
-	barn = pcs->barn;
-
 	/*
 	 * If the barn has too many full sheaves or we fail to refill the sheaf,
 	 * simply flush and free it.
 	 */
-	if (data_race(pcs->barn->nr_full) >= MAX_FULL_SHEAVES ||
+	if (data_race(barn->nr_full) >= MAX_FULL_SHEAVES ||
 	    refill_sheaf(s, sheaf, gfp)) {
 		sheaf_flush_unused(s, sheaf);
 		free_empty_sheaf(s, sheaf);
@@ -5596,6 +5602,8 @@ slab_empty:
 static void __pcs_install_empty_sheaf(struct kmem_cache *s,
 		struct slub_percpu_sheaves *pcs, struct slab_sheaf *empty)
 {
+	struct node_barn *barn;
+
 	lockdep_assert_held(this_cpu_ptr(&s->cpu_sheaves->lock));
 
 	/* This is what we expect to find if nobody interrupted us. */
@@ -5605,19 +5613,21 @@ static void __pcs_install_empty_sheaf(struct kmem_cache *s,
 		return;
 	}
 
+	barn = get_barn(s);
+
 	/*
 	 * Unlikely because if the main sheaf had space, we would have just
 	 * freed to it. Get rid of our empty sheaf.
 	 */
 	if (pcs->main->size < s->sheaf_capacity) {
-		barn_put_empty_sheaf(pcs->barn, empty);
+		barn_put_empty_sheaf(barn, empty);
 		return;
 	}
 
 	/* Also unlikely for the same reason */
 	if (pcs->spare->size < s->sheaf_capacity) {
 		swap(pcs->main, pcs->spare);
-		barn_put_empty_sheaf(pcs->barn, empty);
+		barn_put_empty_sheaf(barn, empty);
 		return;
 	}
 
@@ -5625,7 +5635,7 @@ static void __pcs_install_empty_sheaf(struct kmem_cache *s,
 	 * We probably failed barn_replace_full_sheaf() due to no empty sheaf
 	 * available there, but we allocated one, so finish the job.
 	 */
-	barn_put_full_sheaf(pcs->barn, pcs->main);
+	barn_put_full_sheaf(barn, pcs->main);
 	stat(s, BARN_PUT);
 	pcs->main = empty;
 }
@@ -5642,15 +5652,17 @@ static struct slub_percpu_sheaves *
 __pcs_replace_full_main(struct kmem_cache *s, struct slub_percpu_sheaves *pcs)
 {
 	struct slab_sheaf *empty;
+	struct node_barn *barn;
 	bool put_fail;
 
 restart:
 	lockdep_assert_held(this_cpu_ptr(&s->cpu_sheaves->lock));
 
+	barn = get_barn(s);
 	put_fail = false;
 
 	if (!pcs->spare) {
-		empty = barn_get_empty_sheaf(pcs->barn);
+		empty = barn_get_empty_sheaf(barn);
 		if (empty) {
 			pcs->spare = pcs->main;
 			pcs->main = empty;
@@ -5664,7 +5676,7 @@ restart:
 		return pcs;
 	}
 
-	empty = barn_replace_full_sheaf(pcs->barn, pcs->main);
+	empty = barn_replace_full_sheaf(barn, pcs->main);
 
 	if (!IS_ERR(empty)) {
 		stat(s, BARN_PUT);
@@ -5724,7 +5736,7 @@ alloc_empty:
 
 got_empty:
 	if (!local_trylock(&s->cpu_sheaves->lock)) {
-		barn_put_empty_sheaf(pcs->barn, empty);
+		barn_put_empty_sheaf(barn, empty);
 		return NULL;
 	}
 
@@ -5827,6 +5839,7 @@ bool __kfree_rcu_sheaf(struct kmem_cache *s, void *obj)
 	if (unlikely(!pcs->rcu_free)) {
 
 		struct slab_sheaf *empty;
+		struct node_barn *barn;
 
 		if (pcs->spare && pcs->spare->size == 0) {
 			pcs->rcu_free = pcs->spare;
@@ -5834,7 +5847,9 @@ bool __kfree_rcu_sheaf(struct kmem_cache *s, void *obj)
 			goto do_free;
 		}
 
-		empty = barn_get_empty_sheaf(pcs->barn);
+		barn = get_barn(s);
+
+		empty = barn_get_empty_sheaf(barn);
 
 		if (empty) {
 			pcs->rcu_free = empty;
@@ -5849,14 +5864,14 @@ bool __kfree_rcu_sheaf(struct kmem_cache *s, void *obj)
 			goto fail;
 
 		if (!local_trylock(&s->cpu_sheaves->lock)) {
-			barn_put_empty_sheaf(pcs->barn, empty);
+			barn_put_empty_sheaf(barn, empty);
 			goto fail;
 		}
 
 		pcs = this_cpu_ptr(s->cpu_sheaves);
 
 		if (unlikely(pcs->rcu_free))
-			barn_put_empty_sheaf(pcs->barn, empty);
+			barn_put_empty_sheaf(barn, empty);
 		else
 			pcs->rcu_free = empty;
 	}
@@ -5901,6 +5916,7 @@ static void free_to_pcs_bulk(struct kmem_cache *s, size_t size, void **p)
 	void *remote_objects[PCS_BATCH_MAX];
 	unsigned int remote_nr = 0;
 	int node = numa_mem_id();
+	struct node_barn *barn;
 
 next_remote_batch:
 	while (i < size) {
@@ -5936,8 +5952,10 @@ next_batch:
 	if (likely(pcs->main->size < s->sheaf_capacity))
 		goto do_free;
 
+	barn = get_barn(s);
+
 	if (!pcs->spare) {
-		empty = barn_get_empty_sheaf(pcs->barn);
+		empty = barn_get_empty_sheaf(barn);
 		if (!empty)
 			goto no_empty;
 
@@ -5951,7 +5969,7 @@ next_batch:
 		goto do_free;
 	}
 
-	empty = barn_replace_full_sheaf(pcs->barn, pcs->main);
+	empty = barn_replace_full_sheaf(barn, pcs->main);
 	if (IS_ERR(empty)) {
 		stat(s, BARN_PUT_FAIL);
 		goto no_empty;
@@ -7036,15 +7054,11 @@ static int init_percpu_sheaves(struct kmem_cache *s)
 
 	for_each_possible_cpu(cpu) {
 		struct slub_percpu_sheaves *pcs;
-		int nid;
 
 		pcs = per_cpu_ptr(s->cpu_sheaves, cpu);
 
 		local_trylock_init(&pcs->lock);
 
-		nid = cpu_to_mem(cpu);
-
-		pcs->barn = get_node(s, nid)->barn;
 		pcs->main = alloc_empty_sheaf(s, GFP_KERNEL);
 
 		if (!pcs->main)
