@@ -57,16 +57,16 @@ extern bool cma_intersects(struct cma *cma, unsigned long start, unsigned long e
 extern void cma_reserve_pages_on_error(struct cma *cma);
 
 #ifdef CONFIG_CMA
-struct folio *cma_alloc_folio(struct cma *cma, int order, gfp_t gfp);
-bool cma_free_folio(struct cma *cma, const struct folio *folio);
+struct folio *cma_alloc_frozen_folio(struct cma *cma, int order, gfp_t gfp);
+bool cma_free_frozen_folio(struct cma *cma, const struct folio *folio);
 bool cma_validate_zones(struct cma *cma);
 #else
-static inline struct folio *cma_alloc_folio(struct cma *cma, int order, gfp_t gfp)
+static inline struct folio *cma_alloc_frozen_folio(struct cma *cma, int order, gfp_t gfp)
 {
 	return NULL;
 }
 
-static inline bool cma_free_folio(struct cma *cma, const struct folio *folio)
+static inline bool cma_free_frozen_folio(struct cma *cma, const struct folio *folio)
 {
 	return false;
 }
