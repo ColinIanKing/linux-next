@@ -854,6 +854,8 @@ struct mlx5_ib_port_resources {
 struct mlx5_data_direct_resources {
 	u32 pdn;
 	u32 mkey;
+	u32 mkey_ro;
+	u8 mkey_ro_valid :1;
 };
 
 struct mlx5_ib_resources {
@@ -1109,6 +1111,7 @@ struct mlx5_ib_lb_state {
 	u32			user_td;
 	int			qps;
 	bool			enabled;
+	bool			force_enable;
 };
 
 struct mlx5_ib_pf_eq {
