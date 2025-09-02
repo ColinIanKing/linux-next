@@ -207,7 +207,7 @@ config MTD_PARTITIONED_MASTER
 	  what lies behind the master.
 
 config MTD_VIRT_CONCAT
-	bool "Virtual concatenated MTD devices"
+	tristate "Virtual concatenated MTD devices"
 	default n
 	depends on MTD_PARTITIONED_MASTER
 	help
