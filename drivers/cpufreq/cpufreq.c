@@ -664,10 +664,10 @@ unlock:
 
 static unsigned int cpufreq_parse_policy(char *str_governor)
 {
-	if (!strncasecmp(str_governor, "performance", CPUFREQ_NAME_LEN))
+	if (!strncasecmp(str_governor, "performance", strlen("performance")))
 		return CPUFREQ_POLICY_PERFORMANCE;
 
-	if (!strncasecmp(str_governor, "powersave", CPUFREQ_NAME_LEN))
+	if (!strncasecmp(str_governor, "powersave", strlen("powersave")))
 		return CPUFREQ_POLICY_POWERSAVE;
 
 	return CPUFREQ_POLICY_UNKNOWN;
@@ -1121,7 +1121,8 @@ static int cpufreq_init_policy(struct cpufreq_policy *policy)
 
 	if (has_target()) {
 		/* Update policy governor to the one used before hotplug. */
-		gov = get_governor(policy->last_governor);
+		if (policy->last_governor[0] != '\0')
+			gov = get_governor(policy->last_governor);
 		if (gov) {
 			pr_debug("Restoring governor %s for cpu %d\n",
 				 gov->name, policy->cpu);
@@ -2921,10 +2922,7 @@ int cpufreq_register_driver(struct cpufreq_driver *driver_data)
 		return -EPROBE_DEFER;
 
 	if (!driver_data || !driver_data->verify || !driver_data->init ||
-	    !(driver_data->setpolicy || driver_data->target_index ||
-		    driver_data->target) ||
-	     (driver_data->setpolicy && (driver_data->target_index ||
-		    driver_data->target)) ||
+	     (!!driver_data->setpolicy == (driver_data->target_index || driver_data->target)) ||
 	     (!driver_data->get_intermediate != !driver_data->target_intermediate) ||
 	     (!driver_data->online != !driver_data->offline) ||
 		 (driver_data->adjust_perf && !driver_data->fast_switch))
