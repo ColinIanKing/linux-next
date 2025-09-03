@@ -36465,6 +36465,7 @@ static inline void check_bulk_rebalance(struct maple_tree *mt)
 
 	build_full_tree(mt, 0, 2);
 
+	mas_lock(&mas);
 	/* erase every entry in the tree */
 	do {
 		/* set up bulk store mode */
@@ -36474,6 +36475,7 @@ static inline void check_bulk_rebalance(struct maple_tree *mt)
 	} while (mas_prev(&mas, 0) != NULL);
 
 	mas_destroy(&mas);
+	mas_unlock(&mas);
 }
 
 void farmer_tests(void)
