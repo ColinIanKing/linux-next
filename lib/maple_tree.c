@@ -186,6 +186,22 @@ static inline void mt_free_bulk(size_t size, void __rcu **nodes)
 	kmem_cache_free_bulk(maple_node_cache, size, (void **)nodes);
 }
 
+static void mt_return_sheaf(struct slab_sheaf *sheaf)
+{
+	kmem_cache_return_sheaf(maple_node_cache, GFP_NOWAIT, sheaf);
+}
+
+static struct slab_sheaf *mt_get_sheaf(gfp_t gfp, int count)
+{
+	return kmem_cache_prefill_sheaf(maple_node_cache, gfp, count);
+}
+
+static int mt_refill_sheaf(gfp_t gfp, struct slab_sheaf **sheaf,
+		unsigned int size)
+{
+	return kmem_cache_refill_sheaf(maple_node_cache, gfp, sheaf, size);
+}
+
 /*
  * ma_free_rcu() - Use rcu callback to free a maple node
  * @node: The node to free
@@ -576,67 +592,6 @@ static __always_inline bool mte_dead_node(const struct maple_enode *enode)
 
 	node = mte_to_node(enode);
 	return ma_dead_node(node);
-}
-
-/*
- * mas_allocated() - Get the number of nodes allocated in a maple state.
- * @mas: The maple state
- *
- * The ma_state alloc member is overloaded to hold a pointer to the first
- * allocated node or to the number of requested nodes to allocate.  If bit 0 is
- * set, then the alloc contains the number of requested nodes.  If there is an
- * allocated node, then the total allocated nodes is in that node.
- *
- * Return: The total number of nodes allocated
- */
-static inline unsigned long mas_allocated(const struct ma_state *mas)
-{
-	if (!mas->alloc || ((unsigned long)mas->alloc & 0x1))
-		return 0;
-
-	return mas->alloc->total;
-}
-
-/*
- * mas_set_alloc_req() - Set the requested number of allocations.
- * @mas: the maple state
- * @count: the number of allocations.
- *
- * The requested number of allocations is either in the first allocated node,
- * located in @mas->alloc->request_count, or directly in @mas->alloc if there is
- * no allocated node.  Set the request either in the node or do the necessary
- * encoding to store in @mas->alloc directly.
- */
-static inline void mas_set_alloc_req(struct ma_state *mas, unsigned long count)
-{
-	if (!mas->alloc || ((unsigned long)mas->alloc & 0x1)) {
-		if (!count)
-			mas->alloc = NULL;
-		else
-			mas->alloc = (struct maple_alloc *)(((count) << 1U) | 1U);
-		return;
-	}
-
-	mas->alloc->request_count = count;
-}
-
-/*
- * mas_alloc_req() - get the requested number of allocations.
- * @mas: The maple state
- *
- * The alloc count is either stored directly in @mas, or in
- * @mas->alloc->request_count if there is at least one node allocated.  Decode
- * the request count if it's stored directly in @mas->alloc.
- *
- * Return: The allocation request count.
- */
-static inline unsigned int mas_alloc_req(const struct ma_state *mas)
-{
-	if ((unsigned long)mas->alloc & 0x1)
-		return (unsigned long)(mas->alloc) >> 1;
-	else if (mas->alloc)
-		return mas->alloc->request_count;
-	return 0;
 }
 
 /*
@@ -1142,77 +1097,15 @@ static int mas_ascend(struct ma_state *mas)
  */
 static inline struct maple_node *mas_pop_node(struct ma_state *mas)
 {
-	struct maple_alloc *ret, *node = mas->alloc;
-	unsigned long total = mas_allocated(mas);
-	unsigned int req = mas_alloc_req(mas);
+	struct maple_node *ret;
 
-	/* nothing or a request pending. */
-	if (WARN_ON(!total))
+	if (WARN_ON_ONCE(!mas->sheaf))
 		return NULL;
 
-	if (total == 1) {
-		/* single allocation in this ma_state */
-		mas->alloc = NULL;
-		ret = node;
-		goto single_node;
-	}
-
-	if (node->node_count == 1) {
-		/* Single allocation in this node. */
-		mas->alloc = node->slot[0];
-		mas->alloc->total = node->total - 1;
-		ret = node;
-		goto new_head;
-	}
-	node->total--;
-	ret = node->slot[--node->node_count];
-	node->slot[node->node_count] = NULL;
-
-single_node:
-new_head:
-	if (req) {
-		req++;
-		mas_set_alloc_req(mas, req);
-	}
-
+	ret = kmem_cache_alloc_from_sheaf(maple_node_cache, GFP_NOWAIT, mas->sheaf);
 	memset(ret, 0, sizeof(*ret));
-	return (struct maple_node *)ret;
-}
 
-/*
- * mas_push_node() - Push a node back on the maple state allocation.
- * @mas: The maple state
- * @used: The used maple node
- *
- * Stores the maple node back into @mas->alloc for reuse.  Updates allocated and
- * requested node count as necessary.
- */
-static inline void mas_push_node(struct ma_state *mas, struct maple_node *used)
-{
-	struct maple_alloc *reuse = (struct maple_alloc *)used;
-	struct maple_alloc *head = mas->alloc;
-	unsigned long count;
-	unsigned int requested = mas_alloc_req(mas);
-
-	count = mas_allocated(mas);
-
-	reuse->request_count = 0;
-	reuse->node_count = 0;
-	if (count) {
-		if (head->node_count < MAPLE_ALLOC_SLOTS) {
-			head->slot[head->node_count++] = reuse;
-			head->total++;
-			goto done;
-		}
-		reuse->slot[0] = head;
-		reuse->node_count = 1;
-	}
-
-	reuse->total = count + 1;
-	mas->alloc = reuse;
-done:
-	if (requested > 1)
-		mas_set_alloc_req(mas, requested - 1);
+	return ret;
 }
 
 /*
@@ -1222,74 +1115,31 @@ done:
  */
 static inline void mas_alloc_nodes(struct ma_state *mas, gfp_t gfp)
 {
-	struct maple_alloc *node;
-	unsigned long allocated = mas_allocated(mas);
-	unsigned int requested = mas_alloc_req(mas);
-	unsigned int count;
-	void **slots = NULL;
-	unsigned int max_req = 0;
+	if (unlikely(mas->sheaf)) {
+		unsigned long refill = mas->node_request;
 
-	if (!requested)
-		return;
-
-	mas_set_alloc_req(mas, 0);
-	if (mas->mas_flags & MA_STATE_PREALLOC) {
-		if (allocated)
+		if(kmem_cache_sheaf_size(mas->sheaf) >= refill) {
+			mas->node_request = 0;
 			return;
-		WARN_ON(!allocated);
-	}
-
-	if (!allocated || mas->alloc->node_count == MAPLE_ALLOC_SLOTS) {
-		node = (struct maple_alloc *)mt_alloc_one(gfp);
-		if (!node)
-			goto nomem_one;
-
-		if (allocated) {
-			node->slot[0] = mas->alloc;
-			node->node_count = 1;
-		} else {
-			node->node_count = 0;
 		}
 
-		mas->alloc = node;
-		node->total = ++allocated;
-		node->request_count = 0;
-		requested--;
+		if (mt_refill_sheaf(gfp, &mas->sheaf, refill))
+			goto error;
+
+		mas->node_request = 0;
+		return;
 	}
 
-	node = mas->alloc;
-	while (requested) {
-		max_req = MAPLE_ALLOC_SLOTS - node->node_count;
-		slots = (void **)&node->slot[node->node_count];
-		max_req = min(requested, max_req);
-		count = mt_alloc_bulk(gfp, max_req, slots);
-		if (!count)
-			goto nomem_bulk;
-
-		if (node->node_count == 0) {
-			node->slot[0]->node_count = 0;
-			node->slot[0]->request_count = 0;
-		}
-
-		node->node_count += count;
-		allocated += count;
-		/* find a non-full node*/
-		do {
-			node = node->slot[0];
-		} while (unlikely(node->node_count == MAPLE_ALLOC_SLOTS));
-		requested -= count;
+	mas->sheaf = mt_get_sheaf(gfp, mas->node_request);
+	if (likely(mas->sheaf)) {
+		mas->node_request = 0;
+		return;
 	}
-	mas->alloc->total = allocated;
-	return;
 
-nomem_bulk:
-	/* Clean up potential freed allocations on bulk failure */
-	memset(slots, 0, max_req * sizeof(unsigned long));
-	mas->alloc->total = allocated;
-nomem_one:
-	mas_set_alloc_req(mas, requested);
+error:
 	mas_set_err(mas, -ENOMEM);
 }
+
 
 /*
  * mas_free() - Free an encoded maple node
@@ -1301,42 +1151,7 @@ nomem_one:
  */
 static inline void mas_free(struct ma_state *mas, struct maple_enode *used)
 {
-	struct maple_node *tmp = mte_to_node(used);
-
-	if (mt_in_rcu(mas->tree))
-		ma_free_rcu(tmp);
-	else
-		mas_push_node(mas, tmp);
-}
-
-/*
- * mas_node_count_gfp() - Check if enough nodes are allocated and request more
- * if there is not enough nodes.
- * @mas: The maple state
- * @count: The number of nodes needed
- * @gfp: the gfp flags
- */
-static void mas_node_count_gfp(struct ma_state *mas, int count, gfp_t gfp)
-{
-	unsigned long allocated = mas_allocated(mas);
-
-	if (allocated < count) {
-		mas_set_alloc_req(mas, count - allocated);
-		mas_alloc_nodes(mas, gfp);
-	}
-}
-
-/*
- * mas_node_count() - Check if enough nodes are allocated and request more if
- * there is not enough nodes.
- * @mas: The maple state
- * @count: The number of nodes needed
- *
- * Note: Uses GFP_NOWAIT for gfp flags.
- */
-static void mas_node_count(struct ma_state *mas, int count)
-{
-	return mas_node_count_gfp(mas, count, GFP_NOWAIT);
+	ma_free_rcu(mte_to_node(used));
 }
 
 /*
@@ -2511,10 +2326,7 @@ static inline void mas_topiary_node(struct ma_state *mas,
 	enode = tmp_mas->node;
 	tmp = mte_to_node(enode);
 	mte_set_node_dead(enode);
-	if (in_rcu)
-		ma_free_rcu(tmp);
-	else
-		mas_push_node(mas, tmp);
+	ma_free_rcu(tmp);
 }
 
 /*
@@ -4162,7 +3974,7 @@ set_content:
  *
  * Return: Number of nodes required for preallocation.
  */
-static inline int mas_prealloc_calc(struct ma_wr_state *wr_mas, void *entry)
+static inline void mas_prealloc_calc(struct ma_wr_state *wr_mas, void *entry)
 {
 	struct ma_state *mas = wr_mas->mas;
 	unsigned char height = mas_mt_height(mas);
@@ -4208,7 +4020,7 @@ static inline int mas_prealloc_calc(struct ma_wr_state *wr_mas, void *entry)
 		WARN_ON_ONCE(1);
 	}
 
-	return ret;
+	mas->node_request = ret;
 }
 
 /*
@@ -4269,15 +4081,15 @@ static inline enum store_type mas_wr_store_type(struct ma_wr_state *wr_mas)
  */
 static inline void mas_wr_preallocate(struct ma_wr_state *wr_mas, void *entry)
 {
-	int request;
+	struct ma_state *mas = wr_mas->mas;
 
 	mas_wr_prealloc_setup(wr_mas);
-	wr_mas->mas->store_type = mas_wr_store_type(wr_mas);
-	request = mas_prealloc_calc(wr_mas, entry);
-	if (!request)
+	mas->store_type = mas_wr_store_type(wr_mas);
+	mas_prealloc_calc(wr_mas, entry);
+	if (!mas->node_request)
 		return;
 
-	mas_node_count(wr_mas->mas, request);
+	mas_alloc_nodes(mas, GFP_NOWAIT);
 }
 
 /**
@@ -5390,7 +5202,6 @@ static inline void mte_destroy_walk(struct maple_enode *enode,
  */
 void *mas_store(struct ma_state *mas, void *entry)
 {
-	int request;
 	MA_WR_STATE(wr_mas, mas, entry);
 
 	trace_ma_write(__func__, mas, 0, entry);
@@ -5420,11 +5231,11 @@ void *mas_store(struct ma_state *mas, void *entry)
 		return wr_mas.content;
 	}
 
-	request = mas_prealloc_calc(&wr_mas, entry);
-	if (!request)
+	mas_prealloc_calc(&wr_mas, entry);
+	if (!mas->node_request)
 		goto store;
 
-	mas_node_count(mas, request);
+	mas_alloc_nodes(mas, GFP_NOWAIT);
 	if (mas_is_err(mas))
 		return NULL;
 
@@ -5512,20 +5323,19 @@ EXPORT_SYMBOL_GPL(mas_store_prealloc);
 int mas_preallocate(struct ma_state *mas, void *entry, gfp_t gfp)
 {
 	MA_WR_STATE(wr_mas, mas, entry);
-	int ret = 0;
-	int request;
 
 	mas_wr_prealloc_setup(&wr_mas);
 	mas->store_type = mas_wr_store_type(&wr_mas);
-	request = mas_prealloc_calc(&wr_mas, entry);
-	if (!request)
+	mas_prealloc_calc(&wr_mas, entry);
+	if (!mas->node_request)
 		goto set_flag;
 
 	mas->mas_flags &= ~MA_STATE_PREALLOC;
-	mas_node_count_gfp(mas, request, gfp);
+	mas_alloc_nodes(mas, gfp);
 	if (mas_is_err(mas)) {
-		mas_set_alloc_req(mas, 0);
-		ret = xa_err(mas->node);
+		int ret = xa_err(mas->node);
+
+		mas->node_request = 0;
 		mas_destroy(mas);
 		mas_reset(mas);
 		return ret;
@@ -5533,7 +5343,7 @@ int mas_preallocate(struct ma_state *mas, void *entry, gfp_t gfp)
 
 set_flag:
 	mas->mas_flags |= MA_STATE_PREALLOC;
-	return ret;
+	return 0;
 }
 EXPORT_SYMBOL_GPL(mas_preallocate);
 
@@ -5547,9 +5357,6 @@ EXPORT_SYMBOL_GPL(mas_preallocate);
  */
 void mas_destroy(struct ma_state *mas)
 {
-	struct maple_alloc *node;
-	unsigned long total;
-
 	/*
 	 * When using mas_for_each() to insert an expected number of elements,
 	 * it is possible that the number inserted is less than the expected
@@ -5570,21 +5377,11 @@ void mas_destroy(struct ma_state *mas)
 	}
 	mas->mas_flags &= ~(MA_STATE_BULK|MA_STATE_PREALLOC);
 
-	total = mas_allocated(mas);
-	while (total) {
-		node = mas->alloc;
-		mas->alloc = node->slot[0];
-		if (node->node_count > 1) {
-			size_t count = node->node_count - 1;
+	mas->node_request = 0;
+	if (mas->sheaf)
+		mt_return_sheaf(mas->sheaf);
 
-			mt_free_bulk(count, (void __rcu **)&node->slot[1]);
-			total -= count;
-		}
-		kfree(ma_mnode_ptr(node));
-		total--;
-	}
-
-	mas->alloc = NULL;
+	mas->sheaf = NULL;
 }
 EXPORT_SYMBOL_GPL(mas_destroy);
 
@@ -5634,7 +5431,8 @@ int mas_expected_entries(struct ma_state *mas, unsigned long nr_entries)
 	/* Internal nodes */
 	nr_nodes += DIV_ROUND_UP(nr_nodes, nonleaf_cap);
 	/* Add working room for split (2 nodes) + new parents */
-	mas_node_count_gfp(mas, nr_nodes + 3, GFP_KERNEL);
+	mas->node_request = nr_nodes + 3;
+	mas_alloc_nodes(mas, GFP_KERNEL);
 
 	/* Detect if allocations run out */
 	mas->mas_flags |= MA_STATE_PREALLOC;
@@ -6281,7 +6079,7 @@ bool mas_nomem(struct ma_state *mas, gfp_t gfp)
 		mas_alloc_nodes(mas, gfp);
 	}
 
-	if (!mas_allocated(mas))
+	if (!mas->sheaf)
 		return false;
 
 	mas->status = ma_start;
@@ -7676,8 +7474,9 @@ void mas_dump(const struct ma_state *mas)
 
 	pr_err("[%u/%u] index=%lx last=%lx\n", mas->offset, mas->end,
 	       mas->index, mas->last);
-	pr_err("     min=%lx max=%lx alloc=" PTR_FMT ", depth=%u, flags=%x\n",
-	       mas->min, mas->max, mas->alloc, mas->depth, mas->mas_flags);
+	pr_err("     min=%lx max=%lx sheaf=" PTR_FMT ", request %lu depth=%u, flags=%x\n",
+	       mas->min, mas->max, mas->sheaf, mas->node_request, mas->depth,
+	       mas->mas_flags);
 	if (mas->index > mas->last)
 		pr_err("Check index & last\n");
 }
