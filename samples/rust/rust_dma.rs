@@ -9,7 +9,7 @@ use kernel::{
     dma::{CoherentAllocation, Device, DmaMask},
     pci,
     prelude::*,
-    types::ARef,
+    sync::aref::ARef,
 };
 
 struct DmaSampleDriver {
