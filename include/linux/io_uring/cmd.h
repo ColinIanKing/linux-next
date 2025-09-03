@@ -56,7 +56,7 @@ int io_uring_cmd_import_fixed_vec(struct io_uring_cmd *ioucmd,
  * Note: the caller should never hard code @issue_flags and is only allowed
  * to pass the mask provided by the core io_uring code.
  */
-void io_uring_cmd_done(struct io_uring_cmd *cmd, ssize_t ret, u64 res2,
+void io_uring_cmd_done(struct io_uring_cmd *cmd, s32 ret, u64 res2,
 			unsigned issue_flags);
 
 void __io_uring_cmd_do_in_task(struct io_uring_cmd *ioucmd,
@@ -104,7 +104,7 @@ static inline int io_uring_cmd_import_fixed_vec(struct io_uring_cmd *ioucmd,
 {
 	return -EOPNOTSUPP;
 }
-static inline void io_uring_cmd_done(struct io_uring_cmd *cmd, ssize_t ret,
+static inline void io_uring_cmd_done(struct io_uring_cmd *cmd, s32 ret,
 		u64 ret2, unsigned issue_flags)
 {
 }
@@ -132,17 +132,6 @@ static inline bool io_uring_mshot_cmd_post_cqe(struct io_uring_cmd *ioucmd,
 	return true;
 }
 #endif
-
-/*
- * Polled completions must ensure they are coming from a poll queue, and
- * hence are completed inside the usual poll handling loops.
- */
-static inline void io_uring_cmd_iopoll_done(struct io_uring_cmd *ioucmd,
-					    ssize_t ret, ssize_t res2)
-{
-	lockdep_assert(in_task());
-	io_uring_cmd_done(ioucmd, ret, res2, 0);
-}
 
 /* users must follow the IOU_F_TWQ_LAZY_WAKE semantics */
 static inline void io_uring_cmd_do_in_task_lazy(struct io_uring_cmd *ioucmd,
