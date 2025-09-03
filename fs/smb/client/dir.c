@@ -706,6 +706,10 @@ cifs_lookup(struct inode *parent_dir_inode, struct dentry *direntry,
 		return ERR_PTR(rc);
 	}
 
+	/* If in mkdir, keep negative dentry and let create path handle it. */
+	if ((flags & (LOOKUP_CREATE | LOOKUP_EXCL)) == (LOOKUP_CREATE | LOOKUP_EXCL))
+		return NULL;
+
 	/* can not grab the rename sem here since it would
 	deadlock in the cases (beginning of sys_rename itself)
 	in which we already have the sb rename sem */
