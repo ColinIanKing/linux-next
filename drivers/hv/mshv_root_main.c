@@ -37,12 +37,6 @@ MODULE_AUTHOR("Microsoft");
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("Microsoft Hyper-V root partition VMM interface /dev/mshv");
 
-/* TODO move this to mshyperv.h when needed outside driver */
-static inline bool hv_parent_partition(void)
-{
-	return hv_root_partition();
-}
-
 /* TODO move this to another file when debugfs code is added */
 enum hv_stats_vp_counters {			/* HV_THREAD_COUNTER */
 #if defined(CONFIG_X86)
@@ -2193,6 +2187,15 @@ struct notifier_block mshv_reboot_nb = {
 	.notifier_call = mshv_reboot_notify,
 };
 
+static int __init mshv_l1vh_partition_init(struct device *dev)
+{
+	hv_scheduler_type = HV_SCHEDULER_TYPE_CORE_SMT;
+	dev_info(dev, "Hypervisor using %s\n",
+		 scheduler_type_to_string(hv_scheduler_type));
+
+	return 0;
+}
+
 static void mshv_root_partition_exit(void)
 {
 	unregister_reboot_notifier(&mshv_reboot_nb);
@@ -2227,7 +2230,7 @@ static int __init mshv_parent_partition_init(void)
 	struct device *dev;
 	union hv_hypervisor_version_info version_info;
 
-	if (!hv_root_partition() || is_kdump_kernel())
+	if (!hv_parent_partition() || is_kdump_kernel())
 		return -ENODEV;
 
 	if (hv_get_hypervisor_version(&version_info))
@@ -2264,7 +2267,10 @@ static int __init mshv_parent_partition_init(void)
 
 	mshv_cpuhp_online = ret;
 
-	ret = mshv_root_partition_init(dev);
+	if (hv_root_partition())
+		ret = mshv_root_partition_init(dev);
+	else
+		ret = mshv_l1vh_partition_init(dev);
 	if (ret)
 		goto remove_cpu_state;
 
