@@ -33,9 +33,10 @@ static inline struct io_notif_data *io_notif_to_data(struct io_kiocb *notif)
 }
 
 static inline void io_notif_flush(struct io_kiocb *notif)
-	__must_hold(&notif->ctx->uring_lock)
 {
 	struct io_notif_data *nd = io_notif_to_data(notif);
+
+	io_ring_ctx_assert_locked(notif->ctx);
 
 	io_tx_ubuf_complete(NULL, &nd->uarg, true);
 }

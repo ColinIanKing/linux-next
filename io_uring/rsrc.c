@@ -349,7 +349,7 @@ static int __io_register_rsrc_update(struct io_ring_ctx *ctx, unsigned type,
 {
 	__u32 tmp;
 
-	lockdep_assert_held(&ctx->uring_lock);
+	io_ring_ctx_assert_locked(ctx);
 
 	if (check_add_overflow(up->offset, nr_args, &tmp))
 		return -EOVERFLOW;
