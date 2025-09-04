@@ -67,7 +67,7 @@ static unsigned int warn_limit __read_mostly;
 static bool panic_console_replay;
 
 bool panic_triggering_all_cpu_backtrace;
-bool panic_this_cpu_backtrace_printed;
+static bool panic_this_cpu_backtrace_printed;
 
 int panic_timeout = CONFIG_PANIC_TIMEOUT;
 EXPORT_SYMBOL_GPL(panic_timeout);
