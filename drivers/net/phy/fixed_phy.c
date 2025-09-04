@@ -10,7 +10,6 @@
 
 #include <linux/kernel.h>
 #include <linux/module.h>
-#include <linux/device/faux.h>
 #include <linux/list.h>
 #include <linux/mii.h>
 #include <linux/phy.h>
@@ -40,7 +39,6 @@ struct fixed_phy {
 	struct gpio_desc *link_gpiod;
 };
 
-static struct faux_device *fdev;
 static struct fixed_mdio_bus platform_fmb = {
 	.phys = LIST_HEAD_INIT(platform_fmb.phys),
 };
@@ -77,8 +75,6 @@ static int fixed_mdio_read(struct mii_bus *bus, int phy_addr, int reg_num)
 
 	list_for_each_entry(fp, &fmb->phys, node) {
 		if (fp->addr == phy_addr) {
-			struct fixed_phy_status state;
-
 			fp->status.link = !fp->no_carrier;
 
 			/* Issue callback if user registered it. */
@@ -88,9 +84,8 @@ static int fixed_mdio_read(struct mii_bus *bus, int phy_addr, int reg_num)
 
 			/* Check the GPIO for change in status */
 			fixed_phy_update(fp);
-			state = fp->status;
 
-			return swphy_read_reg(reg_num, &state);
+			return swphy_read_reg(reg_num, &fp->status);
 		}
 	}
 
@@ -160,9 +155,9 @@ static int fixed_phy_add_gpiod(unsigned int irq, int phy_addr,
 	return 0;
 }
 
-int fixed_phy_add(int phy_addr, const struct fixed_phy_status *status)
+void fixed_phy_add(const struct fixed_phy_status *status)
 {
-	return fixed_phy_add_gpiod(PHY_POLL, phy_addr, status, NULL);
+	fixed_phy_add_gpiod(PHY_POLL, 0, status, NULL);
 }
 EXPORT_SYMBOL_GPL(fixed_phy_add);
 
@@ -309,6 +304,7 @@ void fixed_phy_unregister(struct phy_device *phy)
 	phy_device_remove(phy);
 	of_node_put(phy->mdio.dev.of_node);
 	fixed_phy_del(phy->mdio.addr);
+	phy_device_free(phy);
 }
 EXPORT_SYMBOL_GPL(fixed_phy_unregister);
 
@@ -317,20 +313,13 @@ static int __init fixed_mdio_bus_init(void)
 	struct fixed_mdio_bus *fmb = &platform_fmb;
 	int ret;
 
-	fdev = faux_device_create("Fixed MDIO bus", NULL, NULL);
-	if (!fdev)
-		return -ENODEV;
-
 	fmb->mii_bus = mdiobus_alloc();
-	if (fmb->mii_bus == NULL) {
-		ret = -ENOMEM;
-		goto err_mdiobus_reg;
-	}
+	if (!fmb->mii_bus)
+		return -ENOMEM;
 
 	snprintf(fmb->mii_bus->id, MII_BUS_ID_SIZE, "fixed-0");
 	fmb->mii_bus->name = "Fixed MDIO Bus";
 	fmb->mii_bus->priv = fmb;
-	fmb->mii_bus->parent = &fdev->dev;
 	fmb->mii_bus->read = &fixed_mdio_read;
 	fmb->mii_bus->write = &fixed_mdio_write;
 	fmb->mii_bus->phy_mask = ~0;
@@ -343,8 +332,6 @@ static int __init fixed_mdio_bus_init(void)
 
 err_mdiobus_alloc:
 	mdiobus_free(fmb->mii_bus);
-err_mdiobus_reg:
-	faux_device_destroy(fdev);
 	return ret;
 }
 module_init(fixed_mdio_bus_init);
@@ -356,7 +343,6 @@ static void __exit fixed_mdio_bus_exit(void)
 
 	mdiobus_unregister(fmb->mii_bus);
 	mdiobus_free(fmb->mii_bus);
-	faux_device_destroy(fdev);
 
 	list_for_each_entry_safe(fp, tmp, &fmb->phys, node) {
 		list_del(&fp->node);
