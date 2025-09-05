@@ -49,7 +49,6 @@ extern int cma_init_reserved_mem(phys_addr_t base, phys_addr_t size,
 					struct cma **res_cma);
 extern struct page *cma_alloc(struct cma *cma, unsigned long count, unsigned int align,
 			      bool no_warn);
-extern bool cma_pages_valid(struct cma *cma, const struct page *pages, unsigned long count);
 extern bool cma_release(struct cma *cma, const struct page *pages, unsigned long count);
 
 extern int cma_for_each_area(int (*it)(struct cma *cma, void *data), void *data);
@@ -58,16 +57,16 @@ extern bool cma_intersects(struct cma *cma, unsigned long start, unsigned long e
 extern void cma_reserve_pages_on_error(struct cma *cma);
 
 #ifdef CONFIG_CMA
-struct folio *cma_alloc_folio(struct cma *cma, int order, gfp_t gfp);
-bool cma_free_folio(struct cma *cma, const struct folio *folio);
+struct folio *cma_alloc_frozen_folio(struct cma *cma, int order, gfp_t gfp);
+bool cma_free_frozen_folio(struct cma *cma, const struct folio *folio);
 bool cma_validate_zones(struct cma *cma);
 #else
-static inline struct folio *cma_alloc_folio(struct cma *cma, int order, gfp_t gfp)
+static inline struct folio *cma_alloc_frozen_folio(struct cma *cma, int order, gfp_t gfp)
 {
 	return NULL;
 }
 
-static inline bool cma_free_folio(struct cma *cma, const struct folio *folio)
+static inline bool cma_free_frozen_folio(struct cma *cma, const struct folio *folio)
 {
 	return false;
 }
