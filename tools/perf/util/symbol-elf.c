@@ -873,7 +873,8 @@ out:
 
 #ifdef HAVE_LIBBFD_BUILDID_SUPPORT
 
-static int read_build_id(const char *filename, struct build_id *bid)
+static int read_build_id(const char *filename, struct build_id *bid,
+			 bool block __maybe_unused)
 {
 	size_t size = sizeof(bid->data);
 	int err = -1;
