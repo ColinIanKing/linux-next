@@ -1904,8 +1904,8 @@ fail_unlock:
 fail:
 	trace_percpu_alloc_percpu_fail(reserved, is_atomic, size, align);
 
-	if (do_warn && atomic_read(&warn_limit) > 0) {
-		int remaining = atomic_dec_return(&warn_limit);
+	if (do_warn) {
+		int remaining = atomic_dec_if_positive(&warn_limit);
 
 		if (remaining >= 0) {
 			pr_warn("allocation failed, size=%zu align=%zu atomic=%d, %s\n",
