@@ -338,6 +338,7 @@ int crash_exclude_mem_range(struct crash_mem *mem,
 
 	return 0;
 }
+EXPORT_SYMBOL_GPL(crash_exclude_mem_range);
 
 ssize_t crash_get_memory_size(void)
 {
