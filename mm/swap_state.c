@@ -235,6 +235,38 @@ void swap_cache_del_folio(struct folio *folio)
 }
 
 /**
+ * __swap_cache_replace_folio - Replace a folio in the swap cache.
+ * @mapping: Swap mapping address space.
+ * @entry: The first swap entry that the new folio corresponds to.
+ * @old: The old folio to be replaced.
+ * @new: The new folio.
+ *
+ * Replace a existing folio in the swap cache with a new folio.
+ *
+ * Context: Caller must ensure both folios are locked, and lock the
+ * swap address_space that holds the entries to be replaced.
+ */
+void __swap_cache_replace_folio(struct address_space *mapping,
+				swp_entry_t entry,
+				struct folio *old, struct folio *new)
+{
+	unsigned long nr_pages = folio_nr_pages(new);
+	unsigned long offset = swap_cache_index(entry);
+	unsigned long end = offset + nr_pages;
+	XA_STATE(xas, &mapping->i_pages, offset);
+
+	VM_WARN_ON_ONCE(entry.val != new->swap.val);
+	VM_WARN_ON_ONCE(!folio_test_locked(old) || !folio_test_locked(new));
+	VM_WARN_ON_ONCE(!folio_test_swapcache(old) || !folio_test_swapcache(new));
+
+	/* Swap cache still stores N entries instead of a high-order entry */
+	do {
+		WARN_ON_ONCE(xas_store(&xas, new) != old);
+		xas_next(&xas);
+	} while (++offset < end);
+}
+
+/**
  * swap_cache_clear_shadow - Clears a set of shadows in the swap cache.
  * @type: Indicates the swap device.
  * @begin: Beginning offset of the range.
