@@ -32,8 +32,8 @@ was in.
    the transient state of swap out or swap in. The folio data can be in
    the folio or swap file, or both.
 
-3. shadow: The shadow contains the working set information of the swap
-   outed folio. This is the normal state for a swap outed page.
+3. shadow: The shadow contains the working set information of the swapped
+   out folio. This is the normal state for a swapped out page.
 
 Swap Table
 ----------
