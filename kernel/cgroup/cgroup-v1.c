@@ -10,6 +10,7 @@
 #include <linux/sched/task.h>
 #include <linux/magic.h>
 #include <linux/slab.h>
+#include <linux/string.h>
 #include <linux/vmalloc.h>
 #include <linux/delayacct.h>
 #include <linux/pid_namespace.h>
@@ -1133,7 +1134,7 @@ int cgroup1_reconfigure(struct fs_context *fc)
 
 	if (ctx->release_agent) {
 		spin_lock(&release_agent_path_lock);
-		strcpy(root->release_agent_path, ctx->release_agent);
+		strscpy(root->release_agent_path, ctx->release_agent);
 		spin_unlock(&release_agent_path_lock);
 	}
 
@@ -1325,7 +1326,7 @@ static int __init cgroup1_wq_init(void)
 	 * Cap @max_active to 1 too.
 	 */
 	cgroup_pidlist_destroy_wq = alloc_workqueue("cgroup_pidlist_destroy",
-						    0, 1);
+						    WQ_PERCPU, 1);
 	BUG_ON(!cgroup_pidlist_destroy_wq);
 	return 0;
 }
