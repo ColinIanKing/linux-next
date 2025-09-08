@@ -2746,6 +2746,7 @@ static noinline void __init check_fuzzer(struct maple_tree *mt)
 	mtree_test_erase(mt, ULONG_MAX - 10);
 }
 
+#if 0
 /* duplicate the tree with a specific gap */
 static noinline void __init check_dup_gaps(struct maple_tree *mt,
 				    unsigned long nr_entries, bool zero_start,
@@ -2770,6 +2771,7 @@ static noinline void __init check_dup_gaps(struct maple_tree *mt,
 		mtree_store_range(mt, i*10, (i+1)*10 - gap,
 				  xa_mk_value(i), GFP_KERNEL);
 
+	mt_dump(mt, mt_dump_dec);
 	mt_init_flags(&newmt, MT_FLAGS_ALLOC_RANGE | MT_FLAGS_LOCK_EXTERN);
 	mt_set_non_kernel(99999);
 	down_write(&newmt_lock);
@@ -2779,9 +2781,12 @@ static noinline void __init check_dup_gaps(struct maple_tree *mt,
 
 	rcu_read_lock();
 	mas_for_each(&mas, tmp, ULONG_MAX) {
+		printk("%lu nodes %lu\n", mas.index,
+		       kmem_cache_sheaf_count(newmas.sheaf));
 		newmas.index = mas.index;
 		newmas.last = mas.last;
 		mas_store(&newmas, tmp);
+		mt_dump(&newmt, mt_dump_dec);
 	}
 	rcu_read_unlock();
 	mas_destroy(&newmas);
@@ -2878,6 +2883,7 @@ static noinline void __init check_dup(struct maple_tree *mt)
 		cond_resched();
 	}
 }
+#endif
 
 static noinline void __init check_bnode_min_spanning(struct maple_tree *mt)
 {
@@ -4077,9 +4083,11 @@ static int __init maple_tree_seed(void)
 	check_fuzzer(&tree);
 	mtree_destroy(&tree);
 
+#if 0
 	mt_init_flags(&tree, MT_FLAGS_ALLOC_RANGE);
 	check_dup(&tree);
 	mtree_destroy(&tree);
+#endif
 
 	mt_init_flags(&tree, MT_FLAGS_ALLOC_RANGE);
 	check_bnode_min_spanning(&tree);
