@@ -1207,6 +1207,7 @@ copy_pte_range(struct vm_area_struct *dst_vma, struct vm_area_struct *src_vma,
 	       pmd_t *dst_pmd, pmd_t *src_pmd, unsigned long addr,
 	       unsigned long end)
 {
+	lazy_mmu_state_t lazy_mmu_state;
 	struct mm_struct *dst_mm = dst_vma->vm_mm;
 	struct mm_struct *src_mm = src_vma->vm_mm;
 	pte_t *orig_src_pte, *orig_dst_pte;
@@ -1254,7 +1255,7 @@ again:
 	spin_lock_nested(src_ptl, SINGLE_DEPTH_NESTING);
 	orig_src_pte = src_pte;
 	orig_dst_pte = dst_pte;
-	arch_enter_lazy_mmu_mode();
+	lazy_mmu_state = arch_enter_lazy_mmu_mode();
 
 	do {
 		nr = 1;
@@ -1323,7 +1324,7 @@ again:
 	} while (dst_pte += nr, src_pte += nr, addr += PAGE_SIZE * nr,
 		 addr != end);
 
-	arch_leave_lazy_mmu_mode();
+	arch_leave_lazy_mmu_mode(lazy_mmu_state);
 	pte_unmap_unlock(orig_src_pte, src_ptl);
 	add_mm_rss_vec(dst_mm, rss);
 	pte_unmap_unlock(orig_dst_pte, dst_ptl);
@@ -1822,6 +1823,7 @@ static unsigned long zap_pte_range(struct mmu_gather *tlb,
 				unsigned long addr, unsigned long end,
 				struct zap_details *details)
 {
+	lazy_mmu_state_t lazy_mmu_state;
 	bool force_flush = false, force_break = false;
 	struct mm_struct *mm = tlb->mm;
 	int rss[NR_MM_COUNTERS];
@@ -1842,7 +1844,7 @@ retry:
 		return addr;
 
 	flush_tlb_batched_pending(mm);
-	arch_enter_lazy_mmu_mode();
+	lazy_mmu_state = arch_enter_lazy_mmu_mode();
 	do {
 		bool any_skipped = false;
 
@@ -1874,7 +1876,7 @@ retry:
 		direct_reclaim = try_get_and_clear_pmd(mm, pmd, &pmdval);
 
 	add_mm_rss_vec(mm, rss);
-	arch_leave_lazy_mmu_mode();
+	arch_leave_lazy_mmu_mode(lazy_mmu_state);
 
 	/* Do the actual TLB flush before dropping ptl */
 	if (force_flush) {
@@ -2811,6 +2813,7 @@ static int remap_pte_range(struct mm_struct *mm, pmd_t *pmd,
 			unsigned long addr, unsigned long end,
 			unsigned long pfn, pgprot_t prot)
 {
+	lazy_mmu_state_t lazy_mmu_state;
 	pte_t *pte, *mapped_pte;
 	spinlock_t *ptl;
 	int err = 0;
@@ -2818,7 +2821,7 @@ static int remap_pte_range(struct mm_struct *mm, pmd_t *pmd,
 	mapped_pte = pte = pte_alloc_map_lock(mm, pmd, addr, &ptl);
 	if (!pte)
 		return -ENOMEM;
-	arch_enter_lazy_mmu_mode();
+	lazy_mmu_state = arch_enter_lazy_mmu_mode();
 	do {
 		BUG_ON(!pte_none(ptep_get(pte)));
 		if (!pfn_modify_allowed(pfn, prot)) {
@@ -2828,7 +2831,7 @@ static int remap_pte_range(struct mm_struct *mm, pmd_t *pmd,
 		set_pte_at(mm, addr, pte, pte_mkspecial(pfn_pte(pfn, prot)));
 		pfn++;
 	} while (pte++, addr += PAGE_SIZE, addr != end);
-	arch_leave_lazy_mmu_mode();
+	arch_leave_lazy_mmu_mode(lazy_mmu_state);
 	pte_unmap_unlock(mapped_pte, ptl);
 	return err;
 }
@@ -3117,6 +3120,7 @@ static int apply_to_pte_range(struct mm_struct *mm, pmd_t *pmd,
 				     pte_fn_t fn, void *data, bool create,
 				     pgtbl_mod_mask *mask)
 {
+	lazy_mmu_state_t lazy_mmu_state;
 	pte_t *pte, *mapped_pte;
 	int err = 0;
 	spinlock_t *ptl;
@@ -3135,7 +3139,7 @@ static int apply_to_pte_range(struct mm_struct *mm, pmd_t *pmd,
 			return -EINVAL;
 	}
 
-	arch_enter_lazy_mmu_mode();
+	lazy_mmu_state = arch_enter_lazy_mmu_mode();
 
 	if (fn) {
 		do {
@@ -3148,7 +3152,7 @@ static int apply_to_pte_range(struct mm_struct *mm, pmd_t *pmd,
 	}
 	*mask |= PGTBL_PTE_MODIFIED;
 
-	arch_leave_lazy_mmu_mode();
+	arch_leave_lazy_mmu_mode(lazy_mmu_state);
 
 	if (mm != &init_mm)
 		pte_unmap_unlock(mapped_pte, ptl);

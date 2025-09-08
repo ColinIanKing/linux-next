@@ -1076,6 +1076,7 @@ static long move_present_ptes(struct mm_struct *mm,
 			      struct folio **first_src_folio, unsigned long len,
 			      struct anon_vma *src_anon_vma)
 {
+	lazy_mmu_state_t lazy_mmu_state;
 	int err = 0;
 	struct folio *src_folio = *first_src_folio;
 	unsigned long src_start = src_addr;
@@ -1100,7 +1101,7 @@ static long move_present_ptes(struct mm_struct *mm,
 	/* It's safe to drop the reference now as the page-table is holding one. */
 	folio_put(*first_src_folio);
 	*first_src_folio = NULL;
-	arch_enter_lazy_mmu_mode();
+	lazy_mmu_state = arch_enter_lazy_mmu_mode();
 
 	while (true) {
 		orig_src_pte = ptep_get_and_clear(mm, src_addr, src_pte);
@@ -1138,7 +1139,7 @@ static long move_present_ptes(struct mm_struct *mm,
 			break;
 	}
 
-	arch_leave_lazy_mmu_mode();
+	arch_leave_lazy_mmu_mode(lazy_mmu_state);
 	if (src_addr > src_start)
 		flush_tlb_range(src_vma, src_start, src_addr);
 

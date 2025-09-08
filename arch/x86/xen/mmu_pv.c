@@ -2140,7 +2140,7 @@ static void xen_flush_lazy_mmu(void)
 	preempt_disable();
 
 	if (xen_get_lazy_mode() == XEN_LAZY_MMU) {
-		arch_leave_lazy_mmu_mode();
+		arch_leave_lazy_mmu_mode(LAZY_MMU_DEFAULT);
 		arch_enter_lazy_mmu_mode();
 	}
 

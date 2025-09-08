@@ -189,6 +189,7 @@ void hash__tlb_flush(struct mmu_gather *tlb)
  */
 void __flush_hash_table_range(unsigned long start, unsigned long end)
 {
+	lazy_mmu_state_t lazy_mmu_state;
 	int hugepage_shift;
 	unsigned long flags;
 
@@ -205,7 +206,7 @@ void __flush_hash_table_range(unsigned long start, unsigned long end)
 	 * way to do things but is fine for our needs here.
 	 */
 	local_irq_save(flags);
-	arch_enter_lazy_mmu_mode();
+	lazy_mmu_state = arch_enter_lazy_mmu_mode();
 	for (; start < end; start += PAGE_SIZE) {
 		pte_t *ptep = find_init_mm_pte(start, &hugepage_shift);
 		unsigned long pte;
@@ -217,12 +218,13 @@ void __flush_hash_table_range(unsigned long start, unsigned long end)
 			continue;
 		hpte_need_flush(&init_mm, start, ptep, pte, hugepage_shift);
 	}
-	arch_leave_lazy_mmu_mode();
+	arch_leave_lazy_mmu_mode(lazy_mmu_state);
 	local_irq_restore(flags);
 }
 
 void flush_hash_table_pmd_range(struct mm_struct *mm, pmd_t *pmd, unsigned long addr)
 {
+	lazy_mmu_state_t lazy_mmu_state;
 	pte_t *pte;
 	pte_t *start_pte;
 	unsigned long flags;
@@ -237,7 +239,7 @@ void flush_hash_table_pmd_range(struct mm_struct *mm, pmd_t *pmd, unsigned long 
 	 * way to do things but is fine for our needs here.
 	 */
 	local_irq_save(flags);
-	arch_enter_lazy_mmu_mode();
+	lazy_mmu_state = arch_enter_lazy_mmu_mode();
 	start_pte = pte_offset_map(pmd, addr);
 	if (!start_pte)
 		goto out;
@@ -249,6 +251,6 @@ void flush_hash_table_pmd_range(struct mm_struct *mm, pmd_t *pmd, unsigned long 
 	}
 	pte_unmap(start_pte);
 out:
-	arch_leave_lazy_mmu_mode();
+	arch_leave_lazy_mmu_mode(lazy_mmu_state);
 	local_irq_restore(flags);
 }

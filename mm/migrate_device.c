@@ -59,6 +59,7 @@ static int migrate_vma_collect_pmd(pmd_t *pmdp,
 				   unsigned long end,
 				   struct mm_walk *walk)
 {
+	lazy_mmu_state_t lazy_mmu_state;
 	struct migrate_vma *migrate = walk->private;
 	struct folio *fault_folio = migrate->fault_page ?
 		page_folio(migrate->fault_page) : NULL;
@@ -110,7 +111,7 @@ again:
 	ptep = pte_offset_map_lock(mm, pmdp, addr, &ptl);
 	if (!ptep)
 		goto again;
-	arch_enter_lazy_mmu_mode();
+	lazy_mmu_state = arch_enter_lazy_mmu_mode();
 
 	for (; addr < end; addr += PAGE_SIZE, ptep++) {
 		struct dev_pagemap *pgmap;
@@ -287,7 +288,7 @@ next:
 	if (unmapped)
 		flush_tlb_range(walk->vma, start, end);
 
-	arch_leave_lazy_mmu_mode();
+	arch_leave_lazy_mmu_mode(lazy_mmu_state);
 	pte_unmap_unlock(ptep - 1, ptl);
 
 	return 0;

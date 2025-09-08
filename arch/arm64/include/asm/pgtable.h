@@ -81,7 +81,9 @@ static inline void queue_pte_barriers(void)
 }
 
 #define  __HAVE_ARCH_ENTER_LAZY_MMU_MODE
-static inline void arch_enter_lazy_mmu_mode(void)
+typedef int lazy_mmu_state_t;
+
+static inline lazy_mmu_state_t arch_enter_lazy_mmu_mode(void)
 {
 	/*
 	 * lazy_mmu_mode is not supposed to permit nesting. But in practice this
@@ -96,12 +98,14 @@ static inline void arch_enter_lazy_mmu_mode(void)
 	 */
 
 	if (in_interrupt())
-		return;
+		return LAZY_MMU_DEFAULT;
 
 	set_thread_flag(TIF_LAZY_MMU);
+
+	return LAZY_MMU_DEFAULT;
 }
 
-static inline void arch_leave_lazy_mmu_mode(void)
+static inline void arch_leave_lazy_mmu_mode(lazy_mmu_state_t state)
 {
 	if (in_interrupt())
 		return;

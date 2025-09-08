@@ -53,6 +53,7 @@ void subpage_prot_free(struct mm_struct *mm)
 static void hpte_flush_range(struct mm_struct *mm, unsigned long addr,
 			     int npages)
 {
+	lazy_mmu_state_t lazy_mmu_state;
 	pgd_t *pgd;
 	p4d_t *p4d;
 	pud_t *pud;
@@ -73,13 +74,13 @@ static void hpte_flush_range(struct mm_struct *mm, unsigned long addr,
 	pte = pte_offset_map_lock(mm, pmd, addr, &ptl);
 	if (!pte)
 		return;
-	arch_enter_lazy_mmu_mode();
+	lazy_mmu_state = arch_enter_lazy_mmu_mode();
 	for (; npages > 0; --npages) {
 		pte_update(mm, addr, pte, 0, 0, 0);
 		addr += PAGE_SIZE;
 		++pte;
 	}
-	arch_leave_lazy_mmu_mode();
+	arch_leave_lazy_mmu_mode(lazy_mmu_state);
 	pte_unmap_unlock(pte - 1, ptl);
 }
 

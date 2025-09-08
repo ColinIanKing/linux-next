@@ -527,12 +527,14 @@ static inline void arch_end_context_switch(struct task_struct *next)
 }
 
 #define  __HAVE_ARCH_ENTER_LAZY_MMU_MODE
-static inline void arch_enter_lazy_mmu_mode(void)
+static inline lazy_mmu_state_t arch_enter_lazy_mmu_mode(void)
 {
 	PVOP_VCALL0(mmu.lazy_mode.enter);
+
+	return LAZY_MMU_DEFAULT;
 }
 
-static inline void arch_leave_lazy_mmu_mode(void)
+static inline void arch_leave_lazy_mmu_mode(lazy_mmu_state_t state)
 {
 	PVOP_VCALL0(mmu.lazy_mode.leave);
 }

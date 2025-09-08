@@ -1484,6 +1484,9 @@ extern void tlb_gather_mmu(struct mmu_gather *tlb, struct mm_struct *mm);
 extern void tlb_gather_mmu_fullmm(struct mmu_gather *tlb, struct mm_struct *mm);
 extern void tlb_finish_mmu(struct mmu_gather *tlb);
 
+#define LAZY_MMU_DEFAULT	0
+#define LAZY_MMU_NESTED		1
+
 struct vm_fault;
 
 /**

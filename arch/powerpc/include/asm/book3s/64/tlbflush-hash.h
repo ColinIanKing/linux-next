@@ -25,13 +25,14 @@ DECLARE_PER_CPU(struct ppc64_tlb_batch, ppc64_tlb_batch);
 extern void __flush_tlb_pending(struct ppc64_tlb_batch *batch);
 
 #define __HAVE_ARCH_ENTER_LAZY_MMU_MODE
+typedef int lazy_mmu_state_t;
 
-static inline void arch_enter_lazy_mmu_mode(void)
+static inline lazy_mmu_state_t arch_enter_lazy_mmu_mode(void)
 {
 	struct ppc64_tlb_batch *batch;
 
 	if (radix_enabled())
-		return;
+		return LAZY_MMU_DEFAULT;
 	/*
 	 * apply_to_page_range can call us this preempt enabled when
 	 * operating on kernel page tables.
@@ -39,9 +40,11 @@ static inline void arch_enter_lazy_mmu_mode(void)
 	preempt_disable();
 	batch = this_cpu_ptr(&ppc64_tlb_batch);
 	batch->active = 1;
+
+	return LAZY_MMU_DEFAULT;
 }
 
-static inline void arch_leave_lazy_mmu_mode(void)
+static inline void arch_leave_lazy_mmu_mode(lazy_mmu_state_t state)
 {
 	struct ppc64_tlb_batch *batch;
 

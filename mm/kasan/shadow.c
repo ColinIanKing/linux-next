@@ -305,7 +305,7 @@ static int kasan_populate_vmalloc_pte(pte_t *ptep, unsigned long addr,
 	pte_t pte;
 	int index;
 
-	arch_leave_lazy_mmu_mode();
+	arch_leave_lazy_mmu_mode(LAZY_MMU_DEFAULT);
 
 	index = PFN_DOWN(addr - data->start);
 	page = data->pages[index];
@@ -482,7 +482,7 @@ static int kasan_depopulate_vmalloc_pte(pte_t *ptep, unsigned long addr,
 	pte_t pte;
 	int none;
 
-	arch_leave_lazy_mmu_mode();
+	arch_leave_lazy_mmu_mode(LAZY_MMU_DEFAULT);
 
 	spin_lock(&init_mm.page_table_lock);
 	pte = ptep_get(ptep);
