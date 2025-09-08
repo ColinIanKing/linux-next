@@ -164,8 +164,22 @@ extern int root_mountflags;
 
 extern bool early_boot_irqs_disabled;
 
-/*
- * Values used for system_state. Ordering of the states must not be changed
+/**
+ * DOC: General system_states available for drivers
+ *
+ * enum system_states - Values used for system_state.
+ *
+ * * @SYSTEM_BOOTING:	%0, no init needed
+ * * @SYSTEM_SCHEDULING:	system is ready for scheduling; OK to use RCU
+ * * @SYSTEM_FREEING_INITMEM: system is freeing all of initmem; almost running
+ * * @SYSTEM_RUNNING:	system is up and running
+ * * @SYSTEM_HALT:	system entered clean system halt state
+ * * @SYSTEM_POWER_OFF:	system entered shutdown/clean power off state
+ * * @SYSTEM_RESTART:	system entered emergency power off or normal restart
+ * * @SYSTEM_SUSPEND:	system entered suspend or hibernate state
+ *
+ * Note:
+ * Ordering of the states must not be changed
  * as code checks for <, <=, >, >= STATE.
  */
 extern enum system_states {
