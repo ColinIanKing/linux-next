@@ -143,6 +143,7 @@ smb2_check_message(char *buf, unsigned int len, struct TCP_Server_Info *server)
 	int command;
 	__u32 calc_len; /* calculated length */
 	__u64 mid;
+	__u32 req_struct_size;
 
 	/* If server is a channel, select the primary channel */
 	pserver = SERVER_IS_CHAN(server) ? server->primary_server : server;
@@ -209,22 +210,23 @@ smb2_check_message(char *buf, unsigned int len, struct TCP_Server_Info *server)
 	}
 
 	if (smb2_rsp_struct_sizes[command] != pdu->StructureSize2) {
-		if (command != SMB2_OPLOCK_BREAK_HE && (shdr->Status == 0 ||
-		    pdu->StructureSize2 != SMB2_ERROR_STRUCTURE_SIZE2_LE)) {
-			/* error packets have 9 byte structure size */
-			cifs_dbg(VFS, "Invalid response size %u for command %d\n",
-				 le16_to_cpu(pdu->StructureSize2), command);
-			return 1;
-		} else if (command == SMB2_OPLOCK_BREAK_HE
-			   && (shdr->Status == 0)
-			   && (le16_to_cpu(pdu->StructureSize2) != 44)
-			   && (le16_to_cpu(pdu->StructureSize2) != 36)) {
+		if (!(command == SMB2_OPLOCK_BREAK_HE &&
+		    (le16_to_cpu(pdu->StructureSize2) == 44 ||
+		    le16_to_cpu(pdu->StructureSize2) == 36))) {
 			/* special case for SMB2.1 lease break message */
 			cifs_dbg(VFS, "Invalid response size %d for oplock break\n",
 				 le16_to_cpu(pdu->StructureSize2));
 			return 1;
 		}
 	}
+
+	req_struct_size = le16_to_cpu(pdu->StructureSize2) +
+		__SMB2_HEADER_STRUCTURE_SIZE;
+	if (command == SMB2_LOCK_HE)
+		req_struct_size -= sizeof(struct smb2_lock_element);
+
+	if (req_struct_size > len + 1)
+		return 1;
 
 	calc_len = smb2_calc_size(buf);
 
