@@ -898,18 +898,17 @@ static int mt6370_chg_probe(struct platform_device *pdev)
 	ret = devm_add_action_or_reset(dev, mt6370_chg_destroy_attach_lock,
 				       &priv->attach_lock);
 	if (ret)
-		return dev_err_probe(dev, ret, "Failed to init attach lock\n");
+		return ret;
 
 	priv->attach = MT6370_ATTACH_STAT_DETACH;
 
 	priv->wq = create_singlethread_workqueue(dev_name(priv->dev));
 	if (!priv->wq)
-		return dev_err_probe(dev, -ENOMEM,
-				     "Failed to create workqueue\n");
+		return -ENOMEM;
 
 	ret = devm_add_action_or_reset(dev, mt6370_chg_destroy_wq, priv->wq);
 	if (ret)
-		return dev_err_probe(dev, ret, "Failed to init wq\n");
+		return ret;
 
 	ret = devm_work_autocancel(dev, &priv->bc12_work, mt6370_chg_bc12_work_func);
 	if (ret)
