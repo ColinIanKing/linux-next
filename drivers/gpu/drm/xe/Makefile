@@ -140,8 +140,8 @@ xe-y += xe_bb.o \
 	xe_wopcm.o
 
 xe-$(CONFIG_I2C)	+= xe_i2c.o
-xe-$(CONFIG_HMM_MIRROR) += xe_hmm.o
 xe-$(CONFIG_DRM_XE_GPUSVM) += xe_svm.o
+xe-$(CONFIG_DRM_GPUSVM) += xe_userptr.o
 
 # graphics hardware monitoring (HWMON) support
 xe-$(CONFIG_HWMON) += xe_hwmon.o
@@ -325,6 +325,7 @@ ifeq ($(CONFIG_DEBUG_FS),y)
 		xe_gt_stats.o \
 		xe_guc_debugfs.o \
 		xe_huc_debugfs.o \
+		xe_tile_debugfs.o \
 		xe_uc_debugfs.o
 
 	xe-$(CONFIG_PCI_IOV) += xe_gt_sriov_pf_debugfs.o
