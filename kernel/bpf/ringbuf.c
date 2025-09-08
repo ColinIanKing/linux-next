@@ -11,7 +11,6 @@
 #include <linux/kmemleak.h>
 #include <uapi/linux/btf.h>
 #include <linux/btf_ids.h>
-#include <asm/rqspinlock.h>
 
 #define RINGBUF_CREATE_FLAG_MASK (BPF_F_NUMA_NODE)
 
@@ -30,7 +29,7 @@ struct bpf_ringbuf {
 	u64 mask;
 	struct page **pages;
 	int nr_pages;
-	rqspinlock_t spinlock ____cacheline_aligned_in_smp;
+	raw_spinlock_t spinlock ____cacheline_aligned_in_smp;
 	/* For user-space producer ring buffers, an atomic_t busy bit is used
 	 * to synchronize access to the ring buffers in the kernel, rather than
 	 * the spinlock that is used for kernel-producer ring buffers. This is
@@ -174,7 +173,7 @@ static struct bpf_ringbuf *bpf_ringbuf_alloc(size_t data_sz, int numa_node)
 	if (!rb)
 		return NULL;
 
-	raw_res_spin_lock_init(&rb->spinlock);
+	raw_spin_lock_init(&rb->spinlock);
 	atomic_set(&rb->busy, 0);
 	init_waitqueue_head(&rb->waitq);
 	init_irq_work(&rb->work, bpf_ringbuf_notify);
@@ -417,8 +416,12 @@ static void *__bpf_ringbuf_reserve(struct bpf_ringbuf *rb, u64 size)
 
 	cons_pos = smp_load_acquire(&rb->consumer_pos);
 
-	if (raw_res_spin_lock_irqsave(&rb->spinlock, flags))
-		return NULL;
+	if (in_nmi()) {
+		if (!raw_spin_trylock_irqsave(&rb->spinlock, flags))
+			return NULL;
+	} else {
+		raw_spin_lock_irqsave(&rb->spinlock, flags);
+	}
 
 	pend_pos = rb->pending_pos;
 	prod_pos = rb->producer_pos;
@@ -443,7 +446,7 @@ static void *__bpf_ringbuf_reserve(struct bpf_ringbuf *rb, u64 size)
 	 */
 	if (new_prod_pos - cons_pos > rb->mask ||
 	    new_prod_pos - pend_pos > rb->mask) {
-		raw_res_spin_unlock_irqrestore(&rb->spinlock, flags);
+		raw_spin_unlock_irqrestore(&rb->spinlock, flags);
 		return NULL;
 	}
 
@@ -455,7 +458,7 @@ static void *__bpf_ringbuf_reserve(struct bpf_ringbuf *rb, u64 size)
 	/* pairs with consumer's smp_load_acquire() */
 	smp_store_release(&rb->producer_pos, new_prod_pos);
 
-	raw_res_spin_unlock_irqrestore(&rb->spinlock, flags);
+	raw_spin_unlock_irqrestore(&rb->spinlock, flags);
 
 	return (void *)hdr + BPF_RINGBUF_HDR_SZ;
 }
