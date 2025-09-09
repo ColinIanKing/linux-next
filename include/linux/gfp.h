@@ -427,6 +427,7 @@ extern gfp_t vma_thp_gfp_mask(struct vm_area_struct *vma);
 typedef unsigned int __bitwise acr_flags_t;
 #define ACR_FLAGS_NONE ((__force acr_flags_t)0) // ordinary allocation request
 #define ACR_FLAGS_CMA ((__force acr_flags_t)BIT(0)) // allocate for CMA
+#define ACR_FLAGS_FROZEN ((__force acr_flags_t)BIT(1)) // allocate for frozen compound pages
 
 /* The below functions must be run on a range from a single zone. */
 extern int alloc_contig_range_noprof(unsigned long start, unsigned long end,
@@ -437,30 +438,35 @@ extern struct page *alloc_contig_pages_noprof(unsigned long nr_pages, gfp_t gfp_
 					      int nid, nodemask_t *nodemask);
 #define alloc_contig_pages(...)			alloc_hooks(alloc_contig_pages_noprof(__VA_ARGS__))
 
+struct page *alloc_contig_frozen_pages_noprof(unsigned long nr_pages,
+		gfp_t gfp_mask, int nid, nodemask_t *nodemask);
+#define alloc_contig_frozen_pages(...) \
+	alloc_hooks(alloc_contig_frozen_pages_noprof(__VA_ARGS__))
+
 #endif
 void free_contig_range(unsigned long pfn, unsigned long nr_pages);
 
 #ifdef CONFIG_CONTIG_ALLOC
-static inline struct folio *folio_alloc_gigantic_noprof(int order, gfp_t gfp,
-							int nid, nodemask_t *node)
+static inline struct folio *folio_alloc_frozen_gigantic_noprof(int order,
+		gfp_t gfp, int nid, nodemask_t *node)
 {
 	struct page *page;
 
 	if (WARN_ON(!order || !(gfp & __GFP_COMP)))
 		return NULL;
 
-	page = alloc_contig_pages_noprof(1 << order, gfp, nid, node);
+	page = alloc_contig_frozen_pages_noprof(1 << order, gfp, nid, node);
 
 	return page ? page_folio(page) : NULL;
 }
 #else
-static inline struct folio *folio_alloc_gigantic_noprof(int order, gfp_t gfp,
-							int nid, nodemask_t *node)
+static inline struct folio *folio_alloc_frozen_gigantic_noprof(int order,
+		gfp_t gfp, int nid, nodemask_t *node)
 {
 	return NULL;
 }
 #endif
-/* This should be paired with folio_put() rather than free_contig_range(). */
-#define folio_alloc_gigantic(...) alloc_hooks(folio_alloc_gigantic_noprof(__VA_ARGS__))
+/* This must be paired with free_frozen_pages() rather than free_contig_range(). */
+#define folio_alloc_frozen_gigantic(...) alloc_hooks(folio_alloc_frozen_gigantic_noprof(__VA_ARGS__))
 
 #endif /* __LINUX_GFP_H */
