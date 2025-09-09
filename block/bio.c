@@ -1231,13 +1231,6 @@ static int __bio_iov_iter_get_pages(struct bio *bio, struct iov_iter *iter)
 	if (bio->bi_bdev && blk_queue_pci_p2pdma(bio->bi_bdev->bd_disk->queue))
 		extraction_flags |= ITER_ALLOW_P2PDMA;
 
-	/*
-	 * Each segment in the iov is required to be a block size multiple.
-	 * However, we may not be able to get the entire segment if it spans
-	 * more pages than bi_max_vecs allows, so we have to ALIGN_DOWN the
-	 * result to ensure the bio's total size is correct. The remainder of
-	 * the iov data will be picked up in the next bio iteration.
-	 */
 	size = iov_iter_extract_pages(iter, &pages,
 				      UINT_MAX - bio->bi_iter.bi_size,
 				      nr_pages, extraction_flags, &offset);
@@ -1245,18 +1238,6 @@ static int __bio_iov_iter_get_pages(struct bio *bio, struct iov_iter *iter)
 		return size ? size : -EFAULT;
 
 	nr_pages = DIV_ROUND_UP(offset + size, PAGE_SIZE);
-
-	if (bio->bi_bdev) {
-		size_t trim = size & (bdev_logical_block_size(bio->bi_bdev) - 1);
-		iov_iter_revert(iter, trim);
-		size -= trim;
-	}
-
-	if (unlikely(!size)) {
-		ret = -EFAULT;
-		goto out;
-	}
-
 	for (left = size, i = 0; left > 0; left -= len, i += num_pages) {
 		struct page *page = pages[i];
 		struct folio *folio = page_folio(page);
@@ -1301,10 +1282,44 @@ out:
 	return ret;
 }
 
+/*
+ * Aligns the bio size to the len_align_mask, releasing excessive bio vecs that
+ * __bio_iov_iter_get_pages may have inserted, and reverts the trimmed length
+ * for the next iteration.
+ */
+static int bio_iov_iter_align_down(struct bio *bio, struct iov_iter *iter,
+			    unsigned len_align_mask)
+{
+	size_t nbytes = bio->bi_iter.bi_size & len_align_mask;
+
+	if (!nbytes)
+		return 0;
+
+	iov_iter_revert(iter, nbytes);
+	bio->bi_iter.bi_size -= nbytes;
+	do {
+		struct bio_vec *bv = &bio->bi_io_vec[bio->bi_vcnt - 1];
+
+		if (nbytes < bv->bv_len) {
+			bv->bv_len -= nbytes;
+			break;
+		}
+
+		bio_release_page(bio, bv->bv_page);
+		bio->bi_vcnt--;
+		nbytes -= bv->bv_len;
+	} while (nbytes);
+
+	if (!bio->bi_vcnt)
+		return -EFAULT;
+	return 0;
+}
+
 /**
- * bio_iov_iter_get_pages - add user or kernel pages to a bio
+ * bio_iov_iter_get_pages_aligned - add user or kernel pages to a bio
  * @bio: bio to add pages to
  * @iter: iov iterator describing the region to be added
+ * @len_align_mask: the mask to align the total size to, 0 for any length
  *
  * This takes either an iterator pointing to user memory, or one pointing to
  * kernel pages (BVEC iterator). If we're adding user pages, we pin them and
@@ -1321,7 +1336,8 @@ out:
  * MM encounters an error pinning the requested pages, it stops. Error
  * is returned only if 0 pages could be pinned.
  */
-int bio_iov_iter_get_pages(struct bio *bio, struct iov_iter *iter)
+int bio_iov_iter_get_pages_aligned(struct bio *bio, struct iov_iter *iter,
+			   unsigned len_align_mask)
 {
 	int ret = 0;
 
@@ -1340,9 +1356,11 @@ int bio_iov_iter_get_pages(struct bio *bio, struct iov_iter *iter)
 		ret = __bio_iov_iter_get_pages(bio, iter);
 	} while (!ret && iov_iter_count(iter) && !bio_full(bio, 0));
 
-	return bio->bi_vcnt ? 0 : ret;
+	if (bio->bi_vcnt)
+		return bio_iov_iter_align_down(bio, iter, len_align_mask);
+	return ret;
 }
-EXPORT_SYMBOL_GPL(bio_iov_iter_get_pages);
+EXPORT_SYMBOL_GPL(bio_iov_iter_get_pages_aligned);
 
 static void submit_bio_wait_endio(struct bio *bio)
 {
