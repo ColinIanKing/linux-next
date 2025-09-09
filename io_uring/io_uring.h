@@ -11,7 +11,6 @@
 #include "alloc_cache.h"
 #include "io-wq.h"
 #include "slist.h"
-#include "filetable.h"
 #include "opdef.h"
 
 #ifndef CREATE_TRACE_POINTS
@@ -179,16 +178,45 @@ bool io_match_task_safe(struct io_kiocb *head, struct io_uring_task *tctx,
 
 void io_activate_pollwq(struct io_ring_ctx *ctx);
 
+static inline void io_ring_ctx_lock(struct io_ring_ctx *ctx)
+{
+	if (ctx->flags & IORING_SETUP_SINGLE_ISSUER) {
+		WARN_ON_ONCE(current != ctx->submitter_task);
+		return;
+	}
+
+	mutex_lock(&ctx->uring_lock);
+}
+
+static inline void io_ring_ctx_unlock(struct io_ring_ctx *ctx)
+{
+	if (ctx->flags & IORING_SETUP_SINGLE_ISSUER) {
+		WARN_ON_ONCE(current != ctx->submitter_task);
+		return;
+	}
+
+	mutex_unlock(&ctx->uring_lock);
+}
+
+static inline void io_ring_ctx_assert_locked(const struct io_ring_ctx *ctx)
+{
+	if (ctx->flags & IORING_SETUP_SINGLE_ISSUER &&
+	    current == ctx->submitter_task)
+		return;
+
+	lockdep_assert_held(&ctx->uring_lock);
+}
+
 static inline void io_lockdep_assert_cq_locked(struct io_ring_ctx *ctx)
 {
 #if defined(CONFIG_PROVE_LOCKING)
 	lockdep_assert(in_task());
 
 	if (ctx->flags & IORING_SETUP_DEFER_TASKRUN)
-		lockdep_assert_held(&ctx->uring_lock);
+		io_ring_ctx_assert_locked(ctx);
 
 	if (ctx->flags & IORING_SETUP_IOPOLL) {
-		lockdep_assert_held(&ctx->uring_lock);
+		io_ring_ctx_assert_locked(ctx);
 	} else if (!ctx->task_complete) {
 		lockdep_assert_held(&ctx->completion_lock);
 	} else if (ctx->submitter_task) {
@@ -360,7 +388,7 @@ static inline void io_put_file(struct io_kiocb *req)
 static inline void io_ring_submit_unlock(struct io_ring_ctx *ctx,
 					 unsigned issue_flags)
 {
-	lockdep_assert_held(&ctx->uring_lock);
+	io_ring_ctx_assert_locked(ctx);
 	if (unlikely(issue_flags & IO_URING_F_UNLOCKED))
 		mutex_unlock(&ctx->uring_lock);
 }
@@ -376,7 +404,7 @@ static inline void io_ring_submit_lock(struct io_ring_ctx *ctx,
 	 */
 	if (unlikely(issue_flags & IO_URING_F_UNLOCKED))
 		mutex_lock(&ctx->uring_lock);
-	lockdep_assert_held(&ctx->uring_lock);
+	io_ring_ctx_assert_locked(ctx);
 }
 
 static inline void io_commit_cqring(struct io_ring_ctx *ctx)
@@ -488,7 +516,7 @@ static inline bool io_task_work_pending(struct io_ring_ctx *ctx)
 
 static inline void io_tw_lock(struct io_ring_ctx *ctx, io_tw_token_t tw)
 {
-	lockdep_assert_held(&ctx->uring_lock);
+	io_ring_ctx_assert_locked(ctx);
 }
 
 /*
@@ -497,11 +525,10 @@ static inline void io_tw_lock(struct io_ring_ctx *ctx, io_tw_token_t tw)
  * IO_URING_F_COMPLETE_DEFER or inside a tw handler holding the mutex.
  */
 static inline void io_req_complete_defer(struct io_kiocb *req)
-	__must_hold(&req->ctx->uring_lock)
 {
 	struct io_submit_state *state = &req->ctx->submit_state;
 
-	lockdep_assert_held(&req->ctx->uring_lock);
+	io_ring_ctx_assert_locked(req->ctx);
 
 	wq_list_add_tail(&req->comp_list, &state->compl_reqs);
 }

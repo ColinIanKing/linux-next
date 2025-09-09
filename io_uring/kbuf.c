@@ -74,7 +74,7 @@ bool io_kbuf_commit(struct io_kiocb *req,
 static inline struct io_buffer_list *io_buffer_get_list(struct io_ring_ctx *ctx,
 							unsigned int bgid)
 {
-	lockdep_assert_held(&ctx->uring_lock);
+	io_ring_ctx_assert_locked(ctx);
 
 	return xa_load(&ctx->io_bl_xa, bgid);
 }
@@ -345,7 +345,7 @@ int io_buffers_peek(struct io_kiocb *req, struct buf_sel_arg *arg,
 	struct io_buffer_list *bl;
 	int ret;
 
-	lockdep_assert_held(&ctx->uring_lock);
+	io_ring_ctx_assert_locked(ctx);
 
 	bl = io_buffer_get_list(ctx, arg->buf_group);
 	if (unlikely(!bl))
@@ -401,7 +401,7 @@ static int io_remove_buffers_legacy(struct io_ring_ctx *ctx,
 	struct io_buffer *nxt;
 
 	/* protects io_buffers_cache */
-	lockdep_assert_held(&ctx->uring_lock);
+	io_ring_ctx_assert_locked(ctx);
 	WARN_ON_ONCE(bl->flags & IOBL_BUF_RING);
 
 	for (i = 0; i < nbufs && !list_empty(&bl->buf_list); i++) {
