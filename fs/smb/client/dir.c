@@ -684,6 +684,10 @@ cifs_lookup(struct inode *parent_dir_inode, struct dentry *direntry,
 	void *page;
 	int retry_count = 0;
 
+	/* if in mkdir, let create path handle it */
+	if (flags == (LOOKUP_CREATE | LOOKUP_EXCL))
+		return NULL;
+
 	xid = get_xid();
 
 	cifs_dbg(FYI, "parent inode = 0x%p name is: %pd and dentry = 0x%p\n",
