@@ -203,20 +203,20 @@ pub struct Error<State: RegulatorState> {
 /// // A fictictious probe function that obtains a regulator and sets it up.
 /// fn probe(dev: &Device) -> Result<PrivateData> {
 ///     // Obtain a reference to a (fictitious) regulator.
-///     let mut regulator = Regulator::<Dynamic>::get(dev, c_str!("vcc"))?;
+///     let regulator = Regulator::<Dynamic>::get(dev, c_str!("vcc"))?;
 ///
 ///     Ok(PrivateData { regulator })
 /// }
 ///
 /// // A fictictious function that indicates that the device is going to be used.
-/// fn open(dev: &Device, data: &mut PrivateData) -> Result {
+/// fn open(dev: &Device, data: &PrivateData) -> Result {
 ///     // Increase the `enabled` reference count.
 ///     data.regulator.enable()?;
 ///
 ///     Ok(())
 /// }
 ///
-/// fn close(dev: &Device, data: &mut PrivateData) -> Result {
+/// fn close(dev: &Device, data: &PrivateData) -> Result {
 ///     // Decrease the `enabled` reference count.
 ///     data.regulator.disable()?;
 ///
@@ -267,11 +267,8 @@ impl<T: RegulatorState> Regulator<T> {
     pub fn get_voltage(&self) -> Result<Voltage> {
         // SAFETY: Safe as per the type invariants of `Regulator`.
         let voltage = unsafe { bindings::regulator_get_voltage(self.inner.as_ptr()) };
-        if voltage < 0 {
-            Err(kernel::error::Error::from_errno(voltage))
-        } else {
-            Ok(Voltage::from_microvolts(voltage))
-        }
+
+        to_result(voltage).map(|()| Voltage::from_microvolts(voltage))
     }
 
     fn get_internal(dev: &Device, name: &CStr) -> Result<Regulator<T>> {
@@ -289,12 +286,12 @@ impl<T: RegulatorState> Regulator<T> {
         })
     }
 
-    fn enable_internal(&mut self) -> Result {
+    fn enable_internal(&self) -> Result {
         // SAFETY: Safe as per the type invariants of `Regulator`.
         to_result(unsafe { bindings::regulator_enable(self.inner.as_ptr()) })
     }
 
-    fn disable_internal(&mut self) -> Result {
+    fn disable_internal(&self) -> Result {
         // SAFETY: Safe as per the type invariants of `Regulator`.
         to_result(unsafe { bindings::regulator_disable(self.inner.as_ptr()) })
     }
@@ -310,7 +307,7 @@ impl Regulator<Disabled> {
     pub fn try_into_enabled(self) -> Result<Regulator<Enabled>, Error<Disabled>> {
         // We will be transferring the ownership of our `regulator_get()` count to
         // `Regulator<Enabled>`.
-        let mut regulator = ManuallyDrop::new(self);
+        let regulator = ManuallyDrop::new(self);
 
         regulator
             .enable_internal()
@@ -339,7 +336,7 @@ impl Regulator<Enabled> {
     pub fn try_into_disabled(self) -> Result<Regulator<Disabled>, Error<Enabled>> {
         // We will be transferring the ownership of our `regulator_get()` count
         // to `Regulator<Disabled>`.
-        let mut regulator = ManuallyDrop::new(self);
+        let regulator = ManuallyDrop::new(self);
 
         regulator
             .disable_internal()
@@ -366,12 +363,12 @@ impl Regulator<Dynamic> {
     }
 
     /// Increases the `enabled` reference count.
-    pub fn enable(&mut self) -> Result {
+    pub fn enable(&self) -> Result {
         self.enable_internal()
     }
 
     /// Decreases the `enabled` reference count.
-    pub fn disable(&mut self) -> Result {
+    pub fn disable(&self) -> Result {
         self.disable_internal()
     }
 }
@@ -397,6 +394,14 @@ impl<T: RegulatorState> Drop for Regulator<T> {
         unsafe { bindings::regulator_put(self.inner.as_ptr()) };
     }
 }
+
+// SAFETY: It is safe to send a `Regulator<T>` across threads. In particular, a
+// Regulator<T> can be dropped from any thread.
+unsafe impl<T: RegulatorState> Send for Regulator<T> {}
+
+// SAFETY: It is safe to send a &Regulator<T> across threads because the C side
+// handles its own locking.
+unsafe impl<T: RegulatorState> Sync for Regulator<T> {}
 
 /// A voltage.
 ///
