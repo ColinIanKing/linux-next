@@ -48,6 +48,10 @@ properties:
       - nvidia,tegra234-dce-fabric
       - nvidia,tegra234-rce-fabric
       - nvidia,tegra234-sce-fabric
+      - nvidia,tegra264-sys-cbb-fabric
+      - nvidia,tegra264-top0-cbb-fabric
+      - nvidia,tegra264-uphy0-cbb-fabric
+      - nvidia,tegra264-vision-cbb-fabric
 
   reg:
     maxItems: 1
