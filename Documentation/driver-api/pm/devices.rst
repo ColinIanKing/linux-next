@@ -241,6 +241,14 @@ before reactivating its class I/O queues.
 More power-aware drivers might prepare the devices for triggering system wakeup
 events.
 
+System states available for drivers
+-----------------------------------
+
+These system states are available for drivers to help them determine how to
+handle state transitions.
+
+.. kernel-doc:: include/linux/kernel.h
+   :doc: General system_states available for drivers
 
 Call Sequence Guarantees
 ------------------------
