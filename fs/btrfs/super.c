@@ -133,9 +133,8 @@ enum {
 	Opt_enospc_debug,
 #ifdef CONFIG_BTRFS_DEBUG
 	Opt_fragment, Opt_fragment_data, Opt_fragment_metadata, Opt_fragment_all,
-#endif
-#ifdef CONFIG_BTRFS_FS_REF_VERIFY
 	Opt_ref_verify,
+	Opt_ref_tracker,
 #endif
 	Opt_err,
 };
@@ -257,8 +256,7 @@ static const struct fs_parameter_spec btrfs_fs_parameters[] = {
 	fsparam_flag_no("enospc_debug", Opt_enospc_debug),
 #ifdef CONFIG_BTRFS_DEBUG
 	fsparam_enum("fragment", Opt_fragment, btrfs_parameter_fragment),
-#endif
-#ifdef CONFIG_BTRFS_FS_REF_VERIFY
+	fsparam_flag("ref_tracker", Opt_ref_tracker),
 	fsparam_flag("ref_verify", Opt_ref_verify),
 #endif
 	{}
@@ -635,10 +633,11 @@ static int btrfs_parse_param(struct fs_context *fc, struct fs_parameter *param)
 			return -EINVAL;
 		}
 		break;
-#endif
-#ifdef CONFIG_BTRFS_FS_REF_VERIFY
 	case Opt_ref_verify:
 		btrfs_set_opt(ctx->mount_opt, REF_VERIFY);
+		break;
+	case Opt_ref_tracker:
+		btrfs_set_opt(ctx->mount_opt, REF_TRACKER);
 		break;
 #endif
 	default:
@@ -1145,6 +1144,8 @@ static int btrfs_show_options(struct seq_file *seq, struct dentry *dentry)
 #endif
 	if (btrfs_test_opt(info, REF_VERIFY))
 		seq_puts(seq, ",ref_verify");
+	if (btrfs_test_opt(info, REF_TRACKER))
+		seq_puts(seq, ",ref_tracker");
 	seq_printf(seq, ",subvolid=%llu", btrfs_root_id(BTRFS_I(d_inode(dentry))->root));
 	subvol_name = btrfs_get_subvol_name_from_objectid(info,
 			btrfs_root_id(BTRFS_I(d_inode(dentry))->root));
@@ -1271,7 +1272,7 @@ static inline void btrfs_remount_cleanup(struct btrfs_fs_info *fs_info,
 	const bool cache_opt = btrfs_test_opt(fs_info, SPACE_CACHE);
 
 	/*
-	 * We need to cleanup all defragable inodes if the autodefragment is
+	 * We need to cleanup all defraggable inodes if the autodefragment is
 	 * close or the filesystem is read only.
 	 */
 	if (btrfs_raw_test_opt(old_opts, AUTO_DEFRAG) &&
@@ -2263,10 +2264,7 @@ static long btrfs_control_ioctl(struct file *file, unsigned int cmd,
 		device = btrfs_scan_one_device(vol->name, false);
 		if (IS_ERR_OR_NULL(device)) {
 			mutex_unlock(&uuid_mutex);
-			if (IS_ERR(device))
-				ret = PTR_ERR(device);
-			else
-				ret = 0;
+			ret = PTR_ERR_OR_ZERO(device);
 			break;
 		}
 		ret = !(device->fs_devices->num_devices ==
@@ -2474,9 +2472,6 @@ static int __init btrfs_print_mod_info(void)
 #endif
 #ifdef CONFIG_BTRFS_ASSERT
 			", assert=on"
-#endif
-#ifdef CONFIG_BTRFS_FS_REF_VERIFY
-			", ref-verify=on"
 #endif
 #ifdef CONFIG_BLK_DEV_ZONED
 			", zoned=yes"
