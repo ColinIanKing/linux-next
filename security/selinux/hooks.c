@@ -93,6 +93,7 @@
 #include <linux/fanotify.h>
 #include <linux/io_uring/cmd.h>
 #include <uapi/linux/lsm.h>
+#include <linux/memfd.h>
 
 #include "avc.h"
 #include "objsec.h"
@@ -476,7 +477,9 @@ static int selinux_is_genfs_special_handling(struct super_block *sb)
 		!strcmp(sb->s_type->name, "rootfs") ||
 		(selinux_policycap_cgroupseclabel() &&
 		 (!strcmp(sb->s_type->name, "cgroup") ||
-		  !strcmp(sb->s_type->name, "cgroup2")));
+		  !strcmp(sb->s_type->name, "cgroup2"))) ||
+		(selinux_policycap_functionfs_seclabel() &&
+		 !strcmp(sb->s_type->name, "functionfs"));
 }
 
 static int selinux_is_sblabel_mnt(struct super_block *sb)
@@ -741,7 +744,9 @@ static int selinux_set_mnt_opts(struct super_block *sb,
 	    !strcmp(sb->s_type->name, "binder") ||
 	    !strcmp(sb->s_type->name, "bpf") ||
 	    !strcmp(sb->s_type->name, "pstore") ||
-	    !strcmp(sb->s_type->name, "securityfs"))
+	    !strcmp(sb->s_type->name, "securityfs") ||
+	    (selinux_policycap_functionfs_seclabel() &&
+	     !strcmp(sb->s_type->name, "functionfs")))
 		sbsec->flags |= SE_SBGENFS;
 
 	if (!strcmp(sb->s_type->name, "sysfs") ||
@@ -2315,6 +2320,9 @@ static int selinux_bprm_creds_for_exec(struct linux_binprm *bprm)
 	new_tsec = selinux_cred(bprm->cred);
 	isec = inode_security(inode);
 
+	if (isec->sclass != SECCLASS_FILE && isec->sclass != SECCLASS_MEMFD_FILE)
+		return -EPERM;
+
 	/* Default to the current task SID. */
 	new_tsec->sid = old_tsec->sid;
 	new_tsec->osid = old_tsec->sid;
@@ -2367,8 +2375,8 @@ static int selinux_bprm_creds_for_exec(struct linux_binprm *bprm)
 	ad.u.file = bprm->file;
 
 	if (new_tsec->sid == old_tsec->sid) {
-		rc = avc_has_perm(old_tsec->sid, isec->sid,
-				  SECCLASS_FILE, FILE__EXECUTE_NO_TRANS, &ad);
+		rc = avc_has_perm(old_tsec->sid, isec->sid, isec->sclass,
+				  FILE__EXECUTE_NO_TRANS, &ad);
 		if (rc)
 			return rc;
 	} else {
@@ -2378,8 +2386,8 @@ static int selinux_bprm_creds_for_exec(struct linux_binprm *bprm)
 		if (rc)
 			return rc;
 
-		rc = avc_has_perm(new_tsec->sid, isec->sid,
-				  SECCLASS_FILE, FILE__ENTRYPOINT, &ad);
+		rc = avc_has_perm(new_tsec->sid, isec->sid, isec->sclass,
+				  FILE__ENTRYPOINT, &ad);
 		if (rc)
 			return rc;
 
@@ -2974,9 +2982,17 @@ static int selinux_inode_init_security_anon(struct inode *inode,
 	struct common_audit_data ad;
 	struct inode_security_struct *isec;
 	int rc;
+	bool is_memfd = false;
 
 	if (unlikely(!selinux_initialized()))
 		return 0;
+
+	if (name != NULL && name->name != NULL &&
+	    !strcmp(name->name, MEMFD_ANON_NAME)) {
+		if (!selinux_policycap_memfd_class())
+			return 0;
+		is_memfd = true;
+	}
 
 	isec = selinux_inode(inode);
 
@@ -2997,7 +3013,10 @@ static int selinux_inode_init_security_anon(struct inode *inode,
 		isec->sclass = context_isec->sclass;
 		isec->sid = context_isec->sid;
 	} else {
-		isec->sclass = SECCLASS_ANON_INODE;
+		if (is_memfd)
+			isec->sclass = SECCLASS_MEMFD_FILE;
+		else
+			isec->sclass = SECCLASS_ANON_INODE;
 		rc = security_transition_sid(
 			sid, sid,
 			isec->sclass, name, &isec->sid);
@@ -5885,7 +5904,7 @@ static unsigned int selinux_ip_output(void *priv, struct sk_buff *skb,
 	/* we do this in the LOCAL_OUT path and not the POST_ROUTING path
 	 * because we want to make sure we apply the necessary labeling
 	 * before IPsec is applied so we can leverage AH protection */
-	sk = sk_to_full_sk(skb->sk);
+	sk = skb_to_full_sk(skb);
 	if (sk) {
 		struct sk_security_struct *sksec;
 
