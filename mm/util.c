@@ -1155,15 +1155,18 @@ int __compat_vma_mmap_prepare(const struct file_operations *f_op,
 		.vm_file = vma->vm_file,
 		.vm_flags = vma->vm_flags,
 		.page_prot = vma->vm_page_prot,
+
+		.action.type = MMAP_NOTHING, /* Default */
 	};
 	int err;
 
 	err = f_op->mmap_prepare(&desc);
 	if (err)
 		return err;
-	set_vma_from_desc(vma, &desc);
 
-	return 0;
+	mmap_action_prepare(&desc.action, &desc);
+	set_vma_from_desc(vma, &desc);
+	return mmap_action_complete(&desc.action, vma);
 }
 EXPORT_SYMBOL(__compat_vma_mmap_prepare);
 
@@ -1278,6 +1281,149 @@ again:
 		ps->idx = 0;
 	}
 }
+
+struct page **mmap_action_mixedmap_pages(struct mmap_action *action,
+		unsigned long addr, unsigned long num_pages)
+{
+	struct page **pages;
+
+	pages = kmalloc_array(num_pages, sizeof(struct page *), GFP_KERNEL);
+	if (!pages)
+		return NULL;
+
+	action->type = MMAP_INSERT_MIXED_PAGES;
+
+	action->mixedmap_pages.addr = addr;
+	action->mixedmap_pages.num_pages = num_pages;
+	action->mixedmap_pages.kfree_pages = true;
+	action->mixedmap_pages.pages = pages;
+
+	return pages;
+}
+EXPORT_SYMBOL(mmap_action_mixedmap_pages);
+
+/**
+ * mmap_action_prepare - Perform preparatory setup for an VMA descriptor
+ * action which need to be performed.
+ * @desc: The VMA descriptor to prepare for @action.
+ * @action: The action to perform.
+ *
+ * Other than internal mm use, this is intended to be used by mmap_prepare code
+ * which specifies a custom action hook and needs to prepare for another action
+ * it wishes to perform.
+ */
+void mmap_action_prepare(struct mmap_action *action,
+			     struct vm_area_desc *desc)
+{
+	switch (action->type) {
+	case MMAP_NOTHING:
+	case MMAP_CUSTOM_ACTION:
+		break;
+	case MMAP_REMAP_PFN:
+		remap_pfn_range_prepare(desc, action->remap.pfn);
+		break;
+	case MMAP_INSERT_MIXED:
+	case MMAP_INSERT_MIXED_PAGES:
+		desc->vm_flags |= VM_MIXEDMAP;
+		break;
+	}
+}
+EXPORT_SYMBOL(mmap_action_prepare);
+
+/**
+ * mmap_action_complete - Execute VMA descriptor action.
+ * @action: The action to perform.
+ * @vma: The VMA to perform the action upon.
+ *
+ * Similar to mmap_action_prepare(), other than internal mm usage this is
+ * intended for mmap_prepare users who implement a custom hook - with this
+ * function being called from the custom hook itself.
+ *
+ * Return: 0 on success, or error, at which point the VMA will be unmapped.
+ */
+int mmap_action_complete(struct mmap_action *action,
+			     struct vm_area_struct *vma)
+{
+	int err = 0;
+
+	switch (action->type) {
+	case MMAP_NOTHING:
+		break;
+	case MMAP_REMAP_PFN:
+		VM_WARN_ON_ONCE((vma->vm_flags & VM_REMAP_FLAGS) !=
+				VM_REMAP_FLAGS);
+
+		err = remap_pfn_range_complete(vma, action->remap.addr,
+				action->remap.pfn, action->remap.size,
+				action->remap.pgprot);
+
+		break;
+	case MMAP_INSERT_MIXED:
+	{
+		unsigned long pgnum = 0;
+		unsigned long pfn = action->mixedmap.pfn;
+		unsigned long addr = action->mixedmap.addr;
+		unsigned long vaddr = vma->vm_start;
+
+		VM_WARN_ON_ONCE(!(vma->vm_flags & VM_MIXEDMAP));
+
+		for (; pgnum < action->mixedmap.num_pages;
+		     pgnum++, pfn++, addr += PAGE_SIZE, vaddr += PAGE_SIZE) {
+			vm_fault_t vmf;
+
+			vmf = vmf_insert_mixed(vma, vaddr, addr);
+			if (vmf & VM_FAULT_ERROR) {
+				err = vm_fault_to_errno(vmf, 0);
+				break;
+			}
+		}
+
+		break;
+	}
+	case MMAP_INSERT_MIXED_PAGES:
+	{
+		struct page **pages = action->mixedmap_pages.pages;
+		unsigned long nr_pages = action->mixedmap_pages.num_pages;
+
+		VM_WARN_ON_ONCE(!(vma->vm_flags & VM_MIXEDMAP));
+
+		err = vm_insert_pages(vma, action->mixedmap_pages.addr,
+				pages, &nr_pages);
+		if (action->mixedmap_pages.kfree_pages)
+			kfree(pages);
+		break;
+	}
+	case MMAP_CUSTOM_ACTION:
+		err = action->custom.action_hook(vma);
+		break;
+	}
+
+	/*
+	 * If an error occurs, unmap the VMA altogether and return an error. We
+	 * only clear the newly allocated VMA, since this function is only
+	 * invoked if we do NOT merge, so we only clean up the VMA we created.
+	 */
+	if (err) {
+		const size_t len = vma_pages(vma) << PAGE_SHIFT;
+
+		do_munmap(current->mm, vma->vm_start, len, NULL);
+
+		if (action->error_hook) {
+			/* We may want to filter the error. */
+			err = action->error_hook(err);
+
+			/* The caller should not clear the error. */
+			VM_WARN_ON_ONCE(!err);
+		}
+		return err;
+	}
+
+	if (action->success_hook)
+		err = action->success_hook(vma);
+
+	return 0;
+}
+EXPORT_SYMBOL(mmap_action_complete);
 
 #ifdef CONFIG_MMU
 /**
