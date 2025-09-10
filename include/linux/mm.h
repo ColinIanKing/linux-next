@@ -3597,6 +3597,36 @@ static inline unsigned long vma_desc_pages(struct vm_area_desc *desc)
 	return vma_desc_size(desc) >> PAGE_SHIFT;
 }
 
+static inline void mmap_action_remap(struct mmap_action *action,
+		unsigned long addr, unsigned long pfn, unsigned long size,
+		pgprot_t pgprot)
+{
+	action->type = MMAP_REMAP_PFN;
+
+	action->remap.addr = addr;
+	action->remap.pfn = pfn;
+	action->remap.size = size;
+	action->remap.pgprot = pgprot;
+}
+
+static inline void mmap_action_mixedmap(struct mmap_action *action,
+		unsigned long addr, unsigned long pfn, unsigned long num_pages)
+{
+	action->type = MMAP_INSERT_MIXED;
+
+	action->mixedmap.addr = addr;
+	action->mixedmap.pfn = pfn;
+	action->mixedmap.num_pages = num_pages;
+}
+
+struct page **mmap_action_mixedmap_pages(struct mmap_action *action,
+		unsigned long addr, unsigned long num_pages);
+
+void mmap_action_prepare(struct mmap_action *action,
+			     struct vm_area_desc *desc);
+int mmap_action_complete(struct mmap_action *action,
+			     struct vm_area_struct *vma);
+
 /* Look up the first VMA which exactly match the interval vm_start ... vm_end */
 static inline struct vm_area_struct *find_exact_vma(struct mm_struct *mm,
 				unsigned long vm_start, unsigned long vm_end)
