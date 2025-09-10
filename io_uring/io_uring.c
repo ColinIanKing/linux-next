@@ -79,6 +79,7 @@
 
 #include "io-wq.h"
 
+#include "filetable.h"
 #include "io_uring.h"
 #include "opdef.h"
 #include "refs.h"
@@ -107,9 +108,6 @@
 
 #define SQE_COMMON_FLAGS (IOSQE_FIXED_FILE | IOSQE_IO_LINK | \
 			  IOSQE_IO_HARDLINK | IOSQE_ASYNC)
-
-#define SQE_VALID_FLAGS	(SQE_COMMON_FLAGS | IOSQE_BUFFER_SELECT | \
-			IOSQE_IO_DRAIN | IOSQE_CQE_SKIP_SUCCESS)
 
 #define IO_REQ_LINK_FLAGS (REQ_F_LINK | REQ_F_HARDLINK)
 
@@ -179,6 +177,26 @@ static const struct ctl_table kernel_io_uring_disabled_table[] = {
 };
 #endif
 
+static void io_poison_cached_req(struct io_kiocb *req)
+{
+	req->ctx = IO_URING_PTR_POISON;
+	req->tctx = IO_URING_PTR_POISON;
+	req->file = IO_URING_PTR_POISON;
+	req->creds = IO_URING_PTR_POISON;
+	req->io_task_work.func = IO_URING_PTR_POISON;
+	req->apoll = IO_URING_PTR_POISON;
+}
+
+static void io_poison_req(struct io_kiocb *req)
+{
+	io_poison_cached_req(req);
+	req->async_data = IO_URING_PTR_POISON;
+	req->kbuf = IO_URING_PTR_POISON;
+	req->comp_list.next = IO_URING_PTR_POISON;
+	req->file_node = IO_URING_PTR_POISON;
+	req->link = IO_URING_PTR_POISON;
+}
+
 static inline unsigned int __io_cqring_events(struct io_ring_ctx *ctx)
 {
 	return ctx->cached_cq_tail - READ_ONCE(ctx->rings->cq.head);
@@ -235,6 +253,8 @@ static inline void req_fail_link_node(struct io_kiocb *req, int res)
 
 static inline void io_req_add_to_cache(struct io_kiocb *req, struct io_ring_ctx *ctx)
 {
+	if (IS_ENABLED(CONFIG_KASAN))
+		io_poison_cached_req(req);
 	wq_stack_add_head(&req->comp_list, &ctx->submit_state.free_list);
 }
 
@@ -533,7 +553,7 @@ static __cold noinline void io_queue_deferred(struct io_ring_ctx *ctx)
 {
 	bool drain_seen = false, first = true;
 
-	lockdep_assert_held(&ctx->uring_lock);
+	io_ring_ctx_assert_locked(ctx);
 	__io_req_caches_free(ctx);
 
 	while (!list_empty(&ctx->defer_list)) {
@@ -598,27 +618,29 @@ static void io_cq_unlock_post(struct io_ring_ctx *ctx)
 
 static void __io_cqring_overflow_flush(struct io_ring_ctx *ctx, bool dying)
 {
-	size_t cqe_size = sizeof(struct io_uring_cqe);
-
 	lockdep_assert_held(&ctx->uring_lock);
 
 	/* don't abort if we're dying, entries must get freed */
 	if (!dying && __io_cqring_events(ctx) == ctx->cq_entries)
 		return;
 
-	if (ctx->flags & IORING_SETUP_CQE32)
-		cqe_size <<= 1;
-
 	io_cq_lock(ctx);
 	while (!list_empty(&ctx->cq_overflow_list)) {
+		size_t cqe_size = sizeof(struct io_uring_cqe);
 		struct io_uring_cqe *cqe;
 		struct io_overflow_cqe *ocqe;
+		bool is_cqe32 = false;
 
 		ocqe = list_first_entry(&ctx->cq_overflow_list,
 					struct io_overflow_cqe, list);
+		if (ocqe->cqe.flags & IORING_CQE_F_32 ||
+		    ctx->flags & IORING_SETUP_CQE32) {
+			is_cqe32 = true;
+			cqe_size <<= 1;
+		}
 
 		if (!dying) {
-			if (!io_get_cqe_overflow(ctx, &cqe, true))
+			if (!io_get_cqe_overflow(ctx, &cqe, true, is_cqe32))
 				break;
 			memcpy(cqe, &ocqe->cqe, cqe_size);
 		}
@@ -730,10 +752,12 @@ static struct io_overflow_cqe *io_alloc_ocqe(struct io_ring_ctx *ctx,
 {
 	struct io_overflow_cqe *ocqe;
 	size_t ocq_size = sizeof(struct io_overflow_cqe);
-	bool is_cqe32 = (ctx->flags & IORING_SETUP_CQE32);
+	bool is_cqe32 = false;
 
-	if (is_cqe32)
-		ocq_size += sizeof(struct io_uring_cqe);
+	if (cqe->flags & IORING_CQE_F_32 || ctx->flags & IORING_SETUP_CQE32) {
+		is_cqe32 = true;
+		ocq_size <<= 1;
+	}
 
 	ocqe = kzalloc(ocq_size, gfp | __GFP_ACCOUNT);
 	trace_io_uring_cqe_overflow(ctx, cqe->user_data, cqe->res, cqe->flags, ocqe);
@@ -752,11 +776,29 @@ static struct io_overflow_cqe *io_alloc_ocqe(struct io_ring_ctx *ctx,
 }
 
 /*
+ * Fill an empty dummy CQE, in case alignment is off for posting a 32b CQE
+ * because the ring is a single 16b entry away from wrapping.
+ */
+static bool io_fill_nop_cqe(struct io_ring_ctx *ctx, unsigned int off)
+{
+	if (__io_cqring_events(ctx) < ctx->cq_entries) {
+		struct io_uring_cqe *cqe = &ctx->rings->cqes[off];
+
+		cqe->user_data = 0;
+		cqe->res = 0;
+		cqe->flags = IORING_CQE_F_SKIP;
+		ctx->cached_cq_tail++;
+		return true;
+	}
+	return false;
+}
+
+/*
  * writes to the cq entry need to come after reading head; the
  * control dependency is enough as we're using WRITE_ONCE to
  * fill the cq entry
  */
-bool io_cqe_cache_refill(struct io_ring_ctx *ctx, bool overflow)
+bool io_cqe_cache_refill(struct io_ring_ctx *ctx, bool overflow, bool cqe32)
 {
 	struct io_rings *rings = ctx->rings;
 	unsigned int off = ctx->cached_cq_tail & (ctx->cq_entries - 1);
@@ -770,12 +812,22 @@ bool io_cqe_cache_refill(struct io_ring_ctx *ctx, bool overflow)
 	if (!overflow && (ctx->check_cq & BIT(IO_CHECK_CQ_OVERFLOW_BIT)))
 		return false;
 
+	/*
+	 * Post dummy CQE if a 32b CQE is needed and there's only room for a
+	 * 16b CQE before the ring wraps.
+	 */
+	if (cqe32 && off + 1 == ctx->cq_entries) {
+		if (!io_fill_nop_cqe(ctx, off))
+			return false;
+		off = 0;
+	}
+
 	/* userspace may cheat modifying the tail, be safe and do min */
 	queued = min(__io_cqring_events(ctx), ctx->cq_entries);
 	free = ctx->cq_entries - queued;
 	/* we need a contiguous range, limit based on the current array offset */
 	len = min(free, ctx->cq_entries - off);
-	if (!len)
+	if (len < (cqe32 + 1))
 		return false;
 
 	if (ctx->flags & IORING_SETUP_CQE32) {
@@ -793,9 +845,9 @@ static bool io_fill_cqe_aux32(struct io_ring_ctx *ctx,
 {
 	struct io_uring_cqe *cqe;
 
-	if (WARN_ON_ONCE(!(ctx->flags & IORING_SETUP_CQE32)))
+	if (WARN_ON_ONCE(!(ctx->flags & (IORING_SETUP_CQE32|IORING_SETUP_CQE_MIXED))))
 		return false;
-	if (unlikely(!io_get_cqe(ctx, &cqe)))
+	if (unlikely(!io_get_cqe(ctx, &cqe, true)))
 		return false;
 
 	memcpy(cqe, src_cqe, 2 * sizeof(*cqe));
@@ -806,14 +858,15 @@ static bool io_fill_cqe_aux32(struct io_ring_ctx *ctx,
 static bool io_fill_cqe_aux(struct io_ring_ctx *ctx, u64 user_data, s32 res,
 			      u32 cflags)
 {
+	bool cqe32 = cflags & IORING_CQE_F_32;
 	struct io_uring_cqe *cqe;
 
-	if (likely(io_get_cqe(ctx, &cqe))) {
+	if (likely(io_get_cqe(ctx, &cqe, cqe32))) {
 		WRITE_ONCE(cqe->user_data, user_data);
 		WRITE_ONCE(cqe->res, res);
 		WRITE_ONCE(cqe->flags, cflags);
 
-		if (ctx->flags & IORING_SETUP_CQE32) {
+		if (cqe32) {
 			WRITE_ONCE(cqe->big_cqe[0], 0);
 			WRITE_ONCE(cqe->big_cqe[1], 0);
 		}
@@ -871,7 +924,7 @@ bool io_post_aux_cqe(struct io_ring_ctx *ctx, u64 user_data, s32 res, u32 cflags
  */
 void io_add_aux_cqe(struct io_ring_ctx *ctx, u64 user_data, s32 res, u32 cflags)
 {
-	lockdep_assert_held(&ctx->uring_lock);
+	io_ring_ctx_assert_locked(ctx);
 	lockdep_assert(ctx->lockless_cq);
 
 	if (!io_fill_cqe_aux(ctx, user_data, res, cflags)) {
@@ -900,7 +953,7 @@ bool io_req_post_cqe(struct io_kiocb *req, s32 res, u32 cflags)
 		__io_submit_flush_completions(ctx);
 
 	lockdep_assert(!io_wq_current_is_worker());
-	lockdep_assert_held(&ctx->uring_lock);
+	io_ring_ctx_assert_locked(ctx);
 
 	if (!ctx->lockless_cq) {
 		spin_lock(&ctx->completion_lock);
@@ -924,7 +977,7 @@ bool io_req_post_cqe32(struct io_kiocb *req, struct io_uring_cqe cqe[2])
 	bool posted;
 
 	lockdep_assert(!io_wq_current_is_worker());
-	lockdep_assert_held(&ctx->uring_lock);
+	io_ring_ctx_assert_locked(ctx);
 
 	cqe[0].user_data = req->cqe.user_data;
 	if (!ctx->lockless_cq) {
@@ -978,14 +1031,13 @@ defer_complete:
 }
 
 void io_req_defer_failed(struct io_kiocb *req, s32 res)
-	__must_hold(&ctx->uring_lock)
 {
 	const struct io_cold_def *def = &io_cold_defs[req->opcode];
 
-	lockdep_assert_held(&req->ctx->uring_lock);
+	io_ring_ctx_assert_locked(req->ctx);
 
 	req_set_fail(req);
-	io_req_set_res(req, res, io_put_kbuf(req, res, IO_URING_F_UNLOCKED));
+	io_req_set_res(req, res, io_put_kbuf(req, res, NULL));
 	if (def->fail)
 		def->fail(req);
 	io_req_complete_defer(req);
@@ -998,11 +1050,12 @@ void io_req_defer_failed(struct io_kiocb *req, s32 res)
  * and with extra caution to not get a request that is still worked on.
  */
 __cold bool __io_alloc_req_refill(struct io_ring_ctx *ctx)
-	__must_hold(&ctx->uring_lock)
 {
 	gfp_t gfp = GFP_KERNEL | __GFP_NOWARN | __GFP_ZERO;
 	void *reqs[IO_REQ_ALLOC_BATCH];
 	int ret;
+
+	io_ring_ctx_assert_locked(ctx);
 
 	ret = kmem_cache_alloc_bulk(req_cachep, gfp, ARRAY_SIZE(reqs), reqs);
 
@@ -1072,7 +1125,7 @@ static void ctx_flush_and_put(struct io_ring_ctx *ctx, io_tw_token_t tw)
 		atomic_andnot(IORING_SQ_TASKRUN, &ctx->rings->sq_flags);
 
 	io_submit_flush_completions(ctx);
-	mutex_unlock(&ctx->uring_lock);
+	io_ring_ctx_unlock(ctx);
 	percpu_ref_put(&ctx->refs);
 }
 
@@ -1096,7 +1149,7 @@ struct llist_node *io_handle_tw_list(struct llist_node *node,
 		if (req->ctx != ctx) {
 			ctx_flush_and_put(ctx, ts);
 			ctx = req->ctx;
-			mutex_lock(&ctx->uring_lock);
+			io_ring_ctx_lock(ctx);
 			percpu_ref_get(&ctx->refs);
 		}
 		INDIRECT_CALL_2(req->io_task_work.func,
@@ -1448,8 +1501,9 @@ static inline void io_req_put_rsrc_nodes(struct io_kiocb *req)
 
 static void io_free_batch_list(struct io_ring_ctx *ctx,
 			       struct io_wq_work_node *node)
-	__must_hold(&ctx->uring_lock)
 {
+	io_ring_ctx_assert_locked(ctx);
+
 	do {
 		struct io_kiocb *req = container_of(node, struct io_kiocb,
 						    comp_list);
@@ -1489,10 +1543,11 @@ static void io_free_batch_list(struct io_ring_ctx *ctx,
 }
 
 void __io_submit_flush_completions(struct io_ring_ctx *ctx)
-	__must_hold(&ctx->uring_lock)
 {
 	struct io_submit_state *state = &ctx->submit_state;
 	struct io_wq_work_node *node;
+
+	io_ring_ctx_assert_locked(ctx);
 
 	__io_cq_lock(ctx);
 	__wq_list_for_each(node, &state->compl_reqs) {
@@ -1713,11 +1768,12 @@ io_req_flags_t io_file_get_flags(struct file *file)
 }
 
 static __cold void io_drain_req(struct io_kiocb *req)
-	__must_hold(&ctx->uring_lock)
 {
 	struct io_ring_ctx *ctx = req->ctx;
 	bool drain = req->flags & IOSQE_IO_DRAIN;
 	struct io_defer_entry *de;
+
+	io_ring_ctx_assert_locked(ctx);
 
 	de = kmalloc(sizeof(*de), GFP_KERNEL_ACCOUNT);
 	if (!de) {
@@ -1989,8 +2045,9 @@ static int io_req_sqe_copy(struct io_kiocb *req, unsigned int issue_flags)
 }
 
 static void io_queue_async(struct io_kiocb *req, unsigned int issue_flags, int ret)
-	__must_hold(&req->ctx->uring_lock)
 {
+	io_ring_ctx_assert_locked(req->ctx);
+
 	if (ret != -EAGAIN || (req->flags & REQ_F_NOWAIT)) {
 fail:
 		io_req_defer_failed(req, ret);
@@ -2003,11 +2060,9 @@ fail:
 
 	switch (io_arm_poll_handler(req, 0)) {
 	case IO_APOLL_READY:
-		io_kbuf_recycle(req, 0);
 		io_req_task_queue(req);
 		break;
 	case IO_APOLL_ABORTED:
-		io_kbuf_recycle(req, 0);
 		io_queue_iowq(req);
 		break;
 	case IO_APOLL_OK:
@@ -2016,11 +2071,12 @@ fail:
 }
 
 static inline void io_queue_sqe(struct io_kiocb *req, unsigned int extra_flags)
-	__must_hold(&req->ctx->uring_lock)
 {
 	unsigned int issue_flags = IO_URING_F_NONBLOCK |
 				   IO_URING_F_COMPLETE_DEFER | extra_flags;
 	int ret;
+
+	io_ring_ctx_assert_locked(req->ctx);
 
 	ret = io_issue_sqe(req, issue_flags);
 
@@ -2033,8 +2089,9 @@ static inline void io_queue_sqe(struct io_kiocb *req, unsigned int extra_flags)
 }
 
 static void io_queue_sqe_fallback(struct io_kiocb *req)
-	__must_hold(&req->ctx->uring_lock)
 {
+	io_ring_ctx_assert_locked(req->ctx);
+
 	if (unlikely(req->flags & REQ_F_FAIL)) {
 		/*
 		 * We don't submit, fail them all, for that replace hardlinks
@@ -2103,12 +2160,13 @@ static __cold int io_init_fail_req(struct io_kiocb *req, int err)
 
 static int io_init_req(struct io_ring_ctx *ctx, struct io_kiocb *req,
 		       const struct io_uring_sqe *sqe)
-	__must_hold(&ctx->uring_lock)
 {
 	const struct io_issue_def *def;
 	unsigned int sqe_flags;
 	int personality;
 	u8 opcode;
+
+	io_ring_ctx_assert_locked(ctx);
 
 	req->ctx = ctx;
 	req->opcode = opcode = READ_ONCE(sqe->opcode);
@@ -2238,10 +2296,11 @@ static __cold int io_submit_fail_init(const struct io_uring_sqe *sqe,
 
 static inline int io_submit_sqe(struct io_ring_ctx *ctx, struct io_kiocb *req,
 			 const struct io_uring_sqe *sqe)
-	__must_hold(&ctx->uring_lock)
 {
 	struct io_submit_link *link = &ctx->submit_state.link;
 	int ret;
+
+	io_ring_ctx_assert_locked(ctx);
 
 	ret = io_init_req(ctx, req, sqe);
 	if (unlikely(ret))
@@ -2367,11 +2426,12 @@ static bool io_get_sqe(struct io_ring_ctx *ctx, const struct io_uring_sqe **sqe)
 }
 
 int io_submit_sqes(struct io_ring_ctx *ctx, unsigned int nr)
-	__must_hold(&ctx->uring_lock)
 {
 	unsigned int entries = io_sqring_entries(ctx);
 	unsigned int left;
 	int ret;
+
+	io_ring_ctx_assert_locked(ctx);
 
 	if (unlikely(!entries))
 		return 0;
@@ -2736,6 +2796,10 @@ unsigned long rings_size(unsigned int flags, unsigned int sq_entries,
 		if (check_shl_overflow(off, 1, &off))
 			return SIZE_MAX;
 	}
+	if (flags & IORING_SETUP_CQE_MIXED) {
+		if (cq_entries < 2)
+			return SIZE_MAX;
+	}
 
 #ifdef CONFIG_SMP
 	off = ALIGN(off, SMP_CACHE_BYTES);
@@ -2767,6 +2831,7 @@ static __cold void __io_req_caches_free(struct io_ring_ctx *ctx)
 
 	while (!io_req_cache_empty(ctx)) {
 		req = io_extract_req(ctx);
+		io_poison_req(req);
 		kmem_cache_free(req_cachep, req);
 		nr++;
 	}
@@ -3047,10 +3112,10 @@ static __cold void io_ring_ctx_wait_and_kill(struct io_ring_ctx *ctx)
 
 	INIT_WORK(&ctx->exit_work, io_ring_exit_work);
 	/*
-	 * Use system_unbound_wq to avoid spawning tons of event kworkers
+	 * Use system_dfl_wq to avoid spawning tons of event kworkers
 	 * if we're exiting a ton of rings at the same time. It just adds
 	 * noise and overhead, there's no discernable change in runtime
-	 * over using system_wq.
+	 * over using system_percpu_wq.
 	 */
 	queue_work(iou_wq, &ctx->exit_work);
 }
@@ -3404,12 +3469,7 @@ SYSCALL_DEFINE6(io_uring_enter, unsigned int, fd, u32, to_submit,
 	struct file *file;
 	long ret;
 
-	if (unlikely(flags & ~(IORING_ENTER_GETEVENTS | IORING_ENTER_SQ_WAKEUP |
-			       IORING_ENTER_SQ_WAIT | IORING_ENTER_EXT_ARG |
-			       IORING_ENTER_REGISTERED_RING |
-			       IORING_ENTER_ABS_TIMER |
-			       IORING_ENTER_EXT_ARG_REG |
-			       IORING_ENTER_NO_IOWAIT)))
+	if (unlikely(flags & ~IORING_ENTER_FLAGS))
 		return -EINVAL;
 
 	/*
@@ -3461,15 +3521,18 @@ SYSCALL_DEFINE6(io_uring_enter, unsigned int, fd, u32, to_submit,
 		if (unlikely(ret))
 			goto out;
 
-		mutex_lock(&ctx->uring_lock);
+		io_ring_ctx_lock(ctx);
 		ret = io_submit_sqes(ctx, to_submit);
 		if (ret != to_submit) {
-			mutex_unlock(&ctx->uring_lock);
+			io_ring_ctx_unlock(ctx);
 			goto out;
 		}
 		if (flags & IORING_ENTER_GETEVENTS) {
-			if (ctx->syscall_iopoll)
+			if (ctx->syscall_iopoll) {
+				if (ctx->flags & IORING_SETUP_SINGLE_ISSUER)
+					goto iopoll;
 				goto iopoll_locked;
+			}
 			/*
 			 * Ignore errors, we'll soon call io_cqring_wait() and
 			 * it should handle ownership problems if any.
@@ -3477,7 +3540,7 @@ SYSCALL_DEFINE6(io_uring_enter, unsigned int, fd, u32, to_submit,
 			if (ctx->flags & IORING_SETUP_DEFER_TASKRUN)
 				(void)io_run_local_work_locked(ctx, min_complete);
 		}
-		mutex_unlock(&ctx->uring_lock);
+		io_ring_ctx_unlock(ctx);
 	}
 
 	if (flags & IORING_ENTER_GETEVENTS) {
@@ -3490,6 +3553,7 @@ SYSCALL_DEFINE6(io_uring_enter, unsigned int, fd, u32, to_submit,
 			 * prevent racing with polled issue that got punted to
 			 * a workqueue.
 			 */
+iopoll:
 			mutex_lock(&ctx->uring_lock);
 iopoll_locked:
 			ret2 = io_validate_ext_arg(ctx, flags, argp, argsz);
@@ -3659,6 +3723,23 @@ static int io_uring_sanitise_params(struct io_uring_params *p)
 	    !(flags & IORING_SETUP_SINGLE_ISSUER))
 		return -EINVAL;
 
+	/*
+	 * Nonsensical to ask for CQE32 and mixed CQE support, it's not
+	 * supported to post 16b CQEs on a ring setup with CQE32.
+	 */
+	if ((flags & (IORING_SETUP_CQE32|IORING_SETUP_CQE_MIXED)) ==
+	    (IORING_SETUP_CQE32|IORING_SETUP_CQE_MIXED))
+		return -EINVAL;
+
+	/*
+	 * If IORING_SETUP_SQPOLL is set, only the SQ thread issues SQEs,
+	 * but other threads may call io_uring_register() concurrently.
+	 * We still need uring_lock to synchronize these io_ring_ctx accesses,
+	 * so disable the single issuer optimizations.
+	 */
+	if (flags & IORING_SETUP_SQPOLL)
+		p->flags &= ~IORING_SETUP_SINGLE_ISSUER;
+
 	return 0;
 }
 
@@ -3809,15 +3890,7 @@ static __cold int io_uring_create(unsigned entries, struct io_uring_params *p,
 	if (ret)
 		goto err;
 
-	p->features = IORING_FEAT_SINGLE_MMAP | IORING_FEAT_NODROP |
-			IORING_FEAT_SUBMIT_STABLE | IORING_FEAT_RW_CUR_POS |
-			IORING_FEAT_CUR_PERSONALITY | IORING_FEAT_FAST_POLL |
-			IORING_FEAT_POLL_32BITS | IORING_FEAT_SQPOLL_NONFIXED |
-			IORING_FEAT_EXT_ARG | IORING_FEAT_NATIVE_WORKERS |
-			IORING_FEAT_RSRC_TAGS | IORING_FEAT_CQE_SKIP |
-			IORING_FEAT_LINKED_FILE | IORING_FEAT_REG_REG_RING |
-			IORING_FEAT_RECVSEND_BUNDLE | IORING_FEAT_MIN_TIMEOUT |
-			IORING_FEAT_RW_ATTR | IORING_FEAT_NO_IOWAIT;
+	p->features = IORING_FEAT_FLAGS;
 
 	if (copy_to_user(params, p, sizeof(*p))) {
 		ret = -EFAULT;
@@ -3825,8 +3898,13 @@ static __cold int io_uring_create(unsigned entries, struct io_uring_params *p,
 	}
 
 	if (ctx->flags & IORING_SETUP_SINGLE_ISSUER
-	    && !(ctx->flags & IORING_SETUP_R_DISABLED))
-		WRITE_ONCE(ctx->submitter_task, get_task_struct(current));
+	    && !(ctx->flags & IORING_SETUP_R_DISABLED)) {
+		/*
+		 * Unlike io_register_enable_rings(), don't need WRITE_ONCE()
+		 * since ctx isn't yet accessible from other tasks
+		 */
+		ctx->submitter_task = get_task_struct(current);
+	}
 
 	file = io_uring_get_file(ctx);
 	if (IS_ERR(file)) {
@@ -3877,17 +3955,8 @@ static long io_uring_setup(u32 entries, struct io_uring_params __user *params)
 			return -EINVAL;
 	}
 
-	if (p.flags & ~(IORING_SETUP_IOPOLL | IORING_SETUP_SQPOLL |
-			IORING_SETUP_SQ_AFF | IORING_SETUP_CQSIZE |
-			IORING_SETUP_CLAMP | IORING_SETUP_ATTACH_WQ |
-			IORING_SETUP_R_DISABLED | IORING_SETUP_SUBMIT_ALL |
-			IORING_SETUP_COOP_TASKRUN | IORING_SETUP_TASKRUN_FLAG |
-			IORING_SETUP_SQE128 | IORING_SETUP_CQE32 |
-			IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_DEFER_TASKRUN |
-			IORING_SETUP_NO_MMAP | IORING_SETUP_REGISTERED_FD_ONLY |
-			IORING_SETUP_NO_SQARRAY | IORING_SETUP_HYBRID_IOPOLL))
+	if (p.flags & ~IORING_SETUP_FLAGS)
 		return -EINVAL;
-
 	return io_uring_create(entries, &p, params);
 }
 

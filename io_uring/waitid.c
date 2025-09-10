@@ -37,9 +37,7 @@ static void io_waitid_free(struct io_kiocb *req)
 	struct io_waitid_async *iwa = req->async_data;
 
 	put_pid(iwa->wo.wo_pid);
-	kfree(req->async_data);
-	req->async_data = NULL;
-	req->flags &= ~REQ_F_ASYNC_DATA;
+	io_req_async_data_free(req);
 }
 
 static bool io_waitid_compat_copy_si(struct io_waitid *iw, int signo)
@@ -118,7 +116,7 @@ static void io_waitid_complete(struct io_kiocb *req, int ret)
 	/* anyone completing better be holding a reference */
 	WARN_ON_ONCE(!(atomic_read(&iw->refs) & IO_WAITID_REF_MASK));
 
-	lockdep_assert_held(&req->ctx->uring_lock);
+	io_ring_ctx_assert_locked(req->ctx);
 
 	hlist_del_init(&req->hash_node);
 
