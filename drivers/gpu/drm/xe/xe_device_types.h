@@ -183,9 +183,6 @@ struct xe_tile {
 		struct {
 			/** @sriov.vf.ggtt_balloon: GGTT regions excluded from use. */
 			struct xe_ggtt_node *ggtt_balloon[2];
-
-			/** @sriov.vf.ccs: CCS read and write contexts for VF. */
-			struct xe_tile_vf_ccs ccs[XE_SRIOV_VF_CCS_CTX_COUNT];
 		} vf;
 	} sriov;
 
@@ -507,6 +504,12 @@ struct xe_device {
 
 	/** @pm_notifier: Our PM notifier to perform actions in response to various PM events. */
 	struct notifier_block pm_notifier;
+	/** @pm_block: Completion to block validating tasks on suspend / hibernate prepare */
+	struct completion pm_block;
+	/** @rebind_resume_list: List of wq items to kick on resume. */
+	struct list_head rebind_resume_list;
+	/** @rebind_resume_lock: Lock to protect the rebind_resume_list */
+	struct mutex rebind_resume_lock;
 
 	/** @pmt: Support the PMT driver callback interface */
 	struct {
