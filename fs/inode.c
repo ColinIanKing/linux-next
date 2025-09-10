@@ -534,7 +534,7 @@ static void __inode_add_lru(struct inode *inode, bool rotate)
 {
 	if (inode->i_state & (I_DIRTY_ALL | I_SYNC | I_FREEING | I_WILL_FREE))
 		return;
-	if (atomic_read(&inode->i_count))
+	if (icount_read(inode))
 		return;
 	if (!(inode->i_sb->s_flags & SB_ACTIVE))
 		return;
@@ -550,11 +550,11 @@ static void __inode_add_lru(struct inode *inode, bool rotate)
 struct wait_queue_head *inode_bit_waitqueue(struct wait_bit_queue_entry *wqe,
 					    struct inode *inode, u32 bit)
 {
-        void *bit_address;
+	void *bit_address;
 
-        bit_address = inode_state_wait_address(inode, bit);
-        init_wait_var_entry(wqe, bit_address, 0);
-        return __var_waitqueue(bit_address);
+	bit_address = inode_state_wait_address(inode, bit);
+	init_wait_var_entry(wqe, bit_address, 0);
+	return __var_waitqueue(bit_address);
 }
 EXPORT_SYMBOL(inode_bit_waitqueue);
 
@@ -871,11 +871,11 @@ void evict_inodes(struct super_block *sb)
 again:
 	spin_lock(&sb->s_inode_list_lock);
 	list_for_each_entry(inode, &sb->s_inodes, i_sb_list) {
-		if (atomic_read(&inode->i_count))
+		if (icount_read(inode))
 			continue;
 
 		spin_lock(&inode->i_lock);
-		if (atomic_read(&inode->i_count)) {
+		if (icount_read(inode)) {
 			spin_unlock(&inode->i_lock);
 			continue;
 		}
@@ -937,7 +937,7 @@ static enum lru_status inode_lru_isolate(struct list_head *item,
 	 * unreclaimable for a while. Remove them lazily here; iput,
 	 * sync, or the last page cache deletion will requeue them.
 	 */
-	if (atomic_read(&inode->i_count) ||
+	if (icount_read(inode) ||
 	    (inode->i_state & ~I_REFERENCED) ||
 	    !mapping_shrinkable(&inode->i_data)) {
 		list_lru_isolate(lru, &inode->i_lru);
@@ -1908,20 +1908,44 @@ static void iput_final(struct inode *inode)
  */
 void iput(struct inode *inode)
 {
-	if (!inode)
+	if (unlikely(!inode))
 		return;
-	BUG_ON(inode->i_state & I_CLEAR);
+
 retry:
-	if (atomic_dec_and_lock(&inode->i_count, &inode->i_lock)) {
-		if (inode->i_nlink && (inode->i_state & I_DIRTY_TIME)) {
-			atomic_inc(&inode->i_count);
-			spin_unlock(&inode->i_lock);
-			trace_writeback_lazytime_iput(inode);
-			mark_inode_dirty_sync(inode);
-			goto retry;
-		}
-		iput_final(inode);
+	lockdep_assert_not_held(&inode->i_lock);
+	VFS_BUG_ON_INODE(inode->i_state & I_CLEAR, inode);
+	/*
+	 * Note this assert is technically racy as if the count is bogusly
+	 * equal to one, then two CPUs racing to further drop it can both
+	 * conclude it's fine.
+	 */
+	VFS_BUG_ON_INODE(atomic_read(&inode->i_count) < 1, inode);
+
+	if (atomic_add_unless(&inode->i_count, -1, 1))
+		return;
+
+	if ((inode->i_state & I_DIRTY_TIME) && inode->i_nlink) {
+		trace_writeback_lazytime_iput(inode);
+		mark_inode_dirty_sync(inode);
+		goto retry;
 	}
+
+	spin_lock(&inode->i_lock);
+	if (unlikely((inode->i_state & I_DIRTY_TIME) && inode->i_nlink)) {
+		spin_unlock(&inode->i_lock);
+		goto retry;
+	}
+
+	if (!atomic_dec_and_test(&inode->i_count)) {
+		spin_unlock(&inode->i_lock);
+		return;
+	}
+
+	/*
+	 * iput_final() drops ->i_lock, we can't assert on it as the inode may
+	 * be deallocated by the time the call returns.
+	 */
+	iput_final(inode);
 }
 EXPORT_SYMBOL(iput);
 
@@ -2189,7 +2213,7 @@ static int __remove_privs(struct mnt_idmap *idmap,
 	return notify_change(idmap, dentry, &newattrs, NULL);
 }
 
-int file_remove_privs_flags(struct file *file, unsigned int flags)
+static int file_remove_privs_flags(struct file *file, unsigned int flags)
 {
 	struct dentry *dentry = file_dentry(file);
 	struct inode *inode = file_inode(file);
@@ -2214,7 +2238,6 @@ int file_remove_privs_flags(struct file *file, unsigned int flags)
 		inode_has_no_xattr(inode);
 	return error;
 }
-EXPORT_SYMBOL_GPL(file_remove_privs_flags);
 
 /**
  * file_remove_privs - remove special file privileges (suid, capabilities)
@@ -2914,7 +2937,7 @@ EXPORT_SYMBOL(mode_strip_sgid);
  */
 void dump_inode(struct inode *inode, const char *reason)
 {
-       pr_warn("%s encountered for inode %px", reason, inode);
+	pr_warn("%s encountered for inode %px (%s)\n", reason, inode, inode->i_sb->s_type->name);
 }
 
 EXPORT_SYMBOL(dump_inode);
