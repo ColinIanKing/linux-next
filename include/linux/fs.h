@@ -1107,7 +1107,10 @@ struct file {
 	const struct cred		*f_cred;
 	struct fown_struct		*f_owner;
 	/* --- cacheline 1 boundary (64 bytes) --- */
-	struct path			f_path;
+	union {
+		const struct path	f_path;
+		struct path		__f_path;
+	};
 	union {
 		/* regular files (with FMODE_ATOMIC_POS) and directories */
 		struct mutex		f_pos_lock;
@@ -2881,7 +2884,7 @@ struct file *dentry_open_nonotify(const struct path *path, int flags,
 				  const struct cred *cred);
 struct file *dentry_create(const struct path *path, int flags, umode_t mode,
 			   const struct cred *cred);
-struct path *backing_file_user_path(const struct file *f);
+const struct path *backing_file_user_path(const struct file *f);
 
 /*
  * When mmapping a file on a stackable filesystem (e.g., overlayfs), the file
