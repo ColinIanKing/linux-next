@@ -4528,6 +4528,7 @@ finished:
  * @kaddr:		virtual address of vmalloc kernel memory
  * @pgoff:		offset from @kaddr to start at
  * @size:		size of map area
+ * @set_vma:		If true, update VMA flags
  *
  * Returns:	0 for success, -Exxx on failure
  *
@@ -4540,7 +4541,7 @@ finished:
  */
 int remap_vmalloc_range_partial(struct vm_area_struct *vma, unsigned long uaddr,
 				void *kaddr, unsigned long pgoff,
-				unsigned long size)
+				unsigned long size, bool set_vma)
 {
 	struct vm_struct *area;
 	unsigned long off;
@@ -4566,6 +4567,10 @@ int remap_vmalloc_range_partial(struct vm_area_struct *vma, unsigned long uaddr,
 		return -EINVAL;
 	kaddr += off;
 
+	/* If we shouldn't modify VMA flags, vm_insert_page() mustn't. */
+	if (!set_vma && !(vma->vm_flags & VM_MIXEDMAP))
+		return -EINVAL;
+
 	do {
 		struct page *page = vmalloc_to_page(kaddr);
 		int ret;
@@ -4579,7 +4584,11 @@ int remap_vmalloc_range_partial(struct vm_area_struct *vma, unsigned long uaddr,
 		size -= PAGE_SIZE;
 	} while (size > 0);
 
-	vm_flags_set(vma, VM_DONTEXPAND | VM_DONTDUMP);
+	if (set_vma)
+		vm_flags_set(vma, VM_DONTEXPAND | VM_DONTDUMP);
+	else
+		VM_WARN_ON_ONCE((vma->vm_flags & (VM_DONTEXPAND | VM_DONTDUMP)) !=
+				(VM_DONTEXPAND | VM_DONTDUMP));
 
 	return 0;
 }
@@ -4603,7 +4612,8 @@ int remap_vmalloc_range(struct vm_area_struct *vma, void *addr,
 {
 	return remap_vmalloc_range_partial(vma, vma->vm_start,
 					   addr, pgoff,
-					   vma->vm_end - vma->vm_start);
+					   vma->vm_end - vma->vm_start,
+					   /* set_vma= */ true);
 }
 EXPORT_SYMBOL(remap_vmalloc_range);
 
