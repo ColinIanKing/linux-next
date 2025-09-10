@@ -2819,8 +2819,7 @@ static void *alloc_single_from_partial(struct kmem_cache *s,
 	slab->inuse++;
 
 	if (!alloc_debug_processing(s, slab, object, orig_size)) {
-		if (folio_test_slab(slab_folio(slab)))
-			remove_partial(n, slab);
+		remove_partial(n, slab);
 		return NULL;
 	}
 
