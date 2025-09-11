@@ -12,11 +12,11 @@
 #include <dt-bindings/net/ti-dp83867.h>
 #include <dt-bindings/pwm/pwm.h>
 #include <dt-bindings/usb/pd.h>
-#include "imx93-tqma9352.dtsi"
+#include "imx91-tqma9131.dtsi"
 
 /{
-	model = "TQ-Systems i.MX93 TQMa93xxLA/TQMa93xxCA on MBa91xxCA starter kit";
-	compatible = "tq,imx93-tqma9352-mba91xxca", "tq,imx93-tqma9352", "fsl,imx93";
+	model = "TQ-Systems i.MX91 TQMa91xxLA/TQMa91xxCA on MBa91xxCA starter kit";
+	compatible = "tq,imx91-tqma9131-mba91xxca", "tq,imx91-tqma9131", "fsl,imx91";
 	chassis-type = "embedded";
 
 	chosen {
@@ -36,10 +36,10 @@
 		i2c2 = &lpi2c3;
 		mmc0 = &usdhc1;
 		mmc1 = &usdhc2;
-		rtc0 = &pcf85063;
-		rtc1 = &bbnsm_rtc;
 		serial0 = &lpuart1;
 		serial1 = &lpuart2;
+		rtc0 = &pcf85063;
+		rtc1 = &bbnsm_rtc;
 	};
 
 	backlight: backlight {
@@ -186,25 +186,6 @@
 		enable-active-high;
 		regulator-always-on;
 	};
-
-	thermal-zones {
-		cpu-thermal {
-			trips {
-				cpu_active: trip-active0 {
-					temperature = <40000>;
-					hysteresis = <5000>;
-					type = "active";
-				};
-			};
-
-			cooling-maps {
-				map1 {
-					trip = <&cpu_active>;
-					cooling-device = <&fan0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
-				};
-			};
-		};
-	};
 };
 
 &adc1 {
@@ -232,7 +213,7 @@
 			reset-assert-us = <500000>;
 			reset-deassert-us = <50000>;
 			interrupt-parent = <&gpio3>;
-			interrupts = <26 IRQ_TYPE_EDGE_FALLING>;
+			interrupts = <26 IRQ_TYPE_LEVEL_LOW>;
 			enet-phy-lane-no-swap;
 			ti,rx-internal-delay = <DP83867_RGMIIDCTL_2_25_NS>;
 			ti,tx-internal-delay = <DP83867_RGMIIDCTL_2_25_NS>;
@@ -265,7 +246,7 @@
 			reset-assert-us = <500000>;
 			reset-deassert-us = <50000>;
 			interrupt-parent = <&gpio3>;
-			interrupts = <27 IRQ_TYPE_EDGE_FALLING>;
+			interrupts = <27 IRQ_TYPE_LEVEL_LOW>;
 			enet-phy-lane-no-swap;
 			ti,rx-internal-delay = <DP83867_RGMIIDCTL_2_25_NS>;
 			ti,tx-internal-delay = <DP83867_RGMIIDCTL_2_25_NS>;
@@ -308,6 +289,8 @@
 };
 
 &gpio3 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&pinctrl_jtag>;
 	gpio-line-names =
 		/* 00 */ "SD2_CD#", "", "", "",
 		/* 04 */ "", "", "", "SD2_RST#",
@@ -535,8 +518,6 @@
 	adp-disable;
 	usb-role-switch;
 	disable-over-current;
-	samsung,picophy-pre-emp-curr-control = <3>;
-	samsung,picophy-dc-vol-level-adjust = <7>;
 	status = "okay";
 
 	port {
@@ -551,8 +532,6 @@
 	#address-cells = <1>;
 	#size-cells = <0>;
 	disable-over-current;
-	samsung,picophy-pre-emp-curr-control = <3>;
-	samsung,picophy-dc-vol-level-adjust = <7>;
 	status = "okay";
 
 	hub_2_0: hub@1 {
@@ -580,181 +559,181 @@
 &iomuxc {
 	pinctrl_eqos: eqosgrp {
 		fsl,pins = /* PD | FSEL_2 | DSE X4 */
-			   <MX93_PAD_ENET1_MDC__ENET_QOS_MDC				0x51e>,
-			   /* SION | HYS | ODE | FSEL_2 | DSE X4 */
-			   <MX93_PAD_ENET1_MDIO__ENET_QOS_MDIO				0x4000111e>,
+			   <MX91_PAD_ENET1_MDC__ENET1_MDC				0x51e>,
+			   /* SION | HYS | FSEL_2 | DSE X4 */
+			   <MX91_PAD_ENET1_MDIO__ENET_QOS_MDIO				0x4000111e>,
 			   /* HYS | FSEL_0 | DSE no drive */
-			   <MX93_PAD_ENET1_RD0__ENET_QOS_RGMII_RD0			0x1000>,
-			   <MX93_PAD_ENET1_RD1__ENET_QOS_RGMII_RD1			0x1000>,
-			   <MX93_PAD_ENET1_RD2__ENET_QOS_RGMII_RD2			0x1000>,
-			   <MX93_PAD_ENET1_RD3__ENET_QOS_RGMII_RD3			0x1000>,
-			   <MX93_PAD_ENET1_RX_CTL__ENET_QOS_RGMII_RX_CTL		0x1000>,
+			   <MX91_PAD_ENET1_RD0__ENET_QOS_RGMII_RD0			0x1000>,
+			   <MX91_PAD_ENET1_RD1__ENET_QOS_RGMII_RD1			0x1000>,
+			   <MX91_PAD_ENET1_RD2__ENET_QOS_RGMII_RD2			0x1000>,
+			   <MX91_PAD_ENET1_RD3__ENET_QOS_RGMII_RD3			0x1000>,
+			   <MX91_PAD_ENET1_RX_CTL__ENET_QOS_RGMII_RX_CTL		0x1000>,
 			   /* HYS | PD | FSEL_0 | DSE no drive */
-			   <MX93_PAD_ENET1_RXC__CCM_ENET_QOS_CLOCK_GENERATE_RX_CLK	0x1400>,
+			   <MX91_PAD_ENET1_RXC__ENET_QOS_RGMII_RXC			0x1400>,
 			   /* PD | FSEL_2 | DSE X4 */
-			   <MX93_PAD_ENET1_TD0__ENET_QOS_RGMII_TD0			0x51e>,
-			   <MX93_PAD_ENET1_TD1__ENET_QOS_RGMII_TD1			0x51e>,
-			   <MX93_PAD_ENET1_TD2__ENET_QOS_RGMII_TD2			0x51e>,
-			   <MX93_PAD_ENET1_TD3__ENET_QOS_RGMII_TD3			0x51e>,
-			   <MX93_PAD_ENET1_TX_CTL__ENET_QOS_RGMII_TX_CTL		0x51e>,
+			   <MX91_PAD_ENET1_TD0__ENET_QOS_RGMII_TD0			0x51e>,
+			   <MX91_PAD_ENET1_TD1__ENET1_RGMII_TD1				0x51e>,
+			   <MX91_PAD_ENET1_TD2__ENET_QOS_RGMII_TD2			0x51e>,
+			   <MX91_PAD_ENET1_TD3__ENET_QOS_RGMII_TD3			0x51e>,
+			   <MX91_PAD_ENET1_TX_CTL__ENET_QOS_RGMII_TX_CTL		0x51e>,
 			   /* PD | FSEL_3 | DSE X3 */
-			   <MX93_PAD_ENET1_TXC__CCM_ENET_QOS_CLOCK_GENERATE_TX_CLK	0x58e>;
+			   <MX91_PAD_ENET1_TXC__CCM_ENET_QOS_CLOCK_GENERATE_TX_CLK	0x58e>;
 	};
 
 	pinctrl_eqos_phy: eqosphygrp {
 		fsl,pins = /* HYS | FSEL_0 | DSE no drive */
-			   <MX93_PAD_CCM_CLKO1__GPIO3_IO26			0x1000>;
+			   <MX91_PAD_CCM_CLKO1__GPIO3_IO26		0x1000>;
 	};
 
 	pinctrl_fec: fecgrp {
 		fsl,pins = /* PD | FSEL_2 | DSE X4 */
-			   <MX93_PAD_ENET2_MDC__ENET1_MDC			0x51e>,
-			   /* SION | HYS | ODE | FSEL_2 | DSE X4 */
-			   <MX93_PAD_ENET2_MDIO__ENET1_MDIO			0x4000111e>,
+			   <MX91_PAD_ENET2_MDC__ENET2_MDC		0x51e>,
+			   /* SION | HYS | FSEL_2 | DSE X4 */
+			   <MX91_PAD_ENET2_MDIO__ENET2_MDIO		0x4000111e>,
 			   /* HYS | FSEL_0 | DSE no drive */
-			   <MX93_PAD_ENET2_RD0__ENET1_RGMII_RD0			0x1000>,
-			   <MX93_PAD_ENET2_RD1__ENET1_RGMII_RD1			0x1000>,
-			   <MX93_PAD_ENET2_RD2__ENET1_RGMII_RD2			0x1000>,
-			   <MX93_PAD_ENET2_RD3__ENET1_RGMII_RD3			0x1000>,
-			   <MX93_PAD_ENET2_RX_CTL__ENET1_RGMII_RX_CTL		0x1000>,
+			   <MX91_PAD_ENET2_RD0__ENET2_RGMII_RD0		0x1000>,
+			   <MX91_PAD_ENET2_RD1__ENET2_RGMII_RD1		0x1000>,
+			   <MX91_PAD_ENET2_RD2__ENET2_RGMII_RD2		0x1000>,
+			   <MX91_PAD_ENET2_RD3__ENET2_RGMII_RD3		0x1000>,
+			   <MX91_PAD_ENET2_RX_CTL__ENET2_RGMII_RX_CTL	0x1000>,
 			   /* HYS | PD | FSEL_0 | DSE no drive */
-			   <MX93_PAD_ENET2_RXC__ENET1_RGMII_RXC			0x1400>,
+			   <MX91_PAD_ENET2_RXC__ENET2_RGMII_RXC		0x1400>,
 			   /* PD | FSEL_2 | DSE X4 */
-			   <MX93_PAD_ENET2_TD0__ENET1_RGMII_TD0			0x51e>,
-			   <MX93_PAD_ENET2_TD1__ENET1_RGMII_TD1			0x51e>,
-			   <MX93_PAD_ENET2_TD2__ENET1_RGMII_TD2			0x51e>,
-			   <MX93_PAD_ENET2_TD3__ENET1_RGMII_TD3			0x51e>,
-			   <MX93_PAD_ENET2_TX_CTL__ENET1_RGMII_TX_CTL		0x51e>,
+			   <MX91_PAD_ENET2_TD0__ENET2_RGMII_TD0		0x51e>,
+			   <MX91_PAD_ENET2_TD1__ENET2_RGMII_TD1		0x51e>,
+			   <MX91_PAD_ENET2_TD2__ENET2_RGMII_TD2		0x51e>,
+			   <MX91_PAD_ENET2_TD3__ENET2_RGMII_TD3		0x51e>,
+			   <MX91_PAD_ENET2_TX_CTL__ENET2_RGMII_TX_CTL	0x51e>,
 			   /* PD | FSEL_3 | DSE X3 */
-			   <MX93_PAD_ENET2_TXC__ENET1_RGMII_TXC			0x58e>;
+			   <MX91_PAD_ENET2_TXC__ENET2_RGMII_TXC		0x58e>;
 	};
 
 	pinctrl_fec_phy: fecphygrp {
 		fsl,pins = /* HYS | FSEL_0 | DSE no drive */
-			   <MX93_PAD_CCM_CLKO2__GPIO3_IO27			0x1000>;
+			   <MX91_PAD_CCM_CLKO2__GPIO3_IO27		0x1000>;
 	};
 
 	pinctrl_flexcan1: flexcan1grp {
 		fsl,pins = /* HYS | PU | FSEL_0 | DSE no drive */
-			   <MX93_PAD_PDM_BIT_STREAM0__CAN1_RX		0x1200>,
+			   <MX91_PAD_PDM_BIT_STREAM0__CAN1_RX		0x1200>,
 			   /* PU | FSEL_3 | DSE X4 */
-			   <MX93_PAD_PDM_CLK__CAN1_TX			0x039e>;
+			   <MX91_PAD_PDM_CLK__CAN1_TX			0x039e>;
 	};
 
 	pinctrl_jtag: jtaggrp {
-		fsl,pins = <MX93_PAD_DAP_TCLK_SWCLK__JTAG_MUX_TCK	0x051e>,
-			   <MX93_PAD_DAP_TDI__JTAG_MUX_TDI		0x1200>,
-			   <MX93_PAD_DAP_TDO_TRACESWO__JTAG_MUX_TDO	0x031e>,
-			   <MX93_PAD_DAP_TMS_SWDIO__JTAG_MUX_TMS	0x1200>;
+		fsl,pins = <MX91_PAD_DAP_TCLK_SWCLK__JTAG_MUX_TCK	0x051e>,
+			   <MX91_PAD_DAP_TDI__JTAG_MUX_TDI		0x1200>,
+			   <MX91_PAD_DAP_TDO_TRACESWO__JTAG_MUX_TDO	0x031e>,
+			   <MX91_PAD_DAP_TMS_SWDIO__JTAG_MUX_TMS	0x1200>;
 	};
 
 	pinctrl_lpi2c3: lpi2c3grp {
 		fsl,pins = /* SION | HYS | OD | FSEL_3 | DSE X4 */
-			   <MX93_PAD_GPIO_IO28__LPI2C3_SDA		0x4000199e>,
-			   <MX93_PAD_GPIO_IO29__LPI2C3_SCL		0x4000199e>;
+			   <MX91_PAD_GPIO_IO28__LPI2C3_SDA		0x4000199e>,
+			   <MX91_PAD_GPIO_IO29__LPI2C3_SCL		0x4000199e>;
 	};
 
 	pinctrl_pcf85063: pcf85063grp {
-		fsl,pins = <MX93_PAD_SAI1_RXD0__GPIO1_IO14		0x1000>;
+		fsl,pins = <MX91_PAD_SAI1_RXD0__GPIO1_IO14		0x1000>;
 	};
 
 	pinctrl_pexp_irq: pexpirqgrp {
 		fsl,pins = /* HYS | FSEL_0 | No DSE */
-			   <MX93_PAD_SAI1_TXC__GPIO1_IO12		0x1000>;
+			   <MX91_PAD_SAI1_TXC__GPIO1_IO12		0x1000>;
 	};
 
 	pinctrl_rgbdisp: rgbdispgrp {
-		fsl,pins = <MX93_PAD_GPIO_IO00__MEDIAMIX_DISP_CLK	0x31e>,
-			   <MX93_PAD_GPIO_IO01__MEDIAMIX_DISP_DE	0x31e>,
-			   <MX93_PAD_GPIO_IO02__MEDIAMIX_DISP_VSYNC	0x31e>,
-			   <MX93_PAD_GPIO_IO03__MEDIAMIX_DISP_HSYNC	0x31e>,
-			   <MX93_PAD_GPIO_IO04__MEDIAMIX_DISP_DATA00	0x31e>,
-			   <MX93_PAD_GPIO_IO05__MEDIAMIX_DISP_DATA01	0x31e>,
-			   <MX93_PAD_GPIO_IO06__MEDIAMIX_DISP_DATA02	0x31e>,
-			   <MX93_PAD_GPIO_IO07__MEDIAMIX_DISP_DATA03	0x31e>,
-			   <MX93_PAD_GPIO_IO08__MEDIAMIX_DISP_DATA04	0x31e>,
-			   <MX93_PAD_GPIO_IO09__MEDIAMIX_DISP_DATA05	0x31e>,
-			   <MX93_PAD_GPIO_IO10__MEDIAMIX_DISP_DATA06	0x31e>,
-			   <MX93_PAD_GPIO_IO11__MEDIAMIX_DISP_DATA07	0x31e>,
-			   <MX93_PAD_GPIO_IO12__MEDIAMIX_DISP_DATA08	0x31e>,
-			   <MX93_PAD_GPIO_IO13__MEDIAMIX_DISP_DATA09	0x31e>,
-			   <MX93_PAD_GPIO_IO14__MEDIAMIX_DISP_DATA10	0x31e>,
-			   <MX93_PAD_GPIO_IO15__MEDIAMIX_DISP_DATA11	0x31e>,
-			   <MX93_PAD_GPIO_IO16__MEDIAMIX_DISP_DATA12	0x31e>,
-			   <MX93_PAD_GPIO_IO17__MEDIAMIX_DISP_DATA13	0x31e>,
-			   <MX93_PAD_GPIO_IO18__MEDIAMIX_DISP_DATA14	0x31e>,
-			   <MX93_PAD_GPIO_IO19__MEDIAMIX_DISP_DATA15	0x31e>,
-			   <MX93_PAD_GPIO_IO20__MEDIAMIX_DISP_DATA16	0x31e>,
-			   <MX93_PAD_GPIO_IO21__MEDIAMIX_DISP_DATA17	0x31e>,
-			   <MX93_PAD_GPIO_IO22__MEDIAMIX_DISP_DATA18	0x31e>,
-			   <MX93_PAD_GPIO_IO23__MEDIAMIX_DISP_DATA19	0x31e>,
-			   <MX93_PAD_GPIO_IO24__MEDIAMIX_DISP_DATA20	0x31e>,
-			   <MX93_PAD_GPIO_IO25__MEDIAMIX_DISP_DATA21	0x31e>,
-			   <MX93_PAD_GPIO_IO26__MEDIAMIX_DISP_DATA22	0x31e>,
-			   <MX93_PAD_GPIO_IO27__MEDIAMIX_DISP_DATA23	0x31e>;
+		fsl,pins = <MX91_PAD_GPIO_IO00__MEDIAMIX_DISP_CLK	0x31e>,
+			   <MX91_PAD_GPIO_IO01__MEDIAMIX_DISP_DE	0x31e>,
+			   <MX91_PAD_GPIO_IO02__MEDIAMIX_DISP_VSYNC	0x31e>,
+			   <MX91_PAD_GPIO_IO03__MEDIAMIX_DISP_HSYNC	0x31e>,
+			   <MX91_PAD_GPIO_IO04__MEDIAMIX_DISP_DATA0	0x31e>,
+			   <MX91_PAD_GPIO_IO05__MEDIAMIX_DISP_DATA1	0x31e>,
+			   <MX91_PAD_GPIO_IO06__MEDIAMIX_DISP_DATA2	0x31e>,
+			   <MX91_PAD_GPIO_IO07__MEDIAMIX_DISP_DATA3	0x31e>,
+			   <MX91_PAD_GPIO_IO08__MEDIAMIX_DISP_DATA4	0x31e>,
+			   <MX91_PAD_GPIO_IO09__MEDIAMIX_DISP_DATA5	0x31e>,
+			   <MX91_PAD_GPIO_IO10__MEDIAMIX_DISP_DATA6	0x31e>,
+			   <MX91_PAD_GPIO_IO11__MEDIAMIX_DISP_DATA7	0x31e>,
+			   <MX91_PAD_GPIO_IO12__MEDIAMIX_DISP_DATA8	0x31e>,
+			   <MX91_PAD_GPIO_IO13__MEDIAMIX_DISP_DATA9	0x31e>,
+			   <MX91_PAD_GPIO_IO14__MEDIAMIX_DISP_DATA10	0x31e>,
+			   <MX91_PAD_GPIO_IO15__MEDIAMIX_DISP_DATA11	0x31e>,
+			   <MX91_PAD_GPIO_IO16__MEDIAMIX_DISP_DATA12	0x31e>,
+			   <MX91_PAD_GPIO_IO17__MEDIAMIX_DISP_DATA13	0x31e>,
+			   <MX91_PAD_GPIO_IO18__MEDIAMIX_DISP_DATA14	0x31e>,
+			   <MX91_PAD_GPIO_IO19__MEDIAMIX_DISP_DATA15	0x31e>,
+			   <MX91_PAD_GPIO_IO20__MEDIAMIX_DISP_DATA16	0x31e>,
+			   <MX91_PAD_GPIO_IO21__MEDIAMIX_DISP_DATA17	0x31e>,
+			   <MX91_PAD_GPIO_IO22__MEDIAMIX_DISP_DATA18	0x31e>,
+			   <MX91_PAD_GPIO_IO23__MEDIAMIX_DISP_DATA19	0x31e>,
+			   <MX91_PAD_GPIO_IO24__MEDIAMIX_DISP_DATA20	0x31e>,
+			   <MX91_PAD_GPIO_IO25__MEDIAMIX_DISP_DATA21	0x31e>,
+			   <MX91_PAD_GPIO_IO26__MEDIAMIX_DISP_DATA22	0x31e>,
+			   <MX91_PAD_GPIO_IO27__MEDIAMIX_DISP_DATA23	0x31e>;
 	};
 
 	pinctrl_touch: touchgrp {
 		fsl,pins = /* HYS | FSEL_0 | No DSE */
-			   <MX93_PAD_SAI1_TXFS__GPIO1_IO11		0x1000>;
+			   <MX91_PAD_SAI1_TXFS__GPIO1_IO11		0x1000>;
 	};
 
 	pinctrl_tpm2: tpm2grp {
-		fsl,pins = <MX93_PAD_I2C2_SCL__TPM2_CH2			0x57e>;
+		fsl,pins = <MX91_PAD_I2C2_SCL__TPM2_CH2			0x57e>;
 	};
 
 	pinctrl_typec: typecgrp {
 		fsl,pins = /* HYS | FSEL_0 | No DSE */
-			   <MX93_PAD_PDM_BIT_STREAM1__GPIO1_IO10	0x1000>;
+			   <MX91_PAD_PDM_BIT_STREAM1__GPIO1_IO10	0x1000>;
 	};
 
 	pinctrl_uart1: uart1grp {
 		fsl,pins = /* HYS | FSEL_0 | No DSE */
-			   <MX93_PAD_UART1_RXD__LPUART1_RX		0x1000>,
+			   <MX91_PAD_UART1_RXD__LPUART1_RX		0x1000>,
 			   /* FSEL_2 | DSE X4 */
-			   <MX93_PAD_UART1_TXD__LPUART1_TX		0x011e>;
+			   <MX91_PAD_UART1_TXD__LPUART1_TX		0x011e>;
 	};
 
 	pinctrl_uart2: uart2grp {
 		fsl,pins = /* HYS | FSEL_0 | No DSE */
-			   <MX93_PAD_UART2_RXD__LPUART2_RX		0x1000>,
+			   <MX91_PAD_UART2_RXD__LPUART2_RX		0x1000>,
 			   /* FSEL_2 | DSE X4 */
-			   <MX93_PAD_UART2_TXD__LPUART2_TX		0x011e>,
+			   <MX91_PAD_UART2_TXD__LPUART2_TX		0x011e>,
 			   /* FSEL_2 | DSE X4 */
-			   <MX93_PAD_SAI1_TXD0__LPUART2_RTS_B		0x011e>;
+			   <MX91_PAD_SAI1_TXD0__LPUART2_RTS_B		0x011e>;
 	};
 
 	pinctrl_usdhc2_gpio: usdhc2gpiogrp {
 		fsl,pins = /* HYS | FSEL_0 | No DSE */
-			   <MX93_PAD_SD2_CD_B__GPIO3_IO00		0x1000>;
+			   <MX91_PAD_SD2_CD_B__GPIO3_IO0		0x1000>;
 	};
 
 	/* enable SION for data and cmd pad due to ERR052021 */
 	pinctrl_usdhc2_hs: usdhc2hsgrp {
 		fsl,pins = /* PD | FSEL_3 | DSE X5 */
-			   <MX93_PAD_SD2_CLK__USDHC2_CLK		0x05be>,
+			   <MX91_PAD_SD2_CLK__USDHC2_CLK		0x05be>,
 			   /* HYS | PU | FSEL_3 | DSE X4 */
-			   <MX93_PAD_SD2_CMD__USDHC2_CMD		0x4000139e>,
+			   <MX91_PAD_SD2_CMD__USDHC2_CMD		0x4000139e>,
 			   /* HYS | PU | FSEL_3 | DSE X3 */
-			   <MX93_PAD_SD2_DATA0__USDHC2_DATA0		0x4000138e>,
-			   <MX93_PAD_SD2_DATA1__USDHC2_DATA1		0x4000138e>,
-			   <MX93_PAD_SD2_DATA2__USDHC2_DATA2		0x4000138e>,
-			   <MX93_PAD_SD2_DATA3__USDHC2_DATA3		0x4000138e>,
+			   <MX91_PAD_SD2_DATA0__USDHC2_DATA0		0x4000138e>,
+			   <MX91_PAD_SD2_DATA1__USDHC2_DATA1		0x4000138e>,
+			   <MX91_PAD_SD2_DATA2__USDHC2_DATA2		0x4000138e>,
+			   <MX91_PAD_SD2_DATA3__USDHC2_DATA3		0x4000138e>,
 			   /* FSEL_2 | DSE X3 */
-			   <MX93_PAD_SD2_VSELECT__USDHC2_VSELECT	0x010e>;
+			   <MX91_PAD_SD2_VSELECT__USDHC2_VSELECT	0x010e>;
 	};
 
 	/* enable SION for data and cmd pad due to ERR052021 */
 	pinctrl_usdhc2_uhs: usdhc2uhsgrp {
 		fsl,pins = /* PD | FSEL_3 | DSE X6 */
-			   <MX93_PAD_SD2_CLK__USDHC2_CLK		0x05fe>,
+			   <MX91_PAD_SD2_CLK__USDHC2_CLK		0x05fe>,
 			   /* HYS | PU | FSEL_3 | DSE X4 */
-			   <MX93_PAD_SD2_CMD__USDHC2_CMD		0x4000139e>,
-			   <MX93_PAD_SD2_DATA0__USDHC2_DATA0		0x4000139e>,
-			   <MX93_PAD_SD2_DATA1__USDHC2_DATA1		0x4000139e>,
-			   <MX93_PAD_SD2_DATA2__USDHC2_DATA2		0x4000139e>,
-			   <MX93_PAD_SD2_DATA3__USDHC2_DATA3		0x4000139e>,
+			   <MX91_PAD_SD2_CMD__USDHC2_CMD		0x4000139e>,
+			   <MX91_PAD_SD2_DATA0__USDHC2_DATA0		0x4000139e>,
+			   <MX91_PAD_SD2_DATA1__USDHC2_DATA1		0x4000139e>,
+			   <MX91_PAD_SD2_DATA2__USDHC2_DATA2		0x4000139e>,
+			   <MX91_PAD_SD2_DATA3__USDHC2_DATA3		0x4000139e>,
 			   /* FSEL_2 | DSE X3 */
-			   <MX93_PAD_SD2_VSELECT__USDHC2_VSELECT	0x010e>;
+			   <MX91_PAD_SD2_VSELECT__USDHC2_VSELECT	0x010e>;
 	};
 };
