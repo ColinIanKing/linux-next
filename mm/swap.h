@@ -458,8 +458,10 @@ static inline int non_swapcache_batch(swp_entry_t entry, int max_nr)
 static inline pgoff_t folio_index(struct folio *folio)
 {
 #ifdef CONFIG_MMU
+#ifdef CONFIG_SWAP
 	if (unlikely(folio_test_swapcache(folio)))
 		return swp_offset(folio->swap);
+#endif
 #endif
 	return folio->index;
 }
