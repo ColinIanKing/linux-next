@@ -2569,7 +2569,7 @@ static bool tcp_try_undo_loss(struct sock *sk, bool frto_undo)
 		if (frto_undo)
 			NET_INC_STATS(sock_net(sk),
 					LINUX_MIB_TCPSPURIOUSRTOS);
-		inet_csk(sk)->icsk_retransmits = 0;
+		WRITE_ONCE(inet_csk(sk)->icsk_retransmits, 0);
 		if (tcp_is_non_sack_preventing_reopen(sk))
 			return true;
 		if (frto_undo || tcp_is_sack(tp)) {
@@ -3851,7 +3851,7 @@ static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
 
 	if (after(ack, prior_snd_una)) {
 		flag |= FLAG_SND_UNA_ADVANCED;
-		icsk->icsk_retransmits = 0;
+		WRITE_ONCE(icsk->icsk_retransmits, 0);
 
 #if IS_ENABLED(CONFIG_TLS_DEVICE)
 		if (static_branch_unlikely(&clean_acked_data_enabled.key))
@@ -3913,7 +3913,7 @@ static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
 	 * log. Something worked...
 	 */
 	WRITE_ONCE(sk->sk_err_soft, 0);
-	icsk->icsk_probes_out = 0;
+	WRITE_ONCE(icsk->icsk_probes_out, 0);
 	tp->rcv_tstamp = tcp_jiffies32;
 	if (!prior_packets)
 		goto no_queue;
@@ -4830,7 +4830,7 @@ static bool tcp_ooo_try_coalesce(struct sock *sk,
 noinline_for_tracing static void
 tcp_drop_reason(struct sock *sk, struct sk_buff *skb, enum skb_drop_reason reason)
 {
-	sk_drops_add(sk, skb);
+	sk_drops_skbadd(sk, skb);
 	sk_skb_reason_drop(sk, skb, reason);
 }
 
@@ -6297,7 +6297,7 @@ static bool tcp_rcv_fastopen_synack(struct sock *sk, struct sk_buff *synack,
 	u16 mss = tp->rx_opt.mss_clamp, try_exp = 0;
 	bool syn_drop = false;
 
-	if (mss == tp->rx_opt.user_mss) {
+	if (mss == READ_ONCE(tp->rx_opt.user_mss)) {
 		struct tcp_options_received opt;
 
 		/* Get original SYNACK MSS value if user MSS sets mss_clamp */
@@ -6636,7 +6636,7 @@ static void tcp_rcv_synrecv_state_fastopen(struct sock *sk)
 		tcp_try_undo_recovery(sk);
 
 	tcp_update_rto_time(tp);
-	inet_csk(sk)->icsk_retransmits = 0;
+	WRITE_ONCE(inet_csk(sk)->icsk_retransmits, 0);
 	/* In tcp_fastopen_synack_timer() on the first SYNACK RTO we set
 	 * retrans_stamp but don't enter CA_Loss, so in case that happened we
 	 * need to zero retrans_stamp here to prevent spurious
@@ -7117,7 +7117,7 @@ u16 tcp_get_syncookie_mss(struct request_sock_ops *rsk_ops,
 		return 0;
 	}
 
-	mss = tcp_parse_mss_option(th, tp->rx_opt.user_mss);
+	mss = tcp_parse_mss_option(th, READ_ONCE(tp->rx_opt.user_mss));
 	if (!mss)
 		mss = af_ops->mss_clamp;
 
@@ -7131,7 +7131,7 @@ int tcp_conn_request(struct request_sock_ops *rsk_ops,
 {
 	struct tcp_fastopen_cookie foc = { .len = -1 };
 	struct tcp_options_received tmp_opt;
-	struct tcp_sock *tp = tcp_sk(sk);
+	const struct tcp_sock *tp = tcp_sk(sk);
 	struct net *net = sock_net(sk);
 	struct sock *fastopen_sk = NULL;
 	struct request_sock *req;
@@ -7182,7 +7182,7 @@ int tcp_conn_request(struct request_sock_ops *rsk_ops,
 
 	tcp_clear_options(&tmp_opt);
 	tmp_opt.mss_clamp = af_ops->mss_clamp;
-	tmp_opt.user_mss  = tp->rx_opt.user_mss;
+	tmp_opt.user_mss  = READ_ONCE(tp->rx_opt.user_mss);
 	tcp_parse_options(sock_net(sk), skb, &tmp_opt, 0,
 			  want_cookie ? NULL : &foc);
 
