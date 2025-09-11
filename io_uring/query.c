@@ -70,11 +70,14 @@ out:
 	return 0;
 }
 
+/*
+ * Returns number of items processed, or < 0 in case of error.
+ */
 int io_query(struct io_ring_ctx *ctx, void __user *arg, unsigned nr_args)
 {
 	char entry_buffer[IO_MAX_QUERY_SIZE];
 	void __user *uhdr = arg;
-	int ret;
+	int ret = 0, nr = 0;
 
 	memset(entry_buffer, 0, sizeof(entry_buffer));
 
@@ -86,8 +89,11 @@ int io_query(struct io_ring_ctx *ctx, void __user *arg, unsigned nr_args)
 
 		ret = io_handle_query_entry(ctx, entry_buffer, uhdr, &next_hdr);
 		if (ret)
-			return ret;
+			break;
 		uhdr = u64_to_user_ptr(next_hdr);
+		/* Have some limit to avoid a potential loop */
+		if (++nr >= 1024)
+			break;
 	}
-	return 0;
+	return nr ?: ret;
 }
