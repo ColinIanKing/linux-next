@@ -558,10 +558,8 @@ static void register_exec_queue(struct xe_exec_queue *q, int ctx_type)
 	info.engine_submit_mask = q->logical_mask;
 	info.hwlrca_lo = lower_32_bits(xe_lrc_descriptor(lrc));
 	info.hwlrca_hi = upper_32_bits(xe_lrc_descriptor(lrc));
-	info.flags = CONTEXT_REGISTRATION_FLAG_KMD;
-
-	if (ctx_type != GUC_CONTEXT_NORMAL)
-		info.flags |= BIT(ctx_type);
+	info.flags = CONTEXT_REGISTRATION_FLAG_KMD |
+		FIELD_PREP(CONTEXT_REGISTRATION_FLAG_TYPE, ctx_type);
 
 	if (xe_exec_queue_is_parallel(q)) {
 		u64 ggtt_addr = xe_lrc_parallel_ggtt_addr(lrc);
@@ -2029,7 +2027,7 @@ g2h_exec_queue_lookup(struct xe_guc *guc, u32 guc_id)
 
 	q = xa_load(&guc->submission_state.exec_queue_lookup, guc_id);
 	if (unlikely(!q)) {
-		xe_gt_err(gt, "Not engine present for guc_id %u\n", guc_id);
+		xe_gt_err(gt, "No exec queue found for guc_id %u\n", guc_id);
 		return NULL;
 	}
 
@@ -2528,7 +2526,7 @@ static void guc_exec_queue_print(struct xe_exec_queue *q, struct drm_printer *p)
 }
 
 /**
- * xe_guc_register_exec_queue - Register exec queue for a given context type.
+ * xe_guc_register_vf_exec_queue - Register exec queue for a given context type.
  * @q: Execution queue
  * @ctx_type: Type of the context
  *
@@ -2539,15 +2537,17 @@ static void guc_exec_queue_print(struct xe_exec_queue *q, struct drm_printer *p)
  *
  * Returns - None.
  */
-void xe_guc_register_exec_queue(struct xe_exec_queue *q, int ctx_type)
+void xe_guc_register_vf_exec_queue(struct xe_exec_queue *q, int ctx_type)
 {
 	struct xe_guc *guc = exec_queue_to_guc(q);
 	struct xe_device *xe = guc_to_xe(guc);
+	struct xe_gt *gt = guc_to_gt(guc);
 
-	xe_assert(xe, IS_SRIOV_VF(xe));
-	xe_assert(xe, !IS_DGFX(xe));
-	xe_assert(xe, (ctx_type > GUC_CONTEXT_NORMAL &&
-		       ctx_type < GUC_CONTEXT_COUNT));
+	xe_gt_assert(gt, IS_SRIOV_VF(xe));
+	xe_gt_assert(gt, !IS_DGFX(xe));
+	xe_gt_assert(gt, ctx_type == GUC_CONTEXT_COMPRESSION_SAVE ||
+		     ctx_type == GUC_CONTEXT_COMPRESSION_RESTORE);
+	xe_gt_assert(gt, GUC_SUBMIT_VER(guc) >= MAKE_GUC_VER(1, 23, 0));
 
 	register_exec_queue(q, ctx_type);
 	enable_scheduling(q);
