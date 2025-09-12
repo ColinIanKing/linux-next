@@ -1006,6 +1006,26 @@ config REGULATOR_PCAP
 	 This driver provides support for the voltage regulators of the
 	 PCAP2 PMIC.
 
+config REGULATOR_PF0900
+	tristate "NXP PF0900/PF0901/PF09XX regulator driver"
+	depends on I2C
+	select REGMAP_I2C
+	help
+	Say y here to support the NXP PF0900/PF0901/PF09XX PMIC
+	regulator driver.
+
+config REGULATOR_PF530X
+	tristate "NXP PF5300/PF5301/PF5302 regulator driver"
+	depends on I2C && OF
+	select REGMAP_I2C
+	help
+	  Say y here to support the regulators found on the NXP
+	  PF5300/PF5301/PF5302 PMIC.
+
+	  Say M here if you want to support for the regulators found
+	  on the NXP PF5300/PF5301/PF5302 PMIC. The module will be named
+	  "pf530x-regulator".
+
 config REGULATOR_PF8X00
 	tristate "NXP PF8100/PF8121A/PF8200 regulator driver"
 	depends on I2C && OF
@@ -1240,6 +1260,18 @@ config REGULATOR_RT5120
 	  600mV to 1395mV, per step 6.250mV. The others are all fixed voltage
 	  by external hardware circuit.
 
+config REGULATOR_RT5133
+	tristate "Richtek RT5133 PMIC Regulators"
+	depends on I2C && GPIOLIB && OF
+	select REGMAP
+	select CRC8
+	select OF_GPIO
+	help
+	  This driver adds support for RT5133 PMIC regulators.
+	  RT5133 is an integrated chip. It includes 8 LDOs and 3 GPOs that
+	  can be used to drive output high/low purpose. The dependency of the
+	  GPO block is internally LDO1 Voltage.
+
 config REGULATOR_RT5190A
 	tristate "Richtek RT5190A PMIC"
 	depends on I2C
@@ -1343,6 +1375,14 @@ config REGULATOR_RTQ2208
 	  integrate with dual multi-configurable, synchronous buck converters
 	  and two ldos. It features wide output voltage range from 0.4V to 2.05V
 	  and the capability to configure the corresponding power stages.
+
+config REGULATOR_S2DOS05
+	tristate "Samsung S2DOS05 voltage regulator"
+	depends on MFD_SEC_CORE || COMPILE_TEST
+	help
+	  This driver provides support for the voltage regulators of the S2DOS05.
+	  The S2DOS05 is a companion power management IC for the smart phones.
+	  The S2DOS05 has 4 LDOs and 1 BUCK outputs.
 
 config REGULATOR_S2MPA01
 	tristate "Samsung S2MPA01 voltage regulator"
