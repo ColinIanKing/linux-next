@@ -1302,6 +1302,7 @@ struct page **mmap_action_mixedmap_pages(struct mmap_action *action,
 }
 EXPORT_SYMBOL(mmap_action_mixedmap_pages);
 
+#ifdef CONFIG_MMU
 /**
  * mmap_action_prepare - Perform preparatory setup for an VMA descriptor
  * action which need to be performed.
@@ -1313,7 +1314,7 @@ EXPORT_SYMBOL(mmap_action_mixedmap_pages);
  * it wishes to perform.
  */
 void mmap_action_prepare(struct mmap_action *action,
-			     struct vm_area_desc *desc)
+			struct vm_area_desc *desc)
 {
 	switch (action->type) {
 	case MMAP_NOTHING:
@@ -1342,7 +1343,7 @@ EXPORT_SYMBOL(mmap_action_prepare);
  * Return: 0 on success, or error, at which point the VMA will be unmapped.
  */
 int mmap_action_complete(struct mmap_action *action,
-			     struct vm_area_struct *vma)
+			struct vm_area_struct *vma)
 {
 	int err = 0;
 
@@ -1424,6 +1425,69 @@ int mmap_action_complete(struct mmap_action *action,
 	return 0;
 }
 EXPORT_SYMBOL(mmap_action_complete);
+#else
+void mmap_action_prepare(struct mmap_action *action,
+			struct vm_area_desc *desc)
+{
+	switch (action->type) {
+	case MMAP_NOTHING:
+	case MMAP_CUSTOM_ACTION:
+		break;
+	case MMAP_REMAP_PFN:
+	case MMAP_INSERT_MIXED:
+	case MMAP_INSERT_MIXED_PAGES:
+		WARN_ON_ONCE(1); /* nommu cannot handle these. */
+		break;
+	}
+}
+EXPORT_SYMBOL(mmap_action_prepare);
+
+int mmap_action_complete(struct mmap_action *action,
+			struct vm_area_struct *vma)
+{
+	int err = 0;
+
+	switch (action->type) {
+	case MMAP_NOTHING:
+		break;
+	case MMAP_REMAP_PFN:
+	case MMAP_INSERT_MIXED:
+	case MMAP_INSERT_MIXED_PAGES:
+		WARN_ON_ONCE(1); /* nommu cannot handle these. */
+
+		break;
+	case MMAP_CUSTOM_ACTION:
+		err = action->custom.action_hook(vma);
+		break;
+	}
+
+	/*
+	* If an error occurs, unmap the VMA altogether and return an error. We
+	* only clear the newly allocated VMA, since this function is only
+	* invoked if we do NOT merge, so we only clean up the VMA we created.
+	*/
+	if (err) {
+		const size_t len = vma_pages(vma) << PAGE_SHIFT;
+
+		do_munmap(current->mm, vma->vm_start, len, NULL);
+
+		if (action->error_hook) {
+			/* We may want to filter the error. */
+			err = action->error_hook(err);
+
+			/* The caller should not clear the error. */
+			VM_WARN_ON_ONCE(!err);
+		}
+		return err;
+	}
+
+	if (action->success_hook)
+		err = action->success_hook(vma);
+
+	return 0;
+}
+EXPORT_SYMBOL(mmap_action_complete);
+#endif
 
 #ifdef CONFIG_MMU
 /**
