@@ -163,7 +163,7 @@ impl Spec {
 }
 
 /// Structure holding the resources required to operate the GPU.
-#[pin_data(PinnedDrop)]
+#[pin_data]
 pub(crate) struct Gpu {
     spec: Spec,
     /// MMIO mapping of PCI BAR 0
@@ -172,15 +172,6 @@ pub(crate) struct Gpu {
     /// System memory page required for flushing all pending GPU-side memory writes done through
     /// PCIE into system memory, via sysmembar (A GPU-initiated HW memory-barrier operation).
     sysmem_flush: SysmemFlush,
-}
-
-#[pinned_drop]
-impl PinnedDrop for Gpu {
-    fn drop(self: Pin<&mut Self>) {
-        // Unregister the sysmem flush page before we release it.
-        self.bar
-            .try_access_with(|b| self.sysmem_flush.unregister(b));
-    }
 }
 
 impl Gpu {
@@ -221,7 +212,7 @@ impl Gpu {
         fwsec_frts.run(dev, falcon, bar)?;
 
         // SCRATCH_E contains the error code for FWSEC-FRTS.
-        let frts_status = regs::NV_PBUS_SW_SCRATCH_0E::read(bar).frts_err_code();
+        let frts_status = regs::NV_PBUS_SW_SCRATCH_0E_FRTS_ERR::read(bar).frts_err_code();
         if frts_status != 0 {
             dev_err!(
                 dev,
@@ -298,7 +289,7 @@ impl Gpu {
         let fb_layout = FbLayout::new(spec.chipset, bar)?;
         dev_dbg!(pdev.as_ref(), "{:#x?}\n", fb_layout);
 
-        let bios = Vbios::new(pdev, bar)?;
+        let bios = Vbios::new(pdev.as_ref(), bar)?;
 
         Self::run_fwsec_frts(pdev.as_ref(), &gsp_falcon, bar, &bios, &fb_layout)?;
 
@@ -308,5 +299,16 @@ impl Gpu {
             fw,
             sysmem_flush,
         }))
+    }
+
+    /// Called when the corresponding [`Device`](device::Device) is unbound.
+    ///
+    /// Note: This method must only be called from `Driver::unbind`.
+    pub(crate) fn unbind(&self, dev: &device::Device<device::Core>) {
+        kernel::warn_on!(self
+            .bar
+            .access(dev)
+            .inspect(|bar| self.sysmem_flush.unregister(bar))
+            .is_err());
     }
 }
