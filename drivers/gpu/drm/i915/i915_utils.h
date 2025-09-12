@@ -67,30 +67,6 @@ bool i915_error_injected(void);
 		drm_err(&(i915)->drm, fmt, ##__VA_ARGS__); \
 })
 
-#define range_overflows(start, size, max) ({ \
-	typeof(start) start__ = (start); \
-	typeof(size) size__ = (size); \
-	typeof(max) max__ = (max); \
-	(void)(&start__ == &size__); \
-	(void)(&start__ == &max__); \
-	start__ >= max__ || size__ > max__ - start__; \
-})
-
-#define range_overflows_t(type, start, size, max) \
-	range_overflows((type)(start), (type)(size), (type)(max))
-
-#define range_overflows_end(start, size, max) ({ \
-	typeof(start) start__ = (start); \
-	typeof(size) size__ = (size); \
-	typeof(max) max__ = (max); \
-	(void)(&start__ == &size__); \
-	(void)(&start__ == &max__); \
-	start__ > max__ || size__ > max__ - start__; \
-})
-
-#define range_overflows_end_t(type, start, size, max) \
-	range_overflows_end((type)(start), (type)(size), (type)(max))
-
 #define ptr_mask_bits(ptr, n) ({					\
 	unsigned long __v = (unsigned long)(ptr);			\
 	(typeof(ptr))(__v & -BIT(n));					\
@@ -267,8 +243,13 @@ wait_remaining_ms_from_jiffies(unsigned long timestamp_jiffies, int to_wait_ms)
 						   (Wmax))
 #define wait_for(COND, MS)		_wait_for((COND), (MS) * 1000, 10, 1000)
 
-/* If CONFIG_PREEMPT_COUNT is disabled, in_atomic() always reports false. */
-#if IS_ENABLED(CONFIG_DRM_I915_DEBUG) && IS_ENABLED(CONFIG_PREEMPT_COUNT)
+/*
+ * If CONFIG_PREEMPT_COUNT is disabled, in_atomic() always reports false.
+ * On PREEMPT_RT the context isn't becoming atomic because it is used in an
+ * interrupt handler or because a spinlock_t is acquired. This leads to
+ * warnings which don't occur otherwise and therefore the check is disabled.
+ */
+#if IS_ENABLED(CONFIG_DRM_I915_DEBUG) && IS_ENABLED(CONFIG_PREEMPT_COUNT) && !defined(CONFIG_PREEMPT_RT)
 # define _WAIT_FOR_ATOMIC_CHECK(ATOMIC) WARN_ON_ONCE((ATOMIC) && !in_atomic())
 #else
 # define _WAIT_FOR_ATOMIC_CHECK(ATOMIC) do { } while (0)
