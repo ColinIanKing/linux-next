@@ -388,10 +388,10 @@ static int uvc_v4l2_try_format(struct uvc_streaming *stream,
 	return ret;
 }
 
-static int uvc_ioctl_g_fmt(struct file *file, void *fh,
+static int uvc_ioctl_g_fmt(struct file *file, void *priv,
 			   struct v4l2_format *fmt)
 {
-	struct uvc_fh *handle = fh;
+	struct uvc_fh *handle = to_uvc_fh(file);
 	struct uvc_streaming *stream = handle->stream;
 	const struct uvc_format *format;
 	const struct uvc_frame *frame;
@@ -424,10 +424,10 @@ done:
 	return ret;
 }
 
-static int uvc_ioctl_s_fmt(struct file *file, void *fh,
+static int uvc_ioctl_s_fmt(struct file *file, void *priv,
 			   struct v4l2_format *fmt)
 {
-	struct uvc_fh *handle = fh;
+	struct uvc_fh *handle = to_uvc_fh(file);
 	struct uvc_streaming *stream = handle->stream;
 	struct uvc_streaming_control probe;
 	const struct uvc_format *format;
@@ -456,11 +456,11 @@ done:
 	return ret;
 }
 
-static int uvc_ioctl_g_parm(struct file *file, void *fh,
+static int uvc_ioctl_g_parm(struct file *file, void *priv,
 			    struct v4l2_streamparm *parm)
 {
 	u32 numerator, denominator;
-	struct uvc_fh *handle = fh;
+	struct uvc_fh *handle = to_uvc_fh(file);
 	struct uvc_streaming *stream = handle->stream;
 
 	if (parm->type != stream->type)
@@ -493,10 +493,10 @@ static int uvc_ioctl_g_parm(struct file *file, void *fh,
 	return 0;
 }
 
-static int uvc_ioctl_s_parm(struct file *file, void *fh,
+static int uvc_ioctl_s_parm(struct file *file, void *priv,
 			    struct v4l2_streamparm *parm)
 {
-	struct uvc_fh *handle = fh;
+	struct uvc_fh *handle = to_uvc_fh(file);
 	struct uvc_streaming *stream = handle->stream;
 	struct uvc_streaming_control probe;
 	struct v4l2_fract timeperframe;
@@ -600,17 +600,16 @@ static int uvc_v4l2_open(struct file *file)
 		return -ENOMEM;
 
 	v4l2_fh_init(&handle->vfh, &stream->vdev);
-	v4l2_fh_add(&handle->vfh);
+	v4l2_fh_add(&handle->vfh, file);
 	handle->chain = stream->chain;
 	handle->stream = stream;
-	file->private_data = handle;
 
 	return 0;
 }
 
 static int uvc_v4l2_release(struct file *file)
 {
-	struct uvc_fh *handle = file->private_data;
+	struct uvc_fh *handle = to_uvc_fh(file);
 	struct uvc_streaming *stream = handle->stream;
 
 	uvc_dbg(stream->dev, CALLS, "%s\n", __func__);
@@ -623,10 +622,10 @@ static int uvc_v4l2_release(struct file *file)
 	return 0;
 }
 
-static int uvc_ioctl_querycap(struct file *file, void *fh,
+static int uvc_ioctl_querycap(struct file *file, void *priv,
 			      struct v4l2_capability *cap)
 {
-	struct uvc_fh *handle = file->private_data;
+	struct uvc_fh *handle = to_uvc_fh(file);
 	struct uvc_video_chain *chain = handle->chain;
 	struct uvc_streaming *stream = handle->stream;
 
@@ -639,10 +638,10 @@ static int uvc_ioctl_querycap(struct file *file, void *fh,
 	return 0;
 }
 
-static int uvc_ioctl_enum_fmt(struct file *file, void *fh,
+static int uvc_ioctl_enum_fmt(struct file *file, void *priv,
 			      struct v4l2_fmtdesc *fmt)
 {
-	struct uvc_fh *handle = fh;
+	struct uvc_fh *handle = to_uvc_fh(file);
 	struct uvc_streaming *stream = handle->stream;
 	enum v4l2_buf_type type = fmt->type;
 	const struct uvc_format *format;
@@ -663,20 +662,20 @@ static int uvc_ioctl_enum_fmt(struct file *file, void *fh,
 	return 0;
 }
 
-static int uvc_ioctl_try_fmt(struct file *file, void *fh,
+static int uvc_ioctl_try_fmt(struct file *file, void *priv,
 			     struct v4l2_format *fmt)
 {
-	struct uvc_fh *handle = fh;
+	struct uvc_fh *handle = to_uvc_fh(file);
 	struct uvc_streaming *stream = handle->stream;
 	struct uvc_streaming_control probe;
 
 	return uvc_v4l2_try_format(stream, fmt, &probe, NULL, NULL);
 }
 
-static int uvc_ioctl_enum_input(struct file *file, void *fh,
+static int uvc_ioctl_enum_input(struct file *file, void *priv,
 				struct v4l2_input *input)
 {
-	struct uvc_fh *handle = fh;
+	struct uvc_fh *handle = to_uvc_fh(file);
 	struct uvc_video_chain *chain = handle->chain;
 	const struct uvc_entity *selector = chain->selector;
 	struct uvc_entity *iterm = NULL;
@@ -716,9 +715,9 @@ static int uvc_ioctl_enum_input(struct file *file, void *fh,
 	return 0;
 }
 
-static int uvc_ioctl_g_input(struct file *file, void *fh, unsigned int *input)
+static int uvc_ioctl_g_input(struct file *file, void *priv, unsigned int *input)
 {
-	struct uvc_fh *handle = fh;
+	struct uvc_fh *handle = to_uvc_fh(file);
 	struct uvc_video_chain *chain = handle->chain;
 	u8 *buf;
 	int ret;
@@ -744,9 +743,9 @@ static int uvc_ioctl_g_input(struct file *file, void *fh, unsigned int *input)
 	return ret;
 }
 
-static int uvc_ioctl_s_input(struct file *file, void *fh, unsigned int input)
+static int uvc_ioctl_s_input(struct file *file, void *priv, unsigned int input)
 {
-	struct uvc_fh *handle = fh;
+	struct uvc_fh *handle = to_uvc_fh(file);
 	struct uvc_streaming *stream = handle->stream;
 	struct uvc_video_chain *chain = handle->chain;
 	u8 *buf;
@@ -778,10 +777,10 @@ static int uvc_ioctl_s_input(struct file *file, void *fh, unsigned int input)
 	return ret;
 }
 
-static int uvc_ioctl_query_ext_ctrl(struct file *file, void *fh,
+static int uvc_ioctl_query_ext_ctrl(struct file *file, void *priv,
 				    struct v4l2_query_ext_ctrl *qec)
 {
-	struct uvc_fh *handle = fh;
+	struct uvc_fh *handle = to_uvc_fh(file);
 	struct uvc_video_chain *chain = handle->chain;
 
 	return uvc_query_v4l2_ctrl(chain, qec);
@@ -806,10 +805,10 @@ static int uvc_ctrl_check_access(struct uvc_video_chain *chain,
 	return ret;
 }
 
-static int uvc_ioctl_g_ext_ctrls(struct file *file, void *fh,
+static int uvc_ioctl_g_ext_ctrls(struct file *file, void *priv,
 				 struct v4l2_ext_controls *ctrls)
 {
-	struct uvc_fh *handle = fh;
+	struct uvc_fh *handle = to_uvc_fh(file);
 	struct uvc_video_chain *chain = handle->chain;
 	struct v4l2_ext_control *ctrl = ctrls->controls;
 	unsigned int i;
@@ -890,35 +889,35 @@ static int uvc_ioctl_s_try_ext_ctrls(struct uvc_fh *handle,
 		return uvc_ctrl_rollback(handle);
 }
 
-static int uvc_ioctl_s_ext_ctrls(struct file *file, void *fh,
+static int uvc_ioctl_s_ext_ctrls(struct file *file, void *priv,
 				 struct v4l2_ext_controls *ctrls)
 {
-	struct uvc_fh *handle = fh;
+	struct uvc_fh *handle = to_uvc_fh(file);
 
 	return uvc_ioctl_s_try_ext_ctrls(handle, ctrls, VIDIOC_S_EXT_CTRLS);
 }
 
-static int uvc_ioctl_try_ext_ctrls(struct file *file, void *fh,
+static int uvc_ioctl_try_ext_ctrls(struct file *file, void *priv,
 				   struct v4l2_ext_controls *ctrls)
 {
-	struct uvc_fh *handle = fh;
+	struct uvc_fh *handle = to_uvc_fh(file);
 
 	return uvc_ioctl_s_try_ext_ctrls(handle, ctrls, VIDIOC_TRY_EXT_CTRLS);
 }
 
-static int uvc_ioctl_querymenu(struct file *file, void *fh,
+static int uvc_ioctl_querymenu(struct file *file, void *priv,
 			       struct v4l2_querymenu *qm)
 {
-	struct uvc_fh *handle = fh;
+	struct uvc_fh *handle = to_uvc_fh(file);
 	struct uvc_video_chain *chain = handle->chain;
 
 	return uvc_query_v4l2_menu(chain, qm);
 }
 
-static int uvc_ioctl_g_selection(struct file *file, void *fh,
+static int uvc_ioctl_g_selection(struct file *file, void *priv,
 				 struct v4l2_selection *sel)
 {
-	struct uvc_fh *handle = fh;
+	struct uvc_fh *handle = to_uvc_fh(file);
 	struct uvc_streaming *stream = handle->stream;
 
 	if (sel->type != stream->type)
@@ -949,10 +948,10 @@ static int uvc_ioctl_g_selection(struct file *file, void *fh,
 	return 0;
 }
 
-static int uvc_ioctl_enum_framesizes(struct file *file, void *fh,
+static int uvc_ioctl_enum_framesizes(struct file *file, void *priv,
 				     struct v4l2_frmsizeenum *fsize)
 {
-	struct uvc_fh *handle = fh;
+	struct uvc_fh *handle = to_uvc_fh(file);
 	struct uvc_streaming *stream = handle->stream;
 	const struct uvc_format *format = NULL;
 	const struct uvc_frame *frame = NULL;
@@ -989,10 +988,10 @@ static int uvc_ioctl_enum_framesizes(struct file *file, void *fh,
 	return 0;
 }
 
-static int uvc_ioctl_enum_frameintervals(struct file *file, void *fh,
+static int uvc_ioctl_enum_frameintervals(struct file *file, void *priv,
 					 struct v4l2_frmivalenum *fival)
 {
-	struct uvc_fh *handle = fh;
+	struct uvc_fh *handle = to_uvc_fh(file);
 	struct uvc_streaming *stream = handle->stream;
 	const struct uvc_format *format = NULL;
 	const struct uvc_frame *frame = NULL;
@@ -1061,10 +1060,10 @@ static int uvc_ioctl_subscribe_event(struct v4l2_fh *fh,
 	}
 }
 
-static long uvc_ioctl_default(struct file *file, void *fh, bool valid_prio,
+static long uvc_ioctl_default(struct file *file, void *priv, bool valid_prio,
 			      unsigned int cmd, void *arg)
 {
-	struct uvc_fh *handle = fh;
+	struct uvc_fh *handle = to_uvc_fh(file);
 	struct uvc_video_chain *chain = handle->chain;
 
 	switch (cmd) {
@@ -1170,7 +1169,7 @@ static int uvc_v4l2_put_xu_query(const struct uvc_xu_control_query *kp,
 static long uvc_v4l2_compat_ioctl32(struct file *file,
 		     unsigned int cmd, unsigned long arg)
 {
-	struct uvc_fh *handle = file->private_data;
+	struct uvc_fh *handle = to_uvc_fh(file);
 	union {
 		struct uvc_xu_control_mapping xmap;
 		struct uvc_xu_control_query xqry;
@@ -1221,7 +1220,7 @@ static long uvc_v4l2_compat_ioctl32(struct file *file,
 static long uvc_v4l2_unlocked_ioctl(struct file *file,
 				    unsigned int cmd, unsigned long arg)
 {
-	struct uvc_fh *handle = file->private_data;
+	struct uvc_fh *handle = to_uvc_fh(file);
 	unsigned int converted_cmd = v4l2_translate_cmd(cmd);
 	int ret;
 
