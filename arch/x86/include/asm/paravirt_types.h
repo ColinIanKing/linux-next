@@ -41,10 +41,12 @@ struct pv_info {
 };
 
 #ifdef CONFIG_PARAVIRT_XXL
+typedef int lazy_mmu_state_t;
+
 struct pv_lazy_ops {
 	/* Set deferred update mode, used for batching operations. */
-	void (*enter)(void);
-	void (*leave)(void);
+	lazy_mmu_state_t (*enter)(void);
+	void (*leave)(lazy_mmu_state_t);
 	void (*flush)(void);
 } __no_randomize_layout;
 #endif

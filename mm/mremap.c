@@ -193,6 +193,7 @@ static int mremap_folio_pte_batch(struct vm_area_struct *vma, unsigned long addr
 static int move_ptes(struct pagetable_move_control *pmc,
 		unsigned long extent, pmd_t *old_pmd, pmd_t *new_pmd)
 {
+	lazy_mmu_state_t lazy_mmu_state;
 	struct vm_area_struct *vma = pmc->old;
 	bool need_clear_uffd_wp = vma_has_uffd_without_event_remap(vma);
 	struct mm_struct *mm = vma->vm_mm;
@@ -256,7 +257,7 @@ static int move_ptes(struct pagetable_move_control *pmc,
 	if (new_ptl != old_ptl)
 		spin_lock_nested(new_ptl, SINGLE_DEPTH_NESTING);
 	flush_tlb_batched_pending(vma->vm_mm);
-	arch_enter_lazy_mmu_mode();
+	lazy_mmu_state = arch_enter_lazy_mmu_mode();
 
 	for (; old_addr < old_end; old_ptep += nr_ptes, old_addr += nr_ptes * PAGE_SIZE,
 		new_ptep += nr_ptes, new_addr += nr_ptes * PAGE_SIZE) {
@@ -301,7 +302,7 @@ static int move_ptes(struct pagetable_move_control *pmc,
 		}
 	}
 
-	arch_leave_lazy_mmu_mode();
+	arch_leave_lazy_mmu_mode(lazy_mmu_state);
 	if (force_flush)
 		flush_tlb_range(vma, old_end - len, old_end);
 	if (new_ptl != old_ptl)

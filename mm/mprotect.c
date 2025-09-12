@@ -273,6 +273,7 @@ static long change_pte_range(struct mmu_gather *tlb,
 		struct vm_area_struct *vma, pmd_t *pmd, unsigned long addr,
 		unsigned long end, pgprot_t newprot, unsigned long cp_flags)
 {
+	lazy_mmu_state_t lazy_mmu_state;
 	pte_t *pte, oldpte;
 	spinlock_t *ptl;
 	long pages = 0;
@@ -293,7 +294,7 @@ static long change_pte_range(struct mmu_gather *tlb,
 		target_node = numa_node_id();
 
 	flush_tlb_batched_pending(vma->vm_mm);
-	arch_enter_lazy_mmu_mode();
+	lazy_mmu_state = arch_enter_lazy_mmu_mode();
 	do {
 		nr_ptes = 1;
 		oldpte = ptep_get(pte);
@@ -439,7 +440,7 @@ static long change_pte_range(struct mmu_gather *tlb,
 			}
 		}
 	} while (pte += nr_ptes, addr += nr_ptes * PAGE_SIZE, addr != end);
-	arch_leave_lazy_mmu_mode();
+	arch_leave_lazy_mmu_mode(lazy_mmu_state);
 	pte_unmap_unlock(pte - 1, ptl);
 
 	return pages;
