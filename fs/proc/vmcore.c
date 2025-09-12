@@ -592,11 +592,10 @@ static int mmap_prepare_action_vmcore(struct vm_area_struct *vma)
 {
 	struct mmap_action action;
 	size_t size = vma->vm_end - vma->vm_start;
-	u64 start, end, len, tsz;
+	u64 start, len, tsz;
 	struct vmcore_range *m;
 
 	start = (u64)vma->vm_pgoff << PAGE_SHIFT;
-	end = start + size;
 	len = 0;
 
 	if (start < elfcorebuf_sz) {
