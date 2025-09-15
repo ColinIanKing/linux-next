@@ -1364,15 +1364,14 @@ int mmap_action_complete(struct mmap_action *action,
 		unsigned long pgnum = 0;
 		unsigned long pfn = action->mixedmap.pfn;
 		unsigned long addr = action->mixedmap.addr;
-		unsigned long vaddr = vma->vm_start;
 
 		VM_WARN_ON_ONCE(!(vma->vm_flags & VM_MIXEDMAP));
 
 		for (; pgnum < action->mixedmap.num_pages;
-		     pgnum++, pfn++, addr += PAGE_SIZE, vaddr += PAGE_SIZE) {
+		    pgnum++, pfn++, addr += PAGE_SIZE) {
 			vm_fault_t vmf;
 
-			vmf = vmf_insert_mixed(vma, vaddr, addr);
+			vmf = vmf_insert_mixed(vma, addr, pfn);
 			if (vmf & VM_FAULT_ERROR) {
 				err = vm_fault_to_errno(vmf, 0);
 				break;
