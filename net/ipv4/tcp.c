@@ -412,6 +412,22 @@ static u64 tcp_compute_delivery_rate(const struct tcp_sock *tp)
 	return rate64;
 }
 
+#ifdef CONFIG_TCP_MD5SIG
+void tcp_md5_destruct_sock(struct sock *sk)
+{
+	struct tcp_sock *tp = tcp_sk(sk);
+
+	if (tp->md5sig_info) {
+
+		tcp_clear_md5_list(sk);
+		kfree(rcu_replace_pointer(tp->md5sig_info, NULL, 1));
+		static_branch_slow_dec_deferred(&tcp_md5_needed);
+		tcp_md5_release_sigpool();
+	}
+}
+EXPORT_IPV6_MOD_GPL(tcp_md5_destruct_sock);
+#endif
+
 /* Address-family independent initialization for a tcp_sock.
  *
  * NOTE: A lot of things set to zero explicitly by call to
@@ -2818,9 +2834,9 @@ found_ok_skb:
 
 				err = tcp_recvmsg_dmabuf(sk, skb, offset, msg,
 							 used);
-				if (err <= 0) {
+				if (err < 0) {
 					if (!copied)
-						copied = -EFAULT;
+						copied = err;
 
 					break;
 				}
@@ -3099,8 +3115,8 @@ bool tcp_check_oom(const struct sock *sk, int shift)
 
 void __tcp_close(struct sock *sk, long timeout)
 {
+	bool data_was_unread = false;
 	struct sk_buff *skb;
-	int data_was_unread = 0;
 	int state;
 
 	WRITE_ONCE(sk->sk_shutdown, SHUTDOWN_MASK);
@@ -3118,13 +3134,14 @@ void __tcp_close(struct sock *sk, long timeout)
 	 *  descriptor close, not protocol-sourced closes, because the
 	 *  reader process may not have drained the data yet!
 	 */
-	while ((skb = __skb_dequeue(&sk->sk_receive_queue)) != NULL) {
-		u32 len = TCP_SKB_CB(skb)->end_seq - TCP_SKB_CB(skb)->seq;
+	while ((skb = skb_peek(&sk->sk_receive_queue)) != NULL) {
+		u32 end_seq = TCP_SKB_CB(skb)->end_seq;
 
 		if (TCP_SKB_CB(skb)->tcp_flags & TCPHDR_FIN)
-			len--;
-		data_was_unread += len;
-		__kfree_skb(skb);
+			end_seq--;
+		if (after(end_seq, tcp_sk(sk)->copied_seq))
+			data_was_unread = true;
+		tcp_eat_recv_skb(sk, skb);
 	}
 
 	/* If socket has been already reset (e.g. in tcp_reset()) - kill it. */
@@ -3195,7 +3212,7 @@ adjudge_to_death:
 	/* remove backlog if any, without releasing ownership. */
 	__release_sock(sk);
 
-	this_cpu_inc(tcp_orphan_count);
+	tcp_orphan_count_inc();
 
 	/* Have we already been destroyed by a softirq or backlog? */
 	if (state != TCP_CLOSE && sk->sk_state == TCP_CLOSE)
@@ -3376,7 +3393,7 @@ int tcp_disconnect(struct sock *sk, int flags)
 	WRITE_ONCE(tp->write_seq, seq);
 
 	icsk->icsk_backoff = 0;
-	icsk->icsk_probes_out = 0;
+	WRITE_ONCE(icsk->icsk_probes_out, 0);
 	icsk->icsk_probes_tstamp = 0;
 	icsk->icsk_rto = TCP_TIMEOUT_INIT;
 	WRITE_ONCE(icsk->icsk_rto_min, TCP_RTO_MIN);
@@ -3760,7 +3777,7 @@ int tcp_sock_set_maxseg(struct sock *sk, int val)
 	if (val && (val < TCP_MIN_MSS || val > MAX_TCP_WINDOW))
 		return -EINVAL;
 
-	tcp_sk(sk)->rx_opt.user_mss = val;
+	WRITE_ONCE(tcp_sk(sk)->rx_opt.user_mss, val);
 	return 0;
 }
 
@@ -3890,15 +3907,13 @@ int do_tcp_setsockopt(struct sock *sk, int level, int optname,
 		WRITE_ONCE(inet_csk(sk)->icsk_delack_max, delack_max);
 		return 0;
 	}
+	case TCP_MAXSEG:
+		return tcp_sock_set_maxseg(sk, val);
 	}
 
 	sockopt_lock_sock(sk);
 
 	switch (optname) {
-	case TCP_MAXSEG:
-		err = tcp_sock_set_maxseg(sk, val);
-		break;
-
 	case TCP_NODELAY:
 		__tcp_sock_set_nodelay(sk, val);
 		break;
@@ -4348,7 +4363,8 @@ struct sk_buff *tcp_get_timestamping_opt_stats(const struct sock *sk,
 	nla_put_u32(stats, TCP_NLA_REORDERING, tp->reordering);
 	nla_put_u32(stats, TCP_NLA_MIN_RTT, tcp_min_rtt(tp));
 
-	nla_put_u8(stats, TCP_NLA_RECUR_RETRANS, inet_csk(sk)->icsk_retransmits);
+	nla_put_u8(stats, TCP_NLA_RECUR_RETRANS,
+		   READ_ONCE(inet_csk(sk)->icsk_retransmits));
 	nla_put_u8(stats, TCP_NLA_DELIVERY_RATE_APP_LMT, !!tp->rate_app_limited);
 	nla_put_u32(stats, TCP_NLA_SND_SSTHRESH, tp->snd_ssthresh);
 	nla_put_u32(stats, TCP_NLA_DELIVERED, tp->delivered);
@@ -4383,6 +4399,7 @@ int do_tcp_getsockopt(struct sock *sk, int level,
 	struct inet_connection_sock *icsk = inet_csk(sk);
 	struct tcp_sock *tp = tcp_sk(sk);
 	struct net *net = sock_net(sk);
+	int user_mss;
 	int val, len;
 
 	if (copy_from_sockptr(&len, optlen, sizeof(int)))
@@ -4396,9 +4413,10 @@ int do_tcp_getsockopt(struct sock *sk, int level,
 	switch (optname) {
 	case TCP_MAXSEG:
 		val = tp->mss_cache;
-		if (tp->rx_opt.user_mss &&
+		user_mss = READ_ONCE(tp->rx_opt.user_mss);
+		if (user_mss &&
 		    ((1 << sk->sk_state) & (TCPF_CLOSE | TCPF_LISTEN)))
-			val = tp->rx_opt.user_mss;
+			val = user_mss;
 		if (tp->repair)
 			val = tp->rx_opt.mss_clamp;
 		break;

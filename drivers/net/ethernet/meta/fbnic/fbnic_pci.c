@@ -135,7 +135,7 @@ void fbnic_up(struct fbnic_net *fbn)
 
 	fbnic_rss_reinit_hw(fbn->fbd, fbn);
 
-	__fbnic_set_rx_mode(fbn->netdev);
+	__fbnic_set_rx_mode(fbn->fbd);
 
 	/* Enable Tx/Rx processing */
 	fbnic_napi_enable(fbn);
@@ -152,7 +152,7 @@ void fbnic_down_noidle(struct fbnic_net *fbn)
 	fbnic_napi_disable(fbn);
 	netif_tx_disable(fbn->netdev);
 
-	fbnic_clear_rx_mode(fbn->netdev);
+	fbnic_clear_rx_mode(fbn->fbd);
 	fbnic_clear_rules(fbn->fbd);
 	fbnic_rss_disable_hw(fbn->fbd);
 	fbnic_disable(fbn);
@@ -204,8 +204,13 @@ static void fbnic_service_task(struct work_struct *work)
 
 	fbnic_health_check(fbd);
 
-	if (netif_carrier_ok(fbd->netdev))
+	fbnic_bmc_rpc_check(fbd);
+
+	if (netif_carrier_ok(fbd->netdev)) {
+		netdev_lock(fbd->netdev);
 		fbnic_napi_depletion_check(fbd->netdev);
+		netdev_unlock(fbd->netdev);
+	}
 
 	if (netif_running(fbd->netdev))
 		schedule_delayed_work(&fbd->service_task, HZ);
@@ -302,10 +307,9 @@ static int fbnic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 	fbnic_devlink_register(fbd);
 	fbnic_dbg_fbd_init(fbd);
-	spin_lock_init(&fbd->hw_stats_lock);
 
 	/* Capture snapshot of hardware stats so netdev can calculate delta */
-	fbnic_reset_hw_stats(fbd);
+	fbnic_init_hw_stats(fbd);
 
 	fbnic_hwmon_register(fbd);
 
@@ -390,12 +394,14 @@ static int fbnic_pm_suspend(struct device *dev)
 		goto null_uc_addr;
 
 	rtnl_lock();
+	netdev_lock(netdev);
 
 	netif_device_detach(netdev);
 
 	if (netif_running(netdev))
 		netdev->netdev_ops->ndo_stop(netdev);
 
+	netdev_unlock(netdev);
 	rtnl_unlock();
 
 null_uc_addr:
@@ -460,10 +466,12 @@ static int __fbnic_pm_resume(struct device *dev)
 	fbnic_reset_queues(fbn, fbn->num_tx_queues, fbn->num_rx_queues);
 
 	rtnl_lock();
+	netdev_lock(netdev);
 
 	if (netif_running(netdev))
 		err = __fbnic_open(fbn);
 
+	netdev_unlock(netdev);
 	rtnl_unlock();
 	if (err)
 		goto err_free_mbx;
@@ -488,6 +496,10 @@ static void __fbnic_pm_attach(struct device *dev)
 	struct fbnic_dev *fbd = dev_get_drvdata(dev);
 	struct net_device *netdev = fbd->netdev;
 	struct fbnic_net *fbn;
+
+	rtnl_lock();
+	fbnic_reset_hw_stats(fbd);
+	rtnl_unlock();
 
 	if (fbnic_init_failure(fbd))
 		return;
