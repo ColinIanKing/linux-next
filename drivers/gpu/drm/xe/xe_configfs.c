@@ -21,7 +21,7 @@
  * DOC: Xe Configfs
  *
  * Overview
- * =========
+ * ========
  *
  * Configfs is a filesystem-based manager of kernel objects. XE KMD registers a
  * configfs subsystem called ``xe`` that creates a directory in the mounted
@@ -34,7 +34,7 @@
  *
  * To create a device, the ``xe`` module should already be loaded, but some
  * attributes can only be set before binding the device. It can be accomplished
- * by blocking the driver autoprobe:
+ * by blocking the driver autoprobe::
  *
  *	# echo 0 > /sys/bus/pci/drivers_autoprobe
  *	# modprobe xe
@@ -134,6 +134,8 @@ struct xe_config_group_device {
 
 	/* protects attributes */
 	struct mutex lock;
+	/* matching descriptor */
+	const struct xe_device_desc *desc;
 };
 
 static const struct xe_config_device device_defaults = {
@@ -362,8 +364,26 @@ static struct configfs_item_operations xe_config_device_ops = {
 	.release	= xe_config_device_release,
 };
 
+static bool xe_config_device_is_visible(struct config_item *item,
+					struct configfs_attribute *attr, int n)
+{
+	struct xe_config_group_device *dev = to_xe_config_group_device(item);
+
+	if (attr == &attr_survivability_mode) {
+		if (!dev->desc->is_dgfx || dev->desc->platform < XE_BATTLEMAGE)
+			return false;
+	}
+
+	return true;
+}
+
+static struct configfs_group_operations xe_config_device_group_ops = {
+	.is_visible	= xe_config_device_is_visible,
+};
+
 static const struct config_item_type xe_config_device_type = {
 	.ct_item_ops	= &xe_config_device_ops,
+	.ct_group_ops	= &xe_config_device_group_ops,
 	.ct_attrs	= xe_config_device_attrs,
 	.ct_owner	= THIS_MODULE,
 };
@@ -442,6 +462,7 @@ static struct config_group *xe_config_make_device_group(struct config_group *gro
 	if (!dev)
 		return ERR_PTR(-ENOMEM);
 
+	dev->desc = match;
 	set_device_defaults(&dev->config);
 
 	config_group_init_type_name(&dev->group, name, &xe_config_device_type);
@@ -451,12 +472,12 @@ static struct config_group *xe_config_make_device_group(struct config_group *gro
 	return &dev->group;
 }
 
-static struct configfs_group_operations xe_config_device_group_ops = {
+static struct configfs_group_operations xe_config_group_ops = {
 	.make_group	= xe_config_make_device_group,
 };
 
 static const struct config_item_type xe_configfs_type = {
-	.ct_group_ops	= &xe_config_device_group_ops,
+	.ct_group_ops	= &xe_config_group_ops,
 	.ct_owner	= THIS_MODULE,
 };
 
@@ -543,23 +564,6 @@ bool xe_configfs_get_survivability_mode(struct pci_dev *pdev)
 }
 
 /**
- * xe_configfs_clear_survivability_mode - clear configfs survivability mode
- * @pdev: pci device
- */
-void xe_configfs_clear_survivability_mode(struct pci_dev *pdev)
-{
-	struct xe_config_group_device *dev = find_xe_config_group_device(pdev);
-
-	if (!dev)
-		return;
-
-	guard(mutex)(&dev->lock);
-	dev->config.survivability_mode = 0;
-
-	config_group_put(&dev->group);
-}
-
-/**
  * xe_configfs_get_engines_allowed - get engine allowed mask from configfs
  * @pdev: pci device
  *
@@ -594,7 +598,7 @@ bool xe_configfs_get_psmi_enabled(struct pci_dev *pdev)
 		return false;
 
 	ret = dev->config.enable_psmi;
-	config_item_put(&dev->group.cg_item);
+	config_group_put(&dev->group);
 
 	return ret;
 }

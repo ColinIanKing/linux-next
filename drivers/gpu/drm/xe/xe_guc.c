@@ -74,8 +74,7 @@ static u32 guc_ctl_debug_flags(struct xe_guc *guc)
 	if (!GUC_LOG_LEVEL_IS_VERBOSE(level))
 		flags |= GUC_LOG_DISABLED;
 	else
-		flags |= GUC_LOG_LEVEL_TO_VERBOSITY(level) <<
-			 GUC_LOG_VERBOSITY_SHIFT;
+		flags |= FIELD_PREP(GUC_LOG_VERBOSITY, GUC_LOG_LEVEL_TO_VERBOSITY(level));
 
 	return flags;
 }
@@ -122,22 +121,14 @@ static u32 guc_ctl_log_params_flags(struct xe_guc *guc)
 	BUILD_BUG_ON(!CAPTURE_BUFFER_SIZE);
 	BUILD_BUG_ON(!IS_ALIGNED(CAPTURE_BUFFER_SIZE, CAPTURE_UNIT));
 
-	BUILD_BUG_ON((CRASH_BUFFER_SIZE / LOG_UNIT - 1) >
-			(GUC_LOG_CRASH_MASK >> GUC_LOG_CRASH_SHIFT));
-	BUILD_BUG_ON((DEBUG_BUFFER_SIZE / LOG_UNIT - 1) >
-			(GUC_LOG_DEBUG_MASK >> GUC_LOG_DEBUG_SHIFT));
-	BUILD_BUG_ON((CAPTURE_BUFFER_SIZE / CAPTURE_UNIT - 1) >
-			(GUC_LOG_CAPTURE_MASK >> GUC_LOG_CAPTURE_SHIFT));
-
 	flags = GUC_LOG_VALID |
 		GUC_LOG_NOTIFY_ON_HALF_FULL |
 		CAPTURE_FLAG |
 		LOG_FLAG |
-		((CRASH_BUFFER_SIZE / LOG_UNIT - 1) << GUC_LOG_CRASH_SHIFT) |
-		((DEBUG_BUFFER_SIZE / LOG_UNIT - 1) << GUC_LOG_DEBUG_SHIFT) |
-		((CAPTURE_BUFFER_SIZE / CAPTURE_UNIT - 1) <<
-		 GUC_LOG_CAPTURE_SHIFT) |
-		(offset << GUC_LOG_BUF_ADDR_SHIFT);
+		FIELD_PREP(GUC_LOG_CRASH, CRASH_BUFFER_SIZE / LOG_UNIT - 1) |
+		FIELD_PREP(GUC_LOG_DEBUG, DEBUG_BUFFER_SIZE / LOG_UNIT - 1) |
+		FIELD_PREP(GUC_LOG_CAPTURE, CAPTURE_BUFFER_SIZE / CAPTURE_UNIT - 1) |
+		FIELD_PREP(GUC_LOG_BUF_ADDR, offset);
 
 	#undef LOG_UNIT
 	#undef LOG_FLAG
@@ -150,7 +141,7 @@ static u32 guc_ctl_log_params_flags(struct xe_guc *guc)
 static u32 guc_ctl_ads_flags(struct xe_guc *guc)
 {
 	u32 ads = guc_bo_ggtt_addr(guc, guc->ads.bo) >> PAGE_SHIFT;
-	u32 flags = ads << GUC_ADS_ADDR_SHIFT;
+	u32 flags = FIELD_PREP(GUC_ADS_ADDR, ads);
 
 	return flags;
 }
@@ -709,10 +700,6 @@ static int xe_guc_realloc_post_hwconfig(struct xe_guc *guc)
 	if (ret)
 		return ret;
 
-	ret = xe_managed_bo_reinit_in_vram(xe, tile, &guc->ct.bo);
-	if (ret)
-		return ret;
-
 	return 0;
 }
 
@@ -847,6 +834,10 @@ int xe_guc_init_post_hwconfig(struct xe_guc *guc)
 	if (ret)
 		return ret;
 
+	ret = xe_guc_ct_init_post_hwconfig(&guc->ct);
+	if (ret)
+		return ret;
+
 	guc_init_params_post_hwconfig(guc);
 
 	ret = xe_guc_submit_init(guc, ~0);
@@ -888,9 +879,7 @@ int xe_guc_post_load_init(struct xe_guc *guc)
 			return ret;
 	}
 
-	guc->submission_state.enabled = true;
-
-	return 0;
+	return xe_guc_submit_enable(guc);
 }
 
 int xe_guc_reset(struct xe_guc *guc)
@@ -1602,7 +1591,7 @@ void xe_guc_sanitize(struct xe_guc *guc)
 {
 	xe_uc_fw_sanitize(&guc->fw);
 	xe_guc_ct_disable(&guc->ct);
-	guc->submission_state.enabled = false;
+	xe_guc_submit_disable(guc);
 }
 
 int xe_guc_reset_prepare(struct xe_guc *guc)
@@ -1695,3 +1684,7 @@ void xe_guc_declare_wedged(struct xe_guc *guc)
 	xe_guc_ct_stop(&guc->ct);
 	xe_guc_submit_wedge(guc);
 }
+
+#if IS_ENABLED(CONFIG_DRM_XE_KUNIT_TEST)
+#include "tests/xe_guc_g2g_test.c"
+#endif

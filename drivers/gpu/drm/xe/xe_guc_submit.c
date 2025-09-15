@@ -32,6 +32,7 @@
 #include "xe_guc_ct.h"
 #include "xe_guc_exec_queue_types.h"
 #include "xe_guc_id_mgr.h"
+#include "xe_guc_klv_helpers.h"
 #include "xe_guc_submit_types.h"
 #include "xe_hw_engine.h"
 #include "xe_hw_fence.h"
@@ -316,6 +317,71 @@ int xe_guc_submit_init(struct xe_guc *guc, unsigned int num_ids)
 	return drmm_add_action_or_reset(&xe->drm, guc_submit_fini, guc);
 }
 
+/*
+ * Given that we want to guarantee enough RCS throughput to avoid missing
+ * frames, we set the yield policy to 20% of each 80ms interval.
+ */
+#define RC_YIELD_DURATION	80	/* in ms */
+#define RC_YIELD_RATIO		20	/* in percent */
+static u32 *emit_render_compute_yield_klv(u32 *emit)
+{
+	*emit++ = PREP_GUC_KLV_TAG(SCHEDULING_POLICIES_RENDER_COMPUTE_YIELD);
+	*emit++ = RC_YIELD_DURATION;
+	*emit++ = RC_YIELD_RATIO;
+
+	return emit;
+}
+
+#define SCHEDULING_POLICY_MAX_DWORDS 16
+static int guc_init_global_schedule_policy(struct xe_guc *guc)
+{
+	u32 data[SCHEDULING_POLICY_MAX_DWORDS];
+	u32 *emit = data;
+	u32 count = 0;
+	int ret;
+
+	if (GUC_SUBMIT_VER(guc) < MAKE_GUC_VER(1, 1, 0))
+		return 0;
+
+	*emit++ = XE_GUC_ACTION_UPDATE_SCHEDULING_POLICIES_KLV;
+
+	if (CCS_MASK(guc_to_gt(guc)))
+		emit = emit_render_compute_yield_klv(emit);
+
+	count = emit - data;
+	if (count > 1) {
+		xe_assert(guc_to_xe(guc), count <= SCHEDULING_POLICY_MAX_DWORDS);
+
+		ret = xe_guc_ct_send_block(&guc->ct, data, count);
+		if (ret < 0) {
+			xe_gt_err(guc_to_gt(guc),
+				  "failed to enable GuC scheduling policies: %pe\n",
+				  ERR_PTR(ret));
+			return ret;
+		}
+	}
+
+	return 0;
+}
+
+int xe_guc_submit_enable(struct xe_guc *guc)
+{
+	int ret;
+
+	ret = guc_init_global_schedule_policy(guc);
+	if (ret)
+		return ret;
+
+	guc->submission_state.enabled = true;
+
+	return 0;
+}
+
+void xe_guc_submit_disable(struct xe_guc *guc)
+{
+	guc->submission_state.enabled = false;
+}
+
 static void __release_guc_id(struct xe_guc *guc, struct xe_exec_queue *q, u32 xa_count)
 {
 	int i;
@@ -558,10 +624,8 @@ static void register_exec_queue(struct xe_exec_queue *q, int ctx_type)
 	info.engine_submit_mask = q->logical_mask;
 	info.hwlrca_lo = lower_32_bits(xe_lrc_descriptor(lrc));
 	info.hwlrca_hi = upper_32_bits(xe_lrc_descriptor(lrc));
-	info.flags = CONTEXT_REGISTRATION_FLAG_KMD;
-
-	if (ctx_type != GUC_CONTEXT_NORMAL)
-		info.flags |= BIT(ctx_type);
+	info.flags = CONTEXT_REGISTRATION_FLAG_KMD |
+		FIELD_PREP(CONTEXT_REGISTRATION_FLAG_TYPE, ctx_type);
 
 	if (xe_exec_queue_is_parallel(q)) {
 		u64 ggtt_addr = xe_lrc_parallel_ggtt_addr(lrc);
@@ -2029,7 +2093,7 @@ g2h_exec_queue_lookup(struct xe_guc *guc, u32 guc_id)
 
 	q = xa_load(&guc->submission_state.exec_queue_lookup, guc_id);
 	if (unlikely(!q)) {
-		xe_gt_err(gt, "Not engine present for guc_id %u\n", guc_id);
+		xe_gt_err(gt, "No exec queue found for guc_id %u\n", guc_id);
 		return NULL;
 	}
 
@@ -2528,7 +2592,7 @@ static void guc_exec_queue_print(struct xe_exec_queue *q, struct drm_printer *p)
 }
 
 /**
- * xe_guc_register_exec_queue - Register exec queue for a given context type.
+ * xe_guc_register_vf_exec_queue - Register exec queue for a given context type.
  * @q: Execution queue
  * @ctx_type: Type of the context
  *
@@ -2539,15 +2603,17 @@ static void guc_exec_queue_print(struct xe_exec_queue *q, struct drm_printer *p)
  *
  * Returns - None.
  */
-void xe_guc_register_exec_queue(struct xe_exec_queue *q, int ctx_type)
+void xe_guc_register_vf_exec_queue(struct xe_exec_queue *q, int ctx_type)
 {
 	struct xe_guc *guc = exec_queue_to_guc(q);
 	struct xe_device *xe = guc_to_xe(guc);
+	struct xe_gt *gt = guc_to_gt(guc);
 
-	xe_assert(xe, IS_SRIOV_VF(xe));
-	xe_assert(xe, !IS_DGFX(xe));
-	xe_assert(xe, (ctx_type > GUC_CONTEXT_NORMAL &&
-		       ctx_type < GUC_CONTEXT_COUNT));
+	xe_gt_assert(gt, IS_SRIOV_VF(xe));
+	xe_gt_assert(gt, !IS_DGFX(xe));
+	xe_gt_assert(gt, ctx_type == GUC_CONTEXT_COMPRESSION_SAVE ||
+		     ctx_type == GUC_CONTEXT_COMPRESSION_RESTORE);
+	xe_gt_assert(gt, GUC_SUBMIT_VER(guc) >= MAKE_GUC_VER(1, 23, 0));
 
 	register_exec_queue(q, ctx_type);
 	enable_scheduling(q);
