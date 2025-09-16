@@ -2691,7 +2691,7 @@ cifs_dentry_needs_reval(struct dentry *dentry)
 		return true;
 
 	if (!open_cached_dir_by_dentry(tcon, dentry->d_parent, &cfid)) {
-		if (cfid->time && cifs_i->time > cfid->time) {
+		if (cifs_i->time > cfid->time) {
 			close_cached_dir(cfid);
 			return false;
 		}
@@ -2831,7 +2831,7 @@ int cifs_revalidate_dentry_attr(struct dentry *dentry)
 	}
 
 	cifs_dbg(FYI, "Update attributes: %s inode 0x%p count %d dentry: 0x%p d_time %ld jiffies %ld\n",
-		 full_path, inode, inode->i_count.counter,
+		 full_path, inode, icount_read(inode),
 		 dentry, cifs_get_time(dentry), jiffies);
 
 again:
