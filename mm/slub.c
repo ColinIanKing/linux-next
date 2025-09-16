@@ -4439,9 +4439,17 @@ reread_slab:
 		/*
 		 * same as above but node_match() being false already
 		 * implies node != NUMA_NO_NODE.
-		 * Reentrant slub cannot take locks necessary to
-		 * deactivate_slab, hence ignore node preference.
-		 * kmalloc_nolock() doesn't allow __GFP_THISNODE.
+		 *
+		 * We don't strictly honor pfmemalloc and NUMA preferences
+		 * when !allow_spin because:
+		 *
+		 * 1. Most kmalloc() users allocate objects on the local node,
+		 *    so kmalloc_nolock() tries not to interfere with them by
+		 *    deactivating the cpu slab.
+		 *
+		 * 2. Deactivating due to NUMA or pfmemalloc mismatch may cause
+		 *    unnecessary slab allocations even when n->partial list
+		 *    is not empty.
 		 */
 		if (!node_isset(node, slab_nodes) ||
 		    !allow_spin) {
@@ -4530,11 +4538,6 @@ new_slab:
 		slab = slub_percpu_partial(c);
 		slub_set_percpu_partial(c, slab);
 
-		/*
-		 * Reentrant slub cannot take locks necessary for
-		 * __put_partials(), hence ignore node preference.
-		 * kmalloc_nolock() doesn't allow __GFP_THISNODE.
-		 */
 		if (likely(node_match(slab, node) &&
 			   pfmemalloc_match(slab, gfpflags)) ||
 		    !allow_spin) {
