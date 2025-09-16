@@ -342,16 +342,17 @@ static bool cramfs_last_page_is_shared(struct inode *inode)
 	return memchr_inv(tail_data, 0, PAGE_SIZE - partial) ? true : false;
 }
 
-static int cramfs_physmem_mmap(struct file *file, struct vm_area_struct *vma)
+static int cramfs_physmem_mmap_prepare(struct vm_area_desc *desc)
 {
+	struct file *file = desc->file;
 	struct inode *inode = file_inode(file);
 	struct cramfs_sb_info *sbi = CRAMFS_SB(inode->i_sb);
 	unsigned int pages, max_pages, offset;
-	unsigned long address, pgoff = vma->vm_pgoff;
+	unsigned long address, pgoff = desc->pgoff;
 	char *bailout_reason;
 	int ret;
 
-	ret = generic_file_readonly_mmap(file, vma);
+	ret = generic_file_readonly_mmap_prepare(desc);
 	if (ret)
 		return ret;
 
@@ -362,14 +363,14 @@ static int cramfs_physmem_mmap(struct file *file, struct vm_area_struct *vma)
 
 	/* Could COW work here? */
 	bailout_reason = "vma is writable";
-	if (vma->vm_flags & VM_WRITE)
+	if (desc->vm_flags & VM_WRITE)
 		goto bailout;
 
 	max_pages = (inode->i_size + PAGE_SIZE - 1) >> PAGE_SHIFT;
 	bailout_reason = "beyond file limit";
 	if (pgoff >= max_pages)
 		goto bailout;
-	pages = min(vma_pages(vma), max_pages - pgoff);
+	pages = min(vma_desc_pages(desc), max_pages - pgoff);
 
 	offset = cramfs_get_block_range(inode, pgoff, &pages);
 	bailout_reason = "unsuitable block layout";
@@ -391,38 +392,31 @@ static int cramfs_physmem_mmap(struct file *file, struct vm_area_struct *vma)
 		goto bailout;
 	}
 
-	if (pages == vma_pages(vma)) {
+	pr_debug("mapping %pD[%lu] at 0x%08lx (%u/%lu pages) "
+		 "to vma 0x%08lx, page_prot 0x%llx\n", file,
+		 pgoff, address, pages, vma_desc_pages(desc), desc->start,
+		 (unsigned long long)pgprot_val(desc->page_prot));
+
+	if (pages == vma_desc_pages(desc)) {
 		/*
 		 * The entire vma is mappable. remap_pfn_range() will
 		 * make it distinguishable from a non-direct mapping
 		 * in /proc/<pid>/maps by substituting the file offset
 		 * with the actual physical address.
 		 */
-		ret = remap_pfn_range(vma, vma->vm_start, address >> PAGE_SHIFT,
-				      pages * PAGE_SIZE, vma->vm_page_prot);
+		mmap_action_remap(&desc->action, desc->start,
+				  address >> PAGE_SHIFT, pages * PAGE_SIZE,
+				  desc->page_prot);
 	} else {
 		/*
 		 * Let's create a mixed map if we can't map it all.
 		 * The normal paging machinery will take care of the
 		 * unpopulated ptes via cramfs_read_folio().
 		 */
-		int i;
-		vm_flags_set(vma, VM_MIXEDMAP);
-		for (i = 0; i < pages && !ret; i++) {
-			vm_fault_t vmf;
-			unsigned long off = i * PAGE_SIZE;
-			vmf = vmf_insert_mixed(vma, vma->vm_start + off,
-					address + off);
-			if (vmf & VM_FAULT_ERROR)
-				ret = vm_fault_to_errno(vmf, 0);
-		}
+		mmap_action_mixedmap(&desc->action, desc->start,
+				     address >> PAGE_SHIFT, pages);
 	}
 
-	if (!ret)
-		pr_debug("mapped %pD[%lu] at 0x%08lx (%u/%lu pages) "
-			 "to vma 0x%08lx, page_prot 0x%llx\n", file,
-			 pgoff, address, pages, vma_pages(vma), vma->vm_start,
-			 (unsigned long long)pgprot_val(vma->vm_page_prot));
 	return ret;
 
 bailout:
@@ -434,9 +428,9 @@ bailout:
 
 #else /* CONFIG_MMU */
 
-static int cramfs_physmem_mmap(struct file *file, struct vm_area_struct *vma)
+static int cramfs_physmem_mmap_prepare(struct vm_area_desc *desc)
 {
-	return is_nommu_shared_mapping(vma->vm_flags) ? 0 : -ENOSYS;
+	return is_nommu_shared_mapping(desc->vm_flags) ? 0 : -ENOSYS;
 }
 
 static unsigned long cramfs_physmem_get_unmapped_area(struct file *file,
@@ -474,7 +468,7 @@ static const struct file_operations cramfs_physmem_fops = {
 	.llseek			= generic_file_llseek,
 	.read_iter		= generic_file_read_iter,
 	.splice_read		= filemap_splice_read,
-	.mmap			= cramfs_physmem_mmap,
+	.mmap_prepare		= cramfs_physmem_mmap_prepare,
 #ifndef CONFIG_MMU
 	.get_unmapped_area	= cramfs_physmem_get_unmapped_area,
 	.mmap_capabilities	= cramfs_physmem_mmap_capabilities,

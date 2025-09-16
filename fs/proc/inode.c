@@ -414,9 +414,15 @@ static long proc_reg_compat_ioctl(struct file *file, unsigned int cmd, unsigned 
 
 static int pde_mmap(struct proc_dir_entry *pde, struct file *file, struct vm_area_struct *vma)
 {
-	__auto_type mmap = pde->proc_ops->proc_mmap;
-	if (mmap)
-		return mmap(file, vma);
+	const struct file_operations f_op = {
+		.mmap = pde->proc_ops->proc_mmap,
+		.mmap_prepare = pde->proc_ops->proc_mmap_prepare,
+	};
+
+	if (f_op.mmap)
+		return f_op.mmap(file, vma);
+	else if (f_op.mmap_prepare)
+		return __compat_vma_mmap_prepare(&f_op, file, vma);
 	return -EIO;
 }
 

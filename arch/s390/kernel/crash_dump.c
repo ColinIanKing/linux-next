@@ -186,7 +186,7 @@ static int remap_oldmem_pfn_range_kdump(struct vm_area_struct *vma,
 
 	if (pfn < oldmem_data.size >> PAGE_SHIFT) {
 		size_old = min(size, oldmem_data.size - (pfn << PAGE_SHIFT));
-		rc = remap_pfn_range(vma, from,
+		rc = remap_pfn_range_complete(vma, from,
 				     pfn + (oldmem_data.start >> PAGE_SHIFT),
 				     size_old, prot);
 		if (rc || size == size_old)
@@ -195,7 +195,7 @@ static int remap_oldmem_pfn_range_kdump(struct vm_area_struct *vma,
 		from += size_old;
 		pfn += size_old >> PAGE_SHIFT;
 	}
-	return remap_pfn_range(vma, from, pfn, size, prot);
+	return remap_pfn_range_complete(vma, from, pfn, size, prot);
 }
 
 /*
@@ -220,7 +220,7 @@ static int remap_oldmem_pfn_range_zfcpdump(struct vm_area_struct *vma,
 		from += size_hsa;
 		pfn += size_hsa >> PAGE_SHIFT;
 	}
-	return remap_pfn_range(vma, from, pfn, size, prot);
+	return remap_pfn_range_complete(vma, from, pfn, size, prot);
 }
 
 /*

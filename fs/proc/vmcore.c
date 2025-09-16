@@ -254,7 +254,7 @@ int __weak remap_oldmem_pfn_range(struct vm_area_struct *vma,
 				  unsigned long size, pgprot_t prot)
 {
 	prot = pgprot_encrypted(prot);
-	return remap_pfn_range(vma, from, pfn, size, prot);
+	return remap_pfn_range_complete(vma, from, pfn, size, prot);
 }
 
 /*
@@ -308,7 +308,7 @@ static int vmcoredd_mmap_dumps(struct vm_area_struct *vma, unsigned long dst,
 			tsz = min(offset + (u64)dump->size - start, (u64)size);
 			buf = dump->buf + start - offset;
 			if (remap_vmalloc_range_partial(vma, dst, buf, 0,
-							tsz))
+							tsz, /* set_vma= */false))
 				return -EFAULT;
 
 			size -= tsz;
@@ -588,24 +588,14 @@ static int vmcore_remap_oldmem_pfn(struct vm_area_struct *vma,
 	return ret;
 }
 
-static int mmap_vmcore(struct file *file, struct vm_area_struct *vma)
+static int mmap_prepare_action_vmcore(struct vm_area_struct *vma)
 {
+	struct mmap_action action;
 	size_t size = vma->vm_end - vma->vm_start;
-	u64 start, end, len, tsz;
+	u64 start, len, tsz;
 	struct vmcore_range *m;
 
 	start = (u64)vma->vm_pgoff << PAGE_SHIFT;
-	end = start + size;
-
-	if (size > vmcore_size || end > vmcore_size)
-		return -EINVAL;
-
-	if (vma->vm_flags & (VM_WRITE | VM_EXEC))
-		return -EPERM;
-
-	vm_flags_mod(vma, VM_MIXEDMAP, VM_MAYWRITE | VM_MAYEXEC);
-	vma->vm_ops = &vmcore_mmap_ops;
-
 	len = 0;
 
 	if (start < elfcorebuf_sz) {
@@ -613,8 +603,10 @@ static int mmap_vmcore(struct file *file, struct vm_area_struct *vma)
 
 		tsz = min(elfcorebuf_sz - (size_t)start, size);
 		pfn = __pa(elfcorebuf + start) >> PAGE_SHIFT;
-		if (remap_pfn_range(vma, vma->vm_start, pfn, tsz,
-				    vma->vm_page_prot))
+
+		mmap_action_remap(&action, vma->vm_start, pfn, tsz,
+				  vma->vm_page_prot);
+		if (mmap_action_complete(&action, vma))
 			return -EAGAIN;
 		size -= tsz;
 		start += tsz;
@@ -664,7 +656,7 @@ static int mmap_vmcore(struct file *file, struct vm_area_struct *vma)
 		tsz = min(elfcorebuf_sz + elfnotes_sz - (size_t)start, size);
 		kaddr = elfnotes_buf + start - elfcorebuf_sz - vmcoredd_orig_sz;
 		if (remap_vmalloc_range_partial(vma, vma->vm_start + len,
-						kaddr, 0, tsz))
+				kaddr, 0, tsz, /* set_vma =*/false))
 			goto fail;
 
 		size -= tsz;
@@ -700,8 +692,33 @@ fail:
 	do_munmap(vma->vm_mm, vma->vm_start, len, NULL);
 	return -EAGAIN;
 }
+
+static int mmap_prepare_vmcore(struct vm_area_desc *desc)
+{
+	size_t size = vma_desc_size(desc);
+	u64 start, end;
+
+	start = (u64)desc->pgoff << PAGE_SHIFT;
+	end = start + size;
+
+	if (size > vmcore_size || end > vmcore_size)
+		return -EINVAL;
+
+	if (desc->vm_flags & (VM_WRITE | VM_EXEC))
+		return -EPERM;
+
+	/* This is a unique case where we set both PFN map and mixed map flags. */
+	desc->vm_flags |= VM_MIXEDMAP | VM_REMAP_FLAGS;
+	desc->vm_flags &= ~(VM_MAYWRITE | VM_MAYEXEC);
+	desc->vm_ops = &vmcore_mmap_ops;
+
+	desc->action.type = MMAP_CUSTOM_ACTION;
+	desc->action.custom.action_hook = mmap_prepare_action_vmcore;
+
+	return 0;
+}
 #else
-static int mmap_vmcore(struct file *file, struct vm_area_struct *vma)
+static int mmap_prepare_vmcore(struct vm_area_desc *desc)
 {
 	return -ENOSYS;
 }
@@ -712,7 +729,7 @@ static const struct proc_ops vmcore_proc_ops = {
 	.proc_release	= release_vmcore,
 	.proc_read_iter	= read_vmcore,
 	.proc_lseek	= default_llseek,
-	.proc_mmap	= mmap_vmcore,
+	.proc_mmap_prepare = mmap_prepare_vmcore,
 };
 
 static u64 get_vmcore_size(size_t elfsz, size_t elfnotesegsz,
