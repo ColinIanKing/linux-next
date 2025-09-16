@@ -1806,140 +1806,189 @@ free_vars:
 	return rc;
 }
 
+/*
+ * calc_chunk_count - Return the number chunks to be filled in the Chunks[]
+ * array of struct copychunk_ioctl.
+ *
+ * @tcon: destination file tcon
+ * @bytes_left: how many bytes are left to copy
+ *
+ */
+static inline u32
+calc_chunk_count(struct cifs_tcon *tcon, u64 bytes_left)
+{
+	return min_t(u32, DIV_ROUND_UP_ULL(bytes_left, tcon->max_bytes_chunk),
+		     umin(tcon->max_chunks,
+			  DIV_ROUND_UP(tcon->max_bytes_copy, tcon->max_bytes_chunk)));
+}
+
 static ssize_t
 smb2_copychunk_range(const unsigned int xid,
-			struct cifsFileInfo *srcfile,
-			struct cifsFileInfo *trgtfile, u64 src_off,
-			u64 len, u64 dest_off)
+		     struct cifsFileInfo *src_file,
+		     struct cifsFileInfo *dst_file,
+		     u64 src_off,
+		     u64 len,
+		     u64 dst_off)
 {
 	int rc;
 	unsigned int ret_data_len;
-	struct copychunk_ioctl *pcchunk;
-	struct copychunk_ioctl_rsp *retbuf = NULL;
+	struct copychunk_ioctl *cc_req;
+	struct copychunk_ioctl_rsp *cc_rsp;
 	struct cifs_tcon *tcon;
-	int chunks_copied = 0;
-	bool chunk_sizes_updated = false;
-	ssize_t bytes_written, total_bytes_written = 0;
+	struct copychunk *chunk;
+	u32 chunks;
+	u32 chunk_count;
+	u64 chunk_bytes;
+	u64 copy_bytes, copy_bytes_left;
+	u64 total_bytes_left = len;
+	u64 src_off_prev, dst_off_prev;
+	u32 retries = 0;
 
-	pcchunk = kmalloc(sizeof(struct copychunk_ioctl), GFP_KERNEL);
-	if (pcchunk == NULL)
+	tcon = tlink_tcon(dst_file->tlink);
+
+	trace_smb3_copychunk_enter(xid, src_file->fid.volatile_fid,
+				   dst_file->fid.volatile_fid, tcon->tid,
+				   tcon->ses->Suid, src_off, dst_off, len);
+
+retry:
+	chunk_count = calc_chunk_count(tcon, total_bytes_left);
+
+	cc_req = kzalloc(sizeof(struct copychunk_ioctl) +
+			 sizeof(struct copychunk) * chunk_count,
+			 GFP_KERNEL);
+	if (cc_req == NULL)
 		return -ENOMEM;
 
-	cifs_dbg(FYI, "%s: about to call request res key\n", __func__);
 	/* Request a key from the server to identify the source of the copy */
-	rc = SMB2_request_res_key(xid, tlink_tcon(srcfile->tlink),
-				srcfile->fid.persistent_fid,
-				srcfile->fid.volatile_fid, pcchunk);
+	rc = SMB2_request_res_key(xid,
+				  tlink_tcon(src_file->tlink),
+				  src_file->fid.persistent_fid,
+				  src_file->fid.volatile_fid,
+				  cc_req);
 
-	/* Note: request_res_key sets res_key null only if rc !=0 */
+	/* Note: request_res_key sets res_key null only if rc != 0 */
 	if (rc)
 		goto cchunk_out;
 
-	/* For now array only one chunk long, will make more flexible later */
-	pcchunk->ChunkCount = cpu_to_le32(1);
-	pcchunk->Reserved = 0;
-	pcchunk->Reserved2 = 0;
+	while (total_bytes_left > 0) {
 
-	tcon = tlink_tcon(trgtfile->tlink);
+		/* store previous offsets to allow rewind */
+		src_off_prev = src_off;
+		dst_off_prev = dst_off;
 
-	trace_smb3_copychunk_enter(xid, srcfile->fid.volatile_fid,
-				   trgtfile->fid.volatile_fid, tcon->tid,
-				   tcon->ses->Suid, src_off, dest_off, len);
+		trace_smb3_copychunk_iter(xid, src_file->fid.volatile_fid,
+					  dst_file->fid.volatile_fid, tcon->tid,
+					  tcon->ses->Suid, src_off, dst_off, len);
 
-	while (len > 0) {
-		pcchunk->SourceOffset = cpu_to_le64(src_off);
-		pcchunk->TargetOffset = cpu_to_le64(dest_off);
-		pcchunk->Length =
-			cpu_to_le32(min_t(u64, len, tcon->max_bytes_chunk));
+		chunks = 0;
+		copy_bytes = 0;
+		copy_bytes_left = umin(total_bytes_left, tcon->max_bytes_copy);
+		while (copy_bytes_left > 0 && chunks < chunk_count) {
+			chunk = &cc_req->Chunks[chunks++];
+
+			chunk->SourceOffset = cpu_to_le64(src_off);
+			chunk->TargetOffset = cpu_to_le64(dst_off);
+
+			chunk_bytes = umin(copy_bytes_left, tcon->max_bytes_chunk);
+
+			chunk->Length = cpu_to_le32(chunk_bytes);
+			chunk->Reserved = 0;
+
+			src_off += chunk_bytes;
+			dst_off += chunk_bytes;
+
+			copy_bytes_left -= chunk_bytes;
+			copy_bytes += chunk_bytes;
+		}
+
+		cc_req->ChunkCount = cpu_to_le32(chunks);
+		/* buffer is zeroed, no need to set pcchunk->Reserved = 0; */
 
 		/* Request server copy to target from src identified by key */
-		kfree(retbuf);
-		retbuf = NULL;
-		rc = SMB2_ioctl(xid, tcon, trgtfile->fid.persistent_fid,
-			trgtfile->fid.volatile_fid, FSCTL_SRV_COPYCHUNK_WRITE,
-			(char *)pcchunk, sizeof(struct copychunk_ioctl),
-			CIFSMaxBufSize, (char **)&retbuf, &ret_data_len);
+		cc_rsp = NULL;
+		rc = SMB2_ioctl(xid, tcon, dst_file->fid.persistent_fid,
+			dst_file->fid.volatile_fid, FSCTL_SRV_COPYCHUNK_WRITE,
+			(char *)cc_req,
+			sizeof(struct copychunk_ioctl) + chunks * sizeof(struct copychunk),
+			CIFSMaxBufSize, (char **)&cc_rsp, &ret_data_len);
+
 		if (rc == 0) {
-			if (ret_data_len !=
-					sizeof(struct copychunk_ioctl_rsp)) {
+			if (ret_data_len != sizeof(struct copychunk_ioctl_rsp)) {
 				cifs_tcon_dbg(VFS, "Invalid cchunk response size\n");
 				rc = -EIO;
 				goto cchunk_out;
 			}
-			if (retbuf->TotalBytesWritten == 0) {
-				cifs_dbg(FYI, "no bytes copied\n");
+			if (cc_rsp->TotalBytesWritten == 0) {
+				cifs_tcon_dbg(VFS, "No bytes copied\n");
 				rc = -EIO;
 				goto cchunk_out;
-			}
-			/*
-			 * Check if server claimed to write more than we asked
-			 */
-			if (le32_to_cpu(retbuf->TotalBytesWritten) >
-			    le32_to_cpu(pcchunk->Length)) {
+			} else if (le32_to_cpu(cc_rsp->TotalBytesWritten) != copy_bytes) {
 				cifs_tcon_dbg(VFS, "Invalid copy chunk response\n");
 				rc = -EIO;
 				goto cchunk_out;
 			}
-			if (le32_to_cpu(retbuf->ChunksWritten) != 1) {
+			if (le32_to_cpu(cc_rsp->ChunksWritten) != chunks) {
 				cifs_tcon_dbg(VFS, "Invalid num chunks written\n");
 				rc = -EIO;
 				goto cchunk_out;
 			}
-			chunks_copied++;
 
-			bytes_written = le32_to_cpu(retbuf->TotalBytesWritten);
-			src_off += bytes_written;
-			dest_off += bytes_written;
-			len -= bytes_written;
-			total_bytes_written += bytes_written;
-
-			cifs_dbg(FYI, "Chunks %d PartialChunk %d Total %zu\n",
-				le32_to_cpu(retbuf->ChunksWritten),
-				le32_to_cpu(retbuf->ChunkBytesWritten),
-				bytes_written);
-			trace_smb3_copychunk_done(xid, srcfile->fid.volatile_fid,
-				trgtfile->fid.volatile_fid, tcon->tid,
-				tcon->ses->Suid, src_off, dest_off, len);
+			total_bytes_left -= le32_to_cpu(cc_rsp->TotalBytesWritten);
 		} else if (rc == -EINVAL) {
+
 			if (ret_data_len != sizeof(struct copychunk_ioctl_rsp))
 				goto cchunk_out;
 
-			cifs_dbg(FYI, "MaxChunks %d BytesChunk %d MaxCopy %d\n",
-				le32_to_cpu(retbuf->ChunksWritten),
-				le32_to_cpu(retbuf->ChunkBytesWritten),
-				le32_to_cpu(retbuf->TotalBytesWritten));
+			cifs_tcon_dbg(VFS,
+				      "copychunk limits update: MaxChunks %u->%u, MaxBytesChunk %u->%u, MaxBytesCopy %u->%u\n",
+				      le32_to_cpu(cc_rsp->ChunksWritten),
+				      tcon->max_chunks,
+				      le32_to_cpu(cc_rsp->ChunkBytesWritten),
+				      tcon->max_bytes_chunk,
+				      le32_to_cpu(cc_rsp->TotalBytesWritten),
+				      tcon->max_bytes_copy);
 
 			/*
-			 * Check if this is the first request using these sizes,
-			 * (ie check if copy succeed once with original sizes
-			 * and check if the server gave us different sizes after
-			 * we already updated max sizes on previous request).
-			 * if not then why is the server returning an error now
+			 * Check that server is not asking us to reduce size.
+			 *
+			 * NOTE: As per MS-SMB2 2.2.32.1, the values returned
+			 * in cc_rsp are not strictly lower than what existed
+			 * before.
+			 *
 			 */
-			if ((chunks_copied != 0) || chunk_sizes_updated)
+			if (le32_to_cpu(cc_rsp->ChunksWritten) < tcon->max_chunks)
+				tcon->max_chunks = le32_to_cpu(cc_rsp->ChunksWritten);
+			if (le32_to_cpu(cc_rsp->ChunkBytesWritten) < tcon->max_bytes_chunk)
+				tcon->max_bytes_chunk = le32_to_cpu(cc_rsp->ChunkBytesWritten);
+			if (le32_to_cpu(cc_rsp->TotalBytesWritten) < tcon->max_bytes_copy)
+				tcon->max_bytes_copy = le32_to_cpu(cc_rsp->TotalBytesWritten);
+
+			trace_smb3_copychunk_err(xid, src_file->fid.volatile_fid,
+						 dst_file->fid.volatile_fid, tcon->tid,
+						 tcon->ses->Suid, src_off, dst_off, len, rc);
+
+			/* rewind */
+			if (retries++ < 2) {
+				src_off = src_off_prev;
+				dst_off = dst_off_prev;
+				kfree(cc_req);
+				goto retry;
+			} else
 				goto cchunk_out;
-
-			/* Check that server is not asking us to grow size */
-			if (le32_to_cpu(retbuf->ChunkBytesWritten) <
-					tcon->max_bytes_chunk)
-				tcon->max_bytes_chunk =
-					le32_to_cpu(retbuf->ChunkBytesWritten);
-			else
-				goto cchunk_out; /* server gave us bogus size */
-
-			/* No need to change MaxChunks since already set to 1 */
-			chunk_sizes_updated = true;
-		} else
-			goto cchunk_out;
+		}
 	}
 
+	trace_smb3_copychunk_done(xid, src_file->fid.volatile_fid,
+				  dst_file->fid.volatile_fid, tcon->tid,
+				  tcon->ses->Suid, src_off, dst_off, len);
+
 cchunk_out:
-	kfree(pcchunk);
-	kfree(retbuf);
+	kfree(cc_req);
+	kfree(cc_rsp);
 	if (rc)
 		return rc;
 	else
-		return total_bytes_written;
+		return len;
 }
 
 static int
