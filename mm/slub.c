@@ -45,7 +45,7 @@
 #include <kunit/test-bug.h>
 #include <linux/sort.h>
 #include <linux/irq_work.h>
-
+#include <linux/kprobes.h>
 #include <linux/debugfs.h>
 #include <trace/events/kmem.h>
 
@@ -4674,6 +4674,7 @@ retry_load_slab:
 
 	goto load_freelist;
 }
+NOKPROBE_SYMBOL(___slab_alloc);
 
 /*
  * A wrapper for ___slab_alloc() for contexts where preemption is not yet
