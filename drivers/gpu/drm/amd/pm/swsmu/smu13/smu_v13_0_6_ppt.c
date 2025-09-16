@@ -143,7 +143,7 @@ static const struct cmn2asic_msg_mapping smu_v13_0_6_message_map[SMU_MSG_MAX_COU
 	MSG_MAP(GetMinDpmFreq,			     PPSMC_MSG_GetMinDpmFreq,			1),
 	MSG_MAP(GetMaxDpmFreq,			     PPSMC_MSG_GetMaxDpmFreq,			1),
 	MSG_MAP(GetDpmFreqByIndex,		     PPSMC_MSG_GetDpmFreqByIndex,		1),
-	MSG_MAP(SetPptLimit,			     PPSMC_MSG_SetPptLimit,			0),
+	MSG_MAP(SetPptLimit,			     PPSMC_MSG_SetPptLimit,			1),
 	MSG_MAP(GetPptLimit,			     PPSMC_MSG_GetPptLimit,			1),
 	MSG_MAP(GfxDeviceDriverReset,		     PPSMC_MSG_GfxDriverReset,			SMU_MSG_RAS_PRI | SMU_MSG_NO_PRECHECK),
 	MSG_MAP(DramLogSetDramAddrHigh,		     PPSMC_MSG_DramLogSetDramAddrHigh,		0),
@@ -413,6 +413,10 @@ static void smu_v13_0_6_init_caps(struct smu_context *smu)
 			smu_v13_0_6_cap_set(smu, SMU_CAP(HST_LIMIT_METRICS));
 
 		if (amdgpu_sriov_vf(adev)) {
+			if (fw_ver >= 0x00558200)
+				amdgpu_virt_attr_set(&adev->virt.virt_caps,
+						     AMDGPU_VIRT_CAP_POWER_LIMIT,
+						     AMDGPU_CAP_ATTR_RW);
 			if ((pgm == 0 && fw_ver >= 0x00558000) ||
 			    (pgm == 7 && fw_ver >= 0x7551000)) {
 				smu_v13_0_6_cap_set(smu,
@@ -3223,6 +3227,20 @@ static int smu_v13_0_6_reset_vcn(struct smu_context *smu, uint32_t inst_mask)
 }
 
 
+static int smu_v13_0_6_post_init(struct smu_context *smu)
+{
+	if (smu_v13_0_6_is_link_reset_supported(smu))
+		smu_feature_cap_set(smu, SMU_FEATURE_CAP_ID__LINK_RESET);
+
+	if (smu_v13_0_6_reset_sdma_is_supported(smu))
+		smu_feature_cap_set(smu, SMU_FEATURE_CAP_ID__SDMA_RESET);
+
+	if (smu_v13_0_6_reset_vcn_is_supported(smu))
+		smu_feature_cap_set(smu, SMU_FEATURE_CAP_ID__VCN_RESET);
+
+	return 0;
+}
+
 static int mca_smu_set_debug_mode(struct amdgpu_device *adev, bool enable)
 {
 	struct smu_context *smu = adev->powerplay.pp_handle;
@@ -3839,6 +3857,12 @@ static const struct aca_smu_funcs smu_v13_0_6_aca_smu_funcs = {
 	.parse_error_code = aca_smu_parse_error_code,
 };
 
+static void smu_v13_0_6_set_temp_funcs(struct smu_context *smu)
+{
+	smu->smu_temp.temp_funcs = (amdgpu_ip_version(smu->adev, MP1_HWIP, 0)
+			== IP_VERSION(13, 0, 12)) ? &smu_v13_0_12_temp_funcs : NULL;
+}
+
 static const struct pptable_funcs smu_v13_0_6_ppt_funcs = {
 	/* init dpm */
 	.get_allowed_feature_mask = smu_v13_0_6_get_allowed_feature_mask,
@@ -3886,7 +3910,6 @@ static const struct pptable_funcs smu_v13_0_6_ppt_funcs = {
 	.get_xcp_metrics = smu_v13_0_6_get_xcp_metrics,
 	.get_thermal_temperature_range = smu_v13_0_6_get_thermal_temperature_range,
 	.mode1_reset_is_support = smu_v13_0_6_is_mode1_reset_supported,
-	.link_reset_is_support = smu_v13_0_6_is_link_reset_supported,
 	.mode1_reset = smu_v13_0_6_mode1_reset,
 	.mode2_reset = smu_v13_0_6_mode2_reset,
 	.link_reset = smu_v13_0_6_link_reset,
@@ -3896,9 +3919,8 @@ static const struct pptable_funcs smu_v13_0_6_ppt_funcs = {
 	.send_hbm_bad_pages_num = smu_v13_0_6_smu_send_hbm_bad_page_num,
 	.send_rma_reason = smu_v13_0_6_send_rma_reason,
 	.reset_sdma = smu_v13_0_6_reset_sdma,
-	.reset_sdma_is_supported = smu_v13_0_6_reset_sdma_is_supported,
 	.dpm_reset_vcn = smu_v13_0_6_reset_vcn,
-	.reset_vcn_is_supported = smu_v13_0_6_reset_vcn_is_supported,
+	.post_init = smu_v13_0_6_post_init,
 };
 
 void smu_v13_0_6_set_ppt_funcs(struct smu_context *smu)
@@ -3913,12 +3935,8 @@ void smu_v13_0_6_set_ppt_funcs(struct smu_context *smu)
 	smu->smc_driver_if_version = SMU13_0_6_DRIVER_IF_VERSION;
 	smu->smc_fw_caps |= SMU_FW_CAP_RAS_PRI;
 	smu_v13_0_set_smu_mailbox_registers(smu);
+	smu_v13_0_6_set_temp_funcs(smu);
 	amdgpu_mca_smu_init_funcs(smu->adev, &smu_v13_0_6_mca_smu_funcs);
 	amdgpu_aca_set_smu_funcs(smu->adev, &smu_v13_0_6_aca_smu_funcs);
 }
 
-void smu_v13_0_6_set_temp_funcs(struct smu_context *smu)
-{
-	smu->smu_temp.temp_funcs = (amdgpu_ip_version(smu->adev, MP1_HWIP, 0)
-			== IP_VERSION(13, 0, 12)) ? &smu_v13_0_12_temp_funcs : NULL;
-}
