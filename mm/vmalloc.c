@@ -2059,9 +2059,8 @@ retry:
 		spin_unlock(&free_vmap_area_lock);
 
 		/*
-		 * This is not a fast path. Check if yielding is
-		 * needed. This is the only one reschedule point
-		 * in vmalloc() path.
+		 * This is not a fast path.  Check if yielding is needed. This
+		 * is the only reschedule point in the vmalloc() path.
 		 */
 		cond_resched();
 	}
