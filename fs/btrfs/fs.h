@@ -59,6 +59,8 @@ struct btrfs_space_info;
 #define BTRFS_MIN_BLOCKSIZE	(SZ_4K)
 #endif
 
+#define BTRFS_MAX_BLOCKSIZE	(SZ_64K)
+
 #define BTRFS_MAX_EXTENT_SIZE SZ_128M
 
 #define BTRFS_OLDEST_GENERATION	0ULL
@@ -243,6 +245,7 @@ enum {
 	BTRFS_MOUNT_NOSPACECACHE		= (1ULL << 30),
 	BTRFS_MOUNT_IGNOREMETACSUMS		= (1ULL << 31),
 	BTRFS_MOUNT_IGNORESUPERFLAGS		= (1ULL << 32),
+	BTRFS_MOUNT_REF_TRACKER			= (1ULL << 33),
 };
 
 /*
@@ -280,7 +283,7 @@ enum {
 
 #ifdef CONFIG_BTRFS_EXPERIMENTAL
 	/*
-	 * Features under developmen like Extent tree v2 support is enabled
+	 * Features under development like Extent tree v2 support is enabled
 	 * only under CONFIG_BTRFS_EXPERIMENTAL
 	 */
 #define BTRFS_FEATURE_INCOMPAT_SUPP		\
@@ -302,6 +305,16 @@ enum {
 #define BTRFS_DEFAULT_COMMIT_INTERVAL	(30)
 #define BTRFS_WARNING_COMMIT_INTERVAL	(300)
 #define BTRFS_DEFAULT_MAX_INLINE	(2048)
+
+enum btrfs_compression_type {
+	BTRFS_COMPRESS_NONE  = 0,
+	BTRFS_COMPRESS_ZLIB  = 1,
+	BTRFS_COMPRESS_LZO   = 2,
+	BTRFS_COMPRESS_ZSTD  = 3,
+	BTRFS_NR_COMPRESS_TYPES = 4,
+
+	BTRFS_DEFRAG_DONT_COMPRESS,
+};
 
 struct btrfs_dev_replace {
 	/* See #define above */
@@ -504,6 +517,9 @@ struct btrfs_fs_info {
 	 */
 	u64 last_trans_log_full_commit;
 	unsigned long long mount_opt;
+
+	/* Compress related structures. */
+	void *compr_wsm[BTRFS_NR_COMPRESS_TYPES];
 
 	int compress_type;
 	int compress_level;
@@ -878,12 +894,10 @@ struct btrfs_fs_info {
 	struct lockdep_map btrfs_trans_pending_ordered_map;
 	struct lockdep_map btrfs_ordered_extent_map;
 
-#ifdef CONFIG_BTRFS_FS_REF_VERIFY
+#ifdef CONFIG_BTRFS_DEBUG
 	spinlock_t ref_verify_lock;
 	struct rb_root block_tree;
-#endif
 
-#ifdef CONFIG_BTRFS_DEBUG
 	struct kobject *debug_kobj;
 	struct list_head allocated_roots;
 
@@ -997,6 +1011,7 @@ static inline unsigned int btrfs_blocks_per_folio(const struct btrfs_fs_info *fs
 	return folio_size(folio) >> fs_info->sectorsize_bits;
 }
 
+bool __attribute_const__ btrfs_supported_blocksize(u32 blocksize);
 bool btrfs_exclop_start(struct btrfs_fs_info *fs_info,
 			enum btrfs_exclusive_operation type);
 bool btrfs_exclop_start_try_lock(struct btrfs_fs_info *fs_info,
