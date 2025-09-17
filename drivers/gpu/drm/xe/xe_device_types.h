@@ -26,6 +26,7 @@
 #include "xe_sriov_vf_ccs_types.h"
 #include "xe_step_types.h"
 #include "xe_survivability_mode_types.h"
+#include "xe_validation.h"
 
 #if IS_ENABLED(CONFIG_DRM_XE_DEBUG)
 #define TEST_VM_OPS_ERROR
@@ -183,9 +184,6 @@ struct xe_tile {
 		struct {
 			/** @sriov.vf.ggtt_balloon: GGTT regions excluded from use. */
 			struct xe_ggtt_node *ggtt_balloon[2];
-
-			/** @sriov.vf.ccs: CCS read and write contexts for VF. */
-			struct xe_tile_vf_ccs ccs[XE_SRIOV_VF_CCS_CTX_COUNT];
 		} vf;
 	} sriov;
 
@@ -586,6 +584,8 @@ struct xe_device {
 	 */
 	atomic64_t global_total_pages;
 #endif
+	/** @val: The domain for exhaustive eviction, which is currently per device. */
+	struct xe_validation_device val;
 
 	/** @psmi: GPU debugging via additional validation HW */
 	struct {
@@ -594,6 +594,13 @@ struct xe_device {
 		/** @psmi.region_mask: Mask of valid memory regions */
 		u8 region_mask;
 	} psmi;
+
+#if IS_ENABLED(CONFIG_DRM_XE_KUNIT_TEST)
+	/** @g2g_test_array: for testing G2G communications */
+	u32 *g2g_test_array;
+	/** @g2g_test_count: for testing G2G communications */
+	atomic_t g2g_test_count;
+#endif
 
 	/* private: */
 
