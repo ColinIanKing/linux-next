@@ -24,7 +24,9 @@
 #include "xe_pxp_debugfs.h"
 #include "xe_sriov.h"
 #include "xe_sriov_pf.h"
+#include "xe_sriov_vf.h"
 #include "xe_step.h"
+#include "xe_tile_debugfs.h"
 #include "xe_wa.h"
 #include "xe_vsec.h"
 
@@ -38,7 +40,7 @@ DECLARE_FAULT_ATTR(gt_reset_failure);
 DECLARE_FAULT_ATTR(inject_csc_hw_error);
 
 static void read_residency_counter(struct xe_device *xe, struct xe_mmio *mmio,
-				   u32 offset, char *name, struct drm_printer *p)
+				   u32 offset, const char *name, struct drm_printer *p)
 {
 	u64 residency = 0;
 	int ret;
@@ -134,9 +136,9 @@ static int dgfx_pkg_residencies_show(struct seq_file *m, void *data)
 	p = drm_seq_file_printer(m);
 	xe_pm_runtime_get(xe);
 	mmio = xe_root_tile_mmio(xe);
-	struct {
+	static const struct {
 		u32 offset;
-		char *name;
+		const char *name;
 	} residencies[] = {
 		{BMG_G2_RESIDENCY_OFFSET, "Package G2"},
 		{BMG_G6_RESIDENCY_OFFSET, "Package G6"},
@@ -163,9 +165,9 @@ static int dgfx_pcie_link_residencies_show(struct seq_file *m, void *data)
 	xe_pm_runtime_get(xe);
 	mmio = xe_root_tile_mmio(xe);
 
-	struct {
+	static const struct {
 		u32 offset;
-		char *name;
+		const char *name;
 	} residencies[] = {
 		{BMG_PCIE_LINK_L0_RESIDENCY_OFFSET, "PCIE LINK L0 RESIDENCY"},
 		{BMG_PCIE_LINK_L1_RESIDENCY_OFFSET, "PCIE LINK L1 RESIDENCY"},
@@ -329,23 +331,6 @@ static const struct file_operations atomic_svm_timeslice_ms_fops = {
 	.write = atomic_svm_timeslice_ms_set,
 };
 
-static void create_tile_debugfs(struct xe_tile *tile, struct dentry *root)
-{
-	char name[8];
-
-	snprintf(name, sizeof(name), "tile%u", tile->id);
-	tile->debugfs = debugfs_create_dir(name, root);
-	if (IS_ERR(tile->debugfs))
-		return;
-
-	/*
-	 * Store the xe_tile pointer as private data of the tile/ directory
-	 * node so other tile specific attributes under that directory may
-	 * refer to it by looking at its parent node private data.
-	 */
-	tile->debugfs->d_inode->i_private = tile;
-}
-
 void xe_debugfs_register(struct xe_device *xe)
 {
 	struct ttm_device *bdev = &xe->ttm;
@@ -362,7 +347,7 @@ void xe_debugfs_register(struct xe_device *xe)
 				 ARRAY_SIZE(debugfs_list),
 				 root, minor);
 
-	if (xe->info.platform == XE_BATTLEMAGE) {
+	if (xe->info.platform == XE_BATTLEMAGE && !IS_SRIOV_VF(xe)) {
 		drm_debugfs_create_files(debugfs_residencies,
 					 ARRAY_SIZE(debugfs_residencies),
 					 root, minor);
@@ -398,7 +383,7 @@ void xe_debugfs_register(struct xe_device *xe)
 		ttm_resource_manager_create_debugfs(man, root, "stolen_mm");
 
 	for_each_tile(tile, xe, tile_id)
-		create_tile_debugfs(tile, root);
+		xe_tile_debugfs_register(tile);
 
 	for_each_gt(gt, xe, id)
 		xe_gt_debugfs_register(gt);
@@ -411,4 +396,6 @@ void xe_debugfs_register(struct xe_device *xe)
 
 	if (IS_SRIOV_PF(xe))
 		xe_sriov_pf_debugfs_register(xe, root);
+	else if (IS_SRIOV_VF(xe))
+		xe_sriov_vf_debugfs_register(xe, root);
 }
