@@ -178,6 +178,7 @@
 #define IncSP       ((u64)1 << 54)  /* SP is incremented before ModRM calc */
 #define TwoMemOp    ((u64)1 << 55)  /* Instruction has two memory operand */
 #define IsBranch    ((u64)1 << 56)  /* Instruction is considered a branch. */
+#define ShadowStack ((u64)1 << 57)  /* Instruction affects Shadow Stacks. */
 
 #define DstXacc     (DstAccLo | SrcAccHi | SrcWrite)
 
@@ -658,6 +659,57 @@ static inline bool emul_is_noncanonical_address(u64 la,
 						unsigned int flags)
 {
 	return !ctxt->ops->is_canonical_addr(ctxt, la, flags);
+}
+
+static bool is_shstk_instruction(u64 flags)
+{
+	return flags & ShadowStack;
+}
+
+static bool is_ibt_instruction(u64 flags)
+{
+	if (!(flags & IsBranch))
+		return false;
+
+	/*
+	 * Far transfers can affect IBT state even if the branch itself is
+	 * direct, e.g. when changing privilege levels and loading a conforming
+	 * code segment.  For simplicity, treat all far branches as affecting
+	 * IBT.  False positives are acceptable (emulating far branches on an
+	 * IBT-capable CPU won't happen in practice), while false negatives
+	 * could impact guest security.
+	 *
+	 * Note, this also handles SYCALL and SYSENTER.
+	 */
+	if (!(flags & NearBranch))
+		return true;
+
+	switch (flags & (OpMask << SrcShift)) {
+	case SrcReg:
+	case SrcMem:
+	case SrcMem16:
+	case SrcMem32:
+		return true;
+	case SrcMemFAddr:
+	case SrcImmFAddr:
+		/* Far branches should be handled above. */
+		WARN_ON_ONCE(1);
+		return true;
+	case SrcNone:
+	case SrcImm:
+	case SrcImmByte:
+	/*
+	 * Note, ImmU16 is used only for the stack adjustment operand on ENTER
+	 * and RET instructions.  ENTER isn't a branch and RET FAR is handled
+	 * by the NearBranch check above.  RET itself isn't an indirect branch.
+	 */
+	case SrcImmU16:
+		return false;
+	default:
+		WARN_ONCE(1, "Unexpected Src operand '%llx' on branch",
+			  (flags & (OpMask << SrcShift)));
+		return false;
+	}
 }
 
 /*
@@ -4068,9 +4120,9 @@ static const struct opcode group4[] = {
 static const struct opcode group5[] = {
 	F(DstMem | SrcNone | Lock,		em_inc),
 	F(DstMem | SrcNone | Lock,		em_dec),
-	I(SrcMem | NearBranch | IsBranch,       em_call_near_abs),
-	I(SrcMemFAddr | ImplicitOps | IsBranch, em_call_far),
-	I(SrcMem | NearBranch | IsBranch,       em_jmp_abs),
+	I(SrcMem | NearBranch | IsBranch | ShadowStack, em_call_near_abs),
+	I(SrcMemFAddr | ImplicitOps | IsBranch | ShadowStack, em_call_far),
+	I(SrcMem | NearBranch | IsBranch, em_jmp_abs),
 	I(SrcMemFAddr | ImplicitOps | IsBranch, em_jmp_far),
 	I(SrcMem | Stack | TwoMemOp,		em_push), D(Undefined),
 };
@@ -4304,7 +4356,7 @@ static const struct opcode opcode_table[256] = {
 	DI(SrcAcc | DstReg, pause), X7(D(SrcAcc | DstReg)),
 	/* 0x98 - 0x9F */
 	D(DstAcc | SrcNone), I(ImplicitOps | SrcAcc, em_cwd),
-	I(SrcImmFAddr | No64 | IsBranch, em_call_far), N,
+	I(SrcImmFAddr | No64 | IsBranch | ShadowStack, em_call_far), N,
 	II(ImplicitOps | Stack, em_pushf, pushf),
 	II(ImplicitOps | Stack, em_popf, popf),
 	I(ImplicitOps, em_sahf), I(ImplicitOps, em_lahf),
@@ -4324,19 +4376,19 @@ static const struct opcode opcode_table[256] = {
 	X8(I(DstReg | SrcImm64 | Mov, em_mov)),
 	/* 0xC0 - 0xC7 */
 	G(ByteOp | Src2ImmByte, group2), G(Src2ImmByte, group2),
-	I(ImplicitOps | NearBranch | SrcImmU16 | IsBranch, em_ret_near_imm),
-	I(ImplicitOps | NearBranch | IsBranch, em_ret),
+	I(ImplicitOps | NearBranch | SrcImmU16 | IsBranch | ShadowStack, em_ret_near_imm),
+	I(ImplicitOps | NearBranch | IsBranch | ShadowStack, em_ret),
 	I(DstReg | SrcMemFAddr | ModRM | No64 | Src2ES, em_lseg),
 	I(DstReg | SrcMemFAddr | ModRM | No64 | Src2DS, em_lseg),
 	G(ByteOp, group11), G(0, group11),
 	/* 0xC8 - 0xCF */
 	I(Stack | SrcImmU16 | Src2ImmByte, em_enter),
 	I(Stack, em_leave),
-	I(ImplicitOps | SrcImmU16 | IsBranch, em_ret_far_imm),
-	I(ImplicitOps | IsBranch, em_ret_far),
-	D(ImplicitOps | IsBranch), DI(SrcImmByte | IsBranch, intn),
+	I(ImplicitOps | SrcImmU16 | IsBranch | ShadowStack, em_ret_far_imm),
+	I(ImplicitOps | IsBranch | ShadowStack, em_ret_far),
+	D(ImplicitOps | IsBranch), DI(SrcImmByte | IsBranch | ShadowStack, intn),
 	D(ImplicitOps | No64 | IsBranch),
-	II(ImplicitOps | IsBranch, em_iret, iret),
+	II(ImplicitOps | IsBranch | ShadowStack, em_iret, iret),
 	/* 0xD0 - 0xD7 */
 	G(Src2One | ByteOp, group2), G(Src2One, group2),
 	G(Src2CL | ByteOp, group2), G(Src2CL, group2),
@@ -4352,7 +4404,7 @@ static const struct opcode opcode_table[256] = {
 	I2bvIP(SrcImmUByte | DstAcc, em_in,  in,  check_perm_in),
 	I2bvIP(SrcAcc | DstImmUByte, em_out, out, check_perm_out),
 	/* 0xE8 - 0xEF */
-	I(SrcImm | NearBranch | IsBranch, em_call),
+	I(SrcImm | NearBranch | IsBranch | ShadowStack, em_call),
 	D(SrcImm | ImplicitOps | NearBranch | IsBranch),
 	I(SrcImmFAddr | No64 | IsBranch, em_jmp_far),
 	D(SrcImmByte | ImplicitOps | NearBranch | IsBranch),
@@ -4371,7 +4423,7 @@ static const struct opcode opcode_table[256] = {
 static const struct opcode twobyte_table[256] = {
 	/* 0x00 - 0x0F */
 	G(0, group6), GD(0, &group7), N, N,
-	N, I(ImplicitOps | EmulateOnUD | IsBranch, em_syscall),
+	N, I(ImplicitOps | EmulateOnUD | IsBranch | ShadowStack, em_syscall),
 	II(ImplicitOps | Priv, em_clts, clts), N,
 	DI(ImplicitOps | Priv, invd), DI(ImplicitOps | Priv, wbinvd), N, N,
 	N, D(ImplicitOps | ModRM | SrcMem | NoAccess), N, N,
@@ -4402,8 +4454,8 @@ static const struct opcode twobyte_table[256] = {
 	IIP(ImplicitOps, em_rdtsc, rdtsc, check_rdtsc),
 	II(ImplicitOps | Priv, em_rdmsr, rdmsr),
 	IIP(ImplicitOps, em_rdpmc, rdpmc, check_rdpmc),
-	I(ImplicitOps | EmulateOnUD | IsBranch, em_sysenter),
-	I(ImplicitOps | Priv | EmulateOnUD | IsBranch, em_sysexit),
+	I(ImplicitOps | EmulateOnUD | IsBranch | ShadowStack, em_sysenter),
+	I(ImplicitOps | Priv | EmulateOnUD | IsBranch | ShadowStack, em_sysexit),
 	N, N,
 	N, N, N, N, N, N, N, N,
 	/* 0x40 - 0x4F */
@@ -4940,6 +4992,40 @@ done_prefixes:
 	/* Unrecognised? */
 	if (ctxt->d == 0)
 		return EMULATION_FAILED;
+
+	/*
+	 * Reject emulation if KVM might need to emulate shadow stack updates
+	 * and/or indirect branch tracking enforcement, which the emulator
+	 * doesn't support.
+	 */
+	if ((is_ibt_instruction(ctxt->d) || is_shstk_instruction(ctxt->d)) &&
+	    ctxt->ops->get_cr(ctxt, 4) & X86_CR4_CET) {
+		u64 u_cet = 0, s_cet = 0;
+
+		/*
+		 * Check both User and Supervisor on far transfers as inter-
+		 * privilege level transfers are impacted by CET at the target
+		 * privilege level, and that is not known at this time.  The
+		 * the expectation is that the guest will not require emulation
+		 * of any CET-affected instructions at any privilege level.
+		 */
+		if (!(ctxt->d & NearBranch))
+			u_cet = s_cet = CET_SHSTK_EN | CET_ENDBR_EN;
+		else if (ctxt->ops->cpl(ctxt) == 3)
+			u_cet = CET_SHSTK_EN | CET_ENDBR_EN;
+		else
+			s_cet = CET_SHSTK_EN | CET_ENDBR_EN;
+
+		if ((u_cet && ctxt->ops->get_msr(ctxt, MSR_IA32_U_CET, &u_cet)) ||
+		    (s_cet && ctxt->ops->get_msr(ctxt, MSR_IA32_S_CET, &s_cet)))
+			return EMULATION_FAILED;
+
+		if ((u_cet | s_cet) & CET_SHSTK_EN && is_shstk_instruction(ctxt->d))
+			return EMULATION_FAILED;
+
+		if ((u_cet | s_cet) & CET_ENDBR_EN && is_ibt_instruction(ctxt->d))
+			return EMULATION_FAILED;
+	}
 
 	ctxt->execute = opcode.u.execute;
 
