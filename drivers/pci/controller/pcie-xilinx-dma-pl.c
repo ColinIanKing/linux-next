@@ -659,6 +659,12 @@ static int xilinx_pl_dma_pcie_setup_irq(struct pl_dma_pcie *port)
 		return err;
 	}
 
+	/* Enable interrupts */
+	pcie_write(port, XILINX_PCIE_DMA_IMR_ALL_MASK,
+		   XILINX_PCIE_DMA_REG_IMR);
+	pcie_write(port, XILINX_PCIE_DMA_IDRN_MASK,
+		   XILINX_PCIE_DMA_REG_IDRN_MASK);
+
 	return 0;
 }
 
