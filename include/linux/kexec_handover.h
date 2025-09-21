@@ -41,10 +41,10 @@ struct kho_serialization;
 
 struct kho_vmalloc_chunk;
 struct kho_vmalloc {
-        DECLARE_KHOSER_PTR(first, struct kho_vmalloc_chunk *);
-        unsigned int total_pages;
-        unsigned short flags;
-        unsigned short order;
+	DECLARE_KHOSER_PTR(first, struct kho_vmalloc_chunk *);
+	unsigned int total_pages;
+	unsigned short flags;
+	unsigned short order;
 };
 
 #ifdef CONFIG_KEXEC_HANDOVER
