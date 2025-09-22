@@ -21,6 +21,7 @@
 #define RPM_GET_PUT		0x04	/* Increment/decrement the
 					    usage_count */
 #define RPM_AUTO		0x08	/* Use autosuspend_delay */
+#define RPM_TRANSPARENT	0x10	/* Succeed if runtime PM is disabled */
 
 /*
  * Use this for defining a set of PM operations to be used in all situations
@@ -532,6 +533,20 @@ static inline int pm_runtime_resume_and_get(struct device *dev)
 	return 0;
 }
 
+static inline struct device *pm_runtime_get_active_dev(struct device *dev,
+						       int rpmflags)
+{
+	int ret;
+
+	ret = __pm_runtime_resume(dev, RPM_GET_PUT | rpmflags);
+	if (ret < 0) {
+		pm_runtime_put_noidle(dev);
+		return ERR_PTR(ret);
+	}
+
+	return dev;
+}
+
 /**
  * pm_runtime_put - Drop device usage counter and queue up "idle check" if 0.
  * @dev: Target device.
@@ -605,6 +620,61 @@ static inline int pm_runtime_put_autosuspend(struct device *dev)
 	pm_runtime_mark_last_busy(dev);
 	return __pm_runtime_put_autosuspend(dev);
 }
+
+/*
+ * The way to use the classes defined below is to define a class variable and
+ * use it going forward for representing the target device until it goes out of
+ * the scope.  For example:
+ *
+ * CLASS(pm_runtime_get_active, active_dev)(dev);
+ * if (IS_ERR(active_dev))
+ *         return PTR_ERR(active_dev);
+ *
+ * ... do something with active_dev (which is guaranteed to never suspend) ...
+ *
+ * If an error occurs, the runtime PM usage counter of dev will not be
+ * incremented, so using these classes without error handling is not
+ * recommended.
+ */
+DEFINE_CLASS(pm_runtime_get_active, struct device *,
+	     if (!IS_ERR_OR_NULL(_T)) pm_runtime_put(_T),
+	     pm_runtime_get_active_dev(dev, RPM_TRANSPARENT), struct device *dev)
+
+DEFINE_CLASS(pm_runtime_get_active_auto, struct device *,
+	     if (!IS_ERR_OR_NULL(_T)) pm_runtime_put_autosuspend(_T),
+	     pm_runtime_get_active_dev(dev, RPM_TRANSPARENT), struct device *dev)
+
+/*
+ * The following two classes are analogous to the two classes defined above,
+ * respectively, but they produce an error pointer if runtime PM has been
+ * disabled for the given device.
+ *
+ * They should be used only when runtime PM may be disabled for the given device
+ * and if that happens, the device is not regarded as operational and so it
+ * cannot be accessed.  The classes defined above should be used instead in all
+ * of the other cases.
+ */
+DEFINE_CLASS(pm_runtime_get_active_enabled, struct device *,
+	     if (!IS_ERR_OR_NULL(_T)) pm_runtime_put(_T),
+	     pm_runtime_get_active_dev(dev, 0), struct device *dev)
+
+DEFINE_CLASS(pm_runtime_get_active_enabled_auto, struct device *,
+	     if (!IS_ERR_OR_NULL(_T)) pm_runtime_put_autosuspend(_T),
+	     pm_runtime_get_active_dev(dev, 0), struct device *dev)
+
+/*
+ * The following classes may be used instead of the above if resume failures can
+ * be neglected.  However, such cases are not expected to be prevalent, so using
+ * one of these classes should always be regarded as an exception and explained
+ * in an adjacent code comment.
+ */
+DEFINE_CLASS(pm_runtime_get_sync, struct device *,
+	     if (_T) pm_runtime_put(_T),
+	     ({ pm_runtime_get_sync(dev); dev; }), struct device *dev)
+
+DEFINE_CLASS(pm_runtime_get_sync_auto, struct device *,
+	     if (_T) pm_runtime_put_autosuspend(_T),
+	     ({ pm_runtime_get_sync(dev); dev; }), struct device *dev)
 
 /**
  * pm_runtime_put_sync - Drop device usage counter and run "idle check" if 0.
