@@ -132,11 +132,6 @@ static bool force_sd_rebuild;
 #define PRS_INVALID_ROOT	-1
 #define PRS_INVALID_ISOLATED	-2
 
-static inline bool is_prs_invalid(int prs_state)
-{
-	return prs_state < 0;
-}
-
 /*
  * Temporary cpumasks for working with partitions that are passed among
  * functions to avoid memory allocation in inner functions.
@@ -1767,7 +1762,7 @@ static int update_parent_effective_cpumask(struct cpuset *cs, int cmd,
 	old_prs = new_prs = cs->partition_root_state;
 
 	if (cmd == partcmd_invalidate) {
-		if (is_prs_invalid(old_prs))
+		if (is_partition_invalid(cs))
 			return 0;
 
 		/*
@@ -1874,7 +1869,7 @@ static int update_parent_effective_cpumask(struct cpuset *cs, int cmd,
 		 * For invalid partition:
 		 *   delmask = newmask & parent->effective_xcpus
 		 */
-		if (is_prs_invalid(old_prs)) {
+		if (is_partition_invalid(cs)) {
 			adding = false;
 			deleting = cpumask_and(tmp->delmask,
 					newmask, parent->effective_xcpus);
@@ -1923,7 +1918,6 @@ static int update_parent_effective_cpumask(struct cpuset *cs, int cmd,
 		 * A partition error happens when parent has tasks and all
 		 * its effective CPUs will have to be distributed out.
 		 */
-		WARN_ON_ONCE(!is_partition_valid(parent));
 		if (nocpu) {
 			part_error = PERR_NOCPUS;
 			if (is_partition_valid(cs))
@@ -2847,22 +2841,16 @@ static int update_nodemask(struct cpuset *cs, struct cpuset *trialcs,
 
 	/*
 	 * An empty mems_allowed is ok iff there are no tasks in the cpuset.
-	 * Since nodelist_parse() fails on an empty mask, we special case
-	 * that parsing.  The validate_change() call ensures that cpusets
-	 * with tasks have memory.
+	 * The validate_change() call ensures that cpusets with tasks have memory.
 	 */
-	if (!*buf) {
-		nodes_clear(trialcs->mems_allowed);
-	} else {
-		retval = nodelist_parse(buf, trialcs->mems_allowed);
-		if (retval < 0)
-			goto done;
+	retval = nodelist_parse(buf, trialcs->mems_allowed);
+	if (retval < 0)
+		goto done;
 
-		if (!nodes_subset(trialcs->mems_allowed,
-				  top_cpuset.mems_allowed)) {
-			retval = -EINVAL;
-			goto done;
-		}
+	if (!nodes_subset(trialcs->mems_allowed,
+			  top_cpuset.mems_allowed)) {
+		retval = -EINVAL;
+		goto done;
 	}
 
 	if (nodes_equal(cs->mems_allowed, trialcs->mems_allowed)) {
@@ -2971,7 +2959,7 @@ static int update_prstate(struct cpuset *cs, int new_prs)
 	/*
 	 * Treat a previously invalid partition root as if it is a "member".
 	 */
-	if (new_prs && is_prs_invalid(old_prs))
+	if (new_prs && is_partition_invalid(cs))
 		old_prs = PRS_MEMBER;
 
 	if (alloc_tmpmasks(&tmpmask))
