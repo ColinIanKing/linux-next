@@ -17,6 +17,7 @@ struct file_priv {
 	ssize_t response_length;
 	bool response_read;
 	bool command_enqueued;
+	bool exclusive;
 
 	u8 data_buffer[TPM_BUFSIZE];
 };

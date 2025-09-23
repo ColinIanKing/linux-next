@@ -19,15 +19,21 @@ static int tpm_open(struct inode *inode, struct file *file)
 {
 	struct tpm_chip *chip;
 	struct file_priv *priv;
+	int rc;
 
 	chip = container_of(inode->i_cdev, struct tpm_chip, cdev);
 
 	/*
-	 * Only one client is allowed to have /dev/tpm0 open at a time, so we
-	 * treat it as a write lock. The shared /dev/tpmrm0 is treated as a
-	 * read lock.
+	 * If a client uses the O_EXCL flag then it expects to be the only TPM
+	 * user, so we treat it as a write lock. Otherwise we do as /dev/tpmrm
+	 * and use a read lock.
 	 */
-	if (!down_write_trylock(&chip->open_lock)) {
+	if (file->f_flags & O_EXCL)
+		rc = down_write_trylock(&chip->open_lock);
+	else
+		rc = down_read_trylock(&chip->open_lock);
+
+	if (!rc) {
 		dev_dbg(&chip->dev, "Another process owns this TPM\n");
 		return -EBUSY;
 	}
@@ -35,13 +41,17 @@ static int tpm_open(struct inode *inode, struct file *file)
 	priv = kzalloc(sizeof(*priv), GFP_KERNEL);
 	if (priv == NULL)
 		goto out;
+	priv->exclusive = (file->f_flags & O_EXCL);
 
 	tpm_common_open(file, chip, priv, NULL);
 
 	return 0;
 
  out:
-	up_write(&chip->open_lock);
+	if (file->f_flags & O_EXCL)
+		up_write(&chip->open_lock);
+	else
+		up_read(&chip->open_lock);
 	return -ENOMEM;
 }
 
@@ -53,7 +63,10 @@ static int tpm_release(struct inode *inode, struct file *file)
 	struct file_priv *priv = file->private_data;
 
 	tpm_common_release(file, priv);
-	up_write(&priv->chip->open_lock);
+	if (priv->exclusive)
+		up_write(&priv->chip->open_lock);
+	else
+		up_read(&priv->chip->open_lock);
 	kfree(priv);
 
 	return 0;
