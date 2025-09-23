@@ -3,6 +3,12 @@ soc/arm
 		https://git.kernel.org/pub/scm/linux/kernel/git/geert/renesas-devel tags/renesas-arm-soc-for-v6.18-tag1
 	patch
 		ARM: mach-hpe: Rework support and directory structure
+	at91/soc
+		git://git.kernel.org/pub/scm/linux/kernel/git/at91/linux tags/at91-soc-6.18
+	omap/soc
+		git://git.kernel.org/pub/scm/linux/kernel/git/khilman/linux-omap tags/omap-for-v6.18/soc-signed
+	rockchip/soc
+		git://git.kernel.org/pub/scm/linux/kernel/git/mmind/linux-rockchip tags/v6.18-rockchip-arm32-1
 
 soc/dt
 	patch
@@ -81,6 +87,41 @@ soc/dt
 		https://git.kernel.org/pub/scm/linux/kernel/git/shawnguo/linux tags/imx-dt64-6.18
 	patch
 		ARM: dts: socionext: Drop "linux,spdif-dit" port node unit-address
+	stm32/dt
+		git://git.kernel.org/pub/scm/linux/kernel/git/atorgue/stm32 tags/stm32-dt-for-v6.18-1
+	k3/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/ti/linux tags/ti-k3-dt-for-v6.18
+	keystone/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/ti/linux tags/ti-keystone-dt-for-v6.18
+	sophgo/dt
+		https://github.com/sophgo/linux tags/riscv-sophgo-dt-for-v6.18
+	mediatek/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/mediatek/linux tags/v6.17-next-dts64.2
+	allwinner/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/sunxi/linux tags/sunxi-dt-for-6.18
+	spacemit/dt
+		https://github.com/spacemit-com/linux tags/spacemit-dt-for-6.18-1
+	<no branch> (0f860eef417df93eb0ae70bbfa8d26cb7e29244d)
+		git://git.kernel.org/pub/scm/linux/kernel/git/mmind/linux-rockchip tags/v6.17-rockchip-dtsfixes2
+	amlogic/dt64
+		https://git.kernel.org/pub/scm/linux/kernel/git/amlogic/linux tags/amlogic-arm64-dt-for-v6.18
+	patch
+		arm64: dts: apm-shadowcat: Move slimpro nodes out of "simple-bus" node
+		arm64: dts: apm-shadowcat: Drop "apm,xgene2-pcie" compatible
+	<no branch> (27322753c8b913fba05250e7b5abb1da31e6ed23)
+		git://git.kernel.org/pub/scm/linux/kernel/git/khilman/linux-omap tags/omap-for-v6.18/dt-signed
+	apple/dt-2
+		https://git.kernel.org/pub/scm/linux/kernel/git/sven/linux tags/apple-soc-dt-6.18-part2
+	qcom/dt-2
+		https://git.kernel.org/pub/scm/linux/kernel/git/qcom/linux tags/qcom-arm64-for-6.18-2
+	rockchip/dt64-2
+		git://git.kernel.org/pub/scm/linux/kernel/git/mmind/linux-rockchip tags/v6.18-rockchip-dts64-2
+	sunxi/dt-2
+		https://git.kernel.org/pub/scm/linux/kernel/git/sunxi/linux tags/sunxi-dt-for-6.18-2
+	at91/dt
+		git://git.kernel.org/pub/scm/linux/kernel/git/at91/linux tags/at91-dt-6.18
+	cix/dt
+		git://git.kernel.org/pub/scm/linux/kernel/git/peter.chen/cix tags/cix-dt-v6.18-rc1
 
 soc/drivers
 	aspeed/drivers
@@ -113,6 +154,20 @@ soc/drivers
 		git://git.kernel.org/pub/scm/linux/kernel/git/at91/linux tags/microchip-soc-6.18
 	mediate/drivers
 		https://git.kernel.org/pub/scm/linux/kernel/git/mediatek/linux tags/v6.17-next-soc
+	qcom/driver-2
+		https://git.kernel.org/pub/scm/linux/kernel/git/qcom/linux tags/qcom-drivers-for-6.18-2
+	apple/soc-driver
+		https://git.kernel.org/pub/scm/linux/kernel/git/sven/linux tags/apple-soc-drivers-6.18
+	amlogic/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/amlogic/linux tags/amlogic-drivers-for-v6.18
+	k3/socinfo
+		https://git.kernel.org/pub/scm/linux/kernel/git/ti/linux tags/ti-driver-soc-for-v6.18
+	sunxi/drivers
+		https://git.kernel.org/pub/scm/linux/kernel/git/sunxi/linux tags/sunxi-drivers-for-6.18
+	drivers/memory
+		https://git.kernel.org/pub/scm/linux/kernel/git/krzk/linux-mem-ctrl tags/memory-controller-drv-6.18
+	tee/qcom
+		git://git.kernel.org/pub/scm/linux/kernel/git/jenswi/linux-tee tags/tee-qcomtee-for-v6.18
 
 soc/defconfig
 	renesas/defconfig
@@ -125,6 +180,10 @@ soc/defconfig
 		https://github.com/Broadcom/stblinux tags/arm-soc/for-6.18/defconfig-arm64
 	imx/defconfig
 		https://git.kernel.org/pub/scm/linux/kernel/git/shawnguo/linux tags/imx-defconfig-6.18
+	qcom/defconfig32
+		https://git.kernel.org/pub/scm/linux/kernel/git/qcom/linux tags/qcom-arm32-defconfig-for-6.18
+	qcom/defconfig64
+		https://git.kernel.org/pub/scm/linux/kernel/git/qcom/linux tags/qcom-arm64-defconfig-for-6.18
 
 soc/late
 
@@ -154,4 +213,12 @@ arm/fixes
 		git://git.kernel.org/pub/scm/linux/kernel/git/dinguyen/linux tags/socfpga_dts_fix_for_v6.17
 	<no branch> (a50342f976d25aace73ff551845ce89406f48f35)
 		https://git.kernel.org/pub/scm/linux/kernel/git/shawnguo/linux tags/imx-fixes-6.17-2
+	<no branch> (a5d7a8ab4b21747173a2f8f0ebf71d72692793c3)
+		https://git.kernel.org/pub/scm/linux/kernel/git/sunxi/linux tags/sunxi-fixes-for-6.17
+	<no branch> (07db1def8f0aad25612b35377b63aa20b032c86d)
+		https://git.kernel.org/pub/scm/linux/kernel/git/sven/linux tags/apple-soc-fixes-6.17
+	<no branch> (0f860eef417df93eb0ae70bbfa8d26cb7e29244d)
+		git://git.kernel.org/pub/scm/linux/kernel/git/mmind/linux-rockchip tags/v6.17-rockchip-dtsfixes2
+	<no branch> (6131690df4adae33e01c0b51b9b78b3e8ed3b76f)
+		git://git.kernel.org/pub/scm/linux/kernel/git/tegra/linux tags/tegra-for-6.17-firmware-fixes
 
