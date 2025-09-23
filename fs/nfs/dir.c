@@ -829,17 +829,17 @@ static int nfs_readdir_folio_filler(struct nfs_readdir_descriptor *desc,
 	struct address_space *mapping = desc->file->f_mapping;
 	struct folio *new, *folio = *arrays;
 	struct xdr_stream stream;
-	struct folio *scratch;
+	struct page *scratch;
 	struct xdr_buf buf;
 	u64 cookie;
 	int status;
 
-	scratch = folio_alloc(GFP_KERNEL, 0);
+	scratch = alloc_page(GFP_KERNEL);
 	if (scratch == NULL)
 		return -ENOMEM;
 
 	xdr_init_decode_pages(&stream, &buf, xdr_pages, buflen);
-	xdr_set_scratch_folio(&stream, scratch);
+	xdr_set_scratch_page(&stream, scratch);
 
 	do {
 		status = nfs_readdir_entry_decode(desc, entry, &stream);
@@ -891,7 +891,7 @@ static int nfs_readdir_folio_filler(struct nfs_readdir_descriptor *desc,
 	if (folio != *arrays)
 		nfs_readdir_folio_unlock_and_put(folio);
 
-	folio_put(scratch);
+	put_page(scratch);
 	return status;
 }
 
