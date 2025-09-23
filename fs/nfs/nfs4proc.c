@@ -7874,10 +7874,10 @@ int nfs4_lock_delegation_recall(struct file_lock *fl, struct nfs4_state *state, 
 		return err;
 	do {
 		err = _nfs4_do_setlk(state, F_SETLK, fl, NFS_LOCK_NEW);
-		if (err != -NFS4ERR_DELAY && err != -NFS4ERR_GRACE)
+		if (err != -NFS4ERR_DELAY)
 			break;
 		ssleep(1);
-	} while (err == -NFS4ERR_DELAY || err == -NFSERR_GRACE);
+	} while (err == -NFS4ERR_DELAY);
 	return nfs4_handle_delegation_recall_error(server, state, stateid, fl, err);
 }
 
