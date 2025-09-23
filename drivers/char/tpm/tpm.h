@@ -272,6 +272,8 @@ struct tpm_chip *tpm_chip_alloc(struct device *dev,
 				const struct tpm_class_ops *ops);
 struct tpm_chip *tpmm_chip_alloc(struct device *pdev,
 				 const struct tpm_class_ops *ops);
+int tpm_try_get_ops_locked(struct tpm_chip *chip);
+void tpm_put_ops_locked(struct tpm_chip *chip);
 int tpm_chip_register(struct tpm_chip *chip);
 void tpm_chip_unregister(struct tpm_chip *chip);
 

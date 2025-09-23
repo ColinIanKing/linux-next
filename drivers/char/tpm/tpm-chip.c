@@ -144,7 +144,7 @@ void tpm_chip_stop(struct tpm_chip *chip)
 EXPORT_SYMBOL_GPL(tpm_chip_stop);
 
 /**
- * tpm_try_get_ops() - Get a ref to the tpm_chip
+ * tpm_try_get_ops_locked() - Get a ref to the tpm_chip
  * @chip: Chip to ref
  *
  * The caller must already have some kind of locking to ensure that chip is
@@ -154,7 +154,7 @@ EXPORT_SYMBOL_GPL(tpm_chip_stop);
  *
  * Returns -ERRNO if the chip could not be got.
  */
-int tpm_try_get_ops(struct tpm_chip *chip)
+int tpm_try_get_ops_locked(struct tpm_chip *chip)
 {
 	int rc = -EIO;
 
@@ -185,21 +185,56 @@ out_ops:
 	put_device(&chip->dev);
 	return rc;
 }
+
+/**
+ * tpm_put_ops_locked() - Release a ref to the tpm_chip
+ * @chip: Chip to put
+ *
+ * This is the opposite pair to tpm_try_get_ops_locked(). After this returns
+ * chip may be kfree'd.
+ */
+void tpm_put_ops_locked(struct tpm_chip *chip)
+{
+	tpm_chip_stop(chip);
+	mutex_unlock(&chip->tpm_mutex);
+	up_read(&chip->ops_sem);
+	put_device(&chip->dev);
+}
+
+/**
+ * tpm_try_get_ops() - Get a ref to the tpm_chip
+ * @chip: Chip to ref
+ *
+ * The caller must already have some kind of locking to ensure that chip is
+ * valid. This function will attempt to get the open_lock for the chip,
+ * ensuring no other user is expecting exclusive access, before locking the
+ * chip so that the ops member can be accessed safely. The locking prevents
+ * tpm_chip_unregister from completing, so it should not be held for long
+ * periods.
+ *
+ * Returns -ERRNO if the chip could not be got.
+ */
+int tpm_try_get_ops(struct tpm_chip *chip)
+{
+	if (!down_read_trylock(&chip->open_lock))
+		return -EBUSY;
+
+	return tpm_try_get_ops_locked(chip);
+}
 EXPORT_SYMBOL_GPL(tpm_try_get_ops);
 
 /**
  * tpm_put_ops() - Release a ref to the tpm_chip
  * @chip: Chip to put
  *
- * This is the opposite pair to tpm_try_get_ops(). After this returns chip may
- * be kfree'd.
+ * This is the opposite pair to tpm_try_get_ops(). After this returns
+ * chip may be kfree'd.
  */
 void tpm_put_ops(struct tpm_chip *chip)
 {
-	tpm_chip_stop(chip);
-	mutex_unlock(&chip->tpm_mutex);
-	up_read(&chip->ops_sem);
-	put_device(&chip->dev);
+	tpm_put_ops_locked(chip);
+
+	up_read(&chip->open_lock);
 }
 EXPORT_SYMBOL_GPL(tpm_put_ops);
 
@@ -644,10 +679,10 @@ void tpm_chip_unregister(struct tpm_chip *chip)
 #ifdef CONFIG_TCG_TPM2_HMAC
 	int rc;
 
-	rc = tpm_try_get_ops(chip);
+	rc = tpm_try_get_ops_locked(chip);
 	if (!rc) {
 		tpm2_end_auth_session(chip);
-		tpm_put_ops(chip);
+		tpm_put_ops_locked(chip);
 	}
 #endif
 
