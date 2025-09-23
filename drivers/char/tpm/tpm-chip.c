@@ -338,6 +338,7 @@ struct tpm_chip *tpm_chip_alloc(struct device *pdev,
 
 	mutex_init(&chip->tpm_mutex);
 	init_rwsem(&chip->ops_sem);
+	init_rwsem(&chip->open_lock);
 
 	chip->ops = ops;
 

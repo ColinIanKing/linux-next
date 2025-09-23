@@ -22,6 +22,7 @@
 #include <linux/cdev.h>
 #include <linux/fs.h>
 #include <linux/highmem.h>
+#include <linux/rwsem.h>
 #include <crypto/hash_info.h>
 #include <crypto/aes.h>
 
@@ -168,7 +169,7 @@ struct tpm_chip {
 	unsigned int flags;
 
 	int dev_num;		/* /dev/tpm# */
-	unsigned long is_open;	/* only one allowed */
+	struct rw_semaphore open_lock;
 
 	char hwrng_name[64];
 	struct hwrng hwrng;

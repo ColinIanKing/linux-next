@@ -22,10 +22,12 @@ static int tpm_open(struct inode *inode, struct file *file)
 
 	chip = container_of(inode->i_cdev, struct tpm_chip, cdev);
 
-	/* It's assured that the chip will be opened just once,
-	 * by the check of is_open variable, which is protected
-	 * by driver_lock. */
-	if (test_and_set_bit(0, &chip->is_open)) {
+	/*
+	 * Only one client is allowed to have /dev/tpm0 open at a time, so we
+	 * treat it as a write lock. The shared /dev/tpmrm0 is treated as a
+	 * read lock.
+	 */
+	if (!down_write_trylock(&chip->open_lock)) {
 		dev_dbg(&chip->dev, "Another process owns this TPM\n");
 		return -EBUSY;
 	}
@@ -39,7 +41,7 @@ static int tpm_open(struct inode *inode, struct file *file)
 	return 0;
 
  out:
-	clear_bit(0, &chip->is_open);
+	up_write(&chip->open_lock);
 	return -ENOMEM;
 }
 
@@ -51,7 +53,7 @@ static int tpm_release(struct inode *inode, struct file *file)
 	struct file_priv *priv = file->private_data;
 
 	tpm_common_release(file, priv);
-	clear_bit(0, &priv->chip->is_open);
+	up_write(&priv->chip->open_lock);
 	kfree(priv);
 
 	return 0;
