@@ -870,7 +870,7 @@ static bool folio_referenced_one(struct folio *folio,
 			 * If page table boundary has been cross, current ptl
 			 * only protect part of ptes.
 			 */
-			if (pvmw.flags & PVMW_PGTABLE_CROSSSED)
+			if (pvmw.flags & PVMW_PGTABLE_CROSSED)
 				continue;
 
 			/* Restore the mlock which got missed */
