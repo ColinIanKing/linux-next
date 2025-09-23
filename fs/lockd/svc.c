@@ -216,7 +216,8 @@ out_err:
 	if (warned++ == 0)
 		printk(KERN_WARNING
 			"lockd_up: makesock failed, error=%d\n", err);
-	svc_xprt_destroy_all(serv, net, true);
+	svc_xprt_destroy_all(serv, net);
+	svc_rpcb_cleanup(serv, net);
 	return err;
 }
 
@@ -254,7 +255,8 @@ static void lockd_down_net(struct svc_serv *serv, struct net *net)
 			nlm_shutdown_hosts_net(net);
 			cancel_delayed_work_sync(&ln->grace_period_end);
 			locks_end_grace(&ln->lockd_manager);
-			svc_xprt_destroy_all(serv, net, true);
+			svc_xprt_destroy_all(serv, net);
+			svc_rpcb_cleanup(serv, net);
 		}
 	} else {
 		pr_err("%s: no users! net=%x\n",
