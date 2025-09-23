@@ -1933,7 +1933,7 @@ static bool try_to_unmap_one(struct folio *folio, struct vm_area_struct *vma,
 			 * If page table boundary has been cross, current ptl
 			 * only protect part of ptes.
 			 */
-			if (pvmw.flags & PVMW_PGTABLE_CROSSSED)
+			if (pvmw.flags & PVMW_PGTABLE_CROSSED)
 				goto walk_done;
 
 			/* Restore the mlock which got missed */
