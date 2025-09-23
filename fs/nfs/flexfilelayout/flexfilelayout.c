@@ -439,7 +439,7 @@ ff_layout_alloc_lseg(struct pnfs_layout_hdr *lh,
 	struct nfs4_ff_layout_segment *fls = NULL;
 	struct xdr_stream stream;
 	struct xdr_buf buf;
-	struct folio *scratch;
+	struct page *scratch;
 	u64 stripe_unit;
 	u32 mirror_array_cnt;
 	__be32 *p;
@@ -447,13 +447,13 @@ ff_layout_alloc_lseg(struct pnfs_layout_hdr *lh,
 	struct nfs4_ff_layout_ds_stripe *dss_info;
 
 	dprintk("--> %s\n", __func__);
-	scratch = folio_alloc(gfp_flags, 0);
+	scratch = alloc_page(gfp_flags);
 	if (!scratch)
 		return ERR_PTR(-ENOMEM);
 
 	xdr_init_decode_pages(&stream, &buf, lgr->layoutp->pages,
 			      lgr->layoutp->len);
-	xdr_set_scratch_folio(&stream, scratch);
+	xdr_set_scratch_page(&stream, scratch);
 
 	/* stripe unit and mirror_array_cnt */
 	rc = -EIO;
@@ -639,7 +639,7 @@ out_sort_mirrors:
 	ret = &fls->generic_hdr;
 	dprintk("<-- %s (success)\n", __func__);
 out_free_page:
-	folio_put(scratch);
+	__free_page(scratch);
 	return ret;
 out_err_free:
 	_ff_layout_free_lseg(fls);

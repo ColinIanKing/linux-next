@@ -44,7 +44,7 @@ nfs4_ff_alloc_deviceid_node(struct nfs_server *server, struct pnfs_device *pdev,
 {
 	struct xdr_stream stream;
 	struct xdr_buf buf;
-	struct folio *scratch;
+	struct page *scratch;
 	struct list_head dsaddrs;
 	struct nfs4_pnfs_ds_addr *da;
 	struct nfs4_ff_layout_ds *new_ds = NULL;
@@ -56,7 +56,7 @@ nfs4_ff_alloc_deviceid_node(struct nfs_server *server, struct pnfs_device *pdev,
 	int i, ret = -ENOMEM;
 
 	/* set up xdr stream */
-	scratch = folio_alloc(gfp_flags, 0);
+	scratch = alloc_page(gfp_flags);
 	if (!scratch)
 		goto out_err;
 
@@ -70,7 +70,7 @@ nfs4_ff_alloc_deviceid_node(struct nfs_server *server, struct pnfs_device *pdev,
 	INIT_LIST_HEAD(&dsaddrs);
 
 	xdr_init_decode_pages(&stream, &buf, pdev->pages, pdev->pglen);
-	xdr_set_scratch_folio(&stream, scratch);
+	xdr_set_scratch_page(&stream, scratch);
 
 	/* multipath count */
 	p = xdr_inline_decode(&stream, 4);
@@ -163,7 +163,7 @@ nfs4_ff_alloc_deviceid_node(struct nfs_server *server, struct pnfs_device *pdev,
 		kfree(da);
 	}
 
-	folio_put(scratch);
+	__free_page(scratch);
 	return new_ds;
 
 out_err_drain_dsaddrs:
@@ -177,7 +177,7 @@ out_err_drain_dsaddrs:
 
 	kfree(ds_versions);
 out_scratch:
-	folio_put(scratch);
+	__free_page(scratch);
 out_err:
 	kfree(new_ds);
 
