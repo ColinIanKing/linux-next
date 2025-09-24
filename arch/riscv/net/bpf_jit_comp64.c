@@ -1061,10 +1061,9 @@ static int __arch_prepare_bpf_trampoline(struct bpf_tramp_image *im,
 	stack_size += 16;
 
 	save_ret = flags & (BPF_TRAMP_F_CALL_ORIG | BPF_TRAMP_F_RET_FENTRY_RET);
-	if (save_ret) {
+	if (save_ret)
 		stack_size += 16; /* Save both A5 (BPF R0) and A0 */
-		retval_off = stack_size;
-	}
+	retval_off = stack_size;
 
 	stack_size += nr_arg_slots * 8;
 	args_off = stack_size;
@@ -2066,6 +2065,11 @@ bool bpf_jit_supports_insn(struct bpf_insn *insn, bool in_arena)
 		case BPF_STX | BPF_ATOMIC | BPF_DW:
 			if (insn->imm == BPF_CMPXCHG)
 				return rv_ext_enabled(ZACAS);
+			break;
+		case BPF_LDX | BPF_MEMSX | BPF_B:
+		case BPF_LDX | BPF_MEMSX | BPF_H:
+		case BPF_LDX | BPF_MEMSX | BPF_W:
+			return false;
 		}
 	}
 
