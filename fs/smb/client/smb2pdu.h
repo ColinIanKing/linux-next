@@ -420,6 +420,8 @@ struct smb2_create_ea_ctx {
 	struct smb2_file_full_ea_info ea;
 } __packed;
 
+int smb3_sync_ses_channels(struct cifs_sb_info *cifs_sb);
+
 #define SMB2_WSL_XATTR_UID		"$LXUID"
 #define SMB2_WSL_XATTR_GID		"$LXGID"
 #define SMB2_WSL_XATTR_MODE		"$LXMOD"
