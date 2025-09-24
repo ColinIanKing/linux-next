@@ -1775,7 +1775,7 @@ EXPORT_SYMBOL(security_dentry_init_security);
  * Return: Returns 0 on success, error on failure.
  */
 int security_dentry_create_files_as(struct dentry *dentry, int mode,
-				    struct qstr *name,
+				    const struct qstr *name,
 				    const struct cred *old, struct cred *new)
 {
 	return call_int_hook(dentry_create_files_as, dentry, mode,
@@ -3185,7 +3185,7 @@ int security_file_truncate(struct file *file)
  *
  * Return: Returns a zero on success, negative values on failure.
  */
-int security_task_alloc(struct task_struct *task, unsigned long clone_flags)
+int security_task_alloc(struct task_struct *task, u64 clone_flags)
 {
 	int rc = lsm_task_alloc(task);
 
