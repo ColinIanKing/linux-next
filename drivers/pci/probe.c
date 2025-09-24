@@ -205,6 +205,26 @@ static void __pci_size_rom(struct pci_dev *dev, unsigned int pos, u32 *sizes)
 	__pci_size_bars(dev, 1, pos, sizes, true);
 }
 
+static struct resource *pbus_select_window_for_res_addr(
+					const struct pci_bus *bus,
+					const struct resource *res)
+{
+	unsigned long type = res->flags & IORESOURCE_TYPE_BITS;
+	struct resource *r;
+
+	pci_bus_for_each_resource(bus, r) {
+		if (!r || r == &ioport_resource || r == &iomem_resource)
+			continue;
+
+		if ((r->flags & IORESOURCE_TYPE_BITS) != type)
+			continue;
+
+		if (resource_contains(r, res))
+			return r;
+	}
+	return NULL;
+}
+
 /**
  * __pci_read_base - Read a PCI BAR
  * @dev: the PCI device
@@ -327,6 +347,18 @@ int __pci_read_base(struct pci_dev *dev, enum pci_bar_type type,
 		res->end = region.end - region.start;
 		pci_info(dev, "%s: initial BAR value %#010llx invalid\n",
 			 res_name, (unsigned long long)region.start);
+	}
+
+	if (!(res->flags & IORESOURCE_UNSET)) {
+		struct resource *b_res;
+
+		b_res = pbus_select_window_for_res_addr(dev->bus, res);
+		if (!b_res ||
+		    b_res->flags & (IORESOURCE_UNSET | IORESOURCE_DISABLED)) {
+			pci_dbg(dev, "%s %pR: no initial claim (no window)\n",
+				res_name, res);
+			res->flags |= IORESOURCE_UNSET;
+		}
 	}
 
 	goto out;
