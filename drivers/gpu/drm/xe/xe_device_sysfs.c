@@ -293,11 +293,11 @@ int xe_device_sysfs_init(struct xe_device *xe)
 	if (xe->info.platform == XE_BATTLEMAGE && !IS_SRIOV_VF(xe)) {
 		ret = devm_device_add_group(dev, &auto_link_downgrade_attr_group);
 		if (ret)
-			goto cleanup;
+			return ret;
 
 		ret = devm_device_add_group(dev, &late_bind_attr_group);
 		if (ret)
-			goto cleanup;
+			return ret;
 	}
 
 	return 0;
