@@ -1180,7 +1180,7 @@ void __init_or_module apply_seal_endbr(s32 *start, s32 *end) { }
 
 #ifdef CONFIG_CFI_AUTO_DEFAULT
 # define __CFI_DEFAULT CFI_AUTO
-#elif defined(CONFIG_CFI_CLANG)
+#elif defined(CONFIG_CFI)
 # define __CFI_DEFAULT CFI_KCFI
 #else
 # define __CFI_DEFAULT CFI_OFF
@@ -1193,7 +1193,7 @@ static bool cfi_debug __ro_after_init;
 bool cfi_bhi __ro_after_init = false;
 #endif
 
-#ifdef CONFIG_CFI_CLANG
+#ifdef CONFIG_CFI
 u32 cfi_get_func_hash(void *func)
 {
 	u32 hash;
