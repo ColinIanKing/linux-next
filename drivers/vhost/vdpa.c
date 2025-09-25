@@ -22,6 +22,7 @@
 #include <linux/vdpa.h>
 #include <linux/nospec.h>
 #include <linux/vhost.h>
+#include <linux/types.h>
 
 #include "vhost.h"
 
@@ -657,16 +658,20 @@ static long vhost_vdpa_vring_ioctl(struct vhost_vdpa *v, unsigned int cmd,
 			return -EFAULT;
 		ops->set_vq_ready(vdpa, idx, s.num);
 		return 0;
-	case VHOST_VDPA_GET_VRING_GROUP:
+	case VHOST_VDPA_GET_VRING_GROUP: {
+		u64 group;
+
 		if (!ops->get_vq_group)
 			return -EOPNOTSUPP;
 		s.index = idx;
-		s.num = ops->get_vq_group(vdpa, idx);
-		if (s.num >= vdpa->ngroups)
+		group = ops->get_vq_group(vdpa, idx);
+		if (group >= vdpa->ngroups || group > U32_MAX || group < 0)
 			return -EIO;
 		else if (copy_to_user(argp, &s, sizeof(s)))
 			return -EFAULT;
+		s.num = group;
 		return 0;
+	}
 	case VHOST_VDPA_GET_VRING_DESC_GROUP:
 		if (!vhost_vdpa_has_desc_group(v))
 			return -EOPNOTSUPP;
