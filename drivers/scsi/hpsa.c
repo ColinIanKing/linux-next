@@ -6402,18 +6402,14 @@ static int hpsa_passthru_ioctl(struct ctlr_info *h,
 		return -EINVAL;
 	}
 	if (iocommand->buf_size > 0) {
-		buff = kmalloc(iocommand->buf_size, GFP_KERNEL);
-		if (buff == NULL)
-			return -ENOMEM;
 		if (iocommand->Request.Type.Direction & XFER_WRITE) {
-			/* Copy the data into the buffer we created */
-			if (copy_from_user(buff, iocommand->buf,
-				iocommand->buf_size)) {
-				rc = -EFAULT;
-				goto out_kfree;
-			}
+			buff = memdup_user(iocommand->buf, iocommand->buf_size);
+			if (IS_ERR(buff))
+				return PTR_ERR(buff);
 		} else {
-			memset(buff, 0, iocommand->buf_size);
+			buff = kzalloc(iocommand->buf_size, GFP_KERNEL);
+			if (!buff)
+				return -ENOMEM;
 		}
 	}
 	c = cmd_alloc(h);
@@ -6473,7 +6469,6 @@ static int hpsa_passthru_ioctl(struct ctlr_info *h,
 	}
 out:
 	cmd_free(h, c);
-out_kfree:
 	kfree(buff);
 	return rc;
 }
@@ -6517,18 +6512,21 @@ static int hpsa_big_passthru_ioctl(struct ctlr_info *h,
 	while (left) {
 		sz = (left > ioc->malloc_size) ? ioc->malloc_size : left;
 		buff_size[sg_used] = sz;
-		buff[sg_used] = kmalloc(sz, GFP_KERNEL);
-		if (buff[sg_used] == NULL) {
-			status = -ENOMEM;
-			goto cleanup1;
-		}
+
 		if (ioc->Request.Type.Direction & XFER_WRITE) {
-			if (copy_from_user(buff[sg_used], data_ptr, sz)) {
-				status = -EFAULT;
+			buff[sg_used] = memdup_user(data_ptr, sz);
+			if (IS_ERR(buff[sg_used])) {
+				status = PTR_ERR(buff[sg_used]);
 				goto cleanup1;
 			}
-		} else
-			memset(buff[sg_used], 0, sz);
+		} else {
+			buff[sg_used] = kzalloc(sz, GFP_KERNEL);
+			if (!buff[sg_used]) {
+				status = -ENOMEM;
+				goto cleanup1;
+			}
+		}
+
 		left -= sz;
 		data_ptr += sz;
 		sg_used++;
