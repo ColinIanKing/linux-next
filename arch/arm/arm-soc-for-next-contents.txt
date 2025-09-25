@@ -122,6 +122,8 @@ soc/dt
 		git://git.kernel.org/pub/scm/linux/kernel/git/at91/linux tags/at91-dt-6.18
 	cix/dt
 		git://git.kernel.org/pub/scm/linux/kernel/git/peter.chen/cix tags/cix-dt-v6.18-rc1
+	riscv/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/conor/linux tags/riscv-dt-for-v6.18
 
 soc/drivers
 	aspeed/drivers
@@ -168,6 +170,12 @@ soc/drivers
 		https://git.kernel.org/pub/scm/linux/kernel/git/krzk/linux-mem-ctrl tags/memory-controller-drv-6.18
 	tee/qcom
 		git://git.kernel.org/pub/scm/linux/kernel/git/jenswi/linux-tee tags/tee-qcomtee-for-v6.18
+	tee/fix2
+		git://git.kernel.org/pub/scm/linux/kernel/git/jenswi/linux-tee tags/tee-shm-register-fix-for-v6.17
+	fsl/soc-driver
+		https://github.com/chleroy/linux tags/soc_fsl-6.18-1
+	riscv/cache-driver
+		https://git.kernel.org/pub/scm/linux/kernel/git/conor/linux tags/riscv-cache-for-v6.18
 
 soc/defconfig
 	renesas/defconfig
@@ -184,27 +192,12 @@ soc/defconfig
 		https://git.kernel.org/pub/scm/linux/kernel/git/qcom/linux tags/qcom-arm32-defconfig-for-6.18
 	qcom/defconfig64
 		https://git.kernel.org/pub/scm/linux/kernel/git/qcom/linux tags/qcom-arm64-defconfig-for-6.18
+	riscv/defconfig
+		https://git.kernel.org/pub/scm/linux/kernel/git/conor/linux tags/riscv-config-for-v6.18
 
 soc/late
 
 arm/fixes
-	<no branch> (25daf9af0ac1bf12490b723b5efaf8dcc85980bc)
-		https://git.kernel.org/pub/scm/linux/kernel/git/qcom/linux tags/qcom-drivers-fixes-for-6.17
-	<no branch> (50a74d0095cd23d2012133e208df45a298868870)
-		https://git.kernel.org/pub/scm/linux/kernel/git/jenswi/linux-tee tags/tee-fixes-for-v6.17
-	<no branch> (75dbd4304afe574fcfc4118a5b78776a9f48fdc4)
-		https://git.kernel.org/pub/scm/linux/kernel/git/jenswi/linux-tee tags/optee-typo-fix-for-v6.17
-	patch
-		MAINTAINERS: Update Nobuhiro Iwamatsu's email address
-	<no branch> (37e5caa5571b5a60b0c835a0bc09ab1e53f57bfe)
-		https://git.kernel.org/pub/scm/linux/kernel/git/shawnguo/linux tags/imx-fixes-6.17
-	patch
-		arm64: dts: axiado: Add missing UART aliases
-		MAINTAINERS: exclude defconfig from ARM64 PORT
-	<no branch> (dcc6785caffad27f2ea601fdd2f9782036e1faed)
-		git://git.kernel.org/pub/scm/linux/kernel/git/mmind/linux-rockchip tags/v6.17-rockchip-dtsfixes1
-	<no branch> (217efb440933bf97a78ef328b211d8a39f4ff171)
-		git://git.kernel.org/pub/scm/linux/kernel/git/at91/linux tags/at91-fixes-6.17
 	<no branch> (794a066688038df46c01e177cc6faebded0acba4)
 		git://git.kernel.org/pub/scm/linux/kernel/git/gclement/mvebu tags/mvebu-fixes-6.17-1
 	<no branch> (9a52827a9bbbabb461e87bb41174a96a82c0e8ae)
@@ -221,4 +214,13 @@ arm/fixes
 		git://git.kernel.org/pub/scm/linux/kernel/git/mmind/linux-rockchip tags/v6.17-rockchip-dtsfixes2
 	<no branch> (6131690df4adae33e01c0b51b9b78b3e8ed3b76f)
 		git://git.kernel.org/pub/scm/linux/kernel/git/tegra/linux tags/tegra-for-6.17-firmware-fixes
+
+soc/newsoc
+	patch
+		dt-bindings: riscv: Add SiFive P550 CPU compatible
+		riscv: Add Kconfig option for ESWIN platforms
+		dt-bindings: riscv: Add SiFive HiFive Premier P550 board
+		dt-bindings: interrupt-controller: Add ESWIN EIC7700 PLIC
+		riscv: dts: add initial support for EIC7700 SoC
+		riscv: dts: eswin: add HiFive Premier P550 board device tree
 
