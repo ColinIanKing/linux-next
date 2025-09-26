@@ -1323,7 +1323,7 @@ static void mgmt_set_powered_complete(struct hci_dev *hdev, void *data, int err)
 	struct mgmt_mode *cp;
 
 	/* Make sure cmd still outstanding. */
-	if (err == -ECANCELED || !mgmt_pending_valid(hdev, cmd))
+	if (err == -ECANCELED || !mgmt_pending_valid(hdev, cmd, true))
 		return;
 
 	cp = cmd->param;
@@ -1358,13 +1358,9 @@ static int set_powered_sync(struct hci_dev *hdev, void *data)
 	struct mgmt_pending_cmd *cmd = data;
 	struct mgmt_mode cp;
 
-	mutex_lock(&hdev->mgmt_pending_lock);
-
 	/* Make sure cmd still outstanding. */
-	if (!__mgmt_pending_listed(hdev, cmd)) {
-		mutex_unlock(&hdev->mgmt_pending_lock);
+	if (!mgmt_pending_valid(hdev, cmd, false))
 		return -ECANCELED;
-	}
 
 	memcpy(&cp, cmd->param, sizeof(cp));
 
@@ -1521,7 +1517,7 @@ static void mgmt_set_discoverable_complete(struct hci_dev *hdev, void *data,
 	bt_dev_dbg(hdev, "err %d", err);
 
 	/* Make sure cmd still outstanding. */
-	if (err == -ECANCELED || !mgmt_pending_valid(hdev, cmd))
+	if (err == -ECANCELED || !mgmt_pending_valid(hdev, cmd, true))
 		return;
 
 	hci_dev_lock(hdev);
@@ -1549,8 +1545,10 @@ done:
 
 static int set_discoverable_sync(struct hci_dev *hdev, void *data)
 {
-	if (!mgmt_pending_listed(hdev, data))
+	if (!mgmt_pending_valid(hdev, data, false))
 		return -ECANCELED;
+
+	mutex_unlock(&hdev->mgmt_pending_lock);
 
 	BT_DBG("%s", hdev->name);
 
@@ -1698,7 +1696,7 @@ static void mgmt_set_connectable_complete(struct hci_dev *hdev, void *data,
 	bt_dev_dbg(hdev, "err %d", err);
 
 	/* Make sure cmd still outstanding. */
-	if (err == -ECANCELED || !mgmt_pending_valid(hdev, cmd))
+	if (err == -ECANCELED || !mgmt_pending_valid(hdev, cmd, true))
 		return;
 
 	hci_dev_lock(hdev);
@@ -1749,8 +1747,10 @@ static int set_connectable_update_settings(struct hci_dev *hdev,
 
 static int set_connectable_sync(struct hci_dev *hdev, void *data)
 {
-	if (!mgmt_pending_listed(hdev, data))
+	if (!mgmt_pending_valid(hdev, data, false))
 		return -ECANCELED;
+
+	mutex_unlock(&hdev->mgmt_pending_lock);
 
 	BT_DBG("%s", hdev->name);
 
@@ -1933,7 +1933,7 @@ static void set_ssp_complete(struct hci_dev *hdev, void *data, int err)
 	bool changed;
 
 	/* Make sure cmd still outstanding. */
-	if (err == -ECANCELED || !mgmt_pending_valid(hdev, cmd))
+	if (err == -ECANCELED || !mgmt_pending_valid(hdev, cmd, true))
 		return;
 
 	cp = cmd->param;
@@ -1975,12 +1975,8 @@ static int set_ssp_sync(struct hci_dev *hdev, void *data)
 	bool changed = false;
 	int err;
 
-	mutex_lock(&hdev->mgmt_pending_lock);
-
-	if (!__mgmt_pending_listed(hdev, cmd)) {
-		mutex_unlock(&hdev->mgmt_pending_lock);
+	if (!mgmt_pending_valid(hdev, cmd, false))
 		return -ECANCELED;
-	}
 
 	memcpy(&cp, cmd->param, sizeof(cp));
 
@@ -2088,7 +2084,7 @@ static void set_le_complete(struct hci_dev *hdev, void *data, int err)
 
 	bt_dev_dbg(hdev, "err %d", err);
 
-	if (err == -ECANCELED || !mgmt_pending_valid(hdev, data))
+	if (err == -ECANCELED || !mgmt_pending_valid(hdev, data, true))
 		return;
 
 	if (status) {
@@ -2114,12 +2110,8 @@ static int set_le_sync(struct hci_dev *hdev, void *data)
 	u8 val;
 	int err;
 
-	mutex_lock(&hdev->mgmt_pending_lock);
-
-	if (!__mgmt_pending_listed(hdev, cmd)) {
-		mutex_unlock(&hdev->mgmt_pending_lock);
+	if (!mgmt_pending_valid(hdev, cmd, false))
 		return -ECANCELED;
-	}
 
 	memcpy(&cp, cmd->param, sizeof(cp));
 	val = !!cp.val;
@@ -2169,7 +2161,7 @@ static void set_mesh_complete(struct hci_dev *hdev, void *data, int err)
 	u8 status = mgmt_status(err);
 	struct sock *sk;
 
-	if (err == -ECANCELED || !mgmt_pending_valid(hdev, cmd))
+	if (err == -ECANCELED || !mgmt_pending_valid(hdev, cmd, true))
 		return;
 
 	sk = cmd->sk;
@@ -2190,12 +2182,8 @@ static int set_mesh_sync(struct hci_dev *hdev, void *data)
 	struct mgmt_cp_set_mesh cp;
 	size_t len;
 
-	mutex_lock(&hdev->mgmt_pending_lock);
-
-	if (!__mgmt_pending_listed(hdev, cmd)) {
-		mutex_unlock(&hdev->mgmt_pending_lock);
+	if (!mgmt_pending_valid(hdev, cmd, false))
 		return -ECANCELED;
-	}
 
 	memcpy(&cp, cmd->param, sizeof(cp));
 
@@ -3930,7 +3918,7 @@ static void set_name_complete(struct hci_dev *hdev, void *data, int err)
 
 	bt_dev_dbg(hdev, "err %d", err);
 
-	if (err == -ECANCELED || !mgmt_pending_valid(hdev, cmd))
+	if (err == -ECANCELED || !mgmt_pending_valid(hdev, cmd, true))
 		return;
 
 	cp = cmd->param;
@@ -3954,12 +3942,8 @@ static int set_name_sync(struct hci_dev *hdev, void *data)
 	struct mgmt_pending_cmd *cmd = data;
 	struct mgmt_cp_set_local_name cp;
 
-	mutex_lock(&hdev->mgmt_pending_lock);
-
-	if (!__mgmt_pending_listed(hdev, cmd)) {
-		mutex_unlock(&hdev->mgmt_pending_lock);
+	if (!mgmt_pending_valid(hdev, cmd, false))
 		return -ECANCELED;
-	}
 
 	memcpy(&cp, cmd->param, sizeof(cp));
 
@@ -4121,6 +4105,9 @@ static void set_default_phy_complete(struct hci_dev *hdev, void *data, int err)
 	struct sk_buff *skb;
 	u8 status = mgmt_status(err);
 
+	if (err == -ECANCELED || !mgmt_pending_valid(hdev, cmd, true))
+		return;
+
 	skb = cmd->skb;
 
 	if (!status) {
@@ -4154,11 +4141,18 @@ static void set_default_phy_complete(struct hci_dev *hdev, void *data, int err)
 static int set_default_phy_sync(struct hci_dev *hdev, void *data)
 {
 	struct mgmt_pending_cmd *cmd = data;
-	struct mgmt_cp_set_phy_configuration *cp = cmd->param;
+	struct mgmt_cp_set_phy_configuration cp;
 	struct hci_cp_le_set_default_phy cp_phy;
 	u32 selected_phys;
 
-	selected_phys = __le32_to_cpu(cp->selected_phys);
+	if (!mgmt_pending_valid(hdev, cmd, false))
+		return -ECANCELED;
+
+	memcpy(&cp, cmd->param, sizeof(cp));
+
+	mutex_unlock(&hdev->mgmt_pending_lock);
+
+	selected_phys = __le32_to_cpu(cp.selected_phys);
 
 	memset(&cp_phy, 0, sizeof(cp_phy));
 
@@ -4542,13 +4536,11 @@ static int read_exp_features_info(struct sock *sk, struct hci_dev *hdev,
 		return -ENOMEM;
 
 #ifdef CONFIG_BT_FEATURE_DEBUG
-	if (!hdev) {
-		flags = bt_dbg_get() ? BIT(0) : 0;
+	flags = bt_dbg_get() ? BIT(0) : 0;
 
-		memcpy(rp->features[idx].uuid, debug_uuid, 16);
-		rp->features[idx].flags = cpu_to_le32(flags);
-		idx++;
-	}
+	memcpy(rp->features[idx].uuid, debug_uuid, 16);
+	rp->features[idx].flags = cpu_to_le32(flags);
+	idx++;
 #endif
 
 	if (hdev && hci_dev_le_state_simultaneous(hdev)) {
@@ -5266,7 +5258,7 @@ static void mgmt_add_adv_patterns_monitor_complete(struct hci_dev *hdev,
 	 * hci_adv_monitors_clear is about to be called which will take care of
 	 * freeing the adv_monitor instances.
 	 */
-	if (status == -ECANCELED && !mgmt_pending_valid(hdev, cmd))
+	if (status == -ECANCELED && !mgmt_pending_valid(hdev, cmd, true))
 		return;
 
 	monitor = cmd->user_data;
@@ -5295,20 +5287,13 @@ static void mgmt_add_adv_patterns_monitor_complete(struct hci_dev *hdev,
 static int mgmt_add_adv_patterns_monitor_sync(struct hci_dev *hdev, void *data)
 {
 	struct mgmt_pending_cmd *cmd = data;
-	struct adv_monitor *mon;
 
-	mutex_lock(&hdev->mgmt_pending_lock);
-
-	if (!__mgmt_pending_listed(hdev, cmd)) {
-		mutex_unlock(&hdev->mgmt_pending_lock);
+	if (!mgmt_pending_valid(hdev, cmd, false))
 		return -ECANCELED;
-	}
-
-	mon = cmd->user_data;
 
 	mutex_unlock(&hdev->mgmt_pending_lock);
 
-	return hci_add_adv_monitor(hdev, mon);
+	return hci_add_adv_monitor(hdev, cmd->user_data);
 }
 
 static int __add_adv_patterns_monitor(struct sock *sk, struct hci_dev *hdev,
@@ -5879,7 +5864,7 @@ static void start_discovery_complete(struct hci_dev *hdev, void *data, int err)
 
 	bt_dev_dbg(hdev, "err %d", err);
 
-	if (err == -ECANCELED || !mgmt_pending_valid(hdev, cmd))
+	if (err == -ECANCELED || !mgmt_pending_valid(hdev, cmd, true))
 		return;
 
 	mgmt_cmd_complete(cmd->sk, cmd->hdev->id, cmd->opcode, mgmt_status(err),
@@ -5892,8 +5877,10 @@ static void start_discovery_complete(struct hci_dev *hdev, void *data, int err)
 
 static int start_discovery_sync(struct hci_dev *hdev, void *data)
 {
-	if (!mgmt_pending_listed(hdev, data))
+	if (!mgmt_pending_valid(hdev, data, false))
 		return -ECANCELED;
+
+	mutex_unlock(&hdev->mgmt_pending_lock);
 
 	return hci_start_discovery_sync(hdev);
 }
@@ -6100,7 +6087,7 @@ static void stop_discovery_complete(struct hci_dev *hdev, void *data, int err)
 {
 	struct mgmt_pending_cmd *cmd = data;
 
-	if (err == -ECANCELED || !mgmt_pending_valid(hdev, cmd))
+	if (err == -ECANCELED || !mgmt_pending_valid(hdev, cmd, true))
 		return;
 
 	bt_dev_dbg(hdev, "err %d", err);
@@ -6115,8 +6102,10 @@ static void stop_discovery_complete(struct hci_dev *hdev, void *data, int err)
 
 static int stop_discovery_sync(struct hci_dev *hdev, void *data)
 {
-	if (!mgmt_pending_listed(hdev, data))
+	if (!mgmt_pending_valid(hdev, data, false))
 		return -ECANCELED;
+
+	mutex_unlock(&hdev->mgmt_pending_lock);
 
 	return hci_stop_discovery_sync(hdev);
 }
@@ -6333,7 +6322,7 @@ static void set_advertising_complete(struct hci_dev *hdev, void *data, int err)
 	struct adv_info *adv_instance;
 	u8 status = mgmt_status(err);
 
-	if (err == -ECANCELED || !mgmt_pending_valid(hdev, data))
+	if (err == -ECANCELED || !mgmt_pending_valid(hdev, data, true))
 		return;
 
 	if (status) {
@@ -6382,12 +6371,8 @@ static int set_adv_sync(struct hci_dev *hdev, void *data)
 	struct mgmt_mode cp;
 	u8 val;
 
-	mutex_lock(&hdev->mgmt_pending_lock);
-
-	if (!__mgmt_pending_listed(hdev, cmd)) {
-		mutex_unlock(&hdev->mgmt_pending_lock);
+	if (!mgmt_pending_valid(hdev, cmd, false))
 		return -ECANCELED;
-	}
 
 	memcpy(&cp, cmd->param, sizeof(cp));
 

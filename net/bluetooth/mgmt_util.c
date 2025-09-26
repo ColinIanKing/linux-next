@@ -320,50 +320,28 @@ void mgmt_pending_remove(struct mgmt_pending_cmd *cmd)
 	mgmt_pending_free(cmd);
 }
 
-bool __mgmt_pending_listed(struct hci_dev *hdev, struct mgmt_pending_cmd *cmd)
+bool mgmt_pending_valid(struct hci_dev *hdev, struct mgmt_pending_cmd *cmd,
+			bool remove_unlock)
 {
 	struct mgmt_pending_cmd *tmp;
 
-	lockdep_assert_held(&hdev->mgmt_pending_lock);
-
 	if (!cmd)
 		return false;
+
+	mutex_lock(&hdev->mgmt_pending_lock);
 
 	list_for_each_entry(tmp, &hdev->mgmt_pending, list) {
-		if (cmd == tmp)
+		if (cmd == tmp) {
+			if (remove_unlock) {
+				list_del(&cmd->list);
+				mutex_unlock(&hdev->mgmt_pending_lock);
+			}
 			return true;
+		}
 	}
 
+	mutex_unlock(&hdev->mgmt_pending_lock);
 	return false;
-}
-
-bool mgmt_pending_listed(struct hci_dev *hdev, struct mgmt_pending_cmd *cmd)
-{
-	bool listed;
-
-	mutex_lock(&hdev->mgmt_pending_lock);
-	listed = __mgmt_pending_listed(hdev, cmd);
-	mutex_unlock(&hdev->mgmt_pending_lock);
-
-	return listed;
-}
-
-bool mgmt_pending_valid(struct hci_dev *hdev, struct mgmt_pending_cmd *cmd)
-{
-	bool listed;
-
-	if (!cmd)
-		return false;
-
-	mutex_lock(&hdev->mgmt_pending_lock);
-
-	listed = __mgmt_pending_listed(hdev, cmd);
-	if (listed)
-		list_del(&cmd->list);
-
-	mutex_unlock(&hdev->mgmt_pending_lock);
-
-	return listed;
 }
 
 void mgmt_mesh_foreach(struct hci_dev *hdev,
