@@ -74,7 +74,8 @@ static int ext4_getfsmap_dev_compare(const void *p1, const void *p2)
 static bool ext4_getfsmap_rec_before_low_key(struct ext4_getfsmap_info *info,
 					     struct ext4_fsmap *rec)
 {
-	return rec->fmr_physical < info->gfi_low.fmr_physical;
+	return rec->fmr_physical + rec->fmr_length <=
+	       info->gfi_low.fmr_physical;
 }
 
 /*
@@ -192,23 +193,24 @@ static int ext4_getfsmap_meta_helper(struct super_block *sb,
 	struct ext4_getfsmap_info *info = priv;
 	struct ext4_fsmap *p;
 	struct ext4_fsmap *tmp;
-	struct ext4_sb_info *sbi = EXT4_SB(sb);
 	ext4_fsblk_t fsb, fs_start, fs_end;
 	int error;
 
-	fs_start = fsb = (EXT4_C2B(sbi, start) +
-			  ext4_group_first_block_no(sb, agno));
-	fs_end = fs_start + EXT4_C2B(sbi, len);
+	fs_start = fsb =  start + ext4_group_first_block_no(sb, agno);
+	fs_end = fs_start + len;
 
-	/* Return relevant extents from the meta_list */
+	/*
+	 * Return relevant extents from the meta_list. We emit all extents that
+	 * partially/fully overlap with the query range
+	 */
 	list_for_each_entry_safe(p, tmp, &info->gfi_meta_list, fmr_list) {
-		if (p->fmr_physical < info->gfi_next_fsblk) {
+		if (p->fmr_physical + p->fmr_length <= info->gfi_next_fsblk) {
 			list_del(&p->fmr_list);
 			kfree(p);
 			continue;
 		}
-		if (p->fmr_physical <= fs_start ||
-		    p->fmr_physical + p->fmr_length <= fs_end) {
+		if (p->fmr_physical <= fs_end &&
+		    p->fmr_physical + p->fmr_length > fs_start) {
 			/* Emit the retained free extent record if present */
 			if (info->gfi_lastfree.fmr_owner) {
 				error = ext4_getfsmap_helper(sb, info,
@@ -244,13 +246,12 @@ static int ext4_getfsmap_datadev_helper(struct super_block *sb,
 	struct ext4_getfsmap_info *info = priv;
 	struct ext4_fsmap *p;
 	struct ext4_fsmap *tmp;
-	struct ext4_sb_info *sbi = EXT4_SB(sb);
 	ext4_fsblk_t fsb;
 	ext4_fsblk_t fslen;
 	int error;
 
-	fsb = (EXT4_C2B(sbi, start) + ext4_group_first_block_no(sb, agno));
-	fslen = EXT4_C2B(sbi, len);
+	fsb = start + ext4_group_first_block_no(sb, agno);
+	fslen = len;
 
 	/* If the retained free extent record is set... */
 	if (info->gfi_lastfree.fmr_owner) {
@@ -527,13 +528,13 @@ static int ext4_getfsmap_datadev(struct super_block *sb,
 {
 	struct ext4_sb_info *sbi = EXT4_SB(sb);
 	ext4_fsblk_t start_fsb;
-	ext4_fsblk_t end_fsb;
+	ext4_fsblk_t end_fsb, orig_end_fsb;
 	ext4_fsblk_t bofs;
 	ext4_fsblk_t eofs;
 	ext4_group_t start_ag;
 	ext4_group_t end_ag;
-	ext4_grpblk_t first_cluster;
-	ext4_grpblk_t last_cluster;
+	ext4_grpblk_t first_grpblk;
+	ext4_grpblk_t last_grpblk;
 	struct ext4_fsmap irec;
 	int error = 0;
 
@@ -549,10 +550,18 @@ static int ext4_getfsmap_datadev(struct super_block *sb,
 		return 0;
 	start_fsb = keys[0].fmr_physical;
 	end_fsb = keys[1].fmr_physical;
+	orig_end_fsb = end_fsb;
 
-	/* Determine first and last group to examine based on start and end */
-	ext4_get_group_no_and_offset(sb, start_fsb, &start_ag, &first_cluster);
-	ext4_get_group_no_and_offset(sb, end_fsb, &end_ag, &last_cluster);
+	/*
+	 * Determine first and last group to examine based on start and end.
+	 * NOTE: do_div() should take ext4_fsblk_t instead of ext4_group_t as
+	 * first argument else it will fail on 32bit archs.
+	 */
+	first_grpblk = do_div(start_fsb, EXT4_BLOCKS_PER_GROUP(sb));
+	last_grpblk = do_div(end_fsb, EXT4_BLOCKS_PER_GROUP(sb));
+
+	start_ag = start_fsb;
+	end_ag = end_fsb;
 
 	/*
 	 * Convert the fsmap low/high keys to bg based keys.  Initialize
@@ -560,7 +569,7 @@ static int ext4_getfsmap_datadev(struct super_block *sb,
 	 * of the bg.
 	 */
 	info->gfi_low = keys[0];
-	info->gfi_low.fmr_physical = EXT4_C2B(sbi, first_cluster);
+	info->gfi_low.fmr_physical = first_grpblk;
 	info->gfi_low.fmr_length = 0;
 
 	memset(&info->gfi_high, 0xFF, sizeof(info->gfi_high));
@@ -580,8 +589,7 @@ static int ext4_getfsmap_datadev(struct super_block *sb,
 		 */
 		if (info->gfi_agno == end_ag) {
 			info->gfi_high = keys[1];
-			info->gfi_high.fmr_physical = EXT4_C2B(sbi,
-					last_cluster);
+			info->gfi_high.fmr_physical = last_grpblk;
 			info->gfi_high.fmr_length = 0;
 		}
 
@@ -596,8 +604,8 @@ static int ext4_getfsmap_datadev(struct super_block *sb,
 				info->gfi_high.fmr_owner);
 
 		error = ext4_mballoc_query_range(sb, info->gfi_agno,
-				EXT4_B2C(sbi, info->gfi_low.fmr_physical),
-				EXT4_B2C(sbi, info->gfi_high.fmr_physical),
+				info->gfi_low.fmr_physical,
+				info->gfi_high.fmr_physical,
 				ext4_getfsmap_meta_helper,
 				ext4_getfsmap_datadev_helper, info);
 		if (error)
@@ -623,7 +631,7 @@ static int ext4_getfsmap_datadev(struct super_block *sb,
 	 * any allocated blocks at the end of the range.
 	 */
 	irec.fmr_device = 0;
-	irec.fmr_physical = end_fsb + 1;
+	irec.fmr_physical = orig_end_fsb + 1;
 	irec.fmr_length = 0;
 	irec.fmr_owner = EXT4_FMR_OWN_FREE;
 	irec.fmr_flags = 0;

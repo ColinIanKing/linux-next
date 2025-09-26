@@ -3655,16 +3655,26 @@ static void ext4_discard_work(struct work_struct *work)
 
 static inline void ext4_mb_avg_fragment_size_destroy(struct ext4_sb_info *sbi)
 {
+	if (!sbi->s_mb_avg_fragment_size)
+		return;
+
 	for (int i = 0; i < MB_NUM_ORDERS(sbi->s_sb); i++)
 		xa_destroy(&sbi->s_mb_avg_fragment_size[i]);
+
 	kfree(sbi->s_mb_avg_fragment_size);
+	sbi->s_mb_avg_fragment_size = NULL;
 }
 
 static inline void ext4_mb_largest_free_orders_destroy(struct ext4_sb_info *sbi)
 {
+	if (!sbi->s_mb_largest_free_orders)
+		return;
+
 	for (int i = 0; i < MB_NUM_ORDERS(sbi->s_sb); i++)
 		xa_destroy(&sbi->s_mb_largest_free_orders[i]);
+
 	kfree(sbi->s_mb_largest_free_orders);
+	sbi->s_mb_largest_free_orders = NULL;
 }
 
 int ext4_mb_init(struct super_block *sb)
@@ -7117,6 +7127,8 @@ ext4_mballoc_query_range(
 	ext4_grpblk_t			start, next;
 	struct ext4_buddy		e4b;
 	int				error;
+	struct ext4_sb_info 		*sbi = EXT4_SB(sb);
+	ext4_grpblk_t 			start_c, end_c, next_c;
 
 	error = ext4_mb_load_buddy(sb, group, &e4b);
 	if (error)
@@ -7125,9 +7137,9 @@ ext4_mballoc_query_range(
 
 	ext4_lock_group(sb, group);
 
-	start = max(e4b.bd_info->bb_first_free, first);
-	if (end >= EXT4_CLUSTERS_PER_GROUP(sb))
-		end = EXT4_CLUSTERS_PER_GROUP(sb) - 1;
+	start = max(EXT4_C2B(sbi, e4b.bd_info->bb_first_free), first);
+	if (end >= EXT4_BLOCKS_PER_GROUP(sb))
+		end = EXT4_BLOCKS_PER_GROUP(sb) - 1;
 	if (meta_formatter && start != first) {
 		if (start > end)
 			start = end;
@@ -7138,19 +7150,26 @@ ext4_mballoc_query_range(
 			goto out_unload;
 		ext4_lock_group(sb, group);
 	}
-	while (start <= end) {
-		start = mb_find_next_zero_bit(bitmap, end + 1, start);
-		if (start > end)
+
+	start_c = EXT4_B2C(sbi, start);
+	end_c = EXT4_B2C(sbi, end);
+
+	while (start_c <= end_c) {
+		start_c = mb_find_next_zero_bit(bitmap, end_c + 1, start_c);
+		if (start_c > end_c)
 			break;
-		next = mb_find_next_bit(bitmap, end + 1, start);
+		next_c = mb_find_next_bit(bitmap, end_c + 1, start_c);
 
 		ext4_unlock_group(sb, group);
+
+		start = EXT4_C2B(sbi, start_c);
+		next = EXT4_C2B(sbi, next_c);
 		error = formatter(sb, group, start, next - start, priv);
 		if (error)
 			goto out_unload;
 		ext4_lock_group(sb, group);
 
-		start = next + 1;
+		start_c = next_c + 1;
 	}
 
 	ext4_unlock_group(sb, group);
