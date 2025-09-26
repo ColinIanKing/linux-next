@@ -22,6 +22,7 @@
 #include <linux/vdpa.h>
 #include <linux/nospec.h>
 #include <linux/vhost.h>
+#include <linux/types.h>
 
 #include "vhost.h"
 
@@ -657,16 +658,20 @@ static long vhost_vdpa_vring_ioctl(struct vhost_vdpa *v, unsigned int cmd,
 			return -EFAULT;
 		ops->set_vq_ready(vdpa, idx, s.num);
 		return 0;
-	case VHOST_VDPA_GET_VRING_GROUP:
+	case VHOST_VDPA_GET_VRING_GROUP: {
+		u64 group;
+
 		if (!ops->get_vq_group)
 			return -EOPNOTSUPP;
 		s.index = idx;
-		s.num = ops->get_vq_group(vdpa, idx);
-		if (s.num >= vdpa->ngroups)
+		group = ops->get_vq_group(vdpa, idx);
+		if (group >= vdpa->ngroups || group > U32_MAX || group < 0)
 			return -EIO;
 		else if (copy_to_user(argp, &s, sizeof(s)))
 			return -EFAULT;
+		s.num = group;
 		return 0;
+	}
 	case VHOST_VDPA_GET_VRING_DESC_GROUP:
 		if (!vhost_vdpa_has_desc_group(v))
 			return -EOPNOTSUPP;
@@ -1318,7 +1323,8 @@ static int vhost_vdpa_alloc_domain(struct vhost_vdpa *v)
 {
 	struct vdpa_device *vdpa = v->vdpa;
 	const struct vdpa_config_ops *ops = vdpa->config;
-	struct device *dma_dev = vdpa_get_dma_dev(vdpa);
+	union virtio_map map = vdpa_get_map(vdpa);
+	struct device *dma_dev = map.dma_dev;
 	int ret;
 
 	/* Device want to do DMA by itself */
@@ -1353,7 +1359,8 @@ err_attach:
 static void vhost_vdpa_free_domain(struct vhost_vdpa *v)
 {
 	struct vdpa_device *vdpa = v->vdpa;
-	struct device *dma_dev = vdpa_get_dma_dev(vdpa);
+	union virtio_map map = vdpa_get_map(vdpa);
+	struct device *dma_dev = map.dma_dev;
 
 	if (v->domain) {
 		iommu_detach_device(v->domain, dma_dev);
