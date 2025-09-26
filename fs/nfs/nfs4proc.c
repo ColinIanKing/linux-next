@@ -6162,7 +6162,7 @@ static ssize_t __nfs4_get_acl_uncached(struct inode *inode, void *buf,
 	}
 
 	/* for decoding across pages */
-	res.acl_scratch = alloc_page(GFP_KERNEL);
+	res.acl_scratch = folio_alloc(GFP_KERNEL, 0);
 	if (!res.acl_scratch)
 		goto out_free;
 
@@ -6198,7 +6198,7 @@ out_free:
 	while (--i >= 0)
 		__free_page(pages[i]);
 	if (res.acl_scratch)
-		__free_page(res.acl_scratch);
+		folio_put(res.acl_scratch);
 	kfree(pages);
 	return ret;
 }
@@ -7874,10 +7874,10 @@ int nfs4_lock_delegation_recall(struct file_lock *fl, struct nfs4_state *state, 
 		return err;
 	do {
 		err = _nfs4_do_setlk(state, F_SETLK, fl, NFS_LOCK_NEW);
-		if (err != -NFS4ERR_DELAY)
+		if (err != -NFS4ERR_DELAY && err != -NFS4ERR_GRACE)
 			break;
 		ssleep(1);
-	} while (err == -NFS4ERR_DELAY);
+	} while (err == -NFS4ERR_DELAY || err == -NFSERR_GRACE);
 	return nfs4_handle_delegation_recall_error(server, state, stateid, fl, err);
 }
 
@@ -9444,7 +9444,7 @@ static int nfs4_verify_back_channel_attrs(struct nfs41_create_session_args *args
 		goto out;
 	if (rcvd->max_rqst_sz > sent->max_rqst_sz)
 		return -EINVAL;
-	if (rcvd->max_resp_sz < sent->max_resp_sz)
+	if (rcvd->max_resp_sz > sent->max_resp_sz)
 		return -EINVAL;
 	if (rcvd->max_resp_sz_cached > sent->max_resp_sz_cached)
 		return -EINVAL;
