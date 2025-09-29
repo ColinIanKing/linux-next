@@ -41,7 +41,6 @@ struct cached_fid {
 	unsigned long last_access_time; /* jiffies of when last accessed */
 	struct kref refcount;
 	struct cifs_fid fid;
-	spinlock_t fid_lock;
 	struct cifs_tcon *tcon;
 	struct dentry *dentry;
 	struct work_struct put_work;
@@ -63,6 +62,12 @@ struct cached_fids {
 	struct work_struct invalidation_work;
 	struct delayed_work laundromat_work;
 };
+
+static inline bool
+is_valid_cached_dir(struct cached_fid *cfid)
+{
+	return cfid->time && cfid->has_lease;
+}
 
 extern struct cached_fids *init_cached_dirs(void);
 extern void free_cached_dirs(struct cached_fids *cfids);
