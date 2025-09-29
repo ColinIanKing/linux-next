@@ -189,7 +189,7 @@ static __always_inline __attribute_const__ unsigned long __flogr(unsigned long w
  * This is defined the same way as the libc and
  * compiler builtin ffs routines (man ffs).
  */
-static __always_inline __flatten int ffs(int word)
+static __always_inline __flatten __attribute_const__ int ffs(int word)
 {
 	unsigned int val = (unsigned int)word;
 
