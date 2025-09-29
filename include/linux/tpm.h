@@ -22,6 +22,7 @@
 #include <linux/cdev.h>
 #include <linux/fs.h>
 #include <linux/highmem.h>
+#include <linux/rwsem.h>
 #include <crypto/hash_info.h>
 #include <crypto/aes.h>
 
@@ -168,7 +169,7 @@ struct tpm_chip {
 	unsigned int flags;
 
 	int dev_num;		/* /dev/tpm# */
-	unsigned long is_open;	/* only one allowed */
+	struct rw_semaphore open_lock;
 
 	char hwrng_name[64];
 	struct hwrng hwrng;
@@ -228,10 +229,11 @@ enum tpm2_timeouts {
 	TPM2_TIMEOUT_B          =   4000,
 	TPM2_TIMEOUT_C          =    200,
 	TPM2_TIMEOUT_D          =     30,
+};
+
+enum tpm2_durations {
 	TPM2_DURATION_SHORT     =     20,
-	TPM2_DURATION_MEDIUM    =    750,
 	TPM2_DURATION_LONG      =   2000,
-	TPM2_DURATION_LONG_LONG = 300000,
 	TPM2_DURATION_DEFAULT   = 120000,
 };
 
