@@ -203,7 +203,6 @@ static void locate_register(const struct kvm_vcpu *vcpu, enum vcpu_sysreg reg,
 		MAPPED_EL2_SYSREG(AMAIR_EL2,   AMAIR_EL1,   NULL	     );
 		MAPPED_EL2_SYSREG(ELR_EL2,     ELR_EL1,	    NULL	     );
 		MAPPED_EL2_SYSREG(SPSR_EL2,    SPSR_EL1,    NULL	     );
-		MAPPED_EL2_SYSREG(ZCR_EL2,     ZCR_EL1,     NULL	     );
 		MAPPED_EL2_SYSREG(CONTEXTIDR_EL2, CONTEXTIDR_EL1, NULL	     );
 		MAPPED_EL2_SYSREG(SCTLR2_EL2,  SCTLR2_EL1,  NULL	     );
 	case CNTHCTL_EL2:
@@ -1757,7 +1756,8 @@ static u64 __kvm_read_sanitised_id_reg(const struct kvm_vcpu *vcpu,
 			val &= ~ID_AA64ISAR2_EL1_WFxT;
 		break;
 	case SYS_ID_AA64ISAR3_EL1:
-		val &= ID_AA64ISAR3_EL1_FPRCVT | ID_AA64ISAR3_EL1_FAMINMAX;
+		val &= ID_AA64ISAR3_EL1_FPRCVT | ID_AA64ISAR3_EL1_LSFE |
+			ID_AA64ISAR3_EL1_FAMINMAX;
 		break;
 	case SYS_ID_AA64MMFR2_EL1:
 		val &= ~ID_AA64MMFR2_EL1_CCIDX_MASK;
@@ -1997,6 +1997,26 @@ static u64 sanitise_id_aa64dfr0_el1(const struct kvm_vcpu *vcpu, u64 val)
 	return val;
 }
 
+/*
+ * Older versions of KVM erroneously claim support for FEAT_DoubleLock with
+ * NV-enabled VMs on unsupporting hardware. Silently ignore the incorrect
+ * value if it is consistent with the bug.
+ */
+static bool ignore_feat_doublelock(struct kvm_vcpu *vcpu, u64 val)
+{
+	u8 host, user;
+
+	if (!vcpu_has_nv(vcpu))
+		return false;
+
+	host = SYS_FIELD_GET(ID_AA64DFR0_EL1, DoubleLock,
+			     read_sanitised_ftr_reg(SYS_ID_AA64DFR0_EL1));
+	user = SYS_FIELD_GET(ID_AA64DFR0_EL1, DoubleLock, val);
+
+	return host == ID_AA64DFR0_EL1_DoubleLock_NI &&
+	       user == ID_AA64DFR0_EL1_DoubleLock_IMP;
+}
+
 static int set_id_aa64dfr0_el1(struct kvm_vcpu *vcpu,
 			       const struct sys_reg_desc *rd,
 			       u64 val)
@@ -2027,6 +2047,11 @@ static int set_id_aa64dfr0_el1(struct kvm_vcpu *vcpu,
 	 */
 	if (debugver < ID_AA64DFR0_EL1_DebugVer_IMP)
 		return -EINVAL;
+
+	if (ignore_feat_doublelock(vcpu, val)) {
+		val &= ~ID_AA64DFR0_EL1_DoubleLock;
+		val |= SYS_FIELD_PREP_ENUM(ID_AA64DFR0_EL1, DoubleLock, NI);
+	}
 
 	return set_id_reg(vcpu, rd, val);
 }
@@ -2148,16 +2173,29 @@ static int set_id_aa64pfr1_el1(struct kvm_vcpu *vcpu,
 	return set_id_reg(vcpu, rd, user_val);
 }
 
+/*
+ * Allow userspace to de-feature a stage-2 translation granule but prevent it
+ * from claiming the impossible.
+ */
+#define tgran2_val_allowed(tg, safe, user)			\
+({								\
+	u8 __s = SYS_FIELD_GET(ID_AA64MMFR0_EL1, tg, safe);	\
+	u8 __u = SYS_FIELD_GET(ID_AA64MMFR0_EL1, tg, user);	\
+								\
+	__s == __u || __u == ID_AA64MMFR0_EL1_##tg##_NI;	\
+})
+
 static int set_id_aa64mmfr0_el1(struct kvm_vcpu *vcpu,
 				const struct sys_reg_desc *rd, u64 user_val)
 {
 	u64 sanitized_val = kvm_read_sanitised_id_reg(vcpu, rd);
-	u64 tgran2_mask = ID_AA64MMFR0_EL1_TGRAN4_2_MASK |
-			  ID_AA64MMFR0_EL1_TGRAN16_2_MASK |
-			  ID_AA64MMFR0_EL1_TGRAN64_2_MASK;
 
-	if (vcpu_has_nv(vcpu) &&
-	    ((sanitized_val & tgran2_mask) != (user_val & tgran2_mask)))
+	if (!vcpu_has_nv(vcpu))
+		return set_id_reg(vcpu, rd, user_val);
+
+	if (!tgran2_val_allowed(TGRAN4_2, sanitized_val, user_val) ||
+	    !tgran2_val_allowed(TGRAN16_2, sanitized_val, user_val) ||
+	    !tgran2_val_allowed(TGRAN64_2, sanitized_val, user_val))
 		return -EINVAL;
 
 	return set_id_reg(vcpu, rd, user_val);
@@ -2666,18 +2704,17 @@ static bool access_zcr_el2(struct kvm_vcpu *vcpu,
 
 	if (guest_hyp_sve_traps_enabled(vcpu)) {
 		kvm_inject_nested_sve_trap(vcpu);
-		return true;
+		return false;
 	}
 
 	if (!p->is_write) {
-		p->regval = vcpu_read_sys_reg(vcpu, ZCR_EL2);
+		p->regval = __vcpu_sys_reg(vcpu, ZCR_EL2);
 		return true;
 	}
 
 	vq = SYS_FIELD_GET(ZCR_ELx, LEN, p->regval) + 1;
 	vq = min(vq, vcpu_sve_max_vq(vcpu));
-	vcpu_write_sys_reg(vcpu, vq - 1, ZCR_EL2);
-
+	__vcpu_assign_sys_reg(vcpu, ZCR_EL2, vq - 1);
 	return true;
 }
 
@@ -3141,6 +3178,7 @@ static const struct sys_reg_desc sys_reg_descs[] = {
 					ID_AA64ISAR2_EL1_APA3 |
 					ID_AA64ISAR2_EL1_GPA3)),
 	ID_WRITABLE(ID_AA64ISAR3_EL1, (ID_AA64ISAR3_EL1_FPRCVT |
+				       ID_AA64ISAR3_EL1_LSFE |
 				       ID_AA64ISAR3_EL1_FAMINMAX)),
 	ID_UNALLOCATED(6,4),
 	ID_UNALLOCATED(6,5),
@@ -3152,8 +3190,6 @@ static const struct sys_reg_desc sys_reg_descs[] = {
 				      ~(ID_AA64MMFR0_EL1_RES0 |
 					ID_AA64MMFR0_EL1_ASIDBITS)),
 	ID_WRITABLE(ID_AA64MMFR1_EL1, ~(ID_AA64MMFR1_EL1_RES0 |
-					ID_AA64MMFR1_EL1_HCX |
-					ID_AA64MMFR1_EL1_TWED |
 					ID_AA64MMFR1_EL1_XNX |
 					ID_AA64MMFR1_EL1_VH |
 					ID_AA64MMFR1_EL1_VMIDBits)),
@@ -3238,6 +3274,7 @@ static const struct sys_reg_desc sys_reg_descs[] = {
 	{ SYS_DESC(SYS_PMBLIMITR_EL1), undef_access },
 	{ SYS_DESC(SYS_PMBPTR_EL1), undef_access },
 	{ SYS_DESC(SYS_PMBSR_EL1), undef_access },
+	{ SYS_DESC(SYS_PMSDSFR_EL1), undef_access },
 	/* PMBIDR_EL1 is not trapped */
 
 	{ PMU_SYS_REG(PMINTENSET_EL1),
