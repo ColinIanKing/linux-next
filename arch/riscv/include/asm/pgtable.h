@@ -944,10 +944,10 @@ static inline int pudp_test_and_clear_young(struct vm_area_struct *vma,
 
 #define __HAVE_ARCH_PUDP_HUGE_GET_AND_CLEAR
 static inline pud_t pudp_huge_get_and_clear(struct mm_struct *mm,
-					    unsigned long address,  pud_t *pudp)
+					    unsigned long address, pud_t *pudp)
 {
 #ifdef CONFIG_SMP
-	pud_t pud = __pud(xchg(&pudp->pud, 0));
+	pud_t pud = __pud(atomic_long_xchg((atomic_long_t *)pudp, 0));
 #else
 	pud_t pud = *pudp;
 
