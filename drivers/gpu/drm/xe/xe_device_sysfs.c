@@ -308,15 +308,19 @@ int xe_device_sysfs_init(struct xe_device *xe)
 			return ret;
 	}
 
-	if (xe->info.platform == XE_BATTLEMAGE) {
+	if (xe->info.platform == XE_BATTLEMAGE && !IS_SRIOV_VF(xe)) {
 		ret = sysfs_create_files(&dev->kobj, auto_link_downgrade_attrs);
 		if (ret)
-			return ret;
+			goto cleanup;
 
 		ret = late_bind_create_files(dev);
 		if (ret)
-			return ret;
+			goto cleanup;
 	}
 
 	return devm_add_action_or_reset(dev, xe_device_sysfs_fini, xe);
+
+cleanup:
+	xe_device_sysfs_fini(xe);
+	return ret;
 }

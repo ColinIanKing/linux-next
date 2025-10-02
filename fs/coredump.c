@@ -345,7 +345,7 @@ static bool coredump_parse(struct core_name *cn, struct coredump_params *cprm,
 				was_space = false;
 				err = cn_printf(cn, "%c", '\0');
 				if (err)
-					return err;
+					return false;
 				(*argv)[(*argc)++] = cn->used;
 			}
 		}
@@ -635,7 +635,7 @@ static int umh_coredump_setup(struct subprocess_info *info, struct cred *new)
 
 		/*
 		 * Usermode helpers are childen of either
-		 * system_unbound_wq or of kthreadd. So we know that
+		 * system_dfl_wq or of kthreadd. So we know that
 		 * we're starting off with a clean file descriptor
 		 * table. So we should always be able to use
 		 * COREDUMP_PIDFD_NUMBER as our file descriptor value.
@@ -1466,11 +1466,15 @@ static int proc_dostring_coredump(const struct ctl_table *table, int write,
 	ssize_t retval;
 	char old_core_pattern[CORENAME_MAX_SIZE];
 
+	if (write)
+		return proc_dostring(table, write, buffer, lenp, ppos);
+
 	retval = strscpy(old_core_pattern, core_pattern, CORENAME_MAX_SIZE);
 
 	error = proc_dostring(table, write, buffer, lenp, ppos);
 	if (error)
 		return error;
+
 	if (!check_coredump_socket()) {
 		strscpy(core_pattern, old_core_pattern, retval + 1);
 		return -EINVAL;

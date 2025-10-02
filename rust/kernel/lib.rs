@@ -17,6 +17,7 @@
 // the unstable features in use.
 //
 // Stable since Rust 1.79.0.
+#![feature(generic_nonzero)]
 #![feature(inline_const)]
 //
 // Stable since Rust 1.81.0.
@@ -28,6 +29,7 @@
 // Stable since Rust 1.83.0.
 #![feature(const_maybe_uninit_as_mut_ptr)]
 #![feature(const_mut_refs)]
+#![feature(const_option)]
 #![feature(const_ptr_write)]
 #![feature(const_refs_to_cell)]
 //
@@ -76,6 +78,7 @@ pub mod cpu;
 pub mod cpufreq;
 pub mod cpumask;
 pub mod cred;
+pub mod debugfs;
 pub mod device;
 pub mod device_id;
 pub mod devres;
@@ -92,6 +95,7 @@ pub mod fs;
 pub mod init;
 pub mod io;
 pub mod ioctl;
+pub mod irq;
 pub mod jump_label;
 #[cfg(CONFIG_KUNIT)]
 pub mod kunit;
@@ -110,6 +114,8 @@ pub mod pid_namespace;
 pub mod platform;
 pub mod prelude;
 pub mod print;
+pub mod processor;
+pub mod ptr;
 pub mod rbtree;
 pub mod regulator;
 pub mod revocable;
@@ -206,7 +212,7 @@ impl ThisModule {
     }
 }
 
-#[cfg(not(any(testlib, test)))]
+#[cfg(not(testlib))]
 #[panic_handler]
 fn panic(info: &core::panic::PanicInfo<'_>) -> ! {
     pr_emerg!("{}\n", info);
@@ -296,7 +302,7 @@ macro_rules! asm {
 
 /// Gets the C string file name of a [`Location`].
 ///
-/// If `file_with_nul()` is not available, returns a string that warns about it.
+/// If `Location::file_as_c_str()` is not available, returns a string that warns about it.
 ///
 /// [`Location`]: core::panic::Location
 ///
@@ -310,8 +316,8 @@ macro_rules! asm {
 ///     let caller = core::panic::Location::caller();
 ///
 ///     // Output:
-///     // - A path like "rust/kernel/example.rs" if file_with_nul() is available.
-///     // - "<Location::file_with_nul() not supported>" otherwise.
+///     // - A path like "rust/kernel/example.rs" if `file_as_c_str()` is available.
+///     // - "<Location::file_as_c_str() not supported>" otherwise.
 ///     let caller_file = file_from_location(caller);
 ///
 ///     // Prints out the message with caller's file name.
@@ -326,7 +332,12 @@ macro_rules! asm {
 /// ```
 #[inline]
 pub fn file_from_location<'a>(loc: &'a core::panic::Location<'a>) -> &'a core::ffi::CStr {
-    #[cfg(CONFIG_RUSTC_HAS_FILE_WITH_NUL)]
+    #[cfg(CONFIG_RUSTC_HAS_FILE_AS_C_STR)]
+    {
+        loc.file_as_c_str()
+    }
+
+    #[cfg(all(CONFIG_RUSTC_HAS_FILE_WITH_NUL, not(CONFIG_RUSTC_HAS_FILE_AS_C_STR)))]
     {
         loc.file_with_nul()
     }
@@ -334,6 +345,6 @@ pub fn file_from_location<'a>(loc: &'a core::panic::Location<'a>) -> &'a core::f
     #[cfg(not(CONFIG_RUSTC_HAS_FILE_WITH_NUL))]
     {
         let _ = loc;
-        c"<Location::file_with_nul() not supported>"
+        c"<Location::file_as_c_str() not supported>"
     }
 }
