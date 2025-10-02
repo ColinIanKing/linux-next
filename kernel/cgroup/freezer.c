@@ -179,6 +179,7 @@ static void cgroup_do_freeze(struct cgroup *cgrp, bool freeze, u64 ts_nsec)
 	lockdep_assert_held(&cgroup_mutex);
 
 	spin_lock_irq(&css_set_lock);
+	preempt_disable_nested();
 	write_seqcount_begin(&cgrp->freezer.freeze_seq);
 	if (freeze) {
 		set_bit(CGRP_FREEZE, &cgrp->flags);
@@ -189,6 +190,7 @@ static void cgroup_do_freeze(struct cgroup *cgrp, bool freeze, u64 ts_nsec)
 			cgrp->freezer.freeze_start_nsec);
 	}
 	write_seqcount_end(&cgrp->freezer.freeze_seq);
+	preempt_enable_nested();
 	spin_unlock_irq(&css_set_lock);
 
 	if (freeze)
