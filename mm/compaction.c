@@ -1320,27 +1320,22 @@ int
 isolate_migratepages_range(struct compact_control *cc, unsigned long start_pfn,
 							unsigned long end_pfn)
 {
-	unsigned long pfn, block_start_pfn, block_end_pfn;
+	unsigned long block_start_pfn, block_end_pfn;
 	int ret = 0;
 
 	/* Scan block by block. First and last block may be incomplete */
-	pfn = start_pfn;
-	block_start_pfn = pageblock_start_pfn(pfn);
-	if (block_start_pfn < cc->zone->zone_start_pfn)
-		block_start_pfn = cc->zone->zone_start_pfn;
-	block_end_pfn = pageblock_end_pfn(pfn);
+	block_start_pfn = start_pfn;
+	block_end_pfn = pageblock_end_pfn(start_pfn);
 
-	for (; pfn < end_pfn; pfn = block_end_pfn,
-				block_start_pfn = block_end_pfn,
+	for (; block_start_pfn < end_pfn; block_start_pfn = block_end_pfn,
 				block_end_pfn += pageblock_nr_pages) {
 
 		block_end_pfn = min(block_end_pfn, end_pfn);
 
-		if (!pageblock_pfn_to_page(block_start_pfn,
-					block_end_pfn, cc->zone))
+		if (!pageblock_pfn_to_page(block_start_pfn, block_end_pfn, cc->zone))
 			continue;
 
-		ret = isolate_migratepages_block(cc, pfn, block_end_pfn,
+		ret = isolate_migratepages_block(cc, block_start_pfn, block_end_pfn,
 						 ISOLATE_UNEVICTABLE);
 
 		if (ret)
@@ -2046,7 +2041,6 @@ static isolate_migrate_t isolate_migratepages(struct compact_control *cc)
 {
 	unsigned long block_start_pfn;
 	unsigned long block_end_pfn;
-	unsigned long low_pfn;
 	struct page *page;
 	const isolate_mode_t isolate_mode =
 		(sysctl_compact_unevictable_allowed ? ISOLATE_UNEVICTABLE : 0) |
@@ -2058,20 +2052,17 @@ static isolate_migrate_t isolate_migratepages(struct compact_control *cc)
 	 * initialized by compact_zone(). The first failure will use
 	 * the lowest PFN as the starting point for linear scanning.
 	 */
-	low_pfn = fast_find_migrateblock(cc);
-	block_start_pfn = pageblock_start_pfn(low_pfn);
-	if (block_start_pfn < cc->zone->zone_start_pfn)
-		block_start_pfn = cc->zone->zone_start_pfn;
+	block_start_pfn = fast_find_migrateblock(cc);
 
 	/*
 	 * fast_find_migrateblock() has already ensured the pageblock is not
 	 * set with a skipped flag, so to avoid the isolation_suitable check
 	 * below again, check whether the fast search was successful.
 	 */
-	fast_find_block = low_pfn != cc->migrate_pfn && !cc->fast_search_fail;
+	fast_find_block = block_start_pfn != cc->migrate_pfn && !cc->fast_search_fail;
 
 	/* Only scan within a pageblock boundary */
-	block_end_pfn = pageblock_end_pfn(low_pfn);
+	block_end_pfn = pageblock_end_pfn(block_start_pfn);
 
 	/*
 	 * Iterate over whole pageblocks until we find the first suitable.
@@ -2079,7 +2070,7 @@ static isolate_migrate_t isolate_migratepages(struct compact_control *cc)
 	 */
 	for (; block_end_pfn <= cc->free_pfn;
 			fast_find_block = false,
-			cc->migrate_pfn = low_pfn = block_end_pfn,
+			cc->migrate_pfn = block_end_pfn,
 			block_start_pfn = block_end_pfn,
 			block_end_pfn += pageblock_nr_pages) {
 
@@ -2088,7 +2079,7 @@ static isolate_migrate_t isolate_migratepages(struct compact_control *cc)
 		 * many pageblocks unsuitable, so periodically check if we
 		 * need to schedule.
 		 */
-		if (!(low_pfn % (COMPACT_CLUSTER_MAX * pageblock_nr_pages)))
+		if (!(block_start_pfn % (COMPACT_CLUSTER_MAX * pageblock_nr_pages)))
 			cond_resched();
 
 		page = pageblock_pfn_to_page(block_start_pfn,
@@ -2109,8 +2100,8 @@ static isolate_migrate_t isolate_migratepages(struct compact_control *cc)
 		 * before making it "skip" so other compaction instances do
 		 * not scan the same block.
 		 */
-		if ((pageblock_aligned(low_pfn) ||
-		     low_pfn == cc->zone->zone_start_pfn) &&
+		if ((pageblock_aligned(block_start_pfn) ||
+		     block_start_pfn == cc->zone->zone_start_pfn) &&
 		    !fast_find_block && !isolation_suitable(cc, page))
 			continue;
 
@@ -2128,7 +2119,7 @@ static isolate_migrate_t isolate_migratepages(struct compact_control *cc)
 		}
 
 		/* Perform the isolation */
-		if (isolate_migratepages_block(cc, low_pfn, block_end_pfn,
+		if (isolate_migratepages_block(cc, block_start_pfn, block_end_pfn,
 						isolate_mode))
 			return ISOLATE_ABORT;
 
