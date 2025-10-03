@@ -12,6 +12,7 @@
 #include "barrier.c"
 #include "bitmap.c"
 #include "bitops.c"
+#include "binder.c"
 #include "blk.c"
 #include "bug.c"
 #include "build_assert.c"
