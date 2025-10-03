@@ -17,19 +17,34 @@ static int tpmrm_open(struct inode *inode, struct file *file)
 	int rc;
 
 	chip = container_of(inode->i_cdev, struct tpm_chip, cdevs);
+
+	/*
+	 * Only one client is allowed to have /dev/tpm0 open at a time, so we
+	 * treat it as a write lock. The shared /dev/tpmrm0 is treated as a
+	 * read lock.
+	 */
+	if (!down_read_trylock(&chip->open_lock)) {
+		dev_dbg(&chip->dev, "Another process owns this TPM\n");
+		return -EBUSY;
+	}
+
 	priv = kzalloc(sizeof(*priv), GFP_KERNEL);
 	if (priv == NULL)
-		return -ENOMEM;
+		goto err;
 
 	rc = tpm2_init_space(&priv->space, TPM2_SPACE_BUFFER_SIZE);
 	if (rc) {
 		kfree(priv);
-		return -ENOMEM;
+		goto err;
 	}
 
 	tpm_common_open(file, chip, &priv->priv, &priv->space);
 
 	return 0;
+
+err:
+	up_read(&chip->open_lock);
+	return -ENOMEM;
 }
 
 static int tpmrm_release(struct inode *inode, struct file *file)
@@ -40,6 +55,7 @@ static int tpmrm_release(struct inode *inode, struct file *file)
 	tpm_common_release(file, fpriv);
 	tpm2_del_space(fpriv->chip, &priv->space);
 	kfree(priv);
+	up_read(&fpriv->chip->open_lock);
 
 	return 0;
 }

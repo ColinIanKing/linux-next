@@ -65,7 +65,7 @@ static void tpm_dev_async_work(struct work_struct *work)
 
 	mutex_lock(&priv->buffer_mutex);
 	priv->command_enqueued = false;
-	ret = tpm_try_get_ops(priv->chip);
+	ret = tpm_try_get_ops_locked(priv->chip);
 	if (ret) {
 		priv->response_length = ret;
 		goto out;
@@ -73,7 +73,7 @@ static void tpm_dev_async_work(struct work_struct *work)
 
 	ret = tpm_dev_transmit(priv->chip, priv->space, priv->data_buffer,
 			       sizeof(priv->data_buffer));
-	tpm_put_ops(priv->chip);
+	tpm_put_ops_locked(priv->chip);
 
 	/*
 	 * If ret is > 0 then tpm_dev_transmit returned the size of the
@@ -220,14 +220,14 @@ ssize_t tpm_common_write(struct file *file, const char __user *buf,
 	 * lock during this period so that the tpm can be unregistered even if
 	 * the char dev is held open.
 	 */
-	if (tpm_try_get_ops(priv->chip)) {
+	if (tpm_try_get_ops_locked(priv->chip)) {
 		ret = -EPIPE;
 		goto out;
 	}
 
 	ret = tpm_dev_transmit(priv->chip, priv->space, priv->data_buffer,
 			       sizeof(priv->data_buffer));
-	tpm_put_ops(priv->chip);
+	tpm_put_ops_locked(priv->chip);
 
 	if (ret > 0) {
 		priv->response_length = ret;
