@@ -66,6 +66,7 @@ KUNIT_ARRAY_PARAM(platform, cases, xe_pci_fake_data_desc);
 
 /**
  * xe_pci_fake_data_gen_params - Generate struct xe_pci_fake_data parameters
+ * @test: the &kunit where this fake &xe_device will be used
  * @prev: the pointer to the previous parameter to iterate from or NULL
  * @desc: output buffer with minimum size of KUNIT_PARAM_DESC_SIZE
  *
