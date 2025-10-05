@@ -863,7 +863,7 @@ has to be handled by the ``<linux/gpio/consumer.h>`` interface. Instead view thi
 a certain pin config setting. Look in e.g. ``<linux/pinctrl/pinconf-generic.h>``
 and you find this in the documentation:
 
-  PIN_CONFIG_OUTPUT:
+  PIN_CONFIG_LEVEL:
      this will configure the pin in output, use argument
      1 to indicate high level, argument 0 to indicate low level.
 
@@ -897,7 +897,7 @@ And your machine configuration may look like this:
 	};
 
 	static unsigned long uart_sleep_mode[] = {
-		PIN_CONF_PACKED(PIN_CONFIG_OUTPUT, 0),
+		PIN_CONF_PACKED(PIN_CONFIG_LEVEL, 0),
 	};
 
 	static struct pinctrl_map pinmap[] __initdata = {
@@ -1202,22 +1202,24 @@ default state like this:
 	{
 		/* Allocate a state holder named "foo" etc */
 		struct foo_state *foo = ...;
+		int ret;
 
 		foo->p = devm_pinctrl_get(&device);
 		if (IS_ERR(foo->p)) {
-			/* FIXME: clean up "foo" here */
-			return PTR_ERR(foo->p);
+			ret = PTR_ERR(foo->p);
+			foo->p = NULL;
+			return ret;
 		}
 
 		foo->s = pinctrl_lookup_state(foo->p, PINCTRL_STATE_DEFAULT);
 		if (IS_ERR(foo->s)) {
-			/* FIXME: clean up "foo" here */
+			devm_pinctrl_put(foo->p);
 			return PTR_ERR(foo->s);
 		}
 
 		ret = pinctrl_select_state(foo->p, foo->s);
 		if (ret < 0) {
-			/* FIXME: clean up "foo" here */
+			devm_pinctrl_put(foo->p);
 			return ret;
 		}
 	}

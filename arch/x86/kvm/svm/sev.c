@@ -719,13 +719,6 @@ static void sev_clflush_pages(struct page *pages[], unsigned long npages)
 static void sev_writeback_caches(struct kvm *kvm)
 {
 	/*
-	 * Note, the caller is responsible for ensuring correctness if the mask
-	 * can be modified, e.g. if a CPU could be doing VMRUN.
-	 */
-	if (cpumask_empty(to_kvm_sev_info(kvm)->have_run_cpus))
-		return;
-
-	/*
 	 * Ensure that all dirty guest tagged cache entries are written back
 	 * before releasing the pages back to the system for use.  CLFLUSH will
 	 * not do this without SME_COHERENT, and flushing many cache lines
@@ -739,6 +732,9 @@ static void sev_writeback_caches(struct kvm *kvm)
 	 * serializing multiple calls and having responding CPUs (to the IPI)
 	 * mark themselves as still running if they are running (or about to
 	 * run) a vCPU for the VM.
+	 *
+	 * Note, the caller is responsible for ensuring correctness if the mask
+	 * can be modified, e.g. if a CPU could be doing VMRUN.
 	 */
 	wbnoinvd_on_cpus_mask(to_kvm_sev_info(kvm)->have_run_cpus);
 }
@@ -2365,7 +2361,7 @@ static int snp_launch_update(struct kvm *kvm, struct kvm_sev_cmd *argp)
 	mutex_lock(&kvm->slots_lock);
 
 	memslot = gfn_to_memslot(kvm, params.gfn_start);
-	if (!kvm_slot_can_be_private(memslot)) {
+	if (!kvm_slot_has_gmem(memslot)) {
 		ret = -EINVAL;
 		goto out;
 	}
@@ -4719,7 +4715,7 @@ void sev_handle_rmp_fault(struct kvm_vcpu *vcpu, gpa_t gpa, u64 error_code)
 	}
 
 	slot = gfn_to_memslot(kvm, gfn);
-	if (!kvm_slot_can_be_private(slot)) {
+	if (!kvm_slot_has_gmem(slot)) {
 		pr_warn_ratelimited("SEV: Unexpected RMP fault, non-private slot for GPA 0x%llx\n",
 				    gpa);
 		return;
@@ -4947,7 +4943,7 @@ next_pfn:
 	}
 }
 
-int sev_private_max_mapping_level(struct kvm *kvm, kvm_pfn_t pfn)
+int sev_gmem_max_mapping_level(struct kvm *kvm, kvm_pfn_t pfn, bool is_private)
 {
 	int level, rc;
 	bool assigned;
