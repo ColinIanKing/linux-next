@@ -173,8 +173,8 @@ static int __register_trace_wprobe(struct trace_wprobe *tw)
 	attr.bp_type = tw->type;
 
 	tw->bp_event = register_wide_hw_breakpoint(&attr, wprobe_perf_handler, tw);
-	if (IS_ERR((void * __force)tw->bp_event)) {
-		int ret = PTR_ERR((void * __force)tw->bp_event);
+	if (IS_ERR_PCPU(tw->bp_event)) {
+		int ret = PTR_ERR_PCPU(tw->bp_event);
 
 		tw->bp_event = NULL;
 		return ret;
