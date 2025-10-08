@@ -807,6 +807,19 @@ config EPROBE_EVENTS
 	  convert the type of an event field. For example, turn an
 	  address into a string.
 
+config WPROBE_EVENTS
+	bool "Enable wprobe-based dynamic events"
+	depends on TRACING
+	depends on HAVE_HW_BREAKPOINT
+	select PROBE_EVENTS
+	select DYNAMIC_EVENTS
+	help
+	  This allows the user to add watchpoint tracing events based on
+	  hardware breakpoints on the fly via the ftrace interface.
+
+	  Those events can be inserted wherever hardware breakpoints can be
+	  set, and record accessed memory address and values.
+
 config BPF_EVENTS
 	depends on BPF_SYSCALL
 	depends on (KPROBE_EVENTS || UPROBE_EVENTS) && PERF_EVENTS
