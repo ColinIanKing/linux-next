@@ -7,4 +7,6 @@
 #define __ARCH_WANT_STAT64
 #define __ARCH_WANT_SET_GET_RLIMIT
 
+#define __ARCH_BROKEN_SYS_CLONE3
+
 #endif
