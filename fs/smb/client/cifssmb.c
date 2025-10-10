@@ -1163,7 +1163,7 @@ OldOpenRetry:
 				cpu_to_le64(le32_to_cpu(pSMBr->EndOfFile));
 			pfile_info->EndOfFile = pfile_info->AllocationSize;
 			pfile_info->NumberOfLinks = cpu_to_le32(1);
-			pfile_info->DeletePending = 0;
+			pfile_info->DeletePending = 0; /* successful open = not delete pending */
 		}
 	}
 
@@ -1288,7 +1288,7 @@ openRetry:
 		buf->AllocationSize = rsp->AllocationSize;
 		buf->EndOfFile = rsp->EndOfFile;
 		buf->NumberOfLinks = cpu_to_le32(1);
-		buf->DeletePending = 0;
+		buf->DeletePending = 0; /* successful open = not delete pending */
 	}
 
 	cifs_buf_release(req);
@@ -2320,7 +2320,6 @@ int CIFSSMBRenameOpenFile(const unsigned int xid, struct cifs_tcon *pTcon,
 	struct smb_com_transaction2_sfi_rsp *pSMBr = NULL;
 	struct set_file_rename *rename_info;
 	char *data_offset;
-	char dummy_string[30];
 	int rc = 0;
 	int bytes_returned = 0;
 	int len_of_str;
@@ -2354,21 +2353,12 @@ int CIFSSMBRenameOpenFile(const unsigned int xid, struct cifs_tcon *pTcon,
 	pSMB->TotalParameterCount = pSMB->ParameterCount;
 	pSMB->ParameterOffset = cpu_to_le16(param_offset);
 	pSMB->DataOffset = cpu_to_le16(offset);
-	/* construct random name ".cifs_tmp<inodenum><mid>" */
 	rename_info->overwrite = cpu_to_le32(1);
 	rename_info->root_fid  = 0;
 	/* unicode only call */
-	if (target_name == NULL) {
-		sprintf(dummy_string, "cifs%x", pSMB->hdr.Mid);
-		len_of_str =
-			cifsConvertToUTF16((__le16 *)rename_info->target_name,
-					dummy_string, 24, nls_codepage, remap);
-	} else {
-		len_of_str =
-			cifsConvertToUTF16((__le16 *)rename_info->target_name,
+	len_of_str = cifsConvertToUTF16((__le16 *)rename_info->target_name,
 					target_name, PATH_MAX, nls_codepage,
 					remap);
-	}
 	rename_info->target_name_len = cpu_to_le32(2 * len_of_str);
 	count = sizeof(struct set_file_rename) + (2 * len_of_str);
 	byte_count += count;
