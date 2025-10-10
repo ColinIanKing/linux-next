@@ -102,7 +102,8 @@ struct intel_fbc {
 	struct mutex lock;
 	unsigned int busy_bits;
 
-	struct i915_stolen_fb compressed_fb, compressed_llb;
+	struct intel_stolen_node *compressed_fb;
+	struct intel_stolen_node *compressed_llb;
 
 	enum intel_fbc_id id;
 
@@ -376,20 +377,19 @@ static void i8xx_fbc_nuke(struct intel_fbc *fbc)
 static void i8xx_fbc_program_cfb(struct intel_fbc *fbc)
 {
 	struct intel_display *display = fbc->display;
-	struct drm_i915_private *i915 = to_i915(display->drm);
 
 	drm_WARN_ON(display->drm,
-		    range_end_overflows_t(u64, i915_gem_stolen_area_address(i915),
-					  i915_gem_stolen_node_offset(&fbc->compressed_fb),
+		    range_end_overflows_t(u64, i915_gem_stolen_area_address(display->drm),
+					  i915_gem_stolen_node_offset(fbc->compressed_fb),
 					  U32_MAX));
 	drm_WARN_ON(display->drm,
-		    range_end_overflows_t(u64, i915_gem_stolen_area_address(i915),
-					  i915_gem_stolen_node_offset(&fbc->compressed_llb),
+		    range_end_overflows_t(u64, i915_gem_stolen_area_address(display->drm),
+					  i915_gem_stolen_node_offset(fbc->compressed_llb),
 					  U32_MAX));
 	intel_de_write(display, FBC_CFB_BASE,
-		       i915_gem_stolen_node_address(i915, &fbc->compressed_fb));
+		       i915_gem_stolen_node_address(fbc->compressed_fb));
 	intel_de_write(display, FBC_LL_BASE,
-		       i915_gem_stolen_node_address(i915, &fbc->compressed_llb));
+		       i915_gem_stolen_node_address(fbc->compressed_llb));
 }
 
 static const struct intel_fbc_funcs i8xx_fbc_funcs = {
@@ -497,7 +497,7 @@ static void g4x_fbc_program_cfb(struct intel_fbc *fbc)
 	struct intel_display *display = fbc->display;
 
 	intel_de_write(display, DPFC_CB_BASE,
-		       i915_gem_stolen_node_offset(&fbc->compressed_fb));
+		       i915_gem_stolen_node_offset(fbc->compressed_fb));
 }
 
 static const struct intel_fbc_funcs g4x_fbc_funcs = {
@@ -566,7 +566,7 @@ static void ilk_fbc_program_cfb(struct intel_fbc *fbc)
 	struct intel_display *display = fbc->display;
 
 	intel_de_write(display, ILK_DPFC_CB_BASE(fbc->id),
-		       i915_gem_stolen_node_offset(&fbc->compressed_fb));
+		       i915_gem_stolen_node_offset(fbc->compressed_fb));
 }
 
 static const struct intel_fbc_funcs ilk_fbc_funcs = {
@@ -797,7 +797,6 @@ static u64 intel_fbc_cfb_base_max(struct intel_display *display)
 
 static u64 intel_fbc_stolen_end(struct intel_display *display)
 {
-	struct drm_i915_private __maybe_unused *i915 = to_i915(display->drm);
 	u64 end;
 
 	/* The FBC hardware for BDW/SKL doesn't have access to the stolen
@@ -806,7 +805,7 @@ static u64 intel_fbc_stolen_end(struct intel_display *display)
 	 * underruns, even if that range is not reserved by the BIOS. */
 	if (display->platform.broadwell ||
 	    (DISPLAY_VER(display) == 9 && !display->platform.broxton))
-		end = i915_gem_stolen_area_size(i915) - 8 * 1024 * 1024;
+		end = i915_gem_stolen_area_size(display->drm) - 8 * 1024 * 1024;
 	else
 		end = U64_MAX;
 
@@ -835,20 +834,19 @@ static int find_compression_limit(struct intel_fbc *fbc,
 				  unsigned int size, int min_limit)
 {
 	struct intel_display *display = fbc->display;
-	struct drm_i915_private *i915 = to_i915(display->drm);
 	u64 end = intel_fbc_stolen_end(display);
 	int ret, limit = min_limit;
 
 	size /= limit;
 
 	/* Try to over-allocate to reduce reallocations and fragmentation. */
-	ret = i915_gem_stolen_insert_node_in_range(i915, &fbc->compressed_fb,
+	ret = i915_gem_stolen_insert_node_in_range(fbc->compressed_fb,
 						   size <<= 1, 4096, 0, end);
 	if (ret == 0)
 		return limit;
 
 	for (; limit <= intel_fbc_max_limit(display); limit <<= 1) {
-		ret = i915_gem_stolen_insert_node_in_range(i915, &fbc->compressed_fb,
+		ret = i915_gem_stolen_insert_node_in_range(fbc->compressed_fb,
 							   size >>= 1, 4096, 0, end);
 		if (ret == 0)
 			return limit;
@@ -861,17 +859,15 @@ static int intel_fbc_alloc_cfb(struct intel_fbc *fbc,
 			       unsigned int size, int min_limit)
 {
 	struct intel_display *display = fbc->display;
-	struct drm_i915_private *i915 = to_i915(display->drm);
 	int ret;
 
 	drm_WARN_ON(display->drm,
-		    i915_gem_stolen_node_allocated(&fbc->compressed_fb));
+		    i915_gem_stolen_node_allocated(fbc->compressed_fb));
 	drm_WARN_ON(display->drm,
-		    i915_gem_stolen_node_allocated(&fbc->compressed_llb));
+		    i915_gem_stolen_node_allocated(fbc->compressed_llb));
 
 	if (DISPLAY_VER(display) < 5 && !display->platform.g4x) {
-		ret = i915_gem_stolen_insert_node(i915, &fbc->compressed_llb,
-						  4096, 4096);
+		ret = i915_gem_stolen_insert_node(fbc->compressed_llb, 4096, 4096);
 		if (ret)
 			goto err;
 	}
@@ -887,14 +883,14 @@ static int intel_fbc_alloc_cfb(struct intel_fbc *fbc,
 
 	drm_dbg_kms(display->drm,
 		    "reserved %llu bytes of contiguous stolen space for FBC, limit: %d\n",
-		    i915_gem_stolen_node_size(&fbc->compressed_fb), fbc->limit);
+		    i915_gem_stolen_node_size(fbc->compressed_fb), fbc->limit);
 	return 0;
 
 err_llb:
-	if (i915_gem_stolen_node_allocated(&fbc->compressed_llb))
-		i915_gem_stolen_remove_node(i915, &fbc->compressed_llb);
+	if (i915_gem_stolen_node_allocated(fbc->compressed_llb))
+		i915_gem_stolen_remove_node(fbc->compressed_llb);
 err:
-	if (i915_gem_stolen_initialized(i915))
+	if (i915_gem_stolen_initialized(display->drm))
 		drm_info_once(display->drm,
 			      "not enough stolen space for compressed buffer (need %d more bytes), disabling. Hint: you may be able to increase stolen memory size in the BIOS to avoid this.\n", size);
 	return -ENOSPC;
@@ -945,16 +941,13 @@ static void intel_fbc_program_workarounds(struct intel_fbc *fbc)
 
 static void __intel_fbc_cleanup_cfb(struct intel_fbc *fbc)
 {
-	struct intel_display *display = fbc->display;
-	struct drm_i915_private *i915 = to_i915(display->drm);
-
 	if (WARN_ON(intel_fbc_hw_is_active(fbc)))
 		return;
 
-	if (i915_gem_stolen_node_allocated(&fbc->compressed_llb))
-		i915_gem_stolen_remove_node(i915, &fbc->compressed_llb);
-	if (i915_gem_stolen_node_allocated(&fbc->compressed_fb))
-		i915_gem_stolen_remove_node(i915, &fbc->compressed_fb);
+	if (i915_gem_stolen_node_allocated(fbc->compressed_llb))
+		i915_gem_stolen_remove_node(fbc->compressed_llb);
+	if (i915_gem_stolen_node_allocated(fbc->compressed_fb))
+		i915_gem_stolen_remove_node(fbc->compressed_fb);
 }
 
 void intel_fbc_cleanup(struct intel_display *display)
@@ -966,6 +959,9 @@ void intel_fbc_cleanup(struct intel_display *display)
 		mutex_lock(&fbc->lock);
 		__intel_fbc_cleanup_cfb(fbc);
 		mutex_unlock(&fbc->lock);
+
+		i915_gem_stolen_node_free(fbc->compressed_fb);
+		i915_gem_stolen_node_free(fbc->compressed_llb);
 
 		kfree(fbc);
 	}
@@ -1355,7 +1351,7 @@ static bool intel_fbc_is_cfb_ok(const struct intel_plane_state *plane_state)
 
 	return intel_fbc_min_limit(plane_state) <= fbc->limit &&
 		intel_fbc_cfb_size(plane_state) <= fbc->limit *
-			i915_gem_stolen_node_size(&fbc->compressed_fb);
+			i915_gem_stolen_node_size(fbc->compressed_fb);
 }
 
 static bool intel_fbc_is_ok(const struct intel_plane_state *plane_state)
@@ -1436,7 +1432,7 @@ static int intel_fbc_check_plane(struct intel_atomic_state *state,
 	if (!fbc)
 		return 0;
 
-	if (!i915_gem_stolen_initialized(i915)) {
+	if (!i915_gem_stolen_initialized(display->drm)) {
 		plane_state->no_fbc_reason = "stolen memory not initialised";
 		return 0;
 	}
@@ -2083,6 +2079,13 @@ static struct intel_fbc *intel_fbc_create(struct intel_display *display,
 	if (!fbc)
 		return NULL;
 
+	fbc->compressed_fb = i915_gem_stolen_node_alloc(display->drm);
+	if (!fbc->compressed_fb)
+		goto err;
+	fbc->compressed_llb = i915_gem_stolen_node_alloc(display->drm);
+	if (!fbc->compressed_llb)
+		goto err;
+
 	fbc->id = fbc_id;
 	fbc->display = display;
 	INIT_WORK(&fbc->underrun_work, intel_fbc_underrun_work_fn);
@@ -2102,6 +2105,13 @@ static struct intel_fbc *intel_fbc_create(struct intel_display *display,
 		fbc->funcs = &i8xx_fbc_funcs;
 
 	return fbc;
+
+err:
+	i915_gem_stolen_node_free(fbc->compressed_llb);
+	i915_gem_stolen_node_free(fbc->compressed_fb);
+	kfree(fbc);
+
+	return NULL;
 }
 
 /**

@@ -13,6 +13,11 @@ subdir-ccflags-$(CONFIG_DRM_I915_WERROR) += -Werror
 # drivers. Define I915 when building i915.
 subdir-ccflags-y += -DI915
 
+# FIXME: Disable tracepoints on i915 for PREEMPT_RT, unfortunately
+# it's an all or nothing flag. You cannot selectively disable
+# only some tracepoints.
+subdir-ccflags-$(CONFIG_PREEMPT_RT) += -DNOTRACE
+
 subdir-ccflags-y += -I$(src)
 
 # Please keep these build lists sorted!
@@ -300,6 +305,7 @@ i915-y += \
 	display/skl_scaler.o \
 	display/skl_universal_plane.o \
 	display/skl_watermark.o \
+	display/vlv_clock.o \
 	display/vlv_sideband.o
 i915-$(CONFIG_ACPI) += \
 	display/intel_acpi.o \
