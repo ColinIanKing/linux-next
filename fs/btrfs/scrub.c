@@ -694,7 +694,7 @@ static void *scrub_stripe_get_kaddr(struct scrub_stripe *stripe, int sector_nr)
 
 	/* stripe->folios[] is allocated by us and no highmem is allowed. */
 	ASSERT(folio);
-	ASSERT(!folio_test_partial_kmap(folio));
+	ASSERT(!folio_test_highmem(folio));
 	return folio_address(folio) + offset_in_folio(folio, offset);
 }
 
@@ -707,7 +707,7 @@ static phys_addr_t scrub_stripe_get_paddr(struct scrub_stripe *stripe, int secto
 
 	/* stripe->folios[] is allocated by us and no highmem is allowed. */
 	ASSERT(folio);
-	ASSERT(!folio_test_partial_kmap(folio));
+	ASSERT(!folio_test_highmem(folio));
 	/* And the range must be contained inside the folio. */
 	ASSERT(offset_in_folio(folio, offset) + fs_info->sectorsize <= folio_size(folio));
 	return page_to_phys(folio_page(folio, 0)) + offset_in_folio(folio, offset);
@@ -1284,7 +1284,7 @@ static void scrub_write_endio(struct btrfs_bio *bbio)
 		bitmap_set(&stripe->write_error_bitmap, sector_nr,
 			   bio_size >> fs_info->sectorsize_bits);
 		spin_unlock_irqrestore(&stripe->write_error_lock, flags);
-		for (int i = 0; i < (bio_size >> fs_info->sectorsize_bits); i++)
+		for (i = 0; i < (bio_size >> fs_info->sectorsize_bits); i++)
 			btrfs_dev_stat_inc_and_print(stripe->dev,
 						     BTRFS_DEV_STAT_WRITE_ERRS);
 	}
@@ -2527,8 +2527,6 @@ out:
 	}
 
 	if (sctx->is_dev_replace && ret >= 0) {
-		int ret2;
-
 		ret2 = sync_write_pointer_for_zoned(sctx,
 				chunk_logical + offset,
 				map->stripes[stripe_index].physical,
