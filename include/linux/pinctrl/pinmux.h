@@ -35,6 +35,13 @@ struct pinctrl_gpio_range;
  *	name can be used with the generic @pinctrl_ops to retrieve the
  *	actual pins affected. The applicable groups will be returned in
  *	@groups and the number of groups in @num_groups
+ * @function_is_gpio: determine, preferably by reading hardware register
+ *	states, if the indicated function selector passed corresponds to the
+ *	GPIO function which can also be used by the accelerared GPIO functions
+ *	@gpio_request_enable, @gpio_disable_free and @gpio_set_direction.
+ *	When the pin control core can properly determine if a function is a
+ *	GPIO function, it is much easier to use the @strict mode on the pin
+ *	controller and avoid confusing set-ups.
  * @set_mux: enable a certain muxing function with a certain pin group. The
  *	driver does not need to figure out whether enabling this function
  *	conflicts some other use of the pins in that group, such collisions
