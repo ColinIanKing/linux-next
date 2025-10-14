@@ -2884,7 +2884,7 @@ static bool free_frozen_page_commit(struct zone *zone,
 		free_pcppages_bulk(zone, to_free_batched, pcp, pindex);
 		to_free -= to_free_batched;
 
-		if (to_free <= 0 || pcp->count <= 0)
+		if (to_free == 0 || pcp->count == 0)
 			break;
 
 		pcp_spin_unlock(pcp);
