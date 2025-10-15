@@ -882,7 +882,7 @@ void register_memory_blocks_under_node_hotplug(int nid, unsigned long start_pfn,
 
 /**
  * register_node - Initialize and register the node device.
- * @nid - Node number to use when creating the device.
+ * @nid: Node number to use when creating the device.
  *
  * Return: 0 on success, -errno otherwise
  */
