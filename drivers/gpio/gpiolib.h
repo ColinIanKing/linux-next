@@ -283,39 +283,28 @@ static inline int gpio_chip_hwgpio(const struct gpio_desc *desc)
 
 /* With descriptor prefix */
 
-#define gpiod_err(desc, fmt, ...) \
+#define __gpiod_pr(level, desc, fmt, ...) \
 do { \
 	scoped_guard(srcu, &desc->gdev->desc_srcu) { \
-		pr_err("gpio-%d (%s): " fmt, desc_to_gpio(desc), \
-		       gpiod_get_label(desc) ? : "?", ##__VA_ARGS__); \
+		pr_##level("gpio-%d (%s): " fmt, desc_to_gpio(desc), \
+			   gpiod_get_label(desc) ?: "?", ##__VA_ARGS__); \
 	} \
 } while (0)
 
-#define gpiod_warn(desc, fmt, ...) \
-do { \
-	scoped_guard(srcu, &desc->gdev->desc_srcu) { \
-		pr_warn("gpio-%d (%s): " fmt, desc_to_gpio(desc), \
-			gpiod_get_label(desc) ? : "?", ##__VA_ARGS__); \
-	} \
-} while (0)
-
-#define gpiod_dbg(desc, fmt, ...) \
-do { \
-	scoped_guard(srcu, &desc->gdev->desc_srcu) { \
-		pr_debug("gpio-%d (%s): " fmt, desc_to_gpio(desc), \
-			 gpiod_get_label(desc) ? : "?", ##__VA_ARGS__); \
-	} \
-} while (0)
+#define gpiod_err(desc, fmt, ...) __gpiod_pr(err, desc, fmt, ##__VA_ARGS__)
+#define gpiod_warn(desc, fmt, ...) __gpiod_pr(warn, desc, fmt, ##__VA_ARGS__)
+#define gpiod_dbg(desc, fmt, ...) __gpiod_pr(debug, desc, fmt, ##__VA_ARGS__)
 
 /* With chip prefix */
 
-#define chip_err(gc, fmt, ...)					\
-	dev_err(&gc->gpiodev->dev, "(%s): " fmt, gc->label, ##__VA_ARGS__)
-#define chip_warn(gc, fmt, ...)					\
-	dev_warn(&gc->gpiodev->dev, "(%s): " fmt, gc->label, ##__VA_ARGS__)
-#define chip_info(gc, fmt, ...)					\
-	dev_info(&gc->gpiodev->dev, "(%s): " fmt, gc->label, ##__VA_ARGS__)
-#define chip_dbg(gc, fmt, ...)					\
-	dev_dbg(&gc->gpiodev->dev, "(%s): " fmt, gc->label, ##__VA_ARGS__)
+#define __gpiochip_pr(level, gc, fmt, ...) \
+do { \
+	dev_##level(&gc->gpiodev->dev, "(%s): " fmt, gc->label, ##__VA_ARGS__); \
+} while (0)
+
+#define gpiochip_err(gc, fmt, ...) __gpiochip_pr(err, gc, fmt, ##__VA_ARGS__)
+#define gpiochip_warn(gc, fmt, ...) __gpiochip_pr(warn, gc, fmt, ##__VA_ARGS__)
+#define gpiochip_info(gc, fmt, ...) __gpiochip_pr(info, gc, fmt, ##__VA_ARGS__)
+#define gpiochip_dbg(gc, fmt, ...) __gpiochip_pr(dbg, gc, fmt, ##__VA_ARGS__)
 
 #endif /* GPIOLIB_H */
