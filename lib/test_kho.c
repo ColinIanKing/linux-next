@@ -39,32 +39,16 @@ struct kho_test_state {
 
 static struct kho_test_state kho_test_state;
 
-static int kho_test_notifier(struct notifier_block *self, unsigned long cmd,
-			     void *v)
+static int kho_test(void)
 {
 	struct kho_test_state *state = &kho_test_state;
-	struct kho_serialization *ser = v;
 	int err = 0;
 
-	switch (cmd) {
-	case KEXEC_KHO_ABORT:
-		return NOTIFY_DONE;
-	case KEXEC_KHO_FINALIZE:
-		/* Handled below */
-		break;
-	default:
-		return NOTIFY_BAD;
-	}
-
 	err |= kho_preserve_folio(state->fdt);
-	err |= kho_add_subtree(ser, KHO_TEST_FDT, folio_address(state->fdt));
+	err |= kho_add_subtree(KHO_TEST_FDT, folio_address(state->fdt));
 
 	return err ? NOTIFY_BAD : NOTIFY_DONE;
 }
-
-static struct notifier_block kho_test_nb = {
-	.notifier_call = kho_test_notifier,
-};
 
 static int kho_test_save_data(struct kho_test_state *state, void *fdt)
 {
@@ -101,6 +85,9 @@ static int kho_test_save_data(struct kho_test_state *state, void *fdt)
 
 	if (!err)
 		state->folios_info = no_free_ptr(folios_info);
+
+	if (!err)
+		err = kho_test();
 
 	return err;
 }
@@ -203,14 +190,8 @@ static int kho_test_save(void)
 	if (err)
 		goto err_free_folios;
 
-	err = register_kho_notifier(&kho_test_nb);
-	if (err)
-		goto err_free_fdt;
-
 	return 0;
 
-err_free_fdt:
-	folio_put(state->fdt);
 err_free_folios:
 	kvfree(folios);
 	return err;
@@ -326,7 +307,6 @@ static void kho_test_cleanup(void)
 
 static void __exit kho_test_exit(void)
 {
-	unregister_kho_notifier(&kho_test_nb);
 	kho_test_cleanup();
 }
 module_exit(kho_test_exit);
