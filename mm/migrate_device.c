@@ -18,12 +18,17 @@
 #include <asm/tlbflush.h>
 #include "internal.h"
 
+#define CREATE_TRACE_POINTS
+#include <trace/events/migrate_device.h>
+
 static int migrate_vma_collect_skip(unsigned long start,
 				    unsigned long end,
 				    struct mm_walk *walk)
 {
 	struct migrate_vma *migrate = walk->private;
 	unsigned long addr;
+
+	trace_migrate_vma_collect_skip(start, end);
 
 	for (addr = start; addr < end; addr += PAGE_SIZE) {
 		migrate->dst[migrate->npages] = 0;
@@ -69,6 +74,7 @@ static int migrate_vma_collect_hole(unsigned long start,
 		migrate->cpages++;
 	}
 
+	trace_migrate_vma_collect_hole(start, end, migrate->npages);
 	return 0;
 }
 
@@ -517,6 +523,7 @@ static void migrate_vma_collect(struct migrate_vma *migrate)
 
 	mmu_notifier_invalidate_range_end(&range);
 	migrate->end = migrate->start + (migrate->npages << PAGE_SHIFT);
+	trace_migrate_vma_collect(migrate->start, migrate->end, migrate->npages);
 }
 
 /*
@@ -747,6 +754,8 @@ int migrate_vma_setup(struct migrate_vma *args)
 		return -EINVAL;
 	if (args->fault_page && !PageLocked(args->fault_page))
 		return -EINVAL;
+
+	trace_migrate_vma_setup(args->start, args->end, nr_pages);
 
 	memset(args->src, 0, sizeof(*args->src) * nr_pages);
 	args->cpages = 0;
@@ -1259,6 +1268,7 @@ EXPORT_SYMBOL(migrate_device_pages);
 void migrate_vma_pages(struct migrate_vma *migrate)
 {
 	__migrate_device_pages(migrate->src, migrate->dst, migrate->npages, migrate);
+	trace_migrate_device_pages(migrate->npages, migrate->npages);
 }
 EXPORT_SYMBOL(migrate_vma_pages);
 
@@ -1312,6 +1322,7 @@ static void __migrate_device_finalize(unsigned long *src_pfns,
 			folio_put(dst);
 		}
 	}
+	trace_migrate_vma_finalize(npages);
 }
 
 /*
