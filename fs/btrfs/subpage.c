@@ -194,12 +194,11 @@ static void btrfs_subpage_assert(const struct btrfs_fs_info *fs_info,
 #define subpage_calc_start_bit(fs_info, folio, name, start, len)	\
 ({									\
 	unsigned int __start_bit;					\
-	const unsigned int blocks_per_folio =				\
-			   btrfs_blocks_per_folio(fs_info, folio);	\
+	const unsigned int __bpf = btrfs_blocks_per_folio(fs_info, folio); \
 									\
 	btrfs_subpage_assert(fs_info, folio, start, len);		\
 	__start_bit = offset_in_folio(folio, start) >> fs_info->sectorsize_bits; \
-	__start_bit += blocks_per_folio * btrfs_bitmap_nr_##name;	\
+	__start_bit += __bpf * btrfs_bitmap_nr_##name;			\
 	__start_bit;							\
 })
 
@@ -338,24 +337,20 @@ void btrfs_folio_end_lock_bitmap(const struct btrfs_fs_info *fs_info,
 
 #define subpage_test_bitmap_all_set(fs_info, folio, name)		\
 ({									\
-	struct btrfs_folio_state *bfs = folio_get_private(folio);	\
-	const unsigned int blocks_per_folio =				\
-				btrfs_blocks_per_folio(fs_info, folio); \
+	struct btrfs_folio_state *__bfs = folio_get_private(folio);	\
+	const unsigned int __bpf = btrfs_blocks_per_folio(fs_info, folio); \
 									\
-	bitmap_test_range_all_set(bfs->bitmaps,				\
-			blocks_per_folio * btrfs_bitmap_nr_##name,	\
-			blocks_per_folio);				\
+	bitmap_test_range_all_set(__bfs->bitmaps,			\
+				  __bpf * btrfs_bitmap_nr_##name, __bpf); \
 })
 
 #define subpage_test_bitmap_all_zero(fs_info, folio, name)		\
 ({									\
-	struct btrfs_folio_state *bfs = folio_get_private(folio);	\
-	const unsigned int blocks_per_folio =				\
-				btrfs_blocks_per_folio(fs_info, folio); \
+	struct btrfs_folio_state *__bfs = folio_get_private(folio);	\
+	const unsigned int __bpf = btrfs_blocks_per_folio(fs_info, folio); \
 									\
-	bitmap_test_range_all_zero(bfs->bitmaps,			\
-			blocks_per_folio * btrfs_bitmap_nr_##name,	\
-			blocks_per_folio);				\
+	bitmap_test_range_all_zero(__bfs->bitmaps,			\
+				   __bpf * btrfs_bitmap_nr_##name, __bpf); \
 })
 
 void btrfs_subpage_set_uptodate(const struct btrfs_fs_info *fs_info,
@@ -460,12 +455,12 @@ void btrfs_subpage_set_writeback(const struct btrfs_fs_info *fs_info,
 	if (!folio_test_dirty(folio)) {
 		struct address_space *mapping = folio_mapping(folio);
 		XA_STATE(xas, &mapping->i_pages, folio->index);
-		unsigned long flags;
+		unsigned long xa_flags;
 
-		xas_lock_irqsave(&xas, flags);
+		xas_lock_irqsave(&xas, xa_flags);
 		xas_load(&xas);
 		xas_clear_mark(&xas, PAGECACHE_TAG_TOWRITE);
-		xas_unlock_irqrestore(&xas, flags);
+		xas_unlock_irqrestore(&xas, xa_flags);
 	}
 	spin_unlock_irqrestore(&bfs->lock, flags);
 }
@@ -672,27 +667,23 @@ IMPLEMENT_BTRFS_PAGE_OPS(checked, folio_set_checked, folio_clear_checked,
 
 #define GET_SUBPAGE_BITMAP(fs_info, folio, name, dst)			\
 {									\
-	const unsigned int blocks_per_folio =				\
-				btrfs_blocks_per_folio(fs_info, folio);	\
-	const struct btrfs_folio_state *bfs = folio_get_private(folio);	\
+	const unsigned int __bpf = btrfs_blocks_per_folio(fs_info, folio); \
+	const struct btrfs_folio_state *__bfs = folio_get_private(folio); \
 									\
-	ASSERT(blocks_per_folio <= BITS_PER_LONG);			\
-	*dst = bitmap_read(bfs->bitmaps,				\
-			   blocks_per_folio * btrfs_bitmap_nr_##name,	\
-			   blocks_per_folio);				\
+	ASSERT(__bpf <= BITS_PER_LONG);					\
+	*dst = bitmap_read(__bfs->bitmaps,				\
+			   __bpf * btrfs_bitmap_nr_##name, __bpf);	\
 }
 
 #define SUBPAGE_DUMP_BITMAP(fs_info, folio, name, start, len)		\
 {									\
 	unsigned long bitmap;						\
-	const unsigned int blocks_per_folio =				\
-				btrfs_blocks_per_folio(fs_info, folio);	\
+	const unsigned int __bpf = btrfs_blocks_per_folio(fs_info, folio); \
 									\
 	GET_SUBPAGE_BITMAP(fs_info, folio, name, &bitmap);		\
 	btrfs_warn(fs_info,						\
 	"dumping bitmap start=%llu len=%u folio=%llu " #name "_bitmap=%*pbl", \
-		   start, len, folio_pos(folio),			\
-		   blocks_per_folio, &bitmap);				\
+		   start, len, folio_pos(folio), __bpf, &bitmap);	\
 }
 
 /*
