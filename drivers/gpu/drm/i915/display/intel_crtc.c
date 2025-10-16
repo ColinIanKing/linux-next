@@ -84,8 +84,13 @@ u32 intel_crtc_get_vblank_counter(struct intel_crtc *crtc)
 	if (!crtc->active)
 		return 0;
 
-	if (!vblank->max_vblank_count)
-		return (u32)drm_crtc_accurate_vblank_count(&crtc->base);
+	if (!vblank->max_vblank_count) {
+		/* On preempt-rt we cannot take the vblank spinlock since this function is called from tracepoints */
+		if (IS_ENABLED(CONFIG_PREEMPT_RT))
+			return (u32)drm_crtc_vblank_count(&crtc->base);
+		else
+			return (u32)drm_crtc_accurate_vblank_count(&crtc->base);
+	}
 
 	return crtc->base.funcs->get_vblank_counter(&crtc->base);
 }
@@ -747,4 +752,46 @@ void intel_pipe_update_end(struct intel_atomic_state *state,
 
 out:
 	intel_psr_unlock(new_crtc_state);
+}
+
+bool intel_crtc_enable_changed(const struct intel_crtc_state *old_crtc_state,
+			       const struct intel_crtc_state *new_crtc_state)
+{
+	return old_crtc_state->hw.enable != new_crtc_state->hw.enable;
+}
+
+bool intel_any_crtc_enable_changed(struct intel_atomic_state *state)
+{
+	const struct intel_crtc_state *old_crtc_state, *new_crtc_state;
+	struct intel_crtc *crtc;
+	int i;
+
+	for_each_oldnew_intel_crtc_in_state(state, crtc, old_crtc_state,
+					    new_crtc_state, i) {
+		if (intel_crtc_enable_changed(old_crtc_state, new_crtc_state))
+			return true;
+	}
+
+	return false;
+}
+
+bool intel_crtc_active_changed(const struct intel_crtc_state *old_crtc_state,
+			       const struct intel_crtc_state *new_crtc_state)
+{
+	return old_crtc_state->hw.active != new_crtc_state->hw.active;
+}
+
+bool intel_any_crtc_active_changed(struct intel_atomic_state *state)
+{
+	const struct intel_crtc_state *old_crtc_state, *new_crtc_state;
+	struct intel_crtc *crtc;
+	int i;
+
+	for_each_oldnew_intel_crtc_in_state(state, crtc, old_crtc_state,
+					    new_crtc_state, i) {
+		if (intel_crtc_active_changed(old_crtc_state, new_crtc_state))
+			return true;
+	}
+
+	return false;
 }

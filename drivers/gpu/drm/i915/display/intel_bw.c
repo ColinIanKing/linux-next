@@ -13,6 +13,7 @@
 #include "intel_atomic.h"
 #include "intel_bw.h"
 #include "intel_cdclk.h"
+#include "intel_crtc.h"
 #include "intel_display_core.h"
 #include "intel_display_regs.h"
 #include "intel_display_types.h"
@@ -870,13 +871,14 @@ static unsigned int intel_bw_crtc_data_rate(const struct intel_crtc_state *crtc_
 }
 
 /* "Maximum Pipe Read Bandwidth" */
-static int intel_bw_crtc_min_cdclk(struct intel_display *display,
-				   unsigned int data_rate)
+int intel_bw_crtc_min_cdclk(const struct intel_crtc_state *crtc_state)
 {
+	struct intel_display *display = to_intel_display(crtc_state);
+
 	if (DISPLAY_VER(display) < 12)
 		return 0;
 
-	return DIV_ROUND_UP_ULL(mul_u32_u32(data_rate, 10), 512);
+	return DIV_ROUND_UP_ULL(mul_u32_u32(intel_bw_crtc_data_rate(crtc_state), 10), 512);
 }
 
 static unsigned int intel_bw_num_active_planes(struct intel_display *display,
@@ -1291,10 +1293,6 @@ static bool intel_bw_state_changed(struct intel_display *display,
 
 		if (intel_dbuf_bw_changed(display, old_dbuf_bw, new_dbuf_bw))
 			return true;
-
-		if (intel_bw_crtc_min_cdclk(display, old_bw_state->data_rate[pipe]) !=
-		    intel_bw_crtc_min_cdclk(display, new_bw_state->data_rate[pipe]))
-			return true;
 	}
 
 	return false;
@@ -1385,15 +1383,9 @@ intel_bw_dbuf_min_cdclk(struct intel_display *display,
 int intel_bw_min_cdclk(struct intel_display *display,
 		       const struct intel_bw_state *bw_state)
 {
-	enum pipe pipe;
 	int min_cdclk;
 
 	min_cdclk = intel_bw_dbuf_min_cdclk(display, bw_state);
-
-	for_each_pipe(display, pipe)
-		min_cdclk = max(min_cdclk,
-				intel_bw_crtc_min_cdclk(display,
-							bw_state->data_rate[pipe]));
 
 	return min_cdclk;
 }
@@ -1404,12 +1396,10 @@ int intel_bw_calc_min_cdclk(struct intel_atomic_state *state,
 	struct intel_display *display = to_intel_display(state);
 	struct intel_bw_state *new_bw_state = NULL;
 	const struct intel_bw_state *old_bw_state = NULL;
-	const struct intel_cdclk_state *cdclk_state;
 	const struct intel_crtc_state *old_crtc_state;
 	const struct intel_crtc_state *new_crtc_state;
-	int old_min_cdclk, new_min_cdclk;
 	struct intel_crtc *crtc;
-	int i;
+	int ret, i;
 
 	if (DISPLAY_VER(display) < 9)
 		return 0;
@@ -1442,39 +1432,12 @@ int intel_bw_calc_min_cdclk(struct intel_atomic_state *state,
 			return ret;
 	}
 
-	old_min_cdclk = intel_bw_min_cdclk(display, old_bw_state);
-	new_min_cdclk = intel_bw_min_cdclk(display, new_bw_state);
-
-	/*
-	 * No need to check against the cdclk state if
-	 * the min cdclk doesn't increase.
-	 *
-	 * Ie. we only ever increase the cdclk due to bandwidth
-	 * requirements. This can reduce back and forth
-	 * display blinking due to constant cdclk changes.
-	 */
-	if (new_min_cdclk <= old_min_cdclk)
-		return 0;
-
-	cdclk_state = intel_atomic_get_cdclk_state(state);
-	if (IS_ERR(cdclk_state))
-		return PTR_ERR(cdclk_state);
-
-	/*
-	 * No need to recalculate the cdclk state if
-	 * the min cdclk doesn't increase.
-	 *
-	 * Ie. we only ever increase the cdclk due to bandwidth
-	 * requirements. This can reduce back and forth
-	 * display blinking due to constant cdclk changes.
-	 */
-	if (new_min_cdclk <= intel_cdclk_bw_min_cdclk(cdclk_state))
-		return 0;
-
-	drm_dbg_kms(display->drm,
-		    "new bandwidth min cdclk (%d kHz) > old min cdclk (%d kHz)\n",
-		    new_min_cdclk, intel_cdclk_bw_min_cdclk(cdclk_state));
-	*need_cdclk_calc = true;
+	ret = intel_cdclk_update_bw_min_cdclk(state,
+					      intel_bw_min_cdclk(display, old_bw_state),
+					      intel_bw_min_cdclk(display, new_bw_state),
+					      need_cdclk_calc);
+	if (ret)
+		return ret;
 
 	return 0;
 }
@@ -1527,11 +1490,11 @@ static int intel_bw_check_data_rate(struct intel_atomic_state *state, bool *chan
 
 static int intel_bw_modeset_checks(struct intel_atomic_state *state)
 {
-	struct intel_display *display = to_intel_display(state);
 	const struct intel_bw_state *old_bw_state;
 	struct intel_bw_state *new_bw_state;
+	int ret;
 
-	if (DISPLAY_VER(display) < 9)
+	if (!intel_any_crtc_active_changed(state))
 		return 0;
 
 	new_bw_state = intel_atomic_get_bw_state(state);
@@ -1543,13 +1506,9 @@ static int intel_bw_modeset_checks(struct intel_atomic_state *state)
 	new_bw_state->active_pipes =
 		intel_calc_active_pipes(state, old_bw_state->active_pipes);
 
-	if (new_bw_state->active_pipes != old_bw_state->active_pipes) {
-		int ret;
-
-		ret = intel_atomic_lock_global_state(&new_bw_state->base);
-		if (ret)
-			return ret;
-	}
+	ret = intel_atomic_lock_global_state(&new_bw_state->base);
+	if (ret)
+		return ret;
 
 	return 0;
 }
@@ -1599,7 +1558,7 @@ static int intel_bw_check_sagv_mask(struct intel_atomic_state *state)
 	return 0;
 }
 
-int intel_bw_atomic_check(struct intel_atomic_state *state, bool any_ms)
+int intel_bw_atomic_check(struct intel_atomic_state *state)
 {
 	struct intel_display *display = to_intel_display(state);
 	bool changed = false;
@@ -1610,11 +1569,9 @@ int intel_bw_atomic_check(struct intel_atomic_state *state, bool any_ms)
 	if (DISPLAY_VER(display) < 9)
 		return 0;
 
-	if (any_ms) {
-		ret = intel_bw_modeset_checks(state);
-		if (ret)
-			return ret;
-	}
+	ret = intel_bw_modeset_checks(state);
+	if (ret)
+		return ret;
 
 	ret = intel_bw_check_sagv_mask(state);
 	if (ret)

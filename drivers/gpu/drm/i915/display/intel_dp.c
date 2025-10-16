@@ -96,11 +96,6 @@
 #include "intel_vdsc.h"
 #include "intel_vrr.h"
 
-/* DP DSC throughput values used for slice count calculations KPixels/s */
-#define DP_DSC_PEAK_PIXEL_RATE			2720000
-#define DP_DSC_MAX_ENC_THROUGHPUT_0		340000
-#define DP_DSC_MAX_ENC_THROUGHPUT_1		400000
-
 /* Max DSC line buffer depth supported by HW. */
 #define INTEL_DP_DSC_MAX_LINE_BUF_DEPTH		13
 
@@ -1018,13 +1013,43 @@ u8 intel_dp_dsc_get_slice_count(const struct intel_connector *connector,
 	struct intel_display *display = to_intel_display(connector);
 	u8 min_slice_count, i;
 	int max_slice_width;
+	int tp_rgb_yuv444;
+	int tp_yuv422_420;
 
-	if (mode_clock <= DP_DSC_PEAK_PIXEL_RATE)
-		min_slice_count = DIV_ROUND_UP(mode_clock,
-					       DP_DSC_MAX_ENC_THROUGHPUT_0);
-	else
-		min_slice_count = DIV_ROUND_UP(mode_clock,
-					       DP_DSC_MAX_ENC_THROUGHPUT_1);
+	/*
+	 * TODO: Use the throughput value specific to the actual RGB/YUV
+	 * format of the output.
+	 * The RGB/YUV444 throughput value should be always either equal
+	 * or smaller than the YUV422/420 value, but let's not depend on
+	 * this assumption.
+	 */
+	if (mode_clock > max(connector->dp.dsc_branch_caps.overall_throughput.rgb_yuv444,
+			     connector->dp.dsc_branch_caps.overall_throughput.yuv422_420))
+		return 0;
+
+	if (mode_hdisplay > connector->dp.dsc_branch_caps.max_line_width)
+		return 0;
+
+	/*
+	 * TODO: Pass the total pixel rate of all the streams transferred to
+	 * an MST tiled display, calculate the total slice count for all tiles
+	 * from this and the per-tile slice count from the total slice count.
+	 */
+	tp_rgb_yuv444 = drm_dp_dsc_sink_max_slice_throughput(connector->dp.dsc_dpcd,
+							     mode_clock, true);
+	tp_yuv422_420 = drm_dp_dsc_sink_max_slice_throughput(connector->dp.dsc_dpcd,
+							     mode_clock, false);
+
+	/*
+	 * TODO: Use the throughput value specific to the actual RGB/YUV
+	 * format of the output.
+	 * For now use the smaller of these, which is ok, potentially
+	 * resulting in a higher than required minimum slice count.
+	 * The RGB/YUV444 throughput value should be always either equal
+	 * or smaller than the YUV422/420 value, but let's not depend on
+	 * this assumption.
+	 */
+	min_slice_count = DIV_ROUND_UP(mode_clock, min(tp_rgb_yuv444, tp_yuv422_420));
 
 	/*
 	 * Due to some DSC engine BW limitations, we need to enable second
@@ -2460,6 +2485,40 @@ int intel_dp_dsc_compute_config(struct intel_dp *intel_dp,
 	return 0;
 }
 
+static int
+dsc_throughput_quirk_max_bpp_x16(const struct intel_connector *connector,
+				 const struct intel_crtc_state *crtc_state)
+{
+	const struct drm_display_mode *adjusted_mode =
+		&crtc_state->hw.adjusted_mode;
+
+	if (!connector->dp.dsc_throughput_quirk)
+		return INT_MAX;
+
+	/*
+	 * Synaptics Panamera branch devices have a problem decompressing a
+	 * stream with a compressed link-bpp higher than 12, if the pixel
+	 * clock is higher than ~50 % of the maximum overall throughput
+	 * reported by the branch device. Work around this by limiting the
+	 * maximum link bpp for such pixel clocks.
+	 *
+	 * TODO: Use the throughput value specific to the actual RGB/YUV
+	 * format of the output, after determining the pixel clock limit for
+	 * YUV modes. For now use the smaller of the throughput values, which
+	 * may result in limiting the link-bpp value already at a lower than
+	 * required mode clock in case of native YUV422/420 output formats.
+	 * The RGB/YUV444 throughput value should be always either equal or
+	 * smaller than the YUV422/420 value, but let's not depend on this
+	 * assumption.
+	 */
+	if (adjusted_mode->crtc_clock <
+	    min(connector->dp.dsc_branch_caps.overall_throughput.rgb_yuv444,
+		connector->dp.dsc_branch_caps.overall_throughput.yuv422_420) / 2)
+		return INT_MAX;
+
+	return fxp_q4_from_int(12);
+}
+
 /*
  * Calculate the output link min, max bpp values in limits based on the pipe bpp
  * range, crtc_state and dsc mode. Return true on success.
@@ -2491,6 +2550,7 @@ intel_dp_compute_config_link_bpp_limits(struct intel_dp *intel_dp,
 	} else {
 		int dsc_src_min_bpp, dsc_sink_min_bpp, dsc_min_bpp;
 		int dsc_src_max_bpp, dsc_sink_max_bpp, dsc_max_bpp;
+		int throughput_max_bpp_x16;
 
 		dsc_src_min_bpp = intel_dp_dsc_min_src_compressed_bpp();
 		dsc_sink_min_bpp = intel_dp_dsc_sink_min_compressed_bpp(crtc_state);
@@ -2505,6 +2565,19 @@ intel_dp_compute_config_link_bpp_limits(struct intel_dp *intel_dp,
 			      min(dsc_sink_max_bpp, dsc_src_max_bpp) : dsc_src_max_bpp;
 
 		max_link_bpp_x16 = min(max_link_bpp_x16, fxp_q4_from_int(dsc_max_bpp));
+
+		throughput_max_bpp_x16 = dsc_throughput_quirk_max_bpp_x16(connector, crtc_state);
+		throughput_max_bpp_x16 = clamp(throughput_max_bpp_x16,
+					       limits->link.min_bpp_x16, max_link_bpp_x16);
+		if (throughput_max_bpp_x16 < max_link_bpp_x16) {
+			max_link_bpp_x16 = throughput_max_bpp_x16;
+
+			drm_dbg_kms(display->drm,
+				    "[CRTC:%d:%s][CONNECTOR:%d:%s] Decreasing link max bpp to " FXP_Q4_FMT " due to DSC throughput quirk\n",
+				    crtc->base.base.id, crtc->base.name,
+				    connector->base.base.id, connector->base.name,
+				    FXP_Q4_ARGS(max_link_bpp_x16));
+		}
 	}
 
 	limits->link.max_bpp_x16 = max_link_bpp_x16;
@@ -4169,7 +4242,36 @@ static void intel_dp_read_dsc_dpcd(struct drm_dp_aux *aux,
 		    dsc_dpcd);
 }
 
-void intel_dp_get_dsc_sink_cap(u8 dpcd_rev, struct intel_connector *connector)
+static void init_dsc_overall_throughput_limits(struct intel_connector *connector, bool is_branch)
+{
+	u8 branch_caps[DP_DSC_BRANCH_CAP_SIZE];
+	int line_width;
+
+	connector->dp.dsc_branch_caps.overall_throughput.rgb_yuv444 = INT_MAX;
+	connector->dp.dsc_branch_caps.overall_throughput.yuv422_420 = INT_MAX;
+	connector->dp.dsc_branch_caps.max_line_width = INT_MAX;
+
+	if (!is_branch)
+		return;
+
+	if (drm_dp_dpcd_read_data(connector->dp.dsc_decompression_aux,
+				  DP_DSC_BRANCH_OVERALL_THROUGHPUT_0, branch_caps,
+				  sizeof(branch_caps)) != 0)
+		return;
+
+	connector->dp.dsc_branch_caps.overall_throughput.rgb_yuv444 =
+		drm_dp_dsc_branch_max_overall_throughput(branch_caps, true) ? : INT_MAX;
+
+	connector->dp.dsc_branch_caps.overall_throughput.yuv422_420 =
+		drm_dp_dsc_branch_max_overall_throughput(branch_caps, false) ? : INT_MAX;
+
+	line_width = drm_dp_dsc_branch_max_line_width(branch_caps);
+	connector->dp.dsc_branch_caps.max_line_width = line_width > 0 ? line_width : INT_MAX;
+}
+
+void intel_dp_get_dsc_sink_cap(u8 dpcd_rev,
+			       const struct drm_dp_desc *desc, bool is_branch,
+			       struct intel_connector *connector)
 {
 	struct intel_display *display = to_intel_display(connector);
 
@@ -4181,6 +4283,9 @@ void intel_dp_get_dsc_sink_cap(u8 dpcd_rev, struct intel_connector *connector)
 
 	/* Clear fec_capable to avoid using stale values */
 	connector->dp.fec_capability = 0;
+
+	memset(&connector->dp.dsc_branch_caps, 0, sizeof(connector->dp.dsc_branch_caps));
+	connector->dp.dsc_throughput_quirk = false;
 
 	if (dpcd_rev < DP_DPCD_REV_14)
 		return;
@@ -4196,6 +4301,19 @@ void intel_dp_get_dsc_sink_cap(u8 dpcd_rev, struct intel_connector *connector)
 
 	drm_dbg_kms(display->drm, "FEC CAPABILITY: %x\n",
 		    connector->dp.fec_capability);
+
+	if (!(connector->dp.dsc_dpcd[0] & DP_DSC_DECOMPRESSION_IS_SUPPORTED))
+		return;
+
+	init_dsc_overall_throughput_limits(connector, is_branch);
+
+	/*
+	 * TODO: Move the HW rev check as well to the DRM core quirk table if
+	 * that's required after clarifying the list of affected devices.
+	 */
+	if (drm_dp_has_quirk(desc, DP_DPCD_QUIRK_DSC_THROUGHPUT_BPP_LIMIT) &&
+	    desc->ident.hw_rev == 0x10)
+		connector->dp.dsc_throughput_quirk = true;
 }
 
 static void intel_edp_get_dsc_sink_cap(u8 edp_dpcd_rev, struct intel_connector *connector)
@@ -4204,6 +4322,9 @@ static void intel_edp_get_dsc_sink_cap(u8 edp_dpcd_rev, struct intel_connector *
 		return;
 
 	intel_dp_read_dsc_dpcd(connector->dp.dsc_decompression_aux, connector->dp.dsc_dpcd);
+
+	if (connector->dp.dsc_dpcd[0] & DP_DSC_DECOMPRESSION_IS_SUPPORTED)
+		init_dsc_overall_throughput_limits(connector, false);
 }
 
 static void
@@ -4220,6 +4341,7 @@ intel_dp_detect_dsc_caps(struct intel_dp *intel_dp, struct intel_connector *conn
 					   connector);
 	else
 		intel_dp_get_dsc_sink_cap(intel_dp->dpcd[DP_DPCD_REV],
+					  &intel_dp->desc, drm_dp_is_branch(intel_dp->dpcd),
 					  connector);
 }
 
@@ -5553,7 +5675,7 @@ intel_dp_short_pulse(struct intel_dp *intel_dp)
 
 	if (intel_alpm_get_error(intel_dp)) {
 		intel_alpm_disable(intel_dp);
-		intel_dp->alpm_parameters.sink_alpm_error = true;
+		intel_dp->alpm.sink_alpm_error = true;
 	}
 
 	if (intel_dp_test_short_pulse(intel_dp))

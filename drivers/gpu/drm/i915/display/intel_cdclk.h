@@ -38,16 +38,17 @@ void intel_set_cdclk_post_plane_update(struct intel_atomic_state *state);
 void intel_cdclk_dump_config(struct intel_display *display,
 			     const struct intel_cdclk_config *cdclk_config,
 			     const char *context);
-int intel_modeset_calc_cdclk(struct intel_atomic_state *state);
 void intel_cdclk_get_cdclk(struct intel_display *display,
 			   struct intel_cdclk_config *cdclk_config);
-int intel_cdclk_atomic_check(struct intel_atomic_state *state,
-			     bool *need_cdclk_calc);
+int intel_cdclk_atomic_check(struct intel_atomic_state *state);
 int intel_cdclk_state_set_joined_mbus(struct intel_atomic_state *state, bool joined_mbus);
 struct intel_cdclk_state *
 intel_atomic_get_cdclk_state(struct intel_atomic_state *state);
 void intel_cdclk_update_hw_state(struct intel_display *display);
 void intel_cdclk_crtc_disable_noatomic(struct intel_crtc *crtc);
+int intel_cdclk_update_bw_min_cdclk(struct intel_atomic_state *state,
+				    int old_min_cdclk, int new_min_cdclk,
+				    bool *need_cdclk_calc);
 
 #define to_intel_cdclk_state(global_state) \
 	container_of_const((global_state), struct intel_cdclk_state, base)
