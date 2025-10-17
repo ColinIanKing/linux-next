@@ -1467,6 +1467,7 @@ int gfs2_glock_nq(struct gfs2_holder *gh)
 	if (gfs2_withdrawn(sdp))
 		return -EIO;
 
+	gh->gh_error = 0;
 	if (gh->gh_flags & GL_NOBLOCK) {
 		struct gfs2_holder *current_gh;
 
@@ -1486,7 +1487,6 @@ unlock:
 		return error;
 	}
 
-	gh->gh_error = 0;
 	spin_lock(&gl->gl_lockref.lock);
 	add_to_queue(gh);
 	if (unlikely((LM_FLAG_RECOVER & gh->gh_flags) &&
