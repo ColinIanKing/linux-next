@@ -911,7 +911,7 @@ int register_node(int nid)
  * unregister_node - unregister a node device
  * @nid: nid of the node going away
  *
- * Unregisters the node device at node id  @nid.  All the devices on the
+ * Unregisters the node device at node id @nid. All the devices on the
  * node must be unregistered before calling this function.
  */
 void unregister_node(int nid)
