@@ -158,6 +158,7 @@ struct ideapad_rfk_priv {
 struct ideapad_private {
 	struct acpi_device *adev;
 	struct mutex vpc_mutex; /* protects the VPC calls */
+	struct mutex gbmd_sbmc_mutex; /* protects GBMD/SBMC calls */
 	struct rfkill *rfk[IDEAPAD_RFKILL_DEV_NUM];
 	struct ideapad_rfk_priv rfk_priv[IDEAPAD_RFKILL_DEV_NUM];
 	struct platform_device *platform_device;
@@ -455,37 +456,40 @@ static int debugfs_status_show(struct seq_file *s, void *data)
 	struct ideapad_private *priv = s->private;
 	unsigned long value;
 
-	guard(mutex)(&priv->vpc_mutex);
+	scoped_guard(mutex, &priv->vpc_mutex) {
+		if (!read_ec_data(priv->adev->handle, VPCCMD_R_BL_MAX, &value))
+			seq_printf(s, "Backlight max:  %lu\n", value);
+		if (!read_ec_data(priv->adev->handle, VPCCMD_R_BL, &value))
+			seq_printf(s, "Backlight now:  %lu\n", value);
+		if (!read_ec_data(priv->adev->handle, VPCCMD_R_BL_POWER, &value))
+			seq_printf(s, "BL power value: %s (%lu)\n", value ? "on" : "off", value);
 
-	if (!read_ec_data(priv->adev->handle, VPCCMD_R_BL_MAX, &value))
-		seq_printf(s, "Backlight max:  %lu\n", value);
-	if (!read_ec_data(priv->adev->handle, VPCCMD_R_BL, &value))
-		seq_printf(s, "Backlight now:  %lu\n", value);
-	if (!read_ec_data(priv->adev->handle, VPCCMD_R_BL_POWER, &value))
-		seq_printf(s, "BL power value: %s (%lu)\n", value ? "on" : "off", value);
+		seq_puts(s, "=====================\n");
+
+		if (!read_ec_data(priv->adev->handle, VPCCMD_R_RF, &value))
+			seq_printf(s, "Radio status: %s (%lu)\n", value ? "on" : "off", value);
+		if (!read_ec_data(priv->adev->handle, VPCCMD_R_WIFI, &value))
+			seq_printf(s, "Wifi status:  %s (%lu)\n", value ? "on" : "off", value);
+		if (!read_ec_data(priv->adev->handle, VPCCMD_R_BT, &value))
+			seq_printf(s, "BT status:    %s (%lu)\n", value ? "on" : "off", value);
+		if (!read_ec_data(priv->adev->handle, VPCCMD_R_3G, &value))
+			seq_printf(s, "3G status:    %s (%lu)\n", value ? "on" : "off", value);
+
+		seq_puts(s, "=====================\n");
+
+		if (!read_ec_data(priv->adev->handle, VPCCMD_R_TOUCHPAD, &value))
+			seq_printf(s, "Touchpad status: %s (%lu)\n", value ? "on" : "off", value);
+		if (!read_ec_data(priv->adev->handle, VPCCMD_R_CAMERA, &value))
+			seq_printf(s, "Camera status:   %s (%lu)\n", value ? "on" : "off", value);
+	}
 
 	seq_puts(s, "=====================\n");
 
-	if (!read_ec_data(priv->adev->handle, VPCCMD_R_RF, &value))
-		seq_printf(s, "Radio status: %s (%lu)\n", value ? "on" : "off", value);
-	if (!read_ec_data(priv->adev->handle, VPCCMD_R_WIFI, &value))
-		seq_printf(s, "Wifi status:  %s (%lu)\n", value ? "on" : "off", value);
-	if (!read_ec_data(priv->adev->handle, VPCCMD_R_BT, &value))
-		seq_printf(s, "BT status:    %s (%lu)\n", value ? "on" : "off", value);
-	if (!read_ec_data(priv->adev->handle, VPCCMD_R_3G, &value))
-		seq_printf(s, "3G status:    %s (%lu)\n", value ? "on" : "off", value);
+	scoped_guard(mutex, &priv->gbmd_sbmc_mutex) {
+		if (!eval_gbmd(priv->adev->handle, &value))
+			seq_printf(s, "GBMD: %#010lx\n", value);
+	}
 
-	seq_puts(s, "=====================\n");
-
-	if (!read_ec_data(priv->adev->handle, VPCCMD_R_TOUCHPAD, &value))
-		seq_printf(s, "Touchpad status: %s (%lu)\n", value ? "on" : "off", value);
-	if (!read_ec_data(priv->adev->handle, VPCCMD_R_CAMERA, &value))
-		seq_printf(s, "Camera status:   %s (%lu)\n", value ? "on" : "off", value);
-
-	seq_puts(s, "=====================\n");
-
-	if (!eval_gbmd(priv->adev->handle, &value))
-		seq_printf(s, "GBMD: %#010lx\n", value);
 	if (!eval_hals(priv->adev->handle, &value))
 		seq_printf(s, "HALS: %#010lx\n", value);
 
@@ -622,9 +626,11 @@ static ssize_t conservation_mode_show(struct device *dev,
 
 	show_conservation_mode_deprecation_warning(dev);
 
-	err = eval_gbmd(priv->adev->handle, &result);
-	if (err)
-		return err;
+	scoped_guard(mutex, &priv->gbmd_sbmc_mutex) {
+		err = eval_gbmd(priv->adev->handle, &result);
+		if (err)
+			return err;
+	}
 
 	return sysfs_emit(buf, "%d\n", !!test_bit(GBMD_CONSERVATION_STATE_BIT, &result));
 }
@@ -642,6 +648,8 @@ static ssize_t conservation_mode_store(struct device *dev,
 	err = kstrtobool(buf, &state);
 	if (err)
 		return err;
+
+	guard(mutex)(&priv->gbmd_sbmc_mutex);
 
 	err = exec_sbmc(priv->adev->handle, state ? SBMC_CONSERVATION_ON : SBMC_CONSERVATION_OFF);
 	if (err)
@@ -2007,15 +2015,22 @@ static int ideapad_psy_ext_set_prop(struct power_supply *psy,
 				    const union power_supply_propval *val)
 {
 	struct ideapad_private *priv = ext_data;
+	unsigned long op;
 
 	switch (val->intval) {
 	case POWER_SUPPLY_CHARGE_TYPE_LONGLIFE:
-		return exec_sbmc(priv->adev->handle, SBMC_CONSERVATION_ON);
+		op = SBMC_CONSERVATION_ON;
+		break;
 	case POWER_SUPPLY_CHARGE_TYPE_STANDARD:
-		return exec_sbmc(priv->adev->handle, SBMC_CONSERVATION_OFF);
+		op = SBMC_CONSERVATION_OFF;
+		break;
 	default:
 		return -EINVAL;
 	}
+
+	guard(mutex)(&priv->gbmd_sbmc_mutex);
+
+	return exec_sbmc(priv->adev->handle, op);
 }
 
 static int ideapad_psy_ext_get_prop(struct power_supply *psy,
@@ -2028,9 +2043,11 @@ static int ideapad_psy_ext_get_prop(struct power_supply *psy,
 	unsigned long result;
 	int err;
 
-	err = eval_gbmd(priv->adev->handle, &result);
-	if (err)
-		return err;
+	scoped_guard(mutex, &priv->gbmd_sbmc_mutex) {
+		err = eval_gbmd(priv->adev->handle, &result);
+		if (err)
+			return err;
+	}
 
 	if (test_bit(GBMD_CONSERVATION_STATE_BIT, &result))
 		val->intval = POWER_SUPPLY_CHARGE_TYPE_LONGLIFE;
@@ -2289,6 +2306,10 @@ static int ideapad_acpi_add(struct platform_device *pdev)
 	priv->platform_device = pdev;
 
 	err = devm_mutex_init(&pdev->dev, &priv->vpc_mutex);
+	if (err)
+		return err;
+
+	err = devm_mutex_init(&pdev->dev, &priv->gbmd_sbmc_mutex);
 	if (err)
 		return err;
 
