@@ -782,13 +782,14 @@ static int fold_diff(int *zone_diff, int *node_diff)
 		if (zone_diff[i]) {
 			atomic_long_add(zone_diff[i], &vm_zone_stat[i]);
 			changed = true;
-	}
+		}
 
 	for (i = 0; i < NR_VM_NODE_STAT_ITEMS; i++)
 		if (node_diff[i]) {
 			atomic_long_add(node_diff[i], &vm_node_stat[i]);
 			changed = true;
-	}
+		}
+
 	return changed;
 }
 
