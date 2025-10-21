@@ -517,18 +517,22 @@ bool btrfs_can_overcommit(const struct btrfs_space_info *space_info, u64 bytes,
 static void remove_ticket(struct btrfs_space_info *space_info,
 			  struct reserve_ticket *ticket, int error)
 {
+	lockdep_assert_held(&space_info->lock);
+
 	if (!list_empty(&ticket->list)) {
 		list_del_init(&ticket->list);
 		ASSERT(space_info->reclaim_size >= ticket->bytes);
 		space_info->reclaim_size -= ticket->bytes;
 	}
 
+	spin_lock(&ticket->lock);
 	if (error)
 		ticket->error = error;
 	else
 		ticket->bytes = 0;
 
 	wake_up(&ticket->wait);
+	spin_unlock(&ticket->lock);
 }
 
 /*
@@ -1495,6 +1499,17 @@ static const enum btrfs_flush_state evict_flush_states[] = {
 	RESET_ZONES,
 };
 
+static bool is_ticket_served(struct reserve_ticket *ticket)
+{
+	bool ret;
+
+	spin_lock(&ticket->lock);
+	ret = (ticket->bytes == 0);
+	spin_unlock(&ticket->lock);
+
+	return ret;
+}
+
 static void priority_reclaim_metadata_space(struct btrfs_space_info *space_info,
 					    struct reserve_ticket *ticket,
 					    const enum btrfs_flush_state *states,
@@ -1504,29 +1519,25 @@ static void priority_reclaim_metadata_space(struct btrfs_space_info *space_info,
 	u64 to_reclaim;
 	int flush_state = 0;
 
-	spin_lock(&space_info->lock);
 	/*
 	 * This is the priority reclaim path, so to_reclaim could be >0 still
 	 * because we may have only satisfied the priority tickets and still
 	 * left non priority tickets on the list.  We would then have
 	 * to_reclaim but ->bytes == 0.
 	 */
-	if (ticket->bytes == 0) {
-		spin_unlock(&space_info->lock);
+	if (is_ticket_served(ticket))
 		return;
-	}
 
+	spin_lock(&space_info->lock);
 	to_reclaim = btrfs_calc_reclaim_metadata_size(space_info);
 
 	while (flush_state < states_nr) {
 		spin_unlock(&space_info->lock);
 		flush_space(space_info, to_reclaim, states[flush_state], false);
+		if (is_ticket_served(ticket))
+			return;
 		flush_state++;
 		spin_lock(&space_info->lock);
-		if (ticket->bytes == 0) {
-			spin_unlock(&space_info->lock);
-			return;
-		}
 	}
 
 	/*
@@ -1554,22 +1565,17 @@ static void priority_reclaim_metadata_space(struct btrfs_space_info *space_info,
 static void priority_reclaim_data_space(struct btrfs_space_info *space_info,
 					struct reserve_ticket *ticket)
 {
-	spin_lock(&space_info->lock);
-
 	/* We could have been granted before we got here. */
-	if (ticket->bytes == 0) {
-		spin_unlock(&space_info->lock);
+	if (is_ticket_served(ticket))
 		return;
-	}
 
+	spin_lock(&space_info->lock);
 	while (!space_info->full) {
 		spin_unlock(&space_info->lock);
 		flush_space(space_info, U64_MAX, ALLOC_CHUNK_FORCE, false);
-		spin_lock(&space_info->lock);
-		if (ticket->bytes == 0) {
-			spin_unlock(&space_info->lock);
+		if (is_ticket_served(ticket))
 			return;
-		}
+		spin_lock(&space_info->lock);
 	}
 
 	remove_ticket(space_info, ticket, -ENOSPC);
@@ -1582,11 +1588,13 @@ static void wait_reserve_ticket(struct btrfs_space_info *space_info,
 
 {
 	DEFINE_WAIT(wait);
-	int ret = 0;
 
-	spin_lock(&space_info->lock);
+	spin_lock(&ticket->lock);
 	while (ticket->bytes > 0 && ticket->error == 0) {
+		int ret;
+
 		ret = prepare_to_wait_event(&ticket->wait, &wait, TASK_KILLABLE);
+		spin_unlock(&ticket->lock);
 		if (ret) {
 			/*
 			 * Delete us from the list. After we unlock the space
@@ -1596,17 +1604,18 @@ static void wait_reserve_ticket(struct btrfs_space_info *space_info,
 			 * despite getting an error, resulting in a space leak
 			 * (bytes_may_use counter of our space_info).
 			 */
+			spin_lock(&space_info->lock);
 			remove_ticket(space_info, ticket, -EINTR);
-			break;
+			spin_unlock(&space_info->lock);
+			return;
 		}
-		spin_unlock(&space_info->lock);
 
 		schedule();
 
 		finish_wait(&ticket->wait, &wait);
-		spin_lock(&space_info->lock);
+		spin_lock(&ticket->lock);
 	}
-	spin_unlock(&space_info->lock);
+	spin_unlock(&ticket->lock);
 }
 
 /*
@@ -1804,6 +1813,7 @@ static int reserve_bytes(struct btrfs_space_info *space_info, u64 orig_bytes,
 		ticket.error = 0;
 		space_info->reclaim_size += ticket.bytes;
 		init_waitqueue_head(&ticket.wait);
+		spin_lock_init(&ticket.lock);
 		ticket.steal = can_steal(flush);
 		if (trace_btrfs_reserve_ticket_enabled())
 			start_ns = ktime_get_ns();
