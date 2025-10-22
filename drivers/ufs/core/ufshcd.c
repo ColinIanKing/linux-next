@@ -2619,7 +2619,7 @@ __ufshcd_send_uic_cmd(struct ufs_hba *hba, struct uic_command *uic_cmd)
 
 	init_completion(&uic_cmd->done);
 
-	uic_cmd->cmd_active = 1;
+	uic_cmd->cmd_active = true;
 	ufshcd_dispatch_uic_cmd(hba, uic_cmd);
 
 	return 0;
@@ -5132,12 +5132,8 @@ link_startup:
 	ufshcd_readl(hba, REG_UIC_ERROR_CODE_PHY_ADAPTER_LAYER);
 	ret = ufshcd_make_hba_operational(hba);
 out:
-	if (ret) {
+	if (ret)
 		dev_err(hba->dev, "link startup failed %d\n", ret);
-		ufshcd_print_host_state(hba);
-		ufshcd_print_pwr_info(hba);
-		ufshcd_print_evt_hist(hba);
-	}
 	return ret;
 }
 
@@ -5582,7 +5578,7 @@ static irqreturn_t ufshcd_uic_cmd_compl(struct ufs_hba *hba, u32 intr_status)
 	guard(spinlock_irqsave)(hba->host->host_lock);
 	cmd = hba->active_uic_cmd;
 	if (!cmd)
-		goto unlock;
+		return retval;
 
 	if (ufshcd_is_auto_hibern8_error(hba, intr_status))
 		hba->errors |= (UFSHCD_UIC_HIBERN8_MASK & intr_status);
@@ -5591,13 +5587,13 @@ static irqreturn_t ufshcd_uic_cmd_compl(struct ufs_hba *hba, u32 intr_status)
 		cmd->argument2 |= ufshcd_get_uic_cmd_result(hba);
 		cmd->argument3 = ufshcd_get_dme_attr_val(hba);
 		if (!hba->uic_async_done)
-			cmd->cmd_active = 0;
+			cmd->cmd_active = false;
 		complete(&cmd->done);
 		retval = IRQ_HANDLED;
 	}
 
 	if (intr_status & UFSHCD_UIC_PWR_MASK && hba->uic_async_done) {
-		cmd->cmd_active = 0;
+		cmd->cmd_active = false;
 		complete(hba->uic_async_done);
 		retval = IRQ_HANDLED;
 	}
@@ -5605,7 +5601,6 @@ static irqreturn_t ufshcd_uic_cmd_compl(struct ufs_hba *hba, u32 intr_status)
 	if (retval == IRQ_HANDLED)
 		ufshcd_add_uic_command_trace(hba, cmd, UFS_CMD_COMP);
 
-unlock:
 	return retval;
 }
 
@@ -10896,8 +10891,8 @@ initialized:
 	if (err)
 		goto out_disable;
 
-	async_schedule(ufshcd_async_scan, hba);
 	ufs_sysfs_add_nodes(hba->dev);
+	async_schedule(ufshcd_async_scan, hba);
 
 	device_enable_async_suspend(dev);
 	ufshcd_pm_qos_init(hba);
