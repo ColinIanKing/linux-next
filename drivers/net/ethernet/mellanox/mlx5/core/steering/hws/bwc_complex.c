@@ -1070,7 +1070,7 @@ hws_bwc_rule_complex_hash_node_get(struct mlx5hws_bwc_rule *bwc_rule,
 	struct mlx5hws_bwc_matcher *bwc_matcher = bwc_rule->bwc_matcher;
 	struct mlx5hws_bwc_complex_rule_hash_node *node, *old_node;
 	struct rhashtable *refcount_hash;
-	int i;
+	int ret, i;
 
 	bwc_rule->complex_hash_node = NULL;
 
@@ -1078,7 +1078,11 @@ hws_bwc_rule_complex_hash_node_get(struct mlx5hws_bwc_rule *bwc_rule,
 	if (unlikely(!node))
 		return -ENOMEM;
 
-	node->tag = ida_alloc(&bwc_matcher->complex->metadata_ida, GFP_KERNEL);
+	ret = ida_alloc(&bwc_matcher->complex->metadata_ida, GFP_KERNEL);
+	if (ret < 0)
+		goto err_free_node;
+	node->tag = ret;
+
 	refcount_set(&node->refcount, 1);
 
 	/* Clear match buffer - turn off all the unrelated fields
@@ -1094,6 +1098,11 @@ hws_bwc_rule_complex_hash_node_get(struct mlx5hws_bwc_rule *bwc_rule,
 	old_node = rhashtable_lookup_get_insert_fast(refcount_hash,
 						     &node->hash_node,
 						     hws_refcount_hash);
+	if (IS_ERR(old_node)) {
+		ret = PTR_ERR(old_node);
+		goto err_free_ida;
+	}
+
 	if (old_node) {
 		/* Rule with the same tag already exists - update refcount */
 		refcount_inc(&old_node->refcount);
@@ -1112,6 +1121,12 @@ hws_bwc_rule_complex_hash_node_get(struct mlx5hws_bwc_rule *bwc_rule,
 
 	bwc_rule->complex_hash_node = node;
 	return 0;
+
+err_free_ida:
+	ida_free(&bwc_matcher->complex->metadata_ida, node->tag);
+err_free_node:
+	kfree(node);
+	return ret;
 }
 
 static void
@@ -1313,11 +1328,11 @@ mlx5hws_bwc_matcher_move_all_complex(struct mlx5hws_bwc_matcher *bwc_matcher)
 {
 	struct mlx5hws_context *ctx = bwc_matcher->matcher->tbl->ctx;
 	struct mlx5hws_matcher *matcher = bwc_matcher->matcher;
-	bool move_error = false, poll_error = false;
 	u16 bwc_queues = mlx5hws_bwc_queues(ctx);
 	struct mlx5hws_bwc_rule *tmp_bwc_rule;
 	struct mlx5hws_rule_attr rule_attr;
 	struct mlx5hws_table *isolated_tbl;
+	int move_error = 0, poll_error = 0;
 	struct mlx5hws_rule *tmp_rule;
 	struct list_head *rules_list;
 	u32 expected_completions = 1;
@@ -1376,11 +1391,15 @@ mlx5hws_bwc_matcher_move_all_complex(struct mlx5hws_bwc_matcher *bwc_matcher)
 			ret = mlx5hws_matcher_resize_rule_move(matcher,
 							       tmp_rule,
 							       &rule_attr);
-			if (unlikely(ret && !move_error)) {
-				mlx5hws_err(ctx,
-					    "Moving complex BWC rule failed (%d), attempting to move rest of the rules\n",
-					    ret);
-				move_error = true;
+			if (unlikely(ret)) {
+				if (!move_error) {
+					mlx5hws_err(ctx,
+						    "Moving complex BWC rule: move failed (%d), attempting to move rest of the rules\n",
+						    ret);
+					move_error = ret;
+				}
+				/* Rule wasn't queued, no need to poll */
+				continue;
 			}
 
 			expected_completions = 1;
@@ -1388,11 +1407,19 @@ mlx5hws_bwc_matcher_move_all_complex(struct mlx5hws_bwc_matcher *bwc_matcher)
 						     rule_attr.queue_id,
 						     &expected_completions,
 						     true);
-			if (unlikely(ret && !poll_error)) {
-				mlx5hws_err(ctx,
-					    "Moving complex BWC rule: poll failed (%d), attempting to move rest of the rules\n",
-					    ret);
-				poll_error = true;
+			if (unlikely(ret)) {
+				if (ret == -ETIMEDOUT) {
+					mlx5hws_err(ctx,
+						    "Moving complex BWC rule: timeout polling for completions (%d), aborting rehash\n",
+						    ret);
+					return ret;
+				}
+				if (!poll_error) {
+					mlx5hws_err(ctx,
+						    "Moving complex BWC rule: polling for completions failed (%d), attempting to move rest of the rules\n",
+						    ret);
+					poll_error = ret;
+				}
 			}
 
 			/* Done moving the rule to the new matcher,
@@ -1407,8 +1434,11 @@ mlx5hws_bwc_matcher_move_all_complex(struct mlx5hws_bwc_matcher *bwc_matcher)
 		}
 	}
 
-	if (move_error || poll_error)
-		ret = -EINVAL;
+	/* Return the first error that happened */
+	if (unlikely(move_error))
+		return move_error;
+	if (unlikely(poll_error))
+		return poll_error;
 
 	return ret;
 }
