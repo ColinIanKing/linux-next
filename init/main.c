@@ -944,7 +944,7 @@ static void __init early_numa_node_init(void)
  *   Kernel command line: jumps over the \
  *   Kernel command line: lazy dog."
  */
-static void print_kernel_cmdline(const char *cmdline)
+static void __init print_kernel_cmdline(const char *cmdline)
 {
 	size_t len;
 
