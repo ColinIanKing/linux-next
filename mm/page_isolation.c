@@ -176,10 +176,16 @@ static int set_migratetype_isolate(struct page *page, enum pb_isolate_mode mode,
 
 	/*
 	 * FIXME: Now, memory hotplug doesn't call shrink_slab() by itself.
-	 * We just check MOVABLE pages.
+	 *
+	 * This is an intentional limitation: invoking shrink_slab() from a
+	 * hotplug path can cause reclaim recursion or deadlock if the normal
+	 * memory reclaim (vmscan) path is already active. Slab shrinking is
+	 * handled by the vmscan reclaim code under normal operation, so hotplug
+	 * avoids direct calls into shrink_slab() to prevent reentrancy issues.
+	 *
+	 * We therefore only check MOVABLE pages here.
 	 *
 	 * Pass the intersection of [start_pfn, end_pfn) and the page's pageblock
-	 * to avoid redundant checks.
 	 */
 	check_unmovable_start = max(page_to_pfn(page), start_pfn);
 	check_unmovable_end = min(pageblock_end_pfn(page_to_pfn(page)),
