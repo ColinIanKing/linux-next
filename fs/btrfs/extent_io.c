@@ -374,8 +374,7 @@ noinline_for_stack bool find_lock_delalloc_range(struct inode *inode,
 	struct extent_io_tree *tree = &BTRFS_I(inode)->io_tree;
 	const u64 orig_start = *start;
 	const u64 orig_end = *end;
-	/* The sanity tests may not set a valid fs_info. */
-	u64 max_bytes = fs_info ? fs_info->max_extent_size : BTRFS_MAX_EXTENT_SIZE;
+	u64 max_bytes = fs_info->max_extent_size;
 	u64 delalloc_start;
 	u64 delalloc_end;
 	bool found;
@@ -1691,14 +1690,17 @@ static noinline_for_stack int extent_writepage_io(struct btrfs_inode *inode,
 	unsigned long range_bitmap = 0;
 	bool submitted_io = false;
 	int found_error = 0;
+	const u64 end = start + len;
 	const u64 folio_start = folio_pos(folio);
+	const u64 folio_end = folio_start + folio_size(folio);
 	const unsigned int blocks_per_folio = btrfs_blocks_per_folio(fs_info, folio);
 	u64 cur;
 	int bit;
 	int ret = 0;
 
-	ASSERT(start >= folio_start &&
-	       start + len <= folio_start + folio_size(folio));
+	ASSERT(start >= folio_start, "start=%llu folio_start=%llu", start, folio_start);
+	ASSERT(end <= folio_end, "start=%llu len=%u folio_start=%llu folio_size=%zu",
+	       start, len, folio_start, folio_size(folio));
 
 	ret = btrfs_writepage_cow_fixup(folio);
 	if (ret == -EAGAIN) {
@@ -1714,7 +1716,7 @@ static noinline_for_stack int extent_writepage_io(struct btrfs_inode *inode,
 		return ret;
 	}
 
-	for (cur = start; cur < start + len; cur += fs_info->sectorsize)
+	for (cur = start; cur < end; cur += fs_info->sectorsize)
 		set_bit((cur - folio_start) >> fs_info->sectorsize_bits, &range_bitmap);
 	bitmap_and(&bio_ctrl->submit_bitmap, &bio_ctrl->submit_bitmap, &range_bitmap,
 		   blocks_per_folio);
@@ -1725,8 +1727,25 @@ static noinline_for_stack int extent_writepage_io(struct btrfs_inode *inode,
 		cur = folio_pos(folio) + (bit << fs_info->sectorsize_bits);
 
 		if (cur >= i_size) {
+			struct btrfs_ordered_extent *ordered;
+			unsigned long flags;
+
+			ordered = btrfs_lookup_first_ordered_range(inode, cur,
+								   folio_end - cur);
+			/*
+			 * We have just run delalloc before getting here, so
+			 * there must be an ordered extent.
+			 */
+			ASSERT(ordered != NULL);
+			spin_lock_irqsave(&inode->ordered_tree_lock, flags);
+			set_bit(BTRFS_ORDERED_TRUNCATED, &ordered->flags);
+			ordered->truncated_len = min(ordered->truncated_len,
+						     cur - ordered->file_offset);
+			spin_unlock_irqrestore(&inode->ordered_tree_lock, flags);
+			btrfs_put_ordered_extent(ordered);
+
 			btrfs_mark_ordered_io_finished(inode, folio, cur,
-						       start + len - cur, true);
+						       end - cur, true);
 			/*
 			 * This range is beyond i_size, thus we don't need to
 			 * bother writing back.
@@ -1735,8 +1754,7 @@ static noinline_for_stack int extent_writepage_io(struct btrfs_inode *inode,
 			 * writeback the sectors with subpage dirty bits,
 			 * causing writeback without ordered extent.
 			 */
-			btrfs_folio_clear_dirty(fs_info, folio, cur,
-						start + len - cur);
+			btrfs_folio_clear_dirty(fs_info, folio, cur, end - cur);
 			break;
 		}
 		ret = submit_one_sector(inode, folio, cur, bio_ctrl, i_size);
@@ -1856,7 +1874,7 @@ static int extent_writepage(struct folio *folio, struct btrfs_bio_ctrl *bio_ctrl
 				  folio_size(folio), bio_ctrl, i_size);
 	if (ret == 1)
 		return 0;
-	if (ret < 0)
+	if (unlikely(ret < 0))
 		btrfs_err_rl(fs_info,
 "failed to submit blocks, root=%lld inode=%llu folio=%llu submit_bitmap=%*pbl: %d",
 			     btrfs_root_id(inode->root), btrfs_ino(inode),
