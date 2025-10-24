@@ -36,6 +36,7 @@ the Linux kernel.
    kprobes
    kprobetrace
    fprobetrace
+   wprobetrace
    eprobetrace
    fprobe
    ring-buffer-design
