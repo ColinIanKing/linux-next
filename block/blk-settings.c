@@ -184,6 +184,16 @@ static int blk_validate_integrity_limits(struct queue_limits *lim)
 	if (!bi->interval_exp)
 		bi->interval_exp = ilog2(lim->logical_block_size);
 
+	/*
+	 * The PI generation / validation helpers do not expect intervals to
+	 * straddle multiple bio_vecs.  Enforce alignment so that those are
+	 * never generated, and that each buffer is aligned as expected.
+	 */
+	if (bi->csum_type) {
+		lim->dma_alignment = max(lim->dma_alignment,
+					(1U << bi->interval_exp) - 1);
+	}
+
 	return 0;
 }
 
@@ -457,12 +467,12 @@ int blk_validate_limits(struct queue_limits *lim)
 			return -EINVAL;
 	}
 
-	/* setup min segment size for building new segment in fast path */
+	/* setup max segment size for building new segment in fast path */
 	if (lim->seg_boundary_mask > lim->max_segment_size - 1)
 		seg_size = lim->max_segment_size;
 	else
 		seg_size = lim->seg_boundary_mask + 1;
-	lim->min_segment_size = min_t(unsigned int, seg_size, PAGE_SIZE);
+	lim->max_fast_segment_size = min_t(unsigned int, seg_size, PAGE_SIZE);
 
 	/*
 	 * We require drivers to at least do logical block aligned I/O, but
