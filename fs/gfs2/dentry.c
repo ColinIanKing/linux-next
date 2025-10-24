@@ -41,11 +41,11 @@ static int gfs2_drevalidate(struct inode *dir, const struct qstr *name,
 	struct gfs2_holder d_gh;
 	struct gfs2_inode *ip = NULL;
 	int error, valid;
-	int had_lock = 0;
 
 	if (flags & LOOKUP_RCU)
 		return -ECHILD;
 
+	gfs2_holder_mark_uninitialized(&d_gh);
 	inode = d_inode(dentry);
 
 	if (inode) {
@@ -57,8 +57,7 @@ static int gfs2_drevalidate(struct inode *dir, const struct qstr *name,
 	if (sdp->sd_lockstruct.ls_ops->lm_mount == NULL)
 		return 1;
 
-	had_lock = (gfs2_glock_is_locked_by_me(dip->i_gl) != NULL);
-	if (!had_lock) {
+	if (gfs2_glock_is_locked_by_me(dip->i_gl) == NULL) {
 		error = gfs2_glock_nq_init(dip->i_gl, LM_ST_SHARED, 0, &d_gh);
 		if (error)
 			return 0;
@@ -67,7 +66,7 @@ static int gfs2_drevalidate(struct inode *dir, const struct qstr *name,
 	error = gfs2_dir_check(dir, name, ip);
 	valid = inode ? !error : (error == -ENOENT);
 
-	if (!had_lock)
+	if (gfs2_holder_initialized(&d_gh))
 		gfs2_glock_dq_uninit(&d_gh);
 	return valid;
 }

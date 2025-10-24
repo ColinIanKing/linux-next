@@ -164,8 +164,8 @@ search_again:
 		if (unlikely(num_refs == 0)) {
 			ret = -EUCLEAN;
 			btrfs_err(fs_info,
-		"unexpected zero reference count for extent item (%llu %u %llu)",
-				  key.objectid, key.type, key.offset);
+		"unexpected zero reference count for extent item " BTRFS_KEY_FMT,
+				  BTRFS_KEY_FMT_VALUE(&key));
 			btrfs_abort_transaction(trans, ret);
 			return ret;
 		}
@@ -597,8 +597,8 @@ static noinline int remove_extent_data_ref(struct btrfs_trans_handle *trans,
 		num_refs = btrfs_shared_data_ref_count(leaf, ref2);
 	} else {
 		btrfs_err(trans->fs_info,
-			  "unrecognized backref key (%llu %u %llu)",
-			  key.objectid, key.type, key.offset);
+			  "unrecognized backref key " BTRFS_KEY_FMT,
+			  BTRFS_KEY_FMT_VALUE(&key));
 		btrfs_abort_transaction(trans, -EUCLEAN);
 		return -EUCLEAN;
 	}
@@ -3326,9 +3326,9 @@ static int __btrfs_free_extent(struct btrfs_trans_handle *trans,
 			if (iref) {
 				if (unlikely(path->slots[0] != extent_slot)) {
 					abort_and_dump(trans, path,
-"invalid iref, extent item key (%llu %u %llu) slot %u doesn't have wanted iref",
-						       key.objectid, key.type,
-						       key.offset, path->slots[0]);
+"invalid iref, extent item key " BTRFS_KEY_FMT " slot %u doesn't have wanted iref",
+						       BTRFS_KEY_FMT_VALUE(&key),
+						       path->slots[0]);
 					ret = -EUCLEAN;
 					goto out;
 				}
@@ -4735,8 +4735,7 @@ again:
 	"allocation failed flags %llu, wanted %llu tree-log %d, relocation: %d",
 				  flags, num_bytes, for_treelog, for_data_reloc);
 			if (sinfo)
-				btrfs_dump_space_info(fs_info, sinfo,
-						      num_bytes, 1);
+				btrfs_dump_space_info(sinfo, num_bytes, 1);
 		}
 	}
 
