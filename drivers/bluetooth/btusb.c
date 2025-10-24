@@ -621,6 +621,8 @@ static const struct usb_device_id quirks_table[] = {
 	/* Additional MediaTek MT7920 Bluetooth devices */
 	{ USB_DEVICE(0x0489, 0xe134), .driver_info = BTUSB_MEDIATEK |
 						     BTUSB_WIDEBAND_SPEECH },
+	{ USB_DEVICE(0x0489, 0xe135), .driver_info = BTUSB_MEDIATEK |
+						     BTUSB_WIDEBAND_SPEECH },
 	{ USB_DEVICE(0x13d3, 0x3620), .driver_info = BTUSB_MEDIATEK |
 						     BTUSB_WIDEBAND_SPEECH },
 	{ USB_DEVICE(0x13d3, 0x3621), .driver_info = BTUSB_MEDIATEK |
@@ -684,6 +686,8 @@ static const struct usb_device_id quirks_table[] = {
 	{ USB_DEVICE(0x0489, 0xe152), .driver_info = BTUSB_MEDIATEK |
 						     BTUSB_WIDEBAND_SPEECH },
 	{ USB_DEVICE(0x0489, 0xe153), .driver_info = BTUSB_MEDIATEK |
+						     BTUSB_WIDEBAND_SPEECH },
+	{ USB_DEVICE(0x0489, 0xe170), .driver_info = BTUSB_MEDIATEK |
 						     BTUSB_WIDEBAND_SPEECH },
 	{ USB_DEVICE(0x04ca, 0x3804), .driver_info = BTUSB_MEDIATEK |
 						     BTUSB_WIDEBAND_SPEECH },
@@ -780,6 +784,8 @@ static const struct usb_device_id quirks_table[] = {
 	{ USB_DEVICE(0x7392, 0xc611), .driver_info = BTUSB_REALTEK |
 						     BTUSB_WIDEBAND_SPEECH },
 	{ USB_DEVICE(0x2b89, 0x8761), .driver_info = BTUSB_REALTEK |
+						     BTUSB_WIDEBAND_SPEECH },
+	{ USB_DEVICE(0x2b89, 0x6275), .driver_info = BTUSB_REALTEK |
 						     BTUSB_WIDEBAND_SPEECH },
 
 	/* Additional Realtek 8821AE Bluetooth devices */
@@ -1129,6 +1135,24 @@ static void btusb_qca_reset(struct hci_dev *hdev)
 	}
 
 	btusb_reset(hdev);
+}
+
+static u8 btusb_classify_qca_pkt_type(struct hci_dev *hdev, struct sk_buff *skb)
+{
+	/* Some Qualcomm controllers, e.g., QCNFA765 with WCN6855 chip, send debug
+	 * packets as ACL frames with connection handle 0x2EDC. These are not real
+	 * ACL packets and should be reclassified as HCI_DIAG_PKT to prevent
+	 * "ACL packet for unknown connection handle 3804" errors.
+	 */
+	if (skb->len >= 2) {
+		u16 handle = get_unaligned_le16(skb->data);
+
+		if (handle == 0x2EDC)
+			return HCI_DIAG_PKT;
+	}
+
+	/* Use default packet type for other packets */
+	return hci_skb_pkt_type(skb);
 }
 
 static inline void btusb_free_frags(struct btusb_data *data)
@@ -2783,6 +2807,19 @@ static int btusb_mtk_reset(struct hci_dev *hdev, void *rst_data)
 	btusb_stop_traffic(data);
 	usb_kill_anchored_urbs(&data->tx_anchor);
 
+	/* Toggle the hard reset line. The MediaTek device is going to
+	 * yank itself off the USB and then replug. The cleanup is handled
+	 * correctly on the way out (standard USB disconnect), and the new
+	 * device is detected cleanly and bound to the driver again like
+	 * it should be.
+	 */
+	if (data->reset_gpio) {
+		gpiod_set_value_cansleep(data->reset_gpio, 1);
+		msleep(200);
+		gpiod_set_value_cansleep(data->reset_gpio, 0);
+		return 0;
+	}
+
 	err = btmtk_usb_subsys_reset(hdev, btmtk_data->dev_id);
 
 	usb_queue_reset_device(data->intf);
@@ -4201,6 +4238,7 @@ static int btusb_probe(struct usb_interface *intf,
 		data->recv_acl = btusb_recv_acl_qca;
 		hci_devcd_register(hdev, btusb_coredump_qca, btusb_dump_hdr_qca, NULL);
 		data->setup_on_usb = btusb_setup_qca;
+		hdev->classify_pkt_type = btusb_classify_qca_pkt_type;
 		hdev->shutdown = btusb_shutdown_qca;
 		hdev->set_bdaddr = btusb_set_bdaddr_wcn6855;
 		hdev->reset = btusb_qca_reset;
