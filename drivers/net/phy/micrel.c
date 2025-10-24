@@ -101,6 +101,8 @@
 #define LAN8814_CABLE_DIAG_VCT_DATA_MASK	GENMASK(7, 0)
 #define LAN8814_PAIR_BIT_SHIFT			12
 
+#define LAN8814_SKUS				0xB
+
 #define LAN8814_WIRE_PAIR_MASK			0xF
 
 /* Lan8814 general Interrupt control/status reg in GPHY specific block. */
@@ -367,6 +369,9 @@
 
 #define LAN8842_REV_8832			0x8832
 
+#define LAN8814_REV_LAN8814			0x8814
+#define LAN8814_REV_LAN8818			0x8818
+
 struct kszphy_hw_stat {
 	const char *string;
 	u8 reg;
@@ -449,6 +454,7 @@ struct kszphy_priv {
 	bool rmii_ref_clk_sel;
 	bool rmii_ref_clk_sel_val;
 	bool clk_enable;
+	bool is_ptp_available;
 	u64 stats[ARRAY_SIZE(kszphy_hw_stats)];
 	struct kszphy_phy_stats phy_stats;
 };
@@ -1050,7 +1056,7 @@ static int ksz9021_config_init(struct phy_device *phydev)
 #define TX_CLK_ID			0x1f
 
 /* set tx and tx_clk to "No delay adjustment" to keep 0ns
- * dealy
+ * delay
  */
 #define TX_ND				0x7
 #define TX_CLK_ND			0xf
@@ -1913,7 +1919,7 @@ static int ksz886x_config_aneg(struct phy_device *phydev)
 		return ret;
 
 	if (phydev->autoneg != AUTONEG_ENABLE) {
-		/* When autonegotation is disabled, we need to manually force
+		/* When autonegotiation is disabled, we need to manually force
 		 * the link state. If we don't do this, the PHY will keep
 		 * sending Fast Link Pulses (FLPs) which are part of the
 		 * autonegotiation process. This is not desired when
@@ -2095,11 +2101,7 @@ static int ksz9477_phy_errata(struct phy_device *phydev)
 			return err;
 	}
 
-	err = genphy_restart_aneg(phydev);
-	if (err)
-		return err;
-
-	return err;
+	return genphy_restart_aneg(phydev);
 }
 
 static int ksz9477_config_init(struct phy_device *phydev)
@@ -3537,7 +3539,7 @@ static void lan8814_ptp_disable_event(struct phy_device *phydev, int event)
 	/* Set target to too far in the future, effectively disabling it */
 	lan8814_ptp_set_target(phydev, event, 0xFFFFFFFF, 0);
 
-	/* And then reload once it recheas the target */
+	/* And then reload once it reaches the target */
 	lanphy_modify_page_reg(phydev, LAN8814_PAGE_COMMON_REGS, LAN8814_PTP_GENERAL_CONFIG,
 			       LAN8814_PTP_GENERAL_CONFIG_RELOAD_ADD_X(event),
 			       LAN8814_PTP_GENERAL_CONFIG_RELOAD_ADD_X(event));
@@ -4130,6 +4132,17 @@ static int lan8804_config_intr(struct phy_device *phydev)
 	return 0;
 }
 
+/* Check if the PHY has 1588 support. There are multiple skus of the PHY and
+ * some of them support PTP while others don't support it. This function will
+ * return true is the sku supports it, otherwise will return false.
+ */
+static bool lan8814_has_ptp(struct phy_device *phydev)
+{
+	struct kszphy_priv *priv = phydev->priv;
+
+	return priv->is_ptp_available;
+}
+
 static irqreturn_t lan8814_handle_interrupt(struct phy_device *phydev)
 {
 	int ret = IRQ_NONE;
@@ -4145,6 +4158,9 @@ static irqreturn_t lan8814_handle_interrupt(struct phy_device *phydev)
 		phy_trigger_machine(phydev);
 		ret = IRQ_HANDLED;
 	}
+
+	if (!lan8814_has_ptp(phydev))
+		return ret;
 
 	while (true) {
 		irq_status = lanphy_read_page_reg(phydev, LAN8814_PAGE_PORT_REGS,
@@ -4205,6 +4221,9 @@ static void lan8814_ptp_init(struct phy_device *phydev)
 
 	if (!IS_ENABLED(CONFIG_PTP_1588_CLOCK) ||
 	    !IS_ENABLED(CONFIG_NETWORK_PHY_TIMESTAMPING))
+		return;
+
+	if (!lan8814_has_ptp(phydev))
 		return;
 
 	lanphy_write_page_reg(phydev, LAN8814_PAGE_PORT_REGS,
@@ -4336,6 +4355,9 @@ static int __lan8814_ptp_probe_once(struct phy_device *phydev, char *pin_name,
 
 static int lan8814_ptp_probe_once(struct phy_device *phydev)
 {
+	if (!lan8814_has_ptp(phydev))
+		return 0;
+
 	return __lan8814_ptp_probe_once(phydev, "lan8814_ptp_pin",
 					LAN8814_PTP_GPIO_NUM);
 }
@@ -4407,7 +4429,7 @@ static int lan8814_release_coma_mode(struct phy_device *phydev)
 static void lan8814_clear_2psp_bit(struct phy_device *phydev)
 {
 	/* It was noticed that when traffic is passing through the PHY and the
-	 * cable is removed then the LED was still one even though there is no
+	 * cable is removed then the LED was still on even though there is no
 	 * link
 	 */
 	lanphy_modify_page_reg(phydev, LAN8814_PAGE_PCS_DIGITAL, LAN8814_EEE_STATE,
@@ -4449,6 +4471,18 @@ static int lan8814_probe(struct phy_device *phydev)
 	addr = lanphy_read_page_reg(phydev, LAN8814_PAGE_COMMON_REGS, 0) & 0x1F;
 	devm_phy_package_join(&phydev->mdio.dev, phydev,
 			      addr, sizeof(struct lan8814_shared_priv));
+
+	/* There are lan8814 SKUs that don't support PTP. Make sure that for
+	 * those skus no PTP device is created. Here we check if the SKU
+	 * supports PTP.
+	 */
+	err = lanphy_read_page_reg(phydev, LAN8814_PAGE_COMMON_REGS,
+				   LAN8814_SKUS);
+	if (err < 0)
+		return err;
+
+	priv->is_ptp_available = err == LAN8814_REV_LAN8814 ||
+				 err == LAN8814_REV_LAN8818;
 
 	if (phy_package_init_once(phydev)) {
 		err = lan8814_release_coma_mode(phydev);
@@ -4547,7 +4581,7 @@ static int lan8841_config_init(struct phy_device *phydev)
 	phy_write_mmd(phydev, KSZ9131RN_MMD_COMMON_CTRL_REG,
 		      LAN8841_PTP_TX_VERSION, 0xff00);
 
-	/* 100BT Clause 40 improvenent errata */
+	/* 100BT Clause 40 improvement errata */
 	phy_write_mmd(phydev, LAN8841_MMD_ANALOG_REG,
 		      LAN8841_ANALOG_CONTROL_1,
 		      LAN8841_ANALOG_CONTROL_1_PLL_TRIM(0x2));
@@ -5567,7 +5601,7 @@ static int lan8841_ptp_extts_on(struct kszphy_ptp_priv *ptp_priv, int pin,
 	u16 tmp = 0;
 	int ret;
 
-	/* Set GPIO to be intput */
+	/* Set GPIO to be input */
 	ret = phy_set_bits_mmd(phydev, 2, LAN8841_GPIO_EN, BIT(pin));
 	if (ret)
 		return ret;
