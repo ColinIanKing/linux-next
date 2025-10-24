@@ -86,17 +86,13 @@ allOf:
       properties:
         compatible:
           contains:
-            const: img,img-axe-1-16m
+            enum:
+              - ti,am62-gpu
+              - ti,j721s2-gpu
     then:
       properties:
-        power-domains:
-          items:
-            - description: Power domain A
-        power-domain-names:
+        clocks:
           maxItems: 1
-      required:
-        - power-domains
-        - power-domain-names
 
   - if:
       properties:
@@ -109,13 +105,21 @@ allOf:
           minItems: 3
         clock-names:
           minItems: 3
+
+  - if:
+      properties:
+        compatible:
+          contains:
+            const: img,img-axe-1-16m
+    then:
+      properties:
         power-domains:
-          items:
-            - description: The single, unified power domain for the GPU on the
-                TH1520 SoC, integrating all internal IP power domains.
-        power-domain-names: false
+          maxItems: 1
+        power-domain-names:
+          maxItems: 1
       required:
         - power-domains
+        - power-domain-names
 
   - if:
       properties:
@@ -125,9 +129,7 @@ allOf:
     then:
       properties:
         power-domains:
-          items:
-            - description: Power domain A
-            - description: Power domain B
+          minItems: 2
         power-domain-names:
           minItems: 2
       required:
@@ -138,13 +140,16 @@ allOf:
       properties:
         compatible:
           contains:
-            enum:
-              - ti,am62-gpu
-              - ti,j721s2-gpu
+            const: thead,th1520-gpu
     then:
       properties:
-        clocks:
-          maxItems: 1
+        power-domains:
+          items:
+            - description: The single, unified power domain for the GPU on the
+                TH1520 SoC, integrating all internal IP power domains.
+        power-domain-names: false
+      required:
+        - power-domains
 
 examples:
   - |
