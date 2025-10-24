@@ -28,6 +28,7 @@
 #include "intel_cdclk.h"
 #include "intel_color.h"
 #include "intel_crtc.h"
+#include "intel_dbuf_bw.h"
 #include "intel_display_core.h"
 #include "intel_display_debugfs.h"
 #include "intel_display_driver.h"
@@ -285,6 +286,10 @@ int intel_display_driver_probe_noirq(struct intel_display *display)
 	if (ret)
 		goto cleanup_wq_unordered;
 
+	ret = intel_dbuf_bw_init(display);
+	if (ret)
+		goto cleanup_wq_unordered;
+
 	ret = intel_bw_init(display);
 	if (ret)
 		goto cleanup_wq_unordered;
@@ -482,7 +487,6 @@ int intel_display_driver_probe_nogem(struct intel_display *display)
 	intel_dpll_init(display);
 	intel_fdi_pll_freq_update(display);
 
-	intel_update_czclk(display);
 	intel_display_driver_init_hw(display);
 	intel_dpll_update_ref_clks(display);
 
