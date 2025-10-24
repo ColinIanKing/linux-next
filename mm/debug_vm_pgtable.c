@@ -202,6 +202,7 @@ static void __init pmd_basic_tests(struct pgtable_debug_args *args, int idx)
 	WARN_ON(pmd_dirty(pmd_wrprotect(pmd_mkclean(pmd))));
 	WARN_ON(!pmd_dirty(pmd_wrprotect(pmd_mkdirty(pmd))));
 
+	WARN_ON(!pmd_dirty(pmd_mkwrite_novma(pmd_mkdirty(pmd))));
 	WARN_ON(pmd_dirty(pmd_mkwrite_novma(pmd_mkclean(pmd))));
 	WARN_ON(!pmd_write(pmd_mkdirty(pmd_mkwrite_novma(pmd))));
 	WARN_ON(!pmd_write(pmd_mkwrite_novma(pmd_wrprotect(pmd))));
