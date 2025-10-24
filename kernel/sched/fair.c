@@ -13687,6 +13687,8 @@ void unregister_fair_sched_group(struct task_group *tg)
 		struct rq *rq = cpu_rq(cpu);
 
 		if (se) {
+			struct cfs_rq *parent_cfs_rq = cfs_rq_of(se);
+
 			if (se->sched_delayed) {
 				guard(rq_lock_irqsave)(rq);
 				if (se->sched_delayed) {
@@ -13696,6 +13698,13 @@ void unregister_fair_sched_group(struct task_group *tg)
 				list_del_leaf_cfs_rq(cfs_rq);
 			}
 			remove_entity_load_avg(se);
+
+			/*
+			 * Clear parent's h_load_next if it points to the
+			 * sched_entity being freed, to avoid stale pointer.
+			 */
+			if (READ_ONCE(parent_cfs_rq->h_load_next) == se)
+				WRITE_ONCE(parent_cfs_rq->h_load_next, NULL);
 		}
 
 		/*
