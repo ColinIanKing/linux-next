@@ -13,6 +13,7 @@
 #include <linux/errname.h>
 #include "smbdirect.h"
 #include "smbdirect_pdu.h"
+#include "smbdirect_public.h"
 #include "smbdirect_socket.h"
 
 static void __smbdirect_socket_schedule_cleanup(struct smbdirect_socket *sc,
