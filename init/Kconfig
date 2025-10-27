@@ -1515,7 +1515,7 @@ config BOOT_CONFIG_EMBED_FILE
 config CMDLINE_LOG_WRAP_IDEAL_LEN
 	int "Length to try to wrap the cmdline when logged at boot"
 	default 1021
-	range -1 1021
+	range 0 1021
 	help
 	  At boot time, the kernel command line is logged to the console.
 	  The log message will start with the prefix "Kernel command line: ".
@@ -1526,7 +1526,7 @@ config CMDLINE_LOG_WRAP_IDEAL_LEN
 	  ideal length if a place to wrap isn't found before the specified
 	  number of characters.
 
-	  A value of -1 disables wrapping, though be warned that the maximum
+	  A value of 0 disables wrapping, though be warned that the maximum
 	  length of a log message (1021 characters) may cause the cmdline to
 	  be truncated.
 
