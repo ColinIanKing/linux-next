@@ -731,6 +731,7 @@ static int gfs2_create_inode(struct inode *dir, struct dentry *dentry,
 			goto fail_gunlock;
 		}
 		d_instantiate(dentry, inode);
+		dentry->d_time = atomic64_read(&dir->i_version);
 		error = 0;
 		if (file) {
 			if (S_ISREG(inode->i_mode))
@@ -785,6 +786,8 @@ static int gfs2_create_inode(struct inode *dir, struct dentry *dentry,
 		gfs2_set_aops(inode);
 		break;
 	case S_IFDIR:
+		atomic64_set(&inode->i_version,
+			     atomic64_inc_return(&sdp->sd_unique));
 		ip->i_diskflags |= (dip->i_diskflags & GFS2_DIF_INHERIT_JDATA);
 		ip->i_diskflags |= GFS2_DIF_JDATA;
 		ip->i_entries = 2;
@@ -878,6 +881,7 @@ retry:
 
 	mark_inode_dirty(inode);
 	d_instantiate(dentry, inode);
+	dentry->d_time = atomic64_read(&dir->i_version);
 	/* After instantiate, errors should result in evict which will destroy
 	 * both inode and iopen glocks properly. */
 	if (file) {
@@ -988,6 +992,7 @@ static struct dentry *__gfs2_lookup(struct inode *dir, struct dentry *dentry,
 	}
 
 	d = d_splice_alias(inode, dentry);
+	dentry->d_time = atomic64_read(&dir->i_version);
 	if (IS_ERR(d)) {
 		gfs2_glock_dq_uninit(&gh);
 		return d;
@@ -1119,6 +1124,7 @@ static int gfs2_link(struct dentry *old_dentry, struct inode *dir,
 	inode_set_ctime_current(&ip->i_inode);
 	ihold(inode);
 	d_instantiate(dentry, inode);
+	dentry->d_time = atomic64_read(&dir->i_version);
 	mark_inode_dirty(inode);
 
 out_brelse:
