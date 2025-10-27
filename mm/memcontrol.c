@@ -1655,7 +1655,7 @@ void __memcg_memory_event(struct mem_cgroup *memcg,
 	} while ((memcg = parent_mem_cgroup(memcg)) &&
 		 !mem_cgroup_is_root(memcg));
 }
-EXPORT_SYMBOL(__memcg_memory_event);
+EXPORT_SYMBOL_GPL(__memcg_memory_event);
 
 static bool mem_cgroup_out_of_memory(struct mem_cgroup *memcg, gfp_t gfp_mask,
 				     int order)
