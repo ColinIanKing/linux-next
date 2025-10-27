@@ -948,8 +948,9 @@ static void __init print_kernel_cmdline(const char *cmdline)
 {
 	size_t len;
 
-	/* Config option of -1 disables wrapping */
-	if (CONFIG_CMDLINE_LOG_WRAP_IDEAL_LEN < 0) {
+	/* Config option of 0 or anything longer than the max disables wrapping */
+	if (CONFIG_CMDLINE_LOG_WRAP_IDEAL_LEN == 0 ||
+	    IDEAL_CMDLINE_LEN >= COMMAND_LINE_SIZE - 1) {
 		pr_notice("%s%s\n", KERNEL_CMDLINE_PREFIX, cmdline);
 		return;
 	}
