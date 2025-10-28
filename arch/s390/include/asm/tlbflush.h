@@ -103,8 +103,12 @@ static inline void __tlb_flush_mm_lazy(struct mm_struct * mm)
  * flush_tlb_range functions need to do the flush.
  */
 #define flush_tlb()				do { } while (0)
-#define flush_tlb_all()				do { } while (0)
 #define flush_tlb_page(vma, addr)		do { } while (0)
+
+static inline void flush_tlb_all(void)
+{
+	__tlb_flush_global();
+}
 
 static inline void flush_tlb_mm(struct mm_struct *mm)
 {
