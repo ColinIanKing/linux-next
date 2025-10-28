@@ -388,6 +388,15 @@ config BCM74110_MAILBOX
 	  processor and coprocessor that handles various power management task
 	  and more.
 
+config RCAR_MFIS_MBOX
+	bool "Renesas R-Car Multifunctional Interface Mailbox Support"
+	depends on (ARM_SCMI_PROTOCOL && ARCH_RENESAS) || COMPILE_TEST
+	help
+	  This driver provides support for mailboxes of the MFIS
+	  (Multifunctional Interface) via the SCMI interface.
+	  It is used to send short message between different domains
+	  like AP, RT, and SCP.
+
 config RISCV_SBI_MPXY_MBOX
 	tristate "RISC-V SBI Message Proxy (MPXY) Mailbox"
 	depends on RISCV_SBI
