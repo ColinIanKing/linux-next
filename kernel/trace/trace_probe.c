@@ -156,7 +156,7 @@ fail:
 static struct trace_probe_log trace_probe_log;
 extern struct mutex dyn_event_ops_mutex;
 
-void trace_probe_log_init(const char *subsystem, int argc, const char **argv)
+const char *trace_probe_log_init(const char *subsystem, int argc, const char **argv)
 {
 	lockdep_assert_held(&dyn_event_ops_mutex);
 
@@ -164,6 +164,7 @@ void trace_probe_log_init(const char *subsystem, int argc, const char **argv)
 	trace_probe_log.argc = argc;
 	trace_probe_log.argv = argv;
 	trace_probe_log.index = 0;
+	return subsystem;
 }
 
 void trace_probe_log_clear(void)
@@ -214,7 +215,7 @@ void __trace_probe_log_err(int offset, int err_type)
 	p = command;
 	for (i = 0; i < trace_probe_log.argc; i++) {
 		len = strlen(trace_probe_log.argv[i]);
-		strcpy(p, trace_probe_log.argv[i]);
+		memcpy(p, trace_probe_log.argv[i], len);
 		p[len] = ' ';
 		p += len + 1;
 	}
@@ -967,6 +968,24 @@ static int parse_probe_vars(char *orig_arg, const struct fetch_type *t,
 		goto inval;
 	}
 
+	/* wprobe only support "$addr" and "$value" variable */
+	if (ctx->flags & TPARG_FL_WPROBE) {
+		if (!strcmp(arg, "addr")) {
+			code->op = FETCH_OP_BADDR;
+			return 0;
+		}
+		if (!strcmp(arg, "value")) {
+			code->op = FETCH_OP_BADDR;
+			code++;
+			code->op = FETCH_OP_DEREF;
+			code->offset = 0;
+			*pcode = code;
+			return 0;
+		}
+		err = TP_ERR_BAD_VAR;
+		goto inval;
+	}
+
 	if (str_has_prefix(arg, "retval")) {
 		if (!(ctx->flags & TPARG_FL_RETURN)) {
 			err = TP_ERR_RETVAL_ON_PROBE;
@@ -1096,8 +1115,9 @@ parse_probe_arg(char *arg, const struct fetch_type *type,
 		ret = parse_probe_vars(arg, type, pcode, end, ctx);
 		break;
 
+#ifdef CONFIG_HAVE_FUNCTION_ARG_ACCESS_API
 	case '%':	/* named register */
-		if (ctx->flags & (TPARG_FL_TEVENT | TPARG_FL_FPROBE)) {
+		if (ctx->flags & (TPARG_FL_TEVENT | TPARG_FL_FPROBE | TPARG_FL_WPROBE)) {
 			/* eprobe and fprobe do not handle registers */
 			trace_probe_log_err(ctx->offset, BAD_VAR);
 			break;
@@ -1110,6 +1130,7 @@ parse_probe_arg(char *arg, const struct fetch_type *type,
 		} else
 			trace_probe_log_err(ctx->offset, BAD_REG_NAME);
 		break;
+#endif
 
 	case '@':	/* memory, file-offset or symbol */
 		if (isdigit(arg[1])) {
