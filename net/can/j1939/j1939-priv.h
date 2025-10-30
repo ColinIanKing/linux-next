@@ -71,6 +71,7 @@ struct j1939_priv {
 	} ents[256];
 
 	struct kref kref;
+	struct list_head priv_trace_buffer_list;
 
 	/* List of active sessions to prevent start of conflicting
 	 * one.

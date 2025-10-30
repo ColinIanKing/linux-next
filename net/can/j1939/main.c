@@ -136,6 +136,7 @@ static struct j1939_priv *j1939_priv_create(struct net_device *ndev)
 	INIT_LIST_HEAD(&priv->ecus);
 	priv->ndev = ndev;
 	kref_init(&priv->kref);
+	INIT_LIST_HEAD(&priv->priv_trace_buffer_list);
 	kref_init(&priv->rx_kref);
 	dev_hold(ndev);
 
@@ -152,6 +153,18 @@ static inline void j1939_priv_set(struct net_device *ndev,
 	can_ml->j1939_priv = priv;
 }
 
+#ifdef CONFIG_NET_DEV_REFCNT_TRACKER
+static void priv_trace_buffer_init(void);
+static void dump_priv_trace_buffer(const struct j1939_priv *priv);
+static void erase_priv_trace_buffer(struct j1939_priv *priv);
+static noinline void save_priv_trace_buffer(struct j1939_priv *priv, int delta);
+#else
+static inline void priv_trace_buffer_init(void) { };
+static inline void dump_priv_trace_buffer(const struct j1939_priv *priv) { };
+static inline void erase_priv_trace_buffer(struct j1939_priv *priv) { };
+static inline void save_priv_trace_buffer(struct j1939_priv *priv, int delta) { };
+#endif
+
 static void __j1939_priv_release(struct kref *kref)
 {
 	struct j1939_priv *priv = container_of(kref, struct j1939_priv, kref);
@@ -163,18 +176,21 @@ static void __j1939_priv_release(struct kref *kref)
 	WARN_ON_ONCE(!list_empty(&priv->ecus));
 	WARN_ON_ONCE(!list_empty(&priv->j1939_socks));
 
+	erase_priv_trace_buffer(priv);
 	dev_put(ndev);
 	kfree(priv);
 }
 
 void j1939_priv_put(struct j1939_priv *priv)
 {
+	save_priv_trace_buffer(priv, -1);
 	kref_put(&priv->kref, __j1939_priv_release);
 }
 
 void j1939_priv_get(struct j1939_priv *priv)
 {
 	kref_get(&priv->kref);
+	save_priv_trace_buffer(priv, 1);
 }
 
 static int j1939_can_rx_register(struct j1939_priv *priv)
@@ -291,6 +307,7 @@ struct j1939_priv *j1939_netdev_start(struct net_device *ndev)
 	if (ret < 0)
 		goto out_priv_put;
 
+	save_priv_trace_buffer(priv, 1);
 	mutex_unlock(&j1939_netdev_lock);
 	return priv;
 
@@ -382,6 +399,9 @@ static int j1939_netdev_notify(struct notifier_block *nb,
 		j1939_sk_netdev_event_netdown(priv);
 		j1939_sk_netdev_event_unregister(priv);
 		break;
+	case NETDEV_DEBUG_UNREGISTER:
+		dump_priv_trace_buffer(priv);
+		break;
 	}
 
 	j1939_priv_put(priv);
@@ -399,6 +419,7 @@ static __init int j1939_module_init(void)
 {
 	int ret;
 
+	priv_trace_buffer_init();
 	pr_info("can: SAE J1939\n");
 
 	ret = register_netdevice_notifier(&j1939_netdev_notifier);
@@ -428,3 +449,99 @@ static __exit void j1939_module_exit(void)
 
 module_init(j1939_module_init);
 module_exit(j1939_module_exit);
+
+#ifdef CONFIG_NET_DEV_REFCNT_TRACKER
+
+#define PRIV_TRACE_BUFFER_SIZE 32768
+static struct priv_trace_buffer {
+	struct list_head list;
+	atomic_t count;
+	int nr_entries;
+	unsigned long entries[20];
+} priv_trace_buffer[PRIV_TRACE_BUFFER_SIZE];
+static LIST_HEAD(priv_trace_buffer_list);
+static DEFINE_SPINLOCK(priv_trace_buffer_lock);
+static bool priv_trace_buffer_exhausted;
+
+static void priv_trace_buffer_init(void)
+{
+	int i;
+
+	for (i = 0; i < PRIV_TRACE_BUFFER_SIZE; i++)
+		list_add_tail(&priv_trace_buffer[i].list, &priv_trace_buffer_list);
+}
+
+static void dump_priv_trace_buffer(const struct j1939_priv *priv)
+{
+	struct priv_trace_buffer *ptr;
+	int count, balance = 0, pos = 0;
+
+	/* Don't report if j1939_netdev_notify() is about to call final j1939_priv_put() */
+	list_for_each_entry_rcu(ptr, &priv->priv_trace_buffer_list, list,
+				/* list elements can't go away. */ 1)
+		balance += atomic_read(&ptr->count);
+	if (balance == 1)
+		return;
+	balance = 0;
+
+	list_for_each_entry_rcu(ptr, &priv->priv_trace_buffer_list, list,
+				/* list elements can't go away. */ 1) {
+		pos++;
+		count = atomic_read(&ptr->count);
+		balance += count;
+		pr_info("Call trace for %s@%p[%d] %+d at\n", priv->ndev->name, priv, pos, count);
+		stack_trace_print(ptr->entries, ptr->nr_entries, 4);
+		cond_resched();
+	}
+	if (!priv_trace_buffer_exhausted)
+		pr_info("balance as of %s@%p[%d] is %d\n", priv->ndev->name, priv, pos, balance);
+}
+
+static void erase_priv_trace_buffer(struct j1939_priv *priv)
+{
+	struct priv_trace_buffer *ptr;
+	unsigned long flags;
+
+	spin_lock_irqsave(&priv_trace_buffer_lock, flags);
+	while (!list_empty(&priv->priv_trace_buffer_list)) {
+		ptr = list_first_entry(&priv->priv_trace_buffer_list, typeof(*ptr), list);
+		list_del(&ptr->list);
+		list_add_tail(&ptr->list, &priv_trace_buffer_list);
+	}
+	spin_unlock_irqrestore(&priv_trace_buffer_lock, flags);
+}
+
+static noinline void save_priv_trace_buffer(struct j1939_priv *priv, int delta)
+{
+	struct priv_trace_buffer *ptr;
+	unsigned long entries[ARRAY_SIZE(ptr->entries)];
+	unsigned long nr_entries;
+	unsigned long flags;
+
+	if (in_nmi())
+		return;
+	nr_entries = stack_trace_save(entries, ARRAY_SIZE(ptr->entries), 1);
+	nr_entries = trim_netdev_trace(entries, nr_entries);
+	list_for_each_entry_rcu(ptr, &priv->priv_trace_buffer_list, list,
+				/* list elements can't go away. */ 1) {
+		if (ptr->nr_entries == nr_entries &&
+		    !memcmp(ptr->entries, entries, nr_entries * sizeof(unsigned long))) {
+			atomic_add(delta, &ptr->count);
+			return;
+		}
+	}
+	spin_lock_irqsave(&priv_trace_buffer_lock, flags);
+	if (!list_empty(&priv_trace_buffer_list)) {
+		ptr = list_first_entry(&priv_trace_buffer_list, typeof(*ptr), list);
+		list_del(&ptr->list);
+		atomic_set(&ptr->count, delta);
+		ptr->nr_entries = nr_entries;
+		memmove(ptr->entries, entries, nr_entries * sizeof(unsigned long));
+		list_add_tail_rcu(&ptr->list, &priv->priv_trace_buffer_list);
+	} else {
+		priv_trace_buffer_exhausted = true;
+	}
+	spin_unlock_irqrestore(&priv_trace_buffer_lock, flags);
+}
+
+#endif
