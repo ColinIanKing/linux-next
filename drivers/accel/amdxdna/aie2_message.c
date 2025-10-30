@@ -37,7 +37,7 @@ static int aie2_send_mgmt_msg_wait(struct amdxdna_dev_hdl *ndev,
 	if (!ndev->mgmt_chann)
 		return -ENODEV;
 
-	drm_WARN_ON(&xdna->ddev, !mutex_is_locked(&xdna->dev_lock));
+	drm_WARN_ON(&xdna->ddev, xdna->rpm_on && !mutex_is_locked(&xdna->dev_lock));
 	ret = xdna_send_msg_wait(xdna, ndev->mgmt_chann, msg);
 	if (ret == -ETIME) {
 		xdna_mailbox_stop_channel(ndev->mgmt_chann);
@@ -377,15 +377,17 @@ int aie2_register_asyn_event_msg(struct amdxdna_dev_hdl *ndev, dma_addr_t addr, 
 	return xdna_mailbox_send_msg(ndev->mgmt_chann, &msg, TX_TIMEOUT);
 }
 
-int aie2_config_cu(struct amdxdna_hwctx *hwctx)
+int aie2_config_cu(struct amdxdna_hwctx *hwctx,
+		   int (*notify_cb)(void *, void __iomem *, size_t))
 {
 	struct mailbox_channel *chann = hwctx->priv->mbox_chann;
 	struct amdxdna_dev *xdna = hwctx->client->xdna;
 	u32 shift = xdna->dev_info->dev_mem_buf_shift;
-	DECLARE_AIE2_MSG(config_cu, MSG_OP_CONFIG_CU);
+	struct config_cu_req req = { 0 };
+	struct xdna_mailbox_msg msg;
 	struct drm_gem_object *gobj;
 	struct amdxdna_gem_obj *abo;
-	int ret, i;
+	int i;
 
 	if (!chann)
 		return -ENODEV;
@@ -423,18 +425,12 @@ int aie2_config_cu(struct amdxdna_hwctx *hwctx)
 	}
 	req.num_cus = hwctx->cus->num_cus;
 
-	ret = xdna_send_msg_wait(xdna, chann, &msg);
-	if (ret == -ETIME)
-		aie2_destroy_context(xdna->dev_handle, hwctx);
-
-	if (resp.status == AIE2_STATUS_SUCCESS) {
-		XDNA_DBG(xdna, "Configure %d CUs, ret %d", req.num_cus, ret);
-		return 0;
-	}
-
-	XDNA_ERR(xdna, "Command opcode 0x%x failed, status 0x%x ret %d",
-		 msg.opcode, resp.status, ret);
-	return ret;
+	msg.send_data = (u8 *)&req;
+	msg.send_size = sizeof(req);
+	msg.handle = hwctx;
+	msg.opcode = MSG_OP_CONFIG_CU;
+	msg.notify_cb = notify_cb;
+	return xdna_mailbox_send_msg(chann, &msg, TX_TIMEOUT);
 }
 
 int aie2_execbuf(struct amdxdna_hwctx *hwctx, struct amdxdna_sched_job *job,
@@ -753,7 +749,7 @@ int aie2_sync_bo(struct amdxdna_hwctx *hwctx, struct amdxdna_sched_job *job,
 	int ret = 0;
 
 	req.src_addr = 0;
-	req.dst_addr = abo->mem.dev_addr - hwctx->client->dev_heap->mem.dev_addr;
+	req.dst_addr = amdxdna_dev_bo_offset(abo);
 	req.size = abo->mem.size;
 
 	/* Device to Host */
@@ -776,4 +772,33 @@ int aie2_sync_bo(struct amdxdna_hwctx *hwctx, struct amdxdna_sched_job *job,
 	}
 
 	return 0;
+}
+
+int aie2_config_debug_bo(struct amdxdna_hwctx *hwctx, struct amdxdna_sched_job *job,
+			 int (*notify_cb)(void *, void __iomem *, size_t))
+{
+	struct mailbox_channel *chann = hwctx->priv->mbox_chann;
+	struct amdxdna_gem_obj *abo = to_xdna_obj(job->bos[0]);
+	struct amdxdna_dev *xdna = hwctx->client->xdna;
+	struct config_debug_bo_req req;
+	struct xdna_mailbox_msg msg;
+
+	if (job->drv_cmd->opcode == ATTACH_DEBUG_BO)
+		req.config = DEBUG_BO_REGISTER;
+	else
+		req.config = DEBUG_BO_UNREGISTER;
+
+	req.offset = amdxdna_dev_bo_offset(abo);
+	req.size = abo->mem.size;
+
+	XDNA_DBG(xdna, "offset 0x%llx size 0x%llx config %d",
+		 req.offset, req.size, req.config);
+
+	msg.handle = job;
+	msg.notify_cb = notify_cb;
+	msg.send_data = (u8 *)&req;
+	msg.send_size = sizeof(req);
+	msg.opcode = MSG_OP_CONFIG_DEBUG_BO;
+
+	return xdna_mailbox_send_msg(chann, &msg, TX_TIMEOUT);
 }
