@@ -347,7 +347,7 @@ static const DECLARE_TLV_DB_RANGE(max98090_rcv_lout_tlv,
 static int max98090_get_enab_tlv(struct snd_kcontrol *kcontrol,
 				struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_component *component = snd_soc_kcontrol_component(kcontrol);
+	struct snd_soc_component *component = snd_kcontrol_chip(kcontrol);
 	struct max98090_priv *max98090 = snd_soc_component_get_drvdata(component);
 	struct soc_mixer_control *mc =
 		(struct soc_mixer_control *)kcontrol->private_value;
@@ -387,7 +387,7 @@ static int max98090_get_enab_tlv(struct snd_kcontrol *kcontrol,
 static int max98090_put_enab_tlv(struct snd_kcontrol *kcontrol,
 				struct snd_ctl_elem_value *ucontrol)
 {
-	struct snd_soc_component *component = snd_soc_kcontrol_component(kcontrol);
+	struct snd_soc_component *component = snd_kcontrol_chip(kcontrol);
 	struct max98090_priv *max98090 = snd_soc_component_get_drvdata(component);
 	struct soc_mixer_control *mc =
 		(struct soc_mixer_control *)kcontrol->private_value;
@@ -1144,7 +1144,7 @@ static const struct snd_soc_dapm_widget max98090_dapm_widgets[] = {
 
 	SND_SOC_DAPM_AIF_OUT("AIFOUTL", "HiFi Capture", 0,
 		SND_SOC_NOPM, 0, 0),
-	SND_SOC_DAPM_AIF_OUT("AIFOUTR", "HiFi Capture", 1,
+	SND_SOC_DAPM_AIF_OUT("AIFOUTR", "HiFi Capture", 0,
 		SND_SOC_NOPM, 0, 0),
 
 	SND_SOC_DAPM_MUX("LBENL Mux", SND_SOC_NOPM,
@@ -1241,6 +1241,11 @@ static const struct snd_soc_dapm_widget max98091_dapm_widgets[] = {
 			 SND_SOC_DAPM_POST_PMU),
 	SND_SOC_DAPM_SUPPLY("DMIC34_HPF", M98090_REG_FILTER_CONFIG,
 		M98090_FLT_DMIC34HPF_SHIFT, 0, NULL, 0),
+
+	SND_SOC_DAPM_AIF_OUT("AIFOUT2L", "HiFi Capture", 0,
+		SND_SOC_NOPM, 0, 0),
+	SND_SOC_DAPM_AIF_OUT("AIFOUT2R", "HiFi Capture", 0,
+		SND_SOC_NOPM, 0, 0),
 };
 
 static const struct snd_soc_dapm_route max98090_dapm_routes[] = {
@@ -1431,6 +1436,11 @@ static const struct snd_soc_dapm_route max98091_dapm_routes[] = {
 	{"DMIC4", NULL, "DMIC4_ENA"},
 	{"DMIC3", NULL, "DMIC34_HPF"},
 	{"DMIC4", NULL, "DMIC34_HPF"},
+
+	{"AIFOUT2L", NULL, "SHDN"},
+	{"AIFOUT2R", NULL, "SHDN"},
+	{"AIFOUT2L", NULL, "SDOEN"},
+	{"AIFOUT2R", NULL, "SDOEN"},
 };
 
 static int max98090_add_widgets(struct snd_soc_component *component)
@@ -2371,11 +2381,11 @@ static struct snd_soc_dai_driver max98090_dai = {
 	.capture = {
 		.stream_name = "HiFi Capture",
 		.channels_min = 1,
-		.channels_max = 2,
+		.channels_max = 4,
 		.rates = MAX98090_RATES,
 		.formats = MAX98090_FORMATS,
 	},
-	 .ops = &max98090_dai_ops,
+	.ops = &max98090_dai_ops,
 };
 
 static int max98090_probe(struct snd_soc_component *component)
