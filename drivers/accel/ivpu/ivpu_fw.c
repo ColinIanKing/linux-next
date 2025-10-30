@@ -56,12 +56,14 @@ static struct {
 	{ IVPU_HW_IP_40XX, "intel/vpu/vpu_40xx_v0.0.bin" },
 	{ IVPU_HW_IP_50XX, "intel/vpu/vpu_50xx_v1.bin" },
 	{ IVPU_HW_IP_50XX, "intel/vpu/vpu_50xx_v0.0.bin" },
+	{ IVPU_HW_IP_60XX, "intel/vpu/vpu_60xx_v1.bin" },
 };
 
 /* Production fw_names from the table above */
 MODULE_FIRMWARE("intel/vpu/vpu_37xx_v1.bin");
 MODULE_FIRMWARE("intel/vpu/vpu_40xx_v1.bin");
 MODULE_FIRMWARE("intel/vpu/vpu_50xx_v1.bin");
+MODULE_FIRMWARE("intel/vpu/vpu_60xx_v1.bin");
 
 static int ivpu_fw_request(struct ivpu_device *vdev)
 {
@@ -142,6 +144,12 @@ bool ivpu_is_within_range(u64 addr, size_t size, struct ivpu_addr_range *range)
 static u32
 ivpu_fw_sched_mode_select(struct ivpu_device *vdev, const struct vpu_firmware_header *fw_hdr)
 {
+	if (ivpu_hw_ip_gen(vdev) >= IVPU_HW_IP_60XX &&
+	    ivpu_sched_mode == VPU_SCHEDULING_MODE_OS) {
+		ivpu_warn(vdev, "OS sched mode is not supported, using HW mode\n");
+		return VPU_SCHEDULING_MODE_HW;
+	}
+
 	if (ivpu_sched_mode != IVPU_SCHED_MODE_AUTO)
 		return ivpu_sched_mode;
 
