@@ -67,6 +67,17 @@ properties:
     items:
       - const: spi
 
+  fifo-width:
+    description: |
+      This property specifies the FIFO data width (in bits) of the hardware.
+      It must be configured according to the actual FIFO width set during
+      the IP design. For instance, if the hardware FIFO is 32 bits wide,
+      this property should be set to 32.
+    $ref: /schemas/types.yaml#/definitions/uint32
+    minimum: 8
+    maximum: 32
+    default: 8
+
 required:
   - compatible
   - reg
