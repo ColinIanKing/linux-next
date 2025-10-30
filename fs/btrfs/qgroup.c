@@ -1539,8 +1539,10 @@ int btrfs_add_qgroup_relation(struct btrfs_trans_handle *trans, u64 src, u64 dst
 	ASSERT(prealloc);
 
 	/* Check the level of src and dst first */
-	if (btrfs_qgroup_level(src) >= btrfs_qgroup_level(dst))
+	if (btrfs_qgroup_level(src) >= btrfs_qgroup_level(dst)) {
+		kfree(prealloc);
 		return -EINVAL;
+	}
 
 	mutex_lock(&fs_info->qgroup_ioctl_lock);
 	if (!fs_info->quota_root) {
@@ -3710,10 +3712,8 @@ static int qgroup_rescan_leaf(struct btrfs_trans_handle *trans,
 					 path, 1, 0);
 
 	btrfs_debug(fs_info,
-		"current progress key (%llu %u %llu), search_slot ret %d",
-		fs_info->qgroup_rescan_progress.objectid,
-		fs_info->qgroup_rescan_progress.type,
-		fs_info->qgroup_rescan_progress.offset, ret);
+		    "current progress key " BTRFS_KEY_FMT ", search_slot ret %d",
+		    BTRFS_KEY_FMT_VALUE(&fs_info->qgroup_rescan_progress), ret);
 
 	if (ret) {
 		/*

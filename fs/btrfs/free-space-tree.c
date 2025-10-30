@@ -165,11 +165,9 @@ static unsigned long *alloc_bitmap(u32 bitmap_size)
 
 	/*
 	 * GFP_NOFS doesn't work with kvmalloc(), but we really can't recurse
-	 * into the filesystem as the free space bitmap can be modified in the
-	 * critical section of a transaction commit.
-	 *
-	 * TODO: push the memalloc_nofs_{save,restore}() to the caller where we
-	 * know that recursion is unsafe.
+	 * into the filesystem here. All callers hold a transaction handle
+	 * open, so if a GFP_KERNEL allocation recurses into the filesystem
+	 * and triggers a transaction commit, we would deadlock.
 	 */
 	nofs_flag = memalloc_nofs_save();
 	ret = kvzalloc(bitmap_rounded_size, GFP_KERNEL);
@@ -218,11 +216,8 @@ int btrfs_convert_free_space_to_bitmaps(struct btrfs_trans_handle *trans,
 
 	bitmap_size = free_space_bitmap_size(fs_info, block_group->length);
 	bitmap = alloc_bitmap(bitmap_size);
-	if (unlikely(!bitmap)) {
-		ret = -ENOMEM;
-		btrfs_abort_transaction(trans, ret);
-		goto out;
-	}
+	if (unlikely(!bitmap))
+		return 0;
 
 	start = block_group->start;
 	end = block_group->start + block_group->length;
@@ -361,11 +356,8 @@ int btrfs_convert_free_space_to_extents(struct btrfs_trans_handle *trans,
 
 	bitmap_size = free_space_bitmap_size(fs_info, block_group->length);
 	bitmap = alloc_bitmap(bitmap_size);
-	if (unlikely(!bitmap)) {
-		ret = -ENOMEM;
-		btrfs_abort_transaction(trans, ret);
-		goto out;
-	}
+	if (unlikely(!bitmap))
+		return 0;
 
 	start = block_group->start;
 	end = block_group->start + block_group->length;
@@ -1106,14 +1098,15 @@ static int populate_free_space_tree(struct btrfs_trans_handle *trans,
 	 * If ret is 1 (no key found), it means this is an empty block group,
 	 * without any extents allocated from it and there's no block group
 	 * item (key BTRFS_BLOCK_GROUP_ITEM_KEY) located in the extent tree
-	 * because we are using the block group tree feature, so block group
-	 * items are stored in the block group tree. It also means there are no
-	 * extents allocated for block groups with a start offset beyond this
-	 * block group's end offset (this is the last, highest, block group).
+	 * because we are using the block group tree feature (so block group
+	 * items are stored in the block group tree) or this is a new block
+	 * group created in the current transaction and its block group item
+	 * was not yet inserted in the extent tree (that happens in
+	 * btrfs_create_pending_block_groups() -> insert_block_group_item()).
+	 * It also means there are no extents allocated for block groups with a
+	 * start offset beyond this block group's end offset (this is the last,
+	 * highest, block group).
 	 */
-	if (!btrfs_fs_compat_ro(trans->fs_info, BLOCK_GROUP_TREE))
-		ASSERT(ret == 0);
-
 	start = block_group->start;
 	end = block_group->start + block_group->length;
 	while (ret == 0) {
