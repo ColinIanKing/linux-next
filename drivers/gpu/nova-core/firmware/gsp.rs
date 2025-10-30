@@ -150,6 +150,7 @@ impl GspFirmware {
 
         let sigs_section = match chipset.arch() {
             Architecture::Ampere => ".fwsignature_ga10x",
+            Architecture::Ada => ".fwsignature_ad10x",
             _ => return Err(ENOTSUPP),
         };
         let signatures = elf::elf64_section(fw.data(), sigs_section)
@@ -202,10 +203,10 @@ impl GspFirmware {
                 let mut level0_data = kvec![0u8; GSP_PAGE_SIZE]?;
 
                 // Fill level 1 page entry.
-                #[allow(clippy::useless_conversion)]
-                let level1_entry = u64::from(level1.iter().next().unwrap().dma_address());
-                let dst = &mut level0_data[..size_of_val(&level1_entry)];
-                dst.copy_from_slice(&level1_entry.to_le_bytes());
+                let level1_entry = level1.iter().next().ok_or(EINVAL)?;
+                let level1_entry_addr = level1_entry.dma_address();
+                let dst = &mut level0_data[..size_of_val(&level1_entry_addr)];
+                dst.copy_from_slice(&level1_entry_addr.to_le_bytes());
 
                 // Turn the level0 page table into a [`DmaObject`].
                 DmaObject::from_data(dev, &level0_data)?

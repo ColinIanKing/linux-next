@@ -22,6 +22,34 @@ const BIOS_READ_AHEAD_SIZE: usize = 1024;
 /// indicates the last image. Bit 0-6 are reserved, bit 7 is last image bit.
 const LAST_IMAGE_BIT_MASK: u8 = 0x80;
 
+/// BIOS Image Type from PCI Data Structure code_type field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+enum BiosImageType {
+    /// PC-AT compatible BIOS image (x86 legacy)
+    PciAt = 0x00,
+    /// EFI (Extensible Firmware Interface) BIOS image
+    Efi = 0x03,
+    /// NBSI (Notebook System Information) BIOS image
+    Nbsi = 0x70,
+    /// FwSec (Firmware Security) BIOS image
+    FwSec = 0xE0,
+}
+
+impl TryFrom<u8> for BiosImageType {
+    type Error = Error;
+
+    fn try_from(code: u8) -> Result<Self> {
+        match code {
+            0x00 => Ok(Self::PciAt),
+            0x03 => Ok(Self::Efi),
+            0x70 => Ok(Self::Nbsi),
+            0xE0 => Ok(Self::FwSec),
+            _ => Err(EINVAL),
+        }
+    }
+}
+
 // PMU lookup table entry types. Used to locate PMU table entries
 // in the Fwsec image, corresponding to falcon ucodes.
 #[expect(dead_code)]
@@ -197,32 +225,37 @@ impl Vbios {
 
         // Parse all VBIOS images in the ROM
         for image_result in VbiosIterator::new(dev, bar0)? {
-            let full_image = image_result?;
+            let image = image_result?;
 
             dev_dbg!(
                 dev,
-                "Found BIOS image: size: {:#x}, type: {}, last: {}\n",
-                full_image.image_size_bytes(),
-                full_image.image_type_str(),
-                full_image.is_last()
+                "Found BIOS image: size: {:#x}, type: {:?}, last: {}\n",
+                image.image_size_bytes(),
+                image.image_type(),
+                image.is_last()
             );
 
-            // Get references to images we will need after the loop, in order to
-            // setup the falcon data offset.
-            match full_image {
-                BiosImage::PciAt(image) => {
-                    pci_at_image = Some(image);
+            // Convert to a specific image type
+            match BiosImageType::try_from(image.pcir.code_type) {
+                Ok(BiosImageType::PciAt) => {
+                    pci_at_image = Some(PciAtBiosImage::try_from(image)?);
                 }
-                BiosImage::FwSec(image) => {
+                Ok(BiosImageType::FwSec) => {
+                    let fwsec = FwSecBiosBuilder {
+                        base: image,
+                        falcon_data_offset: None,
+                        pmu_lookup_table: None,
+                        falcon_ucode_offset: None,
+                    };
                     if first_fwsec_image.is_none() {
-                        first_fwsec_image = Some(image);
+                        first_fwsec_image = Some(fwsec);
                     } else {
-                        second_fwsec_image = Some(image);
+                        second_fwsec_image = Some(fwsec);
                     }
                 }
-                // For now we don't need to handle these
-                BiosImage::Efi(_image) => {}
-                BiosImage::Nbsi(_image) => {}
+                _ => {
+                    // Ignore other image types or unknown types
+                }
             }
         }
 
@@ -328,7 +361,7 @@ impl PcirStruct {
 
     /// Calculate image size in bytes from 512-byte blocks.
     fn image_size_bytes(&self) -> usize {
-        self.image_len as usize * 512
+        usize::from(self.image_len) * 512
     }
 }
 
@@ -406,13 +439,13 @@ impl BitToken {
         let header = &image.bit_header;
 
         // Offset to the first token entry
-        let tokens_start = image.bit_offset + header.header_size as usize;
+        let tokens_start = image.bit_offset + usize::from(header.header_size);
 
-        for i in 0..header.token_entries as usize {
-            let entry_offset = tokens_start + (i * header.token_size as usize);
+        for i in 0..usize::from(header.token_entries) {
+            let entry_offset = tokens_start + (i * usize::from(header.token_size));
 
             // Make sure we don't go out of bounds
-            if entry_offset + header.token_size as usize > image.base.data.len() {
+            if entry_offset + usize::from(header.token_size) > image.base.data.len() {
                 return Err(EINVAL);
             }
 
@@ -568,7 +601,7 @@ impl NpdeStruct {
 
     /// Calculate image size in bytes from 512-byte blocks.
     fn image_size_bytes(&self) -> usize {
-        self.subimage_len as usize * 512
+        usize::from(self.subimage_len) * 512
     }
 
     /// Try to find NPDE in the data, the NPDE is right after the PCIR.
@@ -580,8 +613,8 @@ impl NpdeStruct {
     ) -> Option<Self> {
         // Calculate the offset where NPDE might be located
         // NPDE should be right after the PCIR structure, aligned to 16 bytes
-        let pcir_offset = rom_header.pci_data_struct_offset as usize;
-        let npde_start = (pcir_offset + pcir.pci_data_struct_len as usize + 0x0F) & !0x0F;
+        let pcir_offset = usize::from(rom_header.pci_data_struct_offset);
+        let npde_start = (pcir_offset + usize::from(pcir.pci_data_struct_len) + 0x0F) & !0x0F;
 
         // Check if we have enough data
         if npde_start + core::mem::size_of::<Self>() > data.len() {
@@ -594,108 +627,29 @@ impl NpdeStruct {
     }
 }
 
-// Use a macro to implement BiosImage enum and methods. This avoids having to
-// repeat each enum type when implementing functions like base() in BiosImage.
-macro_rules! bios_image {
-    (
-        $($variant:ident: $class:ident),* $(,)?
-    ) => {
-        // BiosImage enum with variants for each image type
-        enum BiosImage {
-            $($variant($class)),*
-        }
-
-        impl BiosImage {
-            /// Get a reference to the common BIOS image data regardless of type
-            fn base(&self) -> &BiosImageBase {
-                match self {
-                    $(Self::$variant(img) => &img.base),*
-                }
-            }
-
-            /// Returns a string representing the type of BIOS image
-            fn image_type_str(&self) -> &'static str {
-                match self {
-                    $(Self::$variant(_) => stringify!($variant)),*
-                }
-            }
-        }
-    }
-}
-
-impl BiosImage {
-    /// Check if this is the last image.
-    fn is_last(&self) -> bool {
-        let base = self.base();
-
-        // For NBSI images (type == 0x70), return true as they're
-        // considered the last image
-        if matches!(self, Self::Nbsi(_)) {
-            return true;
-        }
-
-        // For other image types, check the NPDE first if available
-        if let Some(ref npde) = base.npde {
-            return npde.is_last();
-        }
-
-        // Otherwise, fall back to checking the PCIR last_image flag
-        base.pcir.is_last()
-    }
-
-    /// Get the image size in bytes.
-    fn image_size_bytes(&self) -> usize {
-        let base = self.base();
-
-        // Prefer NPDE image size if available
-        if let Some(ref npde) = base.npde {
-            return npde.image_size_bytes();
-        }
-
-        // Otherwise, fall back to the PCIR image size
-        base.pcir.image_size_bytes()
-    }
-
-    /// Create a [`BiosImageBase`] from a byte slice and convert it to a [`BiosImage`] which
-    /// triggers the constructor of the specific BiosImage enum variant.
-    fn new(dev: &device::Device, data: &[u8]) -> Result<Self> {
-        let base = BiosImageBase::new(dev, data)?;
-        let image = base.into_image().inspect_err(|e| {
-            dev_err!(dev, "Failed to create BiosImage: {:?}\n", e);
-        })?;
-
-        Ok(image)
-    }
-}
-
-bios_image! {
-    PciAt: PciAtBiosImage,   // PCI-AT compatible BIOS image
-    Efi: EfiBiosImage,       // EFI (Extensible Firmware Interface)
-    Nbsi: NbsiBiosImage,     // NBSI (Nvidia Bios System Interface)
-    FwSec: FwSecBiosBuilder, // FWSEC (Firmware Security)
-}
-
 /// The PciAt BIOS image is typically the first BIOS image type found in the BIOS image chain.
 ///
 /// It contains the BIT header and the BIT tokens.
 struct PciAtBiosImage {
-    base: BiosImageBase,
+    base: BiosImage,
     bit_header: BitHeader,
     bit_offset: usize,
 }
 
+#[expect(dead_code)]
 struct EfiBiosImage {
-    base: BiosImageBase,
+    base: BiosImage,
     // EFI-specific fields can be added here in the future.
 }
 
+#[expect(dead_code)]
 struct NbsiBiosImage {
-    base: BiosImageBase,
+    base: BiosImage,
     // NBSI-specific fields can be added here in the future.
 }
 
 struct FwSecBiosBuilder {
-    base: BiosImageBase,
+    base: BiosImage,
     /// These are temporary fields that are used during the construction of the
     /// [`FwSecBiosBuilder`].
     ///
@@ -714,37 +668,16 @@ struct FwSecBiosBuilder {
 ///
 /// The PMU table contains voltage/frequency tables as well as a pointer to the Falcon Ucode.
 pub(crate) struct FwSecBiosImage {
-    base: BiosImageBase,
+    base: BiosImage,
     /// The offset of the Falcon ucode.
     falcon_ucode_offset: usize,
 }
 
-// Convert from BiosImageBase to BiosImage
-impl TryFrom<BiosImageBase> for BiosImage {
-    type Error = Error;
-
-    fn try_from(base: BiosImageBase) -> Result<Self> {
-        match base.pcir.code_type {
-            0x00 => Ok(BiosImage::PciAt(base.try_into()?)),
-            0x03 => Ok(BiosImage::Efi(EfiBiosImage { base })),
-            0x70 => Ok(BiosImage::Nbsi(NbsiBiosImage { base })),
-            0xE0 => Ok(BiosImage::FwSec(FwSecBiosBuilder {
-                base,
-                falcon_data_offset: None,
-                pmu_lookup_table: None,
-                falcon_ucode_offset: None,
-            })),
-            _ => Err(EINVAL),
-        }
-    }
-}
-
 /// BIOS Image structure containing various headers and reference fields to all BIOS images.
 ///
-/// Each BiosImage type has a BiosImageBase type along with other image-specific fields. Note that
-/// Rust favors composition of types over inheritance.
+/// A BiosImage struct is embedded into all image types and implements common operations.
 #[expect(dead_code)]
-struct BiosImageBase {
+struct BiosImage {
     /// Used for logging.
     dev: ARef<device::Device>,
     /// PCI ROM Expansion Header
@@ -757,12 +690,41 @@ struct BiosImageBase {
     data: KVec<u8>,
 }
 
-impl BiosImageBase {
-    fn into_image(self) -> Result<BiosImage> {
-        BiosImage::try_from(self)
+impl BiosImage {
+    /// Get the image size in bytes.
+    fn image_size_bytes(&self) -> usize {
+        // Prefer NPDE image size if available
+        if let Some(ref npde) = self.npde {
+            npde.image_size_bytes()
+        } else {
+            // Otherwise, fall back to the PCIR image size
+            self.pcir.image_size_bytes()
+        }
     }
 
-    /// Creates a new BiosImageBase from raw byte data.
+    /// Get the BIOS image type.
+    fn image_type(&self) -> Result<BiosImageType> {
+        BiosImageType::try_from(self.pcir.code_type)
+    }
+
+    /// Check if this is the last image.
+    fn is_last(&self) -> bool {
+        // For NBSI images (type == 0x70), return true as they're
+        // considered the last image
+        if self.pcir.code_type == BiosImageType::Nbsi as u8 {
+            return true;
+        }
+
+        // For other image types, check the NPDE first if available
+        if let Some(ref npde) = self.npde {
+            return npde.is_last();
+        }
+
+        // Otherwise, fall back to checking the PCIR last_image flag
+        self.pcir.is_last()
+    }
+
+    /// Creates a new BiosImage from raw byte data.
     fn new(dev: &device::Device, data: &[u8]) -> Result<Self> {
         // Ensure we have enough data for the ROM header.
         if data.len() < 26 {
@@ -775,7 +737,7 @@ impl BiosImageBase {
             .inspect_err(|e| dev_err!(dev, "Failed to create PciRomHeader: {:?}\n", e))?;
 
         // Get the PCI Data Structure using the pointer from the ROM header.
-        let pcir_offset = rom_header.pci_data_struct_offset as usize;
+        let pcir_offset = usize::from(rom_header.pci_data_struct_offset);
         let pcir_data = data
             .get(pcir_offset..pcir_offset + core::mem::size_of::<PcirStruct>())
             .ok_or(EINVAL)
@@ -802,7 +764,7 @@ impl BiosImageBase {
         let mut data_copy = KVec::new();
         data_copy.extend_from_slice(data, GFP_KERNEL)?;
 
-        Ok(BiosImageBase {
+        Ok(BiosImage {
             dev: dev.into(),
             rom_header,
             pcir,
@@ -843,12 +805,12 @@ impl PciAtBiosImage {
         let token = self.get_bit_token(BIT_TOKEN_ID_FALCON_DATA)?;
 
         // Make sure we don't go out of bounds
-        if token.data_offset as usize + 4 > self.base.data.len() {
+        if usize::from(token.data_offset) + 4 > self.base.data.len() {
             return Err(EINVAL);
         }
 
         // read the 4 bytes at the offset specified in the token
-        let offset = token.data_offset as usize;
+        let offset = usize::from(token.data_offset);
         let bytes: [u8; 4] = self.base.data[offset..offset + 4].try_into().map_err(|_| {
             dev_err!(self.base.dev, "Failed to convert data slice to array");
             EINVAL
@@ -865,10 +827,10 @@ impl PciAtBiosImage {
     }
 }
 
-impl TryFrom<BiosImageBase> for PciAtBiosImage {
+impl TryFrom<BiosImage> for PciAtBiosImage {
     type Error = Error;
 
-    fn try_from(base: BiosImageBase) -> Result<Self> {
+    fn try_from(base: BiosImage) -> Result<Self> {
         let data_slice = &base.data;
         let (bit_header, bit_offset) = PciAtBiosImage::find_bit_header(data_slice)?;
 
@@ -924,9 +886,9 @@ impl PmuLookupTable {
             return Err(EINVAL);
         }
 
-        let header_len = data[1] as usize;
-        let entry_len = data[2] as usize;
-        let entry_count = data[3] as usize;
+        let header_len = usize::from(data[1]);
+        let entry_len = usize::from(data[2]);
+        let entry_count = usize::from(data[3]);
 
         let required_bytes = header_len + (entry_count * entry_len);
 
@@ -949,9 +911,9 @@ impl PmuLookupTable {
 
         Ok(PmuLookupTable {
             version: data[0],
-            header_len: header_len as u8,
-            entry_len: entry_len as u8,
-            entry_count: entry_count as u8,
+            header_len: data[1],
+            entry_len: data[2],
+            entry_count: data[3],
             table_data,
         })
     }
@@ -961,7 +923,7 @@ impl PmuLookupTable {
             return Err(EINVAL);
         }
 
-        let index = (idx as usize) * self.entry_len as usize;
+        let index = (usize::from(idx)) * usize::from(self.entry_len);
         PmuLookupTableEntry::new(&self.table_data[index..])
     }
 
@@ -1130,8 +1092,8 @@ impl FwSecBiosImage {
     pub(crate) fn sigs(&self, desc: &FalconUCodeDescV3) -> Result<&[Bcrt30Rsa3kSignature]> {
         // The signatures data follows the descriptor.
         let sigs_data_offset = self.falcon_ucode_offset + core::mem::size_of::<FalconUCodeDescV3>();
-        let sigs_size =
-            desc.signature_count as usize * core::mem::size_of::<Bcrt30Rsa3kSignature>();
+        let sigs_count = usize::from(desc.signature_count);
+        let sigs_size = sigs_count * core::mem::size_of::<Bcrt30Rsa3kSignature>();
 
         // Make sure the data is within bounds.
         if sigs_data_offset + sigs_size > self.base.data.len() {
@@ -1151,7 +1113,7 @@ impl FwSecBiosImage {
                     .as_ptr()
                     .add(sigs_data_offset)
                     .cast::<Bcrt30Rsa3kSignature>(),
-                desc.signature_count as usize,
+                sigs_count,
             )
         })
     }
