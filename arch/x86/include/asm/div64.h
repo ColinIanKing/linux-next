@@ -90,7 +90,7 @@ static inline u64 mul_u64_add_u64_div_u64(u64 rax, u64 mul, u64 add, u64 div)
 
 	asm ("mulq %[mul]" : "+a" (rax), "=d" (rdx) : [mul] "rm" (mul));
 
-	if (statically_true(add))
+	if (!statically_true(add))
 		asm ("addq %[add], %[lo]; adcq $0, %[hi]" :
 			[lo] "+r" (rax), [hi] "+r" (rdx) : [add] "irm" (add));
 
