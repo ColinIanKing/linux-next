@@ -350,7 +350,7 @@ static inline unsigned long leafent_to_pfn(leaf_entry_t entry)
 	VM_WARN_ON_ONCE(!leafent_has_pfn(entry));
 
 	/* Temporary until swp_entry_t eliminated. */
-	return swp_offset_pfn(entry);
+	return swp_offset(entry) & SWP_PFN_MASK;
 }
 
 /**
@@ -361,10 +361,16 @@ static inline unsigned long leafent_to_pfn(leaf_entry_t entry)
  */
 static inline struct page *leafent_to_page(leaf_entry_t entry)
 {
-	VM_WARN_ON_ONCE(!leafent_has_pfn(entry));
+	struct page *page = pfn_to_page(leafent_to_pfn(entry));
 
-	/* Temporary until swp_entry_t eliminated. */
-	return pfn_swap_entry_to_page(entry);
+	VM_WARN_ON_ONCE(!leafent_has_pfn(entry));
+	/*
+	 * Any use of migration entries may only occur while the
+	 * corresponding page is locked
+	 */
+	VM_WARN_ON_ONCE(leafent_is_migration(entry) && !PageLocked(page));
+
+	return page;
 }
 
 /**
@@ -376,10 +382,17 @@ static inline struct page *leafent_to_page(leaf_entry_t entry)
  */
 static inline struct folio *leafent_to_folio(leaf_entry_t entry)
 {
-	VM_WARN_ON_ONCE(!leafent_has_pfn(entry));
+	struct folio *folio = pfn_folio(leafent_to_pfn(entry));
 
-	/* Temporary until swp_entry_t eliminated. */
-	return pfn_swap_entry_folio(entry);
+	VM_WARN_ON_ONCE(!leafent_has_pfn(entry));
+	/*
+	 * Any use of migration entries may only occur while the
+	 * corresponding folio is locked.
+	 */
+	VM_WARN_ON_ONCE(leafent_is_migration(entry) &&
+			!folio_test_locked(folio));
+
+	return folio;
 }
 
 /**

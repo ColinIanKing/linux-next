@@ -1000,11 +1000,10 @@ pte_table:
 			goto found;
 		}
 	} else if (!pte_none(pte)) {
-		swp_entry_t entry = pte_to_swp_entry(pte);
+		const leaf_entry_t entry = leafent_from_pte(pte);
 
-		if ((flags & FW_MIGRATION) &&
-		    is_migration_entry(entry)) {
-			page = pfn_swap_entry_to_page(entry);
+		if ((flags & FW_MIGRATION) && leafent_is_migration(entry)) {
+			page = leafent_to_page(entry);
 			expose_page = false;
 			goto found;
 		}

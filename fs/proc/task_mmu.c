@@ -1940,13 +1940,13 @@ static pagemap_entry_t pte_to_pagemap_entry(struct pagemapread *pm,
 		if (pte_uffd_wp(pte))
 			flags |= PM_UFFD_WP;
 	} else {
-		swp_entry_t entry;
+		leaf_entry_t entry;
 
 		if (pte_swp_soft_dirty(pte))
 			flags |= PM_SOFT_DIRTY;
 		if (pte_swp_uffd_wp(pte))
 			flags |= PM_UFFD_WP;
-		entry = pte_to_swp_entry(pte);
+		entry = leafent_from_pte(pte);
 		if (pm->show_pfn) {
 			pgoff_t offset;
 
@@ -1954,16 +1954,16 @@ static pagemap_entry_t pte_to_pagemap_entry(struct pagemapread *pm,
 			 * For PFN swap offsets, keeping the offset field
 			 * to be PFN only to be compatible with old smaps.
 			 */
-			if (is_pfn_swap_entry(entry))
-				offset = swp_offset_pfn(entry);
+			if (leafent_has_pfn(entry))
+				offset = leafent_to_pfn(entry);
 			else
 				offset = swp_offset(entry);
 			frame = swp_type(entry) |
 			    (offset << MAX_SWAPFILES_SHIFT);
 		}
 		flags |= PM_SWAP;
-		if (is_pfn_swap_entry(entry))
-			page = pfn_swap_entry_to_page(entry);
+		if (leafent_has_pfn(entry))
+			page = leafent_to_page(entry);
 		if (leafent_is_uffd_wp_marker(entry))
 			flags |= PM_UFFD_WP;
 		if (leafent_is_guard_marker(entry))
@@ -2032,7 +2032,7 @@ static int pagemap_pmd_range_thp(pmd_t *pmdp, unsigned long addr,
 		if (pmd_swp_uffd_wp(pmd))
 			flags |= PM_UFFD_WP;
 		VM_WARN_ON_ONCE(!pmd_is_migration_entry(pmd));
-		page = pfn_swap_entry_to_page(entry);
+		page = leafent_to_page(entry);
 	}
 
 	if (page) {

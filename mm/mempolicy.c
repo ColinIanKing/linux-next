@@ -705,7 +705,9 @@ static int queue_folios_pte_range(pmd_t *pmd, unsigned long addr,
 		if (pte_none(ptent))
 			continue;
 		if (!pte_present(ptent)) {
-			if (is_migration_entry(pte_to_swp_entry(ptent)))
+			const leaf_entry_t entry = leafent_from_pte(ptent);
+
+			if (leafent_is_migration(entry))
 				qp->nr_failed++;
 			continue;
 		}

@@ -691,10 +691,10 @@ static int check_hwpoisoned_entry(pte_t pte, unsigned long addr, short shift,
 	if (pte_present(pte)) {
 		pfn = pte_pfn(pte);
 	} else {
-		swp_entry_t swp = pte_to_swp_entry(pte);
+		const leaf_entry_t entry = leafent_from_pte(pte);
 
-		if (is_hwpoison_entry(swp))
-			pfn = swp_offset_pfn(swp);
+		if (leafent_is_hwpoison(entry))
+			pfn = leafent_to_pfn(entry);
 	}
 
 	if (!pfn || pfn != poisoned_pfn)

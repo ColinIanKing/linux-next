@@ -282,7 +282,7 @@ again:
 		unsigned long mpfn = 0, pfn;
 		struct folio *folio;
 		struct page *page;
-		swp_entry_t entry;
+		leaf_entry_t entry;
 		pte_t pte;
 
 		pte = ptep_get(ptep);
@@ -301,11 +301,11 @@ again:
 			 * page table entry. Other special swap entries are not
 			 * migratable, and we ignore regular swapped page.
 			 */
-			entry = pte_to_swp_entry(pte);
-			if (!is_device_private_entry(entry))
+			entry = leafent_from_pte(pte);
+			if (!leafent_is_device_private(entry))
 				goto next;
 
-			page = pfn_swap_entry_to_page(entry);
+			page = leafent_to_page(entry);
 			pgmap = page_pgmap(page);
 			if (!(migrate->flags &
 				MIGRATE_VMA_SELECT_DEVICE_PRIVATE) ||
@@ -331,7 +331,7 @@ again:
 
 			mpfn = migrate_pfn(page_to_pfn(page)) |
 					MIGRATE_PFN_MIGRATE;
-			if (is_writable_device_private_entry(entry))
+			if (leafent_is_device_private_write(entry))
 				mpfn |= MIGRATE_PFN_WRITE;
 		} else {
 			pfn = pte_pfn(pte);

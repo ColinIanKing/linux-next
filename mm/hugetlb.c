@@ -5640,7 +5640,7 @@ again:
 		} else if (unlikely(leafent_is_migration(leafent))) {
 			bool uffd_wp = pte_swp_uffd_wp(entry);
 
-			if (!is_readable_migration_entry(leafent) && cow) {
+			if (!leafent_is_migration_read(leafent) && cow) {
 				/*
 				 * COW mappings require pages in both
 				 * parent and child to be set to read.
