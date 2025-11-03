@@ -3202,8 +3202,9 @@ static int claim_swapfile(struct swap_info_struct *si, struct inode *inode)
  */
 unsigned long generic_max_swapfile_size(void)
 {
-	return swp_offset(pte_to_swp_entry(
-			swp_entry_to_pte(swp_entry(0, ~0UL)))) + 1;
+	const leaf_entry_t entry = swp_entry(0, ~0UL);
+
+	return swp_offset(leafent_from_pte(leafent_to_pte(entry))) + 1;
 }
 
 /* Can be overridden by an architecture for additional checks. */

@@ -49,11 +49,16 @@ static inline leaf_entry_t leafent_mk_none(void)
  */
 static inline leaf_entry_t leafent_from_pte(pte_t pte)
 {
+	leaf_entry_t arch_entry;
+
 	if (pte_present(pte))
 		return leafent_mk_none();
 
+	pte = pte_swp_clear_flags(pte);
+	arch_entry = __pte_to_swp_entry(pte);
+
 	/* Temporary until swp_entry_t eliminated. */
-	return pte_to_swp_entry(pte);
+	return swp_entry(__swp_type(arch_entry), __swp_offset(arch_entry));
 }
 
 /**

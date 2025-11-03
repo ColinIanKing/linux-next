@@ -202,7 +202,9 @@ static int mincore_pte_range(pmd_t *pmd, unsigned long addr, unsigned long end,
 			for (i = 0; i < step; i++)
 				vec[i] = 1;
 		} else { /* pte is a swap entry */
-			*vec = mincore_swap(pte_to_swp_entry(pte), false);
+			const leaf_entry_t entry = leafent_from_pte(pte);
+
+			*vec = mincore_swap(entry, false);
 		}
 		vec += step;
 	}
