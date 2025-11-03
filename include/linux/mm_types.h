@@ -285,6 +285,23 @@ typedef struct {
 	unsigned long val;
 } swp_entry_t;
 
+/**
+ * leaf_entry_t - Describes a page table 'leaf entry'.
+ *
+ * Leaf entries are an abstract representation of all page table entries which
+ * are non-present. Therefore these describe:
+ *
+ * - None or 'empty' entries.
+ *
+ * - All other entries which cause page faults and therefore encode
+ *   software-controlled metadata.
+ *
+ * NOTE: While we transition from the confusing swp_entry_t type used for this
+ *       purpose, we simply alias this type. This will be removed once the
+ *       transition is complete.
+ */
+typedef swp_entry_t leaf_entry_t;
+
 #if defined(CONFIG_MEMCG) || defined(CONFIG_SLAB_OBJ_EXT)
 /* We have some extra room after the refcount in tail pages. */
 #define NR_PAGES_IN_LARGE_FOLIO
