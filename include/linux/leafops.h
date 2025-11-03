@@ -71,6 +71,7 @@ static inline pte_t leafent_to_pte(leaf_entry_t entry)
 	return swp_entry_to_pte(entry);
 }
 
+#ifdef CONFIG_ARCH_ENABLE_THP_MIGRATION
 /**
  * leafent_from_pmd() - Obtain a leaf entry from a PMD entry.
  * @pmd: PMD entry.
@@ -96,6 +97,15 @@ static inline leaf_entry_t leafent_from_pmd(pmd_t pmd)
 	/* Temporary until swp_entry_t eliminated. */
 	return swp_entry(__swp_type(arch_entry), __swp_offset(arch_entry));
 }
+
+#else
+
+static inline leaf_entry_t leafent_from_pmd(pmd_t pmd)
+{
+	return leafent_mk_none();
+}
+
+#endif
 
 /**
  * leafent_is_none() - Is the leaf entry empty?
