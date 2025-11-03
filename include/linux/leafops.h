@@ -57,6 +57,47 @@ static inline leaf_entry_t leafent_from_pte(pte_t pte)
 }
 
 /**
+ * leafent_to_pte() - Obtain a PTE entry from a leaf entry.
+ * @entry: Leaf entry.
+ *
+ * This generates an architecture-specific PTE entry that can be utilised to
+ * encode the metadata the leaf entry encodes.
+ *
+ * Returns: Architecture-specific PTE entry encoding leaf entry.
+ */
+static inline pte_t leafent_to_pte(leaf_entry_t entry)
+{
+	/* Temporary until swp_entry_t eliminated. */
+	return swp_entry_to_pte(entry);
+}
+
+/**
+ * leafent_from_pmd() - Obtain a leaf entry from a PMD entry.
+ * @pmd: PMD entry.
+ *
+ * If @pmd is present (therefore not a leaf entry) the function returns an empty
+ * leaf entry. Otherwise, it returns a leaf entry.
+ *
+ * Returns: Leaf entry.
+ */
+static inline leaf_entry_t leafent_from_pmd(pmd_t pmd)
+{
+	leaf_entry_t arch_entry;
+
+	if (pmd_present(pmd))
+		return leafent_mk_none();
+
+	if (pmd_swp_soft_dirty(pmd))
+		pmd = pmd_swp_clear_soft_dirty(pmd);
+	if (pmd_swp_uffd_wp(pmd))
+		pmd = pmd_swp_clear_uffd_wp(pmd);
+	arch_entry = __pmd_to_swp_entry(pmd);
+
+	/* Temporary until swp_entry_t eliminated. */
+	return swp_entry(__swp_type(arch_entry), __swp_offset(arch_entry));
+}
+
+/**
  * leafent_is_none() - Is the leaf entry empty?
  * @entry: Leaf entry.
  *
@@ -130,6 +171,43 @@ static inline bool leafent_is_swap(leaf_entry_t entry)
 }
 
 /**
+ * leafent_is_migration_write() - Is this leaf entry a writable migration entry?
+ * @entry: Leaf entry.
+ *
+ * Returns: true if the leaf entry is a writable migration entry, otherwise
+ * false.
+ */
+static inline bool leafent_is_migration_write(leaf_entry_t entry)
+{
+	return leafent_type(entry) == LEAFENT_MIGRATION_WRITE;
+}
+
+/**
+ * leafent_is_migration_read() - Is this leaf entry a readable migration entry?
+ * @entry: Leaf entry.
+ *
+ * Returns: true if the leaf entry is a readable migration entry, otherwise
+ * false.
+ */
+static inline bool leafent_is_migration_read(leaf_entry_t entry)
+{
+	return leafent_type(entry) == LEAFENT_MIGRATION_READ;
+}
+
+/**
+ * leafent_is_migration_read_exclusive() - Is this leaf entry an exclusive
+ * readable migration entry?
+ * @entry: Leaf entry.
+ *
+ * Returns: true if the leaf entry is an exclusive readable migration entry,
+ * otherwise false.
+ */
+static inline bool leafent_is_migration_read_exclusive(leaf_entry_t entry)
+{
+	return leafent_type(entry) == LEAFENT_MIGRATION_READ_EXCLUSIVE;
+}
+
+/**
  * leafent_is_swap() - Is this leaf entry a migration entry?
  * @entry: Leaf entry.
  *
@@ -145,6 +223,19 @@ static inline bool leafent_is_migration(leaf_entry_t entry)
 	default:
 		return false;
 	}
+}
+
+/**
+ * leafent_is_device_private_write() - Is this leaf entry a device private
+ * writable entry?
+ * @entry: Leaf entry.
+ *
+ * Returns: true if the leaf entry is a device private writable entry, otherwise
+ * false.
+ */
+static inline bool leafent_is_device_private_write(leaf_entry_t entry)
+{
+	return leafent_type(entry) == LEAFENT_DEVICE_PRIVATE_WRITE;
 }
 
 /**
@@ -164,6 +255,12 @@ static inline bool leafent_is_device_private(leaf_entry_t entry)
 	}
 }
 
+/**
+ * leafent_is_device_exclusive() - Is this leaf entry a device-exclusive entry?
+ * @entry: Leaf entry.
+ *
+ * Returns: true if the leaf entry is a device-exclusive entry, otherwise false.
+ */
 static inline bool leafent_is_device_exclusive(leaf_entry_t entry)
 {
 	return leafent_type(entry) == LEAFENT_DEVICE_EXCLUSIVE;
@@ -322,6 +419,61 @@ static inline bool leafent_is_uffd_wp_marker(leaf_entry_t entry)
 	return leafent_to_marker(entry) & PTE_MARKER_UFFD_WP;
 }
 
+#ifdef CONFIG_MIGRATION
+
+/**
+ * leafent_is_migration_young() - Does this migration entry contain an accessed
+ * bit?
+ * @entry: Leaf entry.
+ *
+ * If the architecture can support storing A/D bits in migration entries, this
+ * determines whether the accessed (or 'young') bit was set on the migrated page
+ * table entry.
+ *
+ * Returns: true if the entry contains an accessed bit, otherwise false.
+ */
+static inline bool leafent_is_migration_young(leaf_entry_t entry)
+{
+	VM_WARN_ON_ONCE(!leafent_is_migration(entry));
+
+	if (migration_entry_supports_ad())
+		return swp_offset(entry) & SWP_MIG_YOUNG;
+	/* Keep the old behavior of aging page after migration */
+	return false;
+}
+
+/**
+ * leafent_is_migration_dirty() - Does this migration entry contain a dirty bit?
+ * @entry: Leaf entry.
+ *
+ * If the architecture can support storing A/D bits in migration entries, this
+ * determines whether the dirty bit was set on the migrated page table entry.
+ *
+ * Returns: true if the entry contains a dirty bit, otherwise false.
+ */
+static inline bool leafent_is_migration_dirty(leaf_entry_t entry)
+{
+	VM_WARN_ON_ONCE(!leafent_is_migration(entry));
+
+	if (migration_entry_supports_ad())
+		return swp_offset(entry) & SWP_MIG_DIRTY;
+	/* Keep the old behavior of clean page after migration */
+	return false;
+}
+
+#else /* CONFIG_MIGRATION */
+
+static inline bool leafent_is_migration_young(leaf_entry_t entry)
+{
+	return false;
+}
+
+static inline bool leafent_is_migration_dirty(leaf_entry_t entry)
+{
+	return false;
+}
+#endif /* CONFIG_MIGRATION */
+
 /**
  * pte_is_marker() - Does the PTE entry encode a marker leaf entry?
  * @pte: PTE entry.
@@ -371,6 +523,64 @@ static inline bool pte_is_uffd_marker(pte_t pte)
 		return true;
 
 	return false;
+}
+
+#if defined(CONFIG_ZONE_DEVICE) && defined(CONFIG_ARCH_ENABLE_THP_MIGRATION)
+
+/**
+ * pmd_is_device_private_entry() - Check if PMD contains a device private swap
+ * entry.
+ * @pmd: The PMD to check.
+ *
+ * Returns true if the PMD contains a swap entry that represents a device private
+ * page mapping. This is used for zone device private pages that have been
+ * swapped out but still need special handling during various memory management
+ * operations.
+ *
+ * Return: true if PMD contains device private entry, false otherwise
+ */
+static inline bool pmd_is_device_private_entry(pmd_t pmd)
+{
+	return leafent_is_device_private(leafent_from_pmd(pmd));
+}
+
+#else  /* CONFIG_ZONE_DEVICE && CONFIG_ARCH_ENABLE_THP_MIGRATION */
+
+static inline bool pmd_is_device_private_entry(pmd_t pmd)
+{
+	return false;
+}
+
+#endif /* CONFIG_ZONE_DEVICE && CONFIG_ARCH_ENABLE_THP_MIGRATION */
+
+/**
+ * pmd_is_migration_entry() - Does this PMD entry encode a migration entry?
+ * @pmd: PMD entry.
+ *
+ * Returns: true if the PMD encodes a migration entry, otherwise false.
+ */
+static inline bool pmd_is_migration_entry(pmd_t pmd)
+{
+	return leafent_is_migration(leafent_from_pmd(pmd));
+}
+
+/**
+ * pmd_is_valid_leafent() - Is this PMD entry a valid leaf entry?
+ * @pmd: PMD entry.
+ *
+ * PMD leaf entries are valid only if they are device private or migration
+ * entries. This function asserts that a PMD leaf entry is valid in this
+ * respect.
+ *
+ * Returns: true if the PMD entry is a valid leaf entry, otherwise false.
+ */
+static inline bool pmd_is_valid_leafent(pmd_t pmd)
+{
+	const leaf_entry_t entry = leafent_from_pmd(pmd);
+
+	/* Only device private, migration entries valid for PMD. */
+	return leafent_is_device_private(entry) ||
+		leafent_is_migration(entry);
 }
 
 #endif  /* CONFIG_MMU */
