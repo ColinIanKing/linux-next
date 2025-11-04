@@ -241,7 +241,12 @@ int smbdirect_socket_set_custom_workqueue(struct smbdirect_socket *sc,
 	/*
 	 * Remember the callers workqueue
 	 */
-	sc->workqueue = workqueue;
+	sc->workqueues.accept = workqueue;
+	sc->workqueues.connect = workqueue;
+	sc->workqueues.idle = workqueue;
+	sc->workqueues.refill = workqueue;
+	sc->workqueues.immediate = workqueue;
+	sc->workqueues.cleanup = workqueue;
 
 	return 0;
 }
@@ -418,7 +423,7 @@ void __smbdirect_socket_schedule_cleanup(struct smbdirect_socket *sc,
 	 */
 	smbdirect_socket_wake_up_all(sc);
 
-	queue_work(sc->workqueue, &sc->disconnect_work);
+	queue_work(sc->workqueues.cleanup, &sc->disconnect_work);
 }
 
 static void smbdirect_socket_cleanup_work(struct work_struct *work)
