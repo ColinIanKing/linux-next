@@ -86,8 +86,6 @@ static struct smb_direct_listener {
 	struct smbdirect_socket *socket;
 } smb_direct_ib_listener, smb_direct_iw_listener;
 
-static struct workqueue_struct *smb_direct_wq;
-
 struct smb_direct_transport {
 	struct ksmbd_transport	transport;
 
@@ -452,12 +450,6 @@ static int smb_direct_listen(struct smb_direct_listener *listener,
 		       ret, errname(ret));
 		goto err;
 	}
-	ret = smbdirect_socket_set_custom_workqueue(sc, smb_direct_wq);
-	if (ret) {
-		pr_err("Failed smbdirect_socket_set_custom_workqueue(): %d %s\n",
-		       ret, errname(ret));
-		goto err;
-	}
 
 	ret = smbdirect_socket_bind(sc, (struct sockaddr *)&sin);
 	if (ret) {
@@ -501,19 +493,6 @@ int ksmbd_rdma_init(void)
 		.socket = NULL,
 	};
 
-	/* When a client is running out of send credits, the credits are
-	 * granted by the server's sending a packet using this queue.
-	 * This avoids the situation that a clients cannot send packets
-	 * for lack of credits
-	 */
-	smb_direct_wq = alloc_workqueue("ksmbd-smb_direct-wq",
-					WQ_HIGHPRI | WQ_MEM_RECLAIM | WQ_PERCPU,
-					0);
-	if (!smb_direct_wq) {
-		ret = -ENOMEM;
-		goto err;
-	}
-
 	ret = smb_direct_listen(&smb_direct_ib_listener,
 				SMB_DIRECT_PORT_INFINIBAND);
 	if (ret) {
@@ -537,7 +516,6 @@ int ksmbd_rdma_init(void)
 	return 0;
 err:
 	ksmbd_rdma_stop_listening();
-	ksmbd_rdma_destroy();
 	return ret;
 }
 
@@ -545,14 +523,6 @@ void ksmbd_rdma_stop_listening(void)
 {
 	smb_direct_listener_destroy(&smb_direct_ib_listener);
 	smb_direct_listener_destroy(&smb_direct_iw_listener);
-}
-
-void ksmbd_rdma_destroy(void)
-{
-	if (smb_direct_wq) {
-		destroy_workqueue(smb_direct_wq);
-		smb_direct_wq = NULL;
-	}
 }
 
 bool ksmbd_rdma_capable_netdev(struct net_device *netdev)
