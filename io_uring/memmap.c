@@ -15,26 +15,26 @@
 #include "rsrc.h"
 #include "zcrx.h"
 
-static void *io_mem_alloc_compound(struct page **pages, int nr_pages,
-				   size_t size, gfp_t gfp)
+static bool io_mem_alloc_compound(struct page **pages, int nr_pages,
+				  size_t size, gfp_t gfp)
 {
 	struct page *page;
 	int i, order;
 
 	order = get_order(size);
 	if (order > MAX_PAGE_ORDER)
-		return ERR_PTR(-ENOMEM);
+		return false;
 	else if (order)
 		gfp |= __GFP_COMP;
 
 	page = alloc_pages(gfp, order);
 	if (!page)
-		return ERR_PTR(-ENOMEM);
+		return false;
 
 	for (i = 0; i < nr_pages; i++)
 		pages[i] = page + i;
 
-	return page_address(page);
+	return true;
 }
 
 struct page **io_pin_pages(unsigned long uaddr, unsigned long len, int *npages)
@@ -159,14 +159,12 @@ static int io_region_allocate_pages(struct io_ring_ctx *ctx,
 	size_t size = (size_t) mr->nr_pages << PAGE_SHIFT;
 	unsigned long nr_allocated;
 	struct page **pages;
-	void *p;
 
 	pages = kvmalloc_array(mr->nr_pages, sizeof(*pages), gfp);
 	if (!pages)
 		return -ENOMEM;
 
-	p = io_mem_alloc_compound(pages, mr->nr_pages, size, gfp);
-	if (!IS_ERR(p)) {
+	if (io_mem_alloc_compound(pages, mr->nr_pages, size, gfp)) {
 		mr->flags |= IO_REGION_F_SINGLE_REF;
 		goto done;
 	}
@@ -232,27 +230,6 @@ int io_create_region(struct io_ring_ctx *ctx, struct io_mapped_region *mr,
 out_free:
 	io_free_region(ctx, mr);
 	return ret;
-}
-
-int io_create_region_mmap_safe(struct io_ring_ctx *ctx, struct io_mapped_region *mr,
-				struct io_uring_region_desc *reg,
-				unsigned long mmap_offset)
-{
-	struct io_mapped_region tmp_mr;
-	int ret;
-
-	memcpy(&tmp_mr, mr, sizeof(tmp_mr));
-	ret = io_create_region(ctx, &tmp_mr, reg, mmap_offset);
-	if (ret)
-		return ret;
-
-	/*
-	 * Once published mmap can find it without holding only the ->mmap_lock
-	 * and not ->uring_lock.
-	 */
-	guard(mutex)(&ctx->mmap_lock);
-	memcpy(mr, &tmp_mr, sizeof(tmp_mr));
-	return 0;
 }
 
 static struct io_mapped_region *io_mmap_get_region(struct io_ring_ctx *ctx,
