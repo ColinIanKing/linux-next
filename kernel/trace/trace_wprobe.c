@@ -20,6 +20,7 @@
 #include <asm/ptrace.h>
 
 #include "trace_dynevent.h"
+#include "trace_output.h"
 #include "trace_probe.h"
 #include "trace_probe_kernel.h"
 #include "trace_probe_tmpl.h"
@@ -260,7 +261,7 @@ print_wprobe_event(struct trace_iterator *iter, int flags,
 
 	trace_seq_printf(s, "%s: (", trace_probe_name(tp));
 
-	if (!seq_print_ip_sym(s, field->ip, flags | TRACE_ITER_SYM_OFFSET))
+	if (!seq_print_ip_sym_offset(s, field->ip, flags))
 		goto out;
 
 	trace_seq_putc(s, ')');
