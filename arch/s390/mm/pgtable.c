@@ -688,7 +688,7 @@ static void ptep_zap_leaf_entry(struct mm_struct *mm, leaf_entry_t entry)
 	if (leafent_is_swap(entry))
 		dec_mm_counter(mm, MM_SWAPENTS);
 	else if (leafent_is_migration(entry)) {
-		const struct folio *folio = leafent_to_folio(entry);
+		struct folio *folio = leafent_to_folio(entry);
 
 		dec_mm_counter(mm, mm_counter(folio));
 	}
