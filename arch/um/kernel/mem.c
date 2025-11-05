@@ -71,7 +71,7 @@ void __init arch_mm_preinit(void)
 	/* Map in the area just after the brk now that kmalloc is about
 	 * to be turned on.
 	 */
-	brk_end = (unsigned long) UML_ROUND_UP(sbrk(0));
+	brk_end = PAGE_ALIGN((unsigned long) sbrk(0));
 	map_memory(brk_end, __pa(brk_end), uml_reserved - brk_end, 1, 1, 0);
 	memblock_free((void *)brk_end, uml_reserved - brk_end);
 	uml_reserved = brk_end;
@@ -197,7 +197,7 @@ void __init paging_init(void)
 		panic("%s: Failed to allocate %lu bytes align=%lx\n",
 		      __func__, PAGE_SIZE, PAGE_SIZE);
 
-	max_zone_pfn[ZONE_NORMAL] = end_iomem >> PAGE_SHIFT;
+	max_zone_pfn[ZONE_NORMAL] = high_physmem >> PAGE_SHIFT;
 	free_area_init(max_zone_pfn);
 
 #if IS_ENABLED(CONFIG_ARCH_REUSE_HOST_VSYSCALL_AREA)
