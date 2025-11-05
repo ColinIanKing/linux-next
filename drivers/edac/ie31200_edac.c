@@ -528,6 +528,7 @@ static int ie31200_register_mci(struct pci_dev *pdev, struct res_config *cfg, in
 fail_unmap:
 	iounmap(window);
 fail_free:
+	put_device(&priv->dev);
 	edac_mc_free(mci);
 	return ret;
 }
@@ -598,6 +599,7 @@ static void ie31200_unregister_mcis(void)
 		mci = priv->mci;
 		edac_mc_del_mc(mci->pdev);
 		iounmap(priv->window);
+		put_device(&priv->dev);
 		edac_mc_free(mci);
 	}
 }
