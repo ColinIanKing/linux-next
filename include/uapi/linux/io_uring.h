@@ -495,6 +495,9 @@ struct io_uring_cqe {
  * IORING_CQE_F_BUFFER	If set, the upper 16 bits are the buffer ID
  * IORING_CQE_F_MORE	If set, parent SQE will generate more CQE entries
  * IORING_CQE_F_SOCK_NONEMPTY	If set, more data to read after socket recv
+ * IORING_CQE_F_SOCK_FULL	If set, the socket was full when this send or
+ *			sendmsg was attempted. Hence it had to wait for POLLOUT
+ *			before being able to complete.
  * IORING_CQE_F_NOTIF	Set for notification CQEs. Can be used to distinct
  * 			them from sends.
  * IORING_CQE_F_BUF_MORE If set, the buffer ID set in the completion will get
@@ -518,6 +521,7 @@ struct io_uring_cqe {
 #define IORING_CQE_F_BUFFER		(1U << 0)
 #define IORING_CQE_F_MORE		(1U << 1)
 #define IORING_CQE_F_SOCK_NONEMPTY	(1U << 2)
+#define IORING_CQE_F_SOCK_FULL		IORING_CQE_F_SOCK_NONEMPTY
 #define IORING_CQE_F_NOTIF		(1U << 3)
 #define IORING_CQE_F_BUF_MORE		(1U << 4)
 #define IORING_CQE_F_SKIP		(1U << 5)
