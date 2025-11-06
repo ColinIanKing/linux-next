@@ -231,6 +231,12 @@ enum io_uring_sqe_flags_bit {
  */
 #define IORING_SETUP_CQE_MIXED		(1U << 18)
 
+/*
+ * Allow both 64b and 128b SQEs. If a 128b SQE is posted, it will have
+ * a 128b opcode.
+ */
+#define IORING_SETUP_SQE_MIXED		(1U << 19)
+
 enum io_uring_op {
 	IORING_OP_NOP,
 	IORING_OP_READV,
@@ -295,6 +301,8 @@ enum io_uring_op {
 	IORING_OP_READV_FIXED,
 	IORING_OP_WRITEV_FIXED,
 	IORING_OP_PIPE,
+	IORING_OP_NOP128,
+	IORING_OP_URING_CMD128,
 
 	/* this goes last, obviously */
 	IORING_OP_LAST,
@@ -487,6 +495,9 @@ struct io_uring_cqe {
  * IORING_CQE_F_BUFFER	If set, the upper 16 bits are the buffer ID
  * IORING_CQE_F_MORE	If set, parent SQE will generate more CQE entries
  * IORING_CQE_F_SOCK_NONEMPTY	If set, more data to read after socket recv
+ * IORING_CQE_F_SOCK_FULL	If set, the socket was full when this send or
+ *			sendmsg was attempted. Hence it had to wait for POLLOUT
+ *			before being able to complete.
  * IORING_CQE_F_NOTIF	Set for notification CQEs. Can be used to distinct
  * 			them from sends.
  * IORING_CQE_F_BUF_MORE If set, the buffer ID set in the completion will get
@@ -510,6 +521,7 @@ struct io_uring_cqe {
 #define IORING_CQE_F_BUFFER		(1U << 0)
 #define IORING_CQE_F_MORE		(1U << 1)
 #define IORING_CQE_F_SOCK_NONEMPTY	(1U << 2)
+#define IORING_CQE_F_SOCK_FULL		IORING_CQE_F_SOCK_NONEMPTY
 #define IORING_CQE_F_NOTIF		(1U << 3)
 #define IORING_CQE_F_BUF_MORE		(1U << 4)
 #define IORING_CQE_F_SKIP		(1U << 5)
@@ -688,9 +700,6 @@ enum io_uring_register_op {
 
 	/* query various aspects of io_uring, see linux/io_uring/query.h */
 	IORING_REGISTER_QUERY			= 35,
-
-	/* return zcrx buffers back into circulation */
-	IORING_REGISTER_ZCRX_REFILL		= 36,
 
 	/* this goes last */
 	IORING_REGISTER_LAST,
@@ -1071,15 +1080,6 @@ struct io_uring_zcrx_ifq_reg {
 	__u32	zcrx_id;
 	__u32	__resv2;
 	__u64	__resv[3];
-};
-
-struct io_uring_zcrx_sync_refill {
-	__u32		zcrx_id;
-	/* the number of entries to return */
-	__u32		nr_entries;
-	/* pointer to an array of struct io_uring_zcrx_rqe */
-	__u64		rqes;
-	__u64		__resv[2];
 };
 
 #ifdef __cplusplus
