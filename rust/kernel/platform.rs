@@ -74,9 +74,9 @@ impl<T: Driver + 'static> Adapter<T> {
         let info = <Self as driver::Adapter>::id_info(pdev.as_ref());
 
         from_result(|| {
-            let data = T::probe(pdev, info)?;
+            let data = T::probe(pdev, info);
 
-            pdev.as_ref().set_drvdata(data);
+            pdev.as_ref().set_drvdata(data)?;
             Ok(0)
         })
     }
@@ -91,7 +91,7 @@ impl<T: Driver + 'static> Adapter<T> {
         // SAFETY: `remove_callback` is only ever called after a successful call to
         // `probe_callback`, hence it's guaranteed that `Device::set_drvdata()` has been called
         // and stored a `Pin<KBox<T>>`.
-        let data = unsafe { pdev.as_ref().drvdata_obtain::<Pin<KBox<T>>>() };
+        let data = unsafe { pdev.as_ref().drvdata_obtain::<T>() };
 
         T::unbind(pdev, data.as_ref());
     }
@@ -166,7 +166,7 @@ macro_rules! module_platform_driver {
 ///     fn probe(
 ///         _pdev: &platform::Device<Core>,
 ///         _id_info: Option<&Self::IdInfo>,
-///     ) -> Result<Pin<KBox<Self>>> {
+///     ) -> impl PinInit<Self, Error> {
 ///         Err(ENODEV)
 ///     }
 /// }
@@ -190,8 +190,10 @@ pub trait Driver: Send {
     ///
     /// Called when a new platform device is added or discovered.
     /// Implementers should attempt to initialize the device here.
-    fn probe(dev: &Device<device::Core>, id_info: Option<&Self::IdInfo>)
-        -> Result<Pin<KBox<Self>>>;
+    fn probe(
+        dev: &Device<device::Core>,
+        id_info: Option<&Self::IdInfo>,
+    ) -> impl PinInit<Self, Error>;
 
     /// Platform driver unbind.
     ///
