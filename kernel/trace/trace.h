@@ -131,6 +131,8 @@ enum trace_type {
 #define HIST_STACKTRACE_SIZE	(HIST_STACKTRACE_DEPTH * sizeof(unsigned long))
 #define HIST_STACKTRACE_SKIP	5
 
+#define SYSCALL_FAULT_USER_MAX 165
+
 /*
  * syscalls are special, and need special handling, this is why
  * they are not included in trace_entries.h
@@ -171,6 +173,11 @@ struct fexit_trace_entry_head {
 	struct trace_entry	ent;
 	unsigned long		func;
 	unsigned long		ret_ip;
+};
+
+struct wprobe_trace_entry_head {
+	struct trace_entry	ent;
+	unsigned long		ip;
 };
 
 #define TRACE_BUF_SIZE		1024
@@ -430,6 +437,7 @@ struct trace_array {
 	int			function_enabled;
 #endif
 	int			no_filter_buffering_ref;
+	unsigned int		syscall_buf_sz;
 	struct list_head	hist_vars;
 #ifdef CONFIG_TRACER_SNAPSHOT
 	struct cond_snapshot	*cond_snapshot;
@@ -1530,6 +1538,23 @@ void trace_buffered_event_disable(void);
 void trace_buffered_event_enable(void);
 
 void early_enable_events(struct trace_array *tr, char *buf, bool disable_first);
+
+struct trace_user_buf;
+struct trace_user_buf_info {
+	struct trace_user_buf __percpu	*tbuf;
+	size_t				size;
+	int				ref;
+};
+
+typedef int (*trace_user_buf_copy)(char *dst, const char __user *src,
+				  size_t size, void *data);
+int trace_user_fault_init(struct trace_user_buf_info *tinfo, size_t size);
+int trace_user_fault_get(struct trace_user_buf_info *tinfo);
+int trace_user_fault_put(struct trace_user_buf_info *tinfo);
+void trace_user_fault_destroy(struct trace_user_buf_info *tinfo);
+char *trace_user_fault_read(struct trace_user_buf_info *tinfo,
+			    const char __user *ptr, size_t size,
+			    trace_user_buf_copy copy_func, void *data);
 
 static inline void
 __trace_event_discard_commit(struct trace_buffer *buffer,
