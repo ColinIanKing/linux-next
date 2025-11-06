@@ -5286,6 +5286,17 @@ static void *cgroup_procs_start(struct seq_file *s, loff_t *pos)
 
 static int cgroup_procs_show(struct seq_file *s, void *v)
 {
+	pid_t pid = task_pid_vnr(v);
+
+	/*
+	 * css_task_iter_next() could have visited a task which has already lost
+	 * its PID but is not dead yet or the task could have been unhashed
+	 * since css_task_iter_next(). In such cases, $pid would be 0 here.
+	 * Don't confuse userspace with it.
+	 */
+	if (unlikely(!pid))
+		return SEQ_SKIP;
+
 	seq_printf(s, "%d\n", task_pid_vnr(v));
 	return 0;
 }
