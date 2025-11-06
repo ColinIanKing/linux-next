@@ -200,6 +200,9 @@ static int ivpu_get_param_ioctl(struct drm_device *dev, void *data, struct drm_f
 	case DRM_IVPU_PARAM_CAPABILITIES:
 		args->value = ivpu_is_capable(vdev, args->index);
 		break;
+	case DRM_IVPU_PARAM_PREEMPT_BUFFER_SIZE:
+		args->value = ivpu_fw_preempt_buf_size(vdev);
+		break;
 	default:
 		ret = -EINVAL;
 		break;
@@ -377,8 +380,7 @@ int ivpu_boot(struct ivpu_device *vdev)
 	drm_WARN_ON(&vdev->drm, atomic_read(&vdev->job_timeout_counter));
 	drm_WARN_ON(&vdev->drm, !xa_empty(&vdev->submitted_jobs_xa));
 
-	/* Update boot params located at first 4KB of FW memory */
-	ivpu_fw_boot_params_setup(vdev, ivpu_bo_vaddr(vdev->fw->mem));
+	ivpu_fw_boot_params_setup(vdev, ivpu_bo_vaddr(vdev->fw->mem_bp));
 
 	ret = ivpu_hw_boot_fw(vdev);
 	if (ret) {
@@ -705,6 +707,7 @@ static struct pci_device_id ivpu_pci_ids[] = {
 	{ PCI_DEVICE(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_LNL) },
 	{ PCI_DEVICE(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_PTL_P) },
 	{ PCI_DEVICE(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_WCL) },
+	{ PCI_DEVICE(PCI_VENDOR_ID_INTEL, PCI_DEVICE_ID_NVL) },
 	{ }
 };
 MODULE_DEVICE_TABLE(pci, ivpu_pci_ids);
