@@ -259,13 +259,13 @@ impl FirmwareDmaObject<FwsecFirmware, Unsigned> {
         }
 
         // Find the DMEM mapper section in the firmware.
-        for i in 0..hdr.entry_count as usize {
+        for i in 0..usize::from(hdr.entry_count) {
             let app: &FalconAppifV1 =
             // SAFETY: we have exclusive access to `dma_object`.
             unsafe {
                 transmute(
                     &dma_object,
-                    hdr_offset + hdr.header_size as usize + i * hdr.entry_size as usize
+                    hdr_offset + usize::from(hdr.header_size) + i * usize::from(hdr.entry_size)
                 )
             }?;
 
@@ -291,7 +291,7 @@ impl FirmwareDmaObject<FwsecFirmware, Unsigned> {
 
             frts_cmd.read_vbios = ReadVbios {
                 ver: 1,
-                hdr: size_of::<ReadVbios>() as u32,
+                hdr: u32::try_from(size_of::<ReadVbios>())?,
                 addr: 0,
                 size: 0,
                 flags: 2,
@@ -304,9 +304,9 @@ impl FirmwareDmaObject<FwsecFirmware, Unsigned> {
                 } => {
                     frts_cmd.frts_region = FrtsRegion {
                         ver: 1,
-                        hdr: size_of::<FrtsRegion>() as u32,
-                        addr: (frts_addr >> 12) as u32,
-                        size: (frts_size >> 12) as u32,
+                        hdr: u32::try_from(size_of::<FrtsRegion>())?,
+                        addr: u32::try_from(frts_addr >> 12)?,
+                        size: u32::try_from(frts_size >> 12)?,
                         ftype: NVFW_FRTS_CMD_REGION_TYPE_FB,
                     };
 
