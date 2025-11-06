@@ -937,9 +937,15 @@ void tcp_rcv_space_adjust(struct sock *sk)
 
 	trace_tcp_rcv_space_adjust(sk);
 
-	tcp_mstamp_refresh(tp);
+	if (unlikely(!tp->rcv_rtt_est.rtt_us))
+		return;
+
+	/* We do not refresh tp->tcp_mstamp here.
+	 * Some platforms have expensive ktime_get() implementations.
+	 * Using the last cached value is enough for DRS.
+	 */
 	time = tcp_stamp_us_delta(tp->tcp_mstamp, tp->rcvq_space.time);
-	if (time < (tp->rcv_rtt_est.rtt_us >> 3) || tp->rcv_rtt_est.rtt_us == 0)
+	if (time < (tp->rcv_rtt_est.rtt_us >> 3))
 		return;
 
 	/* Number of bytes copied to user in last RTT */
@@ -1102,7 +1108,7 @@ static void tcp_rtt_estimator(struct sock *sk, long mrtt_us)
 	tp->srtt_us = max(1U, srtt);
 }
 
-static void tcp_update_pacing_rate(struct sock *sk)
+void tcp_update_pacing_rate(struct sock *sk)
 {
 	const struct tcp_sock *tp = tcp_sk(sk);
 	u64 rate;
@@ -1139,7 +1145,7 @@ static void tcp_update_pacing_rate(struct sock *sk)
 /* Calculate rto without backoff.  This is the second half of Van Jacobson's
  * routine referred to above.
  */
-static void tcp_set_rto(struct sock *sk)
+void tcp_set_rto(struct sock *sk)
 {
 	const struct tcp_sock *tp = tcp_sk(sk);
 	/* Old crap is replaced with new one. 8)
