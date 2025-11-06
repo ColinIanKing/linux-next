@@ -1190,6 +1190,7 @@ config REGULATOR_RAA215300
 
 config REGULATOR_RASPBERRYPI_TOUCHSCREEN_ATTINY
 	tristate "Raspberry Pi 7-inch touchscreen panel ATTINY regulator"
+	depends on ARM || ARM64 || COMPILE_TEST
 	depends on BACKLIGHT_CLASS_DEVICE
 	depends on I2C
 	depends on OF_GPIO
@@ -1201,6 +1202,7 @@ config REGULATOR_RASPBERRYPI_TOUCHSCREEN_ATTINY
 
 config REGULATOR_RASPBERRYPI_TOUCHSCREEN_V2
 	tristate "Raspberry Pi 7-inch touchscreen panel V2 regulator"
+	depends on ARM || ARM64 || COMPILE_TEST
 	depends on GPIOLIB
 	depends on I2C && OF
 	select GPIO_REGMAP
