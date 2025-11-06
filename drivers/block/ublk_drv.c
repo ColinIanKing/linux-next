@@ -913,73 +913,6 @@ static const struct block_device_operations ub_fops = {
 	.report_zones =	ublk_report_zones,
 };
 
-#define UBLK_MAX_PIN_PAGES	32
-
-struct ublk_io_iter {
-	struct page *pages[UBLK_MAX_PIN_PAGES];
-	struct bio *bio;
-	struct bvec_iter iter;
-};
-
-/* return how many pages are copied */
-static void ublk_copy_io_pages(struct ublk_io_iter *data,
-		size_t total, size_t pg_off, int dir)
-{
-	unsigned done = 0;
-	unsigned pg_idx = 0;
-
-	while (done < total) {
-		struct bio_vec bv = bio_iter_iovec(data->bio, data->iter);
-		unsigned int bytes = min3(bv.bv_len, (unsigned)total - done,
-				(unsigned)(PAGE_SIZE - pg_off));
-		void *bv_buf = bvec_kmap_local(&bv);
-		void *pg_buf = kmap_local_page(data->pages[pg_idx]);
-
-		if (dir == ITER_DEST)
-			memcpy(pg_buf + pg_off, bv_buf, bytes);
-		else
-			memcpy(bv_buf, pg_buf + pg_off, bytes);
-
-		kunmap_local(pg_buf);
-		kunmap_local(bv_buf);
-
-		/* advance page array */
-		pg_off += bytes;
-		if (pg_off == PAGE_SIZE) {
-			pg_idx += 1;
-			pg_off = 0;
-		}
-
-		done += bytes;
-
-		/* advance bio */
-		bio_advance_iter_single(data->bio, &data->iter, bytes);
-		if (!data->iter.bi_size) {
-			data->bio = data->bio->bi_next;
-			if (data->bio == NULL)
-				break;
-			data->iter = data->bio->bi_iter;
-		}
-	}
-}
-
-static bool ublk_advance_io_iter(const struct request *req,
-		struct ublk_io_iter *iter, unsigned int offset)
-{
-	struct bio *bio = req->bio;
-
-	for_each_bio(bio) {
-		if (bio->bi_iter.bi_size > offset) {
-			iter->bio = bio;
-			iter->iter = bio->bi_iter;
-			bio_advance_iter(iter->bio, &iter->iter, offset);
-			return true;
-		}
-		offset -= bio->bi_iter.bi_size;
-	}
-	return false;
-}
-
 /*
  * Copy data between request pages and io_iter, and 'offset'
  * is the start point of linear offset of request.
@@ -987,34 +920,35 @@ static bool ublk_advance_io_iter(const struct request *req,
 static size_t ublk_copy_user_pages(const struct request *req,
 		unsigned offset, struct iov_iter *uiter, int dir)
 {
-	struct ublk_io_iter iter;
+	struct req_iterator iter;
+	struct bio_vec bv;
 	size_t done = 0;
 
-	if (!ublk_advance_io_iter(req, &iter, offset))
-		return 0;
+	rq_for_each_segment(bv, req, iter) {
+		void *bv_buf;
+		size_t copied;
 
-	while (iov_iter_count(uiter) && iter.bio) {
-		unsigned nr_pages;
-		ssize_t len;
-		size_t off;
-		int i;
-
-		len = iov_iter_get_pages2(uiter, iter.pages,
-				iov_iter_count(uiter),
-				UBLK_MAX_PIN_PAGES, &off);
-		if (len <= 0)
-			return done;
-
-		ublk_copy_io_pages(&iter, len, off, dir);
-		nr_pages = DIV_ROUND_UP(len + off, PAGE_SIZE);
-		for (i = 0; i < nr_pages; i++) {
-			if (dir == ITER_DEST)
-				set_page_dirty(iter.pages[i]);
-			put_page(iter.pages[i]);
+		if (offset >= bv.bv_len) {
+			offset -= bv.bv_len;
+			continue;
 		}
-		done += len;
-	}
 
+		bv.bv_offset += offset;
+		bv.bv_len -= offset;
+		bv_buf = bvec_kmap_local(&bv);
+		if (dir == ITER_DEST)
+			copied = copy_to_iter(bv_buf, bv.bv_len, uiter);
+		else
+			copied = copy_from_iter(bv_buf, bv.bv_len, uiter);
+
+		kunmap_local(bv_buf);
+
+		done += copied;
+		if (copied < bv.bv_len)
+			break;
+
+		offset = 0;
+	}
 	return done;
 }
 
