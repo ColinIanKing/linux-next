@@ -33,6 +33,8 @@ struct trace_eval_map {
 
 #define TRACEPOINT_DEFAULT_PRIO	10
 
+extern struct srcu_struct tracepoint_srcu;
+
 extern int
 tracepoint_probe_register(struct tracepoint *tp, void *probe, void *data);
 extern int
@@ -115,7 +117,10 @@ void for_each_tracepoint_in_module(struct module *mod,
 static inline void tracepoint_synchronize_unregister(void)
 {
 	synchronize_rcu_tasks_trace();
-	synchronize_rcu();
+	if (IS_ENABLED(CONFIG_PREEMPT_RT))
+		synchronize_srcu(&tracepoint_srcu);
+	else
+		synchronize_rcu();
 }
 static inline bool tracepoint_is_faultable(struct tracepoint *tp)
 {
@@ -275,24 +280,30 @@ static inline struct tracepoint *tracepoint_ptr_deref(tracepoint_ptr_t *p)
 		return static_branch_unlikely(&__tracepoint_##name.key);\
 	}
 
-#define __DECLARE_TRACE(name, proto, args, cond, data_proto)		\
+#define __DECLARE_TRACE(name, proto, args, cond, data_proto)			\
 	__DECLARE_TRACE_COMMON(name, PARAMS(proto), PARAMS(args), PARAMS(data_proto)) \
-	static inline void __do_trace_##name(proto)			\
-	{								\
-		TRACEPOINT_CHECK(name)					\
-		if (cond) {						\
-			guard(preempt_notrace)();			\
-			__DO_TRACE_CALL(name, TP_ARGS(args));		\
-		}							\
-	}								\
-	static inline void trace_##name(proto)				\
-	{								\
-		if (static_branch_unlikely(&__tracepoint_##name.key))	\
-			__do_trace_##name(args);			\
-		if (IS_ENABLED(CONFIG_LOCKDEP) && (cond)) {		\
-			WARN_ONCE(!rcu_is_watching(),			\
-				  "RCU not watching for tracepoint");	\
-		}							\
+	static inline void __do_trace_##name(proto)				\
+	{									\
+		TRACEPOINT_CHECK(name)						\
+		if (cond) {							\
+			if (IS_ENABLED(CONFIG_PREEMPT_RT) && preemptible()) {	\
+				guard(srcu_fast_notrace)(&tracepoint_srcu);	\
+				guard(migrate)();				\
+				__DO_TRACE_CALL(name, TP_ARGS(args));		\
+			} else {						\
+				guard(preempt_notrace)();			\
+				__DO_TRACE_CALL(name, TP_ARGS(args));		\
+			}							\
+		}								\
+	}									\
+	static inline void trace_##name(proto)					\
+	{									\
+		if (static_branch_unlikely(&__tracepoint_##name.key))		\
+			__do_trace_##name(args);				\
+		if (IS_ENABLED(CONFIG_LOCKDEP) && (cond)) {			\
+			WARN_ONCE(!rcu_is_watching(),				\
+				  "RCU not watching for tracepoint");		\
+		}								\
 	}
 
 #define __DECLARE_TRACE_SYSCALL(name, proto, args, data_proto)		\
