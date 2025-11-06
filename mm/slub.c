@@ -978,7 +978,7 @@ static slab_flags_t slub_debug = DEBUG_DEFAULT_FLAGS;
 static slab_flags_t slub_debug;
 #endif
 
-static char *slub_debug_string;
+static const char *slub_debug_string __ro_after_init;
 static int disable_higher_order_debug;
 
 /*
@@ -1785,8 +1785,8 @@ static inline int free_consistency_checks(struct kmem_cache *s,
  *
  * returns the start of next block if there's any, or NULL
  */
-static char *
-parse_slub_debug_flags(char *str, slab_flags_t *flags, char **slabs, bool init)
+static const char *
+parse_slub_debug_flags(const char *str, slab_flags_t *flags, const char **slabs, bool init)
 {
 	bool higher_order_disable = false;
 
@@ -1863,17 +1863,17 @@ check_slabs:
 		return NULL;
 }
 
-static int __init setup_slub_debug(char *str)
+static int __init setup_slub_debug(const char *str, const struct kernel_param *kp)
 {
 	slab_flags_t flags;
 	slab_flags_t global_flags;
-	char *saved_str;
-	char *slab_list;
+	const char *saved_str;
+	const char *slab_list;
 	bool global_slub_debug_changed = false;
 	bool slab_list_specified = false;
 
 	global_flags = DEBUG_DEFAULT_FLAGS;
-	if (*str++ != '=' || !*str)
+	if (!str || !*str)
 		/*
 		 * No options specified. Switch on full debugging.
 		 */
@@ -1917,11 +1917,15 @@ out:
 	     static_branch_unlikely(&init_on_free)) &&
 	    (slub_debug & SLAB_POISON))
 		pr_info("mem auto-init: SLAB_POISON will take precedence over init_on_alloc/init_on_free\n");
-	return 1;
+	return 0;
 }
 
-__setup("slab_debug", setup_slub_debug);
-__setup_param("slub_debug", slub_debug, setup_slub_debug, 0);
+static const struct kernel_param_ops param_ops_slab_debug __initconst = {
+	.flags = KERNEL_PARAM_OPS_FL_NOARG,
+	.set = setup_slub_debug,
+};
+__core_param_cb(slab_debug, &param_ops_slab_debug, NULL, 0);
+__core_param_cb(slub_debug, &param_ops_slab_debug, NULL, 0);
 
 /*
  * kmem_cache_flags - apply debugging options to the cache
@@ -1935,9 +1939,9 @@ __setup_param("slub_debug", slub_debug, setup_slub_debug, 0);
  */
 slab_flags_t kmem_cache_flags(slab_flags_t flags, const char *name)
 {
-	char *iter;
+	const char *iter;
 	size_t len;
-	char *next_block;
+	const char *next_block;
 	slab_flags_t block_flags;
 	slab_flags_t slub_debug_local = slub_debug;
 
@@ -1961,7 +1965,7 @@ slab_flags_t kmem_cache_flags(slab_flags_t flags, const char *name)
 			continue;
 		/* Found a block that has a slab list, search it */
 		while (*iter) {
-			char *end, *glob;
+			const char *end, *glob;
 			size_t cmplen;
 
 			end = strchrnul(iter, ',');
@@ -8142,46 +8146,53 @@ void __kmem_obj_info(struct kmem_obj_info *kpp, void *object, struct slab *slab)
  *		Kmalloc subsystem
  *******************************************************************/
 
-static int __init setup_slub_min_order(char *str)
+static int __init setup_slub_min_order(const char *str, const struct kernel_param *kp)
 {
-	get_option(&str, (int *)&slub_min_order);
+	int ret;
+
+	ret = kstrtouint(str, 0, &slub_min_order);
+	if (ret)
+		return ret;
 
 	if (slub_min_order > slub_max_order)
 		slub_max_order = slub_min_order;
 
-	return 1;
+	return 0;
 }
 
-__setup("slab_min_order=", setup_slub_min_order);
-__setup_param("slub_min_order=", slub_min_order, setup_slub_min_order, 0);
+static const struct kernel_param_ops param_ops_slab_min_order __initconst = {
+	.set = setup_slub_min_order,
+};
+__core_param_cb(slab_min_order, &param_ops_slab_min_order, &slub_min_order, 0);
+__core_param_cb(slub_min_order, &param_ops_slab_min_order, &slub_min_order, 0);
 
-
-static int __init setup_slub_max_order(char *str)
+static int __init setup_slub_max_order(const char *str, const struct kernel_param *kp)
 {
-	get_option(&str, (int *)&slub_max_order);
+	int ret;
+
+	ret = kstrtouint(str, 0, &slub_max_order);
+	if (ret)
+		return ret;
+
 	slub_max_order = min_t(unsigned int, slub_max_order, MAX_PAGE_ORDER);
 
 	if (slub_min_order > slub_max_order)
 		slub_min_order = slub_max_order;
 
-	return 1;
+	return 0;
 }
 
-__setup("slab_max_order=", setup_slub_max_order);
-__setup_param("slub_max_order=", slub_max_order, setup_slub_max_order, 0);
+static const struct kernel_param_ops param_ops_slab_max_order __initconst = {
+	.set = setup_slub_max_order,
+};
+__core_param_cb(slab_max_order, &param_ops_slab_max_order, &slub_max_order, 0);
+__core_param_cb(slub_max_order, &param_ops_slab_max_order, &slub_max_order, 0);
 
-static int __init setup_slub_min_objects(char *str)
-{
-	get_option(&str, (int *)&slub_min_objects);
-
-	return 1;
-}
-
-__setup("slab_min_objects=", setup_slub_min_objects);
-__setup_param("slub_min_objects=", slub_min_objects, setup_slub_min_objects, 0);
+core_param(slab_min_objects, slub_min_objects, uint, 0);
+core_param(slub_min_objects, slub_min_objects, uint, 0);
 
 #ifdef CONFIG_NUMA
-static int __init setup_slab_strict_numa(char *str)
+static int __init setup_slab_strict_numa(const char *str, const struct kernel_param *kp)
 {
 	if (nr_node_ids > 1) {
 		static_branch_enable(&strict_numa);
@@ -8190,10 +8201,14 @@ static int __init setup_slab_strict_numa(char *str)
 		pr_warn("slab_strict_numa parameter set on non NUMA system.\n");
 	}
 
-	return 1;
+	return 0;
 }
 
-__setup("slab_strict_numa", setup_slab_strict_numa);
+static const struct kernel_param_ops param_ops_slab_strict_numa __initconst = {
+	.flags = KERNEL_PARAM_OPS_FL_NOARG,
+	.set = setup_slab_strict_numa,
+};
+__core_param_cb(slab_strict_numa, &param_ops_slab_strict_numa, NULL, 0);
 #endif
 
 
