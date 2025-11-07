@@ -800,40 +800,41 @@ static unsigned int blk_zone_wp_offset(struct blk_zone *zone)
 	case BLK_ZONE_COND_IMP_OPEN:
 	case BLK_ZONE_COND_EXP_OPEN:
 	case BLK_ZONE_COND_CLOSED:
+	case BLK_ZONE_COND_ACTIVE:
 		return zone->wp - zone->start;
-	case BLK_ZONE_COND_FULL:
-		return zone->len;
 	case BLK_ZONE_COND_EMPTY:
 		return 0;
+	case BLK_ZONE_COND_FULL:
 	case BLK_ZONE_COND_NOT_WP:
 	case BLK_ZONE_COND_OFFLINE:
 	case BLK_ZONE_COND_READONLY:
 	default:
 		/*
-		 * Conventional, offline and read-only zones do not have a valid
-		 * write pointer.
+		 * Conventional, full, offline and read-only zones do not have
+		 * a valid write pointer.
 		 */
 		return UINT_MAX;
 	}
 }
 
-static void disk_zone_wplug_sync_wp_offset(struct gendisk *disk,
-					   struct blk_zone *zone)
+static unsigned int disk_zone_wplug_sync_wp_offset(struct gendisk *disk,
+						   struct blk_zone *zone)
 {
 	struct blk_zone_wplug *zwplug;
-	unsigned long flags;
+	unsigned int wp_offset = blk_zone_wp_offset(zone);
 
 	zwplug = disk_get_zone_wplug(disk, zone->start);
-	if (!zwplug)
-		return;
+	if (zwplug) {
+		unsigned long flags;
 
-	spin_lock_irqsave(&zwplug->lock, flags);
-	if (zwplug->flags & BLK_ZONE_WPLUG_NEED_WP_UPDATE)
-		disk_zone_wplug_set_wp_offset(disk, zwplug,
-					      blk_zone_wp_offset(zone));
-	spin_unlock_irqrestore(&zwplug->lock, flags);
+		spin_lock_irqsave(&zwplug->lock, flags);
+		if (zwplug->flags & BLK_ZONE_WPLUG_NEED_WP_UPDATE)
+			disk_zone_wplug_set_wp_offset(disk, zwplug, wp_offset);
+		spin_unlock_irqrestore(&zwplug->lock, flags);
+		disk_put_zone_wplug(zwplug);
+	}
 
-	disk_put_zone_wplug(zwplug);
+	return wp_offset;
 }
 
 /**
@@ -949,7 +950,7 @@ int blkdev_get_zone_info(struct block_device *bdev, sector_t sector,
 		return -EINVAL;
 
 	memset(zone, 0, sizeof(*zone));
-	sector = ALIGN_DOWN(sector, zone_sectors);
+	sector = bdev_zone_start(bdev, sector);
 
 	if (!blkdev_has_cached_report_zones(bdev))
 		return blkdev_report_zone_fallback(bdev, sector, zone);
@@ -1067,7 +1068,7 @@ int blkdev_report_zones_cached(struct block_device *bdev, sector_t sector,
 		return blkdev_do_report_zones(bdev, sector, nr_zones, &args);
 	}
 
-	for (sector = ALIGN_DOWN(sector, zone_sectors);
+	for (sector = bdev_zone_start(bdev, sector);
 	     sector < capacity && idx < nr_zones;
 	     sector += zone_sectors, idx++) {
 		ret = blkdev_get_zone_info(bdev, sector, &zone);
@@ -2101,9 +2102,7 @@ static int blk_revalidate_seq_zone(struct blk_zone *zone, unsigned int idx,
 	if (!queue_emulates_zone_append(disk->queue) || !disk->zone_wplugs_hash)
 		return 0;
 
-	disk_zone_wplug_sync_wp_offset(disk, zone);
-
-	wp_offset = blk_zone_wp_offset(zone);
+	wp_offset = disk_zone_wplug_sync_wp_offset(disk, zone);
 	if (!wp_offset || wp_offset >= zone->capacity)
 		return 0;
 
