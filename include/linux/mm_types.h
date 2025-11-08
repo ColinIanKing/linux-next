@@ -286,7 +286,7 @@ typedef struct {
 } swp_entry_t;
 
 /**
- * leaf_entry_t - Describes a page table 'leaf entry'.
+ * typedef leaf_entry_t - Describes a page table 'leaf entry'.
  *
  * Leaf entries are an abstract representation of all page table entries which
  * are non-present. Therefore these describe:
