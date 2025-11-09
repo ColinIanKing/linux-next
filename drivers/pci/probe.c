@@ -1633,7 +1633,6 @@ void set_pcie_port_type(struct pci_dev *pdev)
 {
 	int pos;
 	u16 reg16;
-	u32 reg32;
 	int type;
 	struct pci_dev *parent;
 
@@ -1652,8 +1651,8 @@ void set_pcie_port_type(struct pci_dev *pdev)
 	pci_read_config_dword(pdev, pos + PCI_EXP_DEVCAP, &pdev->devcap);
 	pdev->pcie_mpss = FIELD_GET(PCI_EXP_DEVCAP_PAYLOAD, pdev->devcap);
 
-	pcie_capability_read_dword(pdev, PCI_EXP_LNKCAP, &reg32);
-	if (reg32 & PCI_EXP_LNKCAP_DLLLARC)
+	pcie_capability_read_dword(pdev, PCI_EXP_LNKCAP, &pdev->lnkcap);
+	if (pdev->lnkcap & PCI_EXP_LNKCAP_DLLLARC)
 		pdev->link_active_reporting = 1;
 
 	parent = pci_upstream_bridge(pdev);
