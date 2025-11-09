@@ -505,7 +505,7 @@ static int scrub_print_warning_inode(u64 inum, u64 offset, u64 num_bytes,
 	struct btrfs_inode_item *inode_item;
 	struct scrub_warning *swarn = warn_ctx;
 	struct btrfs_fs_info *fs_info = swarn->dev->fs_info;
-	struct inode_fs_paths *ipath = NULL;
+	struct inode_fs_paths *ipath __free(inode_fs_paths) = NULL;
 	struct btrfs_root *local_root;
 	struct btrfs_key key;
 
@@ -569,7 +569,6 @@ static int scrub_print_warning_inode(u64 inum, u64 offset, u64 num_bytes,
 				  (char *)(unsigned long)ipath->fspath->val[i]);
 
 	btrfs_put_root(local_root);
-	free_ipath(ipath);
 	return 0;
 
 err:
@@ -580,7 +579,6 @@ err:
 			  swarn->physical,
 			  root, inum, offset, ret);
 
-	free_ipath(ipath);
 	return 0;
 }
 
@@ -929,10 +927,11 @@ static int calc_next_mirror(int mirror, int num_copies)
 static void scrub_bio_add_sector(struct btrfs_bio *bbio, struct scrub_stripe *stripe,
 				 int sector_nr)
 {
+	struct btrfs_fs_info *fs_info = bbio->inode->root->fs_info;
 	void *kaddr = scrub_stripe_get_kaddr(stripe, sector_nr);
 	int ret;
 
-	ret = bio_add_page(&bbio->bio, virt_to_page(kaddr), bbio->fs_info->sectorsize,
+	ret = bio_add_page(&bbio->bio, virt_to_page(kaddr), fs_info->sectorsize,
 			   offset_in_page(kaddr));
 	/*
 	 * Caller should ensure the bbio has enough size.
@@ -942,7 +941,19 @@ static void scrub_bio_add_sector(struct btrfs_bio *bbio, struct scrub_stripe *st
 	 * to create the minimal amount of bio vectors, for fs block size < page
 	 * size cases.
 	 */
-	ASSERT(ret == bbio->fs_info->sectorsize);
+	ASSERT(ret == fs_info->sectorsize);
+}
+
+static struct btrfs_bio *alloc_scrub_bbio(struct btrfs_fs_info *fs_info,
+					  unsigned int nr_vecs, blk_opf_t opf,
+					  u64 logical,
+					  btrfs_bio_end_io_t end_io, void *private)
+{
+	struct btrfs_bio *bbio = btrfs_bio_alloc(nr_vecs, opf, BTRFS_I(fs_info->btree_inode),
+						 logical, end_io, private);
+	bbio->is_scrub = true;
+	bbio->bio.bi_iter.bi_sector = logical >> SECTOR_SHIFT;
+	return bbio;
 }
 
 static void scrub_stripe_submit_repair_read(struct scrub_stripe *stripe,
@@ -968,12 +979,10 @@ static void scrub_stripe_submit_repair_read(struct scrub_stripe *stripe,
 			bbio = NULL;
 		}
 
-		if (!bbio) {
-			bbio = btrfs_bio_alloc(stripe->nr_sectors, REQ_OP_READ,
-				fs_info, scrub_repair_read_endio, stripe);
-			bbio->bio.bi_iter.bi_sector = (stripe->logical +
-				(i << fs_info->sectorsize_bits)) >> SECTOR_SHIFT;
-		}
+		if (!bbio)
+			bbio = alloc_scrub_bbio(fs_info, stripe->nr_sectors, REQ_OP_READ,
+						stripe->logical + (i << fs_info->sectorsize_bits),
+						scrub_repair_read_endio, stripe);
 
 		scrub_bio_add_sector(bbio, stripe, i);
 	}
@@ -1284,7 +1293,7 @@ static void scrub_write_endio(struct btrfs_bio *bbio)
 		bitmap_set(&stripe->write_error_bitmap, sector_nr,
 			   bio_size >> fs_info->sectorsize_bits);
 		spin_unlock_irqrestore(&stripe->write_error_lock, flags);
-		for (int i = 0; i < (bio_size >> fs_info->sectorsize_bits); i++)
+		for (i = 0; i < (bio_size >> fs_info->sectorsize_bits); i++)
 			btrfs_dev_stat_inc_and_print(stripe->dev,
 						     BTRFS_DEV_STAT_WRITE_ERRS);
 	}
@@ -1352,13 +1361,10 @@ static void scrub_write_sectors(struct scrub_ctx *sctx, struct scrub_stripe *str
 			scrub_submit_write_bio(sctx, stripe, bbio, dev_replace);
 			bbio = NULL;
 		}
-		if (!bbio) {
-			bbio = btrfs_bio_alloc(stripe->nr_sectors, REQ_OP_WRITE,
-					       fs_info, scrub_write_endio, stripe);
-			bbio->bio.bi_iter.bi_sector = (stripe->logical +
-				(sector_nr << fs_info->sectorsize_bits)) >>
-				SECTOR_SHIFT;
-		}
+		if (!bbio)
+			bbio = alloc_scrub_bbio(fs_info, stripe->nr_sectors, REQ_OP_WRITE,
+					stripe->logical + (sector_nr << fs_info->sectorsize_bits),
+					scrub_write_endio, stripe);
 		scrub_bio_add_sector(bbio, stripe, sector_nr);
 	}
 	if (bbio)
@@ -1849,9 +1855,8 @@ static void scrub_submit_extent_sector_read(struct scrub_stripe *stripe)
 				continue;
 			}
 
-			bbio = btrfs_bio_alloc(stripe->nr_sectors, REQ_OP_READ,
-					       fs_info, scrub_read_endio, stripe);
-			bbio->bio.bi_iter.bi_sector = logical >> SECTOR_SHIFT;
+			bbio = alloc_scrub_bbio(fs_info, stripe->nr_sectors, REQ_OP_READ, logical,
+						scrub_read_endio, stripe);
 		}
 
 		scrub_bio_add_sector(bbio, stripe, i);
@@ -1888,10 +1893,8 @@ static void scrub_submit_initial_read(struct scrub_ctx *sctx,
 		return;
 	}
 
-	bbio = btrfs_bio_alloc(BTRFS_STRIPE_LEN >> min_folio_shift, REQ_OP_READ, fs_info,
-			       scrub_read_endio, stripe);
-
-	bbio->bio.bi_iter.bi_sector = stripe->logical >> SECTOR_SHIFT;
+	bbio = alloc_scrub_bbio(fs_info, BTRFS_STRIPE_LEN >> min_folio_shift, REQ_OP_READ,
+				stripe->logical, scrub_read_endio, stripe);
 	/* Read the whole range inside the chunk boundary. */
 	for (unsigned int cur = 0; cur < nr_sectors; cur++)
 		scrub_bio_add_sector(bbio, stripe, cur);
@@ -2069,6 +2072,47 @@ static int queue_scrub_stripe(struct scrub_ctx *sctx, struct btrfs_block_group *
 	return 0;
 }
 
+/*
+ * Return 0 if we should not cancel the scrub.
+ * Return <0 if we need to cancel the scrub, returned value will
+ * indicate the reason:
+ * - -ECANCELED
+ *   Being explicitly canceled through ioctl.
+ * - -EINTR
+ *   Being interrupted by signal or fs/process freezing.
+ */
+static int should_cancel_scrub(const struct scrub_ctx *sctx)
+{
+	struct btrfs_fs_info *fs_info = sctx->fs_info;
+
+	if (atomic_read(&fs_info->scrub_cancel_req) ||
+	    atomic_read(&sctx->cancel_req))
+		return -ECANCELED;
+
+	/*
+	 * The user (e.g. fsfreeze command) or power management (pm)
+	 * suspension/hibernation can freeze the fs.
+	 * And pm suspension/hibernation will also freeze all user processes.
+	 *
+	 * A user process can only be frozen when it is in the user space, thus
+	 * we have to cancel the run so that the process can return to the user
+	 * space.
+	 *
+	 * Furthermore we have to check both fs and process freezing, as pm can
+	 * be configured to freeze the fses before processes.
+	 *
+	 * If we only check fs freezing, then suspension without fs freezing
+	 * will timeout, as the process is still in the kernel space.
+	 *
+	 * If we only check process freezing, then suspension with fs freezing
+	 * will timeout, as the running scrub will prevent the fs from being frozen.
+	 */
+	if (fs_info->sb->s_writers.frozen > SB_UNFROZEN ||
+	    freezing(current) || signal_pending(current))
+		return -EINTR;
+	return 0;
+}
+
 static int scrub_raid56_parity_stripe(struct scrub_ctx *sctx,
 				      struct btrfs_device *scrub_dev,
 				      struct btrfs_block_group *bg,
@@ -2090,6 +2134,20 @@ static int scrub_raid56_parity_stripe(struct scrub_ctx *sctx,
 	int ret;
 
 	ASSERT(sctx->raid56_data_stripes);
+
+	ret = should_cancel_scrub(sctx);
+	if (ret < 0)
+		return ret;
+
+	if (atomic_read(&fs_info->scrub_pause_req))
+		scrub_blocked_if_needed(fs_info);
+
+	spin_lock(&bg->lock);
+	if (test_bit(BLOCK_GROUP_FLAG_REMOVED, &bg->runtime_flags)) {
+		spin_unlock(&bg->lock);
+		return 0;
+	}
+	spin_unlock(&bg->lock);
 
 	/*
 	 * For data stripe search, we cannot reuse the same extent/csum paths,
@@ -2263,18 +2321,13 @@ static int scrub_simple_mirror(struct scrub_ctx *sctx,
 		u64 found_logical = U64_MAX;
 		u64 cur_physical = physical + cur_logical - logical_start;
 
-		/* Canceled? */
-		if (atomic_read(&fs_info->scrub_cancel_req) ||
-		    atomic_read(&sctx->cancel_req)) {
-			ret = -ECANCELED;
+		ret = should_cancel_scrub(sctx);
+		if (ret < 0)
 			break;
-		}
-		/* Paused? */
-		if (atomic_read(&fs_info->scrub_pause_req)) {
-			/* Push queued extents */
+
+		if (atomic_read(&fs_info->scrub_pause_req))
 			scrub_blocked_if_needed(fs_info);
-		}
-		/* Block group removed? */
+
 		spin_lock(&bg->lock);
 		if (test_bit(BLOCK_GROUP_FLAG_REMOVED, &bg->runtime_flags)) {
 			spin_unlock(&bg->lock);
@@ -2529,8 +2582,6 @@ out:
 	}
 
 	if (sctx->is_dev_replace && ret >= 0) {
-		int ret2;
-
 		ret2 = sync_write_pointer_for_zoned(sctx,
 				chunk_logical + offset,
 				map->stripes[stripe_index].physical,
