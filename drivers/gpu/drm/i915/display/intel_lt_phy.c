@@ -1043,7 +1043,7 @@ static int __intel_lt_phy_p2p_write_once(struct intel_encoder *encoder,
 
 	if (intel_de_wait_for_clear(display, XELPDP_PORT_M2P_MSGBUS_CTL(display, port, lane),
 				    XELPDP_PORT_P2P_TRANSACTION_PENDING,
-				    XELPDP_MSGBUS_TIMEOUT_SLOW)) {
+				    XELPDP_MSGBUS_TIMEOUT_MS)) {
 		drm_dbg_kms(display->drm,
 			    "PHY %c Timeout waiting for previous transaction to complete. Resetting bus.\n",
 			    phy_name(phy));
@@ -1178,10 +1178,9 @@ intel_lt_phy_lane_reset(struct intel_encoder *encoder,
 	if (intel_de_wait_custom(display, XELPDP_PORT_CLOCK_CTL(display, port),
 				 XELPDP_LANE_PCLK_PLL_ACK(0),
 				 XELPDP_LANE_PCLK_PLL_ACK(0),
-				 XE3PLPD_MACCLK_TURNON_LATENCY_US,
-				 XE3PLPD_MACCLK_TURNON_LATENCY_MS, NULL))
-		drm_warn(display->drm, "PHY %c PLL MacCLK assertion Ack not done after %dus.\n",
-			 phy_name(phy), XE3PLPD_MACCLK_TURNON_LATENCY_MS * 1000);
+				 2, XE3PLPD_MACCLK_TURNON_LATENCY_MS, NULL))
+		drm_warn(display->drm, "PHY %c PLL MacCLK assertion ack not done\n",
+			 phy_name(phy));
 
 	intel_de_rmw(display, XELPDP_PORT_CLOCK_CTL(display, port),
 		     XELPDP_FORWARD_CLOCK_UNGATE,
@@ -1192,16 +1191,15 @@ intel_lt_phy_lane_reset(struct intel_encoder *encoder,
 
 	if (intel_de_wait_custom(display, XELPDP_PORT_BUF_CTL2(display, port),
 				 lane_phy_current_status, 0,
-				 XE3PLPD_RESET_END_LATENCY_US, 2, NULL))
-		drm_warn(display->drm,
-			 "PHY %c failed to bring out of Lane reset after %dus.\n",
-			 phy_name(phy), XE3PLPD_RESET_END_LATENCY_US);
+				 2, XE3PLPD_RESET_END_LATENCY_MS, NULL))
+		drm_warn(display->drm, "PHY %c failed to bring out of lane reset\n",
+			 phy_name(phy));
 
 	if (intel_de_wait_custom(display, XELPDP_PORT_BUF_CTL2(display, port),
 				 lane_phy_pulse_status, lane_phy_pulse_status,
-				 XE3PLPD_RATE_CALIB_DONE_LATENCY_US, 0, NULL))
-		drm_warn(display->drm, "PHY %c PLL rate not changed after %dus.\n",
-			 phy_name(phy), XE3PLPD_RATE_CALIB_DONE_LATENCY_US);
+				 2, XE3PLPD_RATE_CALIB_DONE_LATENCY_MS, NULL))
+		drm_warn(display->drm, "PHY %c PLL rate not changed\n",
+			 phy_name(phy));
 
 	intel_de_rmw(display, XELPDP_PORT_BUF_CTL2(display, port), lane_phy_pulse_status, 0);
 }
@@ -1654,8 +1652,8 @@ void intel_lt_phy_pll_enable(struct intel_encoder *encoder,
 		if (intel_de_wait_custom(display, XELPDP_PORT_CLOCK_CTL(display, port),
 					 XELPDP_LANE_PCLK_PLL_ACK(0), 0,
 					 XE3PLPD_MACCLK_TURNOFF_LATENCY_US, 0, NULL))
-			drm_warn(display->drm, "PHY %c PLL MacCLK Ack deassertion Timeout after %dus.\n",
-				 phy_name(phy), XE3PLPD_MACCLK_TURNOFF_LATENCY_US);
+			drm_warn(display->drm, "PHY %c PLL MacCLK ack deassertion timeout\n",
+				 phy_name(phy));
 
 		/*
 		 * 9. Follow the Display Voltage Frequency Switching - Sequence Before Frequency
@@ -1674,9 +1672,9 @@ void intel_lt_phy_pll_enable(struct intel_encoder *encoder,
 		if (intel_de_wait_custom(display, XELPDP_PORT_CLOCK_CTL(display, port),
 					 XELPDP_LANE_PCLK_PLL_ACK(0),
 					 XELPDP_LANE_PCLK_PLL_ACK(0),
-					 XE3PLPD_MACCLK_TURNON_LATENCY_US, 2, NULL))
-			drm_warn(display->drm, "PHY %c PLL MacCLK Ack assertion Timeout after %dus.\n",
-				 phy_name(phy), XE3PLPD_MACCLK_TURNON_LATENCY_US);
+					 2, XE3PLPD_MACCLK_TURNON_LATENCY_MS, NULL))
+			drm_warn(display->drm, "PHY %c PLL MacCLK ack assertion timeout\n",
+				 phy_name(phy));
 
 		/*
 		 * 13. Ungate the forward clock by setting
@@ -1702,9 +1700,9 @@ void intel_lt_phy_pll_enable(struct intel_encoder *encoder,
 		/* 16. Poll for PORT_BUF_CTL2 register PHY Pulse Status = 1 for Owned PHY Lanes. */
 		if (intel_de_wait_custom(display, XELPDP_PORT_BUF_CTL2(display, port),
 					 lane_phy_pulse_status, lane_phy_pulse_status,
-					 XE3PLPD_RATE_CALIB_DONE_LATENCY_US, 2, NULL))
-			drm_warn(display->drm, "PHY %c PLL rate not changed after %dus.\n",
-				 phy_name(phy), XE3PLPD_RATE_CALIB_DONE_LATENCY_US);
+					 2, XE3PLPD_RATE_CALIB_DONE_LATENCY_MS, NULL))
+			drm_warn(display->drm, "PHY %c PLL rate not changed\n",
+				 phy_name(phy));
 
 		/* 17. SW clears PORT_BUF_CTL2 [PHY Pulse Status]. */
 		intel_de_rmw(display, XELPDP_PORT_BUF_CTL2(display, port),
@@ -1762,9 +1760,8 @@ void intel_lt_phy_pll_disable(struct intel_encoder *encoder)
 				 lane_phy_current_status,
 				 lane_phy_current_status,
 				 XE3PLPD_RESET_START_LATENCY_US, 0, NULL))
-		drm_warn(display->drm,
-			 "PHY %c failed to reset Lane after %dms.\n",
-			 phy_name(phy), XE3PLPD_RESET_START_LATENCY_US);
+		drm_warn(display->drm, "PHY %c failed to reset lane\n",
+			 phy_name(phy));
 
 	/* 4. Clear for PHY pulse status on owned PHY lanes. */
 	intel_de_rmw(display, XELPDP_PORT_BUF_CTL2(display, port),
@@ -1786,8 +1783,8 @@ void intel_lt_phy_pll_disable(struct intel_encoder *encoder)
 	if (intel_de_wait_custom(display, XELPDP_PORT_CLOCK_CTL(display, port),
 				 XELPDP_LANE_PCLK_PLL_ACK(0), 0,
 				 XE3PLPD_MACCLK_TURNOFF_LATENCY_US, 0, NULL))
-		drm_warn(display->drm, "PHY %c PLL MacCLK Ack deassertion Timeout after %dus.\n",
-			 phy_name(phy), XE3PLPD_MACCLK_TURNOFF_LATENCY_US);
+		drm_warn(display->drm, "PHY %c PLL MacCLK ack deassertion timeout\n",
+			 phy_name(phy));
 
 	/*
 	 *  9. Follow the Display Voltage Frequency Switching -
