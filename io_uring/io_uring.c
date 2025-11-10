@@ -3430,6 +3430,9 @@ static int io_uring_sanitise_params(struct io_uring_params *p)
 {
 	unsigned flags = p->flags;
 
+	if (flags & ~IORING_SETUP_FLAGS)
+		return -EINVAL;
+
 	/* There is no way to mmap rings without a real fd */
 	if ((flags & IORING_SETUP_REGISTERED_FD_ONLY) &&
 	    !(flags & IORING_SETUP_NO_MMAP))
@@ -3479,8 +3482,10 @@ static int io_uring_sanitise_params(struct io_uring_params *p)
 	return 0;
 }
 
-int io_uring_fill_params(unsigned entries, struct io_uring_params *p)
+int io_uring_fill_params(struct io_uring_params *p)
 {
+	unsigned entries = p->sq_entries;
+
 	if (!entries)
 		return -EINVAL;
 	if (entries > IORING_MAX_ENTRIES) {
@@ -3542,7 +3547,7 @@ int io_uring_fill_params(unsigned entries, struct io_uring_params *p)
 	return 0;
 }
 
-static __cold int io_uring_create(unsigned entries, struct io_uring_params *p,
+static __cold int io_uring_create(struct io_uring_params *p,
 				  struct io_uring_params __user *params)
 {
 	struct io_ring_ctx *ctx;
@@ -3554,7 +3559,7 @@ static __cold int io_uring_create(unsigned entries, struct io_uring_params *p,
 	if (ret)
 		return ret;
 
-	ret = io_uring_fill_params(entries, p);
+	ret = io_uring_fill_params(p);
 	if (unlikely(ret))
 		return ret;
 
@@ -3682,18 +3687,15 @@ err_fput:
 static long io_uring_setup(u32 entries, struct io_uring_params __user *params)
 {
 	struct io_uring_params p;
-	int i;
 
 	if (copy_from_user(&p, params, sizeof(p)))
 		return -EFAULT;
-	for (i = 0; i < ARRAY_SIZE(p.resv); i++) {
-		if (p.resv[i])
-			return -EINVAL;
-	}
 
-	if (p.flags & ~IORING_SETUP_FLAGS)
+	if (!mem_is_zero(&p.resv, sizeof(p.resv)))
 		return -EINVAL;
-	return io_uring_create(entries, &p, params);
+
+	p.sq_entries = entries;
+	return io_uring_create(&p, params);
 }
 
 static inline int io_uring_allowed(void)
