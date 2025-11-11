@@ -132,16 +132,6 @@ EXPORT_SYMBOL_GPL(fs_kobj);
  */
 __cacheline_aligned_in_smp DEFINE_SEQLOCK(mount_lock);
 
-static inline struct mnt_namespace *node_to_mnt_ns(const struct rb_node *node)
-{
-	struct ns_common *ns;
-
-	if (!node)
-		return NULL;
-	ns = rb_entry(node, struct ns_common, ns_tree_node);
-	return container_of(ns, struct mnt_namespace, ns);
-}
-
 static void mnt_ns_release(struct mnt_namespace *ns)
 {
 	/* keep alive for {list,stat}mount() */
@@ -5454,11 +5444,11 @@ static int statmount_string(struct kstatmount *s, u64 flag)
 		ret = statmount_sb_source(s, seq);
 		break;
 	case STATMOUNT_MNT_UIDMAP:
-		sm->mnt_uidmap = start;
+		offp = &sm->mnt_uidmap;
 		ret = statmount_mnt_uidmap(s, seq);
 		break;
 	case STATMOUNT_MNT_GIDMAP:
-		sm->mnt_gidmap = start;
+		offp = &sm->mnt_gidmap;
 		ret = statmount_mnt_gidmap(s, seq);
 		break;
 	default:
