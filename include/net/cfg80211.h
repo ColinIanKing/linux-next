@@ -685,7 +685,7 @@ ieee80211_get_he_6ghz_capa(const struct ieee80211_supported_band *sband,
 }
 
 /**
- * ieee80211_get_eht_iftype_cap - return ETH capabilities for an sband's iftype
+ * ieee80211_get_eht_iftype_cap - return EHT capabilities for an sband's iftype
  * @sband: the sband to search for the iftype on
  * @iftype: enum nl80211_iftype
  *
@@ -786,8 +786,7 @@ struct vif_params {
  * @key: key material
  * @key_len: length of key material
  * @cipher: cipher suite selector
- * @seq: sequence counter (IV/PN) for TKIP and CCMP keys, only used
- *	with the get_key() callback, must be in little endian,
+ * @seq: sequence counter (IV/PN), must be in little endian,
  *	length given by @seq_len.
  * @seq_len: length of @seq.
  * @vlan_id: vlan_id for VLAN group key (if nonzero)
