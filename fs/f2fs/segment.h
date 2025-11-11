@@ -626,21 +626,21 @@ static inline bool has_curseg_enough_space(struct f2fs_sb_info *sbi,
 
 		left_blocks = get_left_section_blocks(sbi, i, segno);
 
-		blocks = i <= CURSEG_COLD_DATA ? data_blocks : node_blocks;
+		if (i <= CURSEG_COLD_DATA) {
+			blocks = data_blocks;
+			/*
+			 * With active_logs == 6, dentry blocks can be allocated to
+			 * any data segment. With active_logs != 6, dentry blocks
+			 * are always allocated to HOT_DATA segment.
+			 */
+			if ((F2FS_OPTION(sbi).active_logs == 6) || (i == CURSEG_HOT_DATA))
+				blocks += dent_blocks;
+		} else {
+			blocks = node_blocks;
+		}
 		if (blocks > left_blocks)
 			return false;
 	}
-
-	/* check current data section for dentry blocks. */
-	segno = CURSEG_I(sbi, CURSEG_HOT_DATA)->segno;
-
-	if (unlikely(segno == NULL_SEGNO))
-		return false;
-
-	left_blocks = get_left_section_blocks(sbi, CURSEG_HOT_DATA, segno);
-
-	if (dent_blocks > left_blocks)
-		return false;
 	return true;
 }
 
