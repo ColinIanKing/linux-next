@@ -37,8 +37,8 @@
 #define BTRFS_SB_LOG_FIRST_OFFSET	(512ULL * SZ_1G)
 #define BTRFS_SB_LOG_SECOND_OFFSET	(4096ULL * SZ_1G)
 
-#define BTRFS_SB_LOG_FIRST_SHIFT	const_ilog2(BTRFS_SB_LOG_FIRST_OFFSET)
-#define BTRFS_SB_LOG_SECOND_SHIFT	const_ilog2(BTRFS_SB_LOG_SECOND_OFFSET)
+#define BTRFS_SB_LOG_FIRST_SHIFT	ilog2(BTRFS_SB_LOG_FIRST_OFFSET)
+#define BTRFS_SB_LOG_SECOND_SHIFT	ilog2(BTRFS_SB_LOG_SECOND_OFFSET)
 
 /* Number of superblock log zones */
 #define BTRFS_NR_SB_LOG_ZONES 2
@@ -1628,7 +1628,7 @@ int btrfs_load_block_group_zone_info(struct btrfs_block_group *cache, bool new)
 	struct btrfs_chunk_map *map;
 	u64 logical = cache->start;
 	u64 length = cache->length;
-	struct zone_info *zone_info = NULL;
+	struct zone_info AUTO_KFREE(zone_info);
 	int ret;
 	int i;
 	unsigned long *active = NULL;
@@ -1782,7 +1782,6 @@ out:
 		cache->physical_map = NULL;
 	}
 	bitmap_free(active);
-	kfree(zone_info);
 
 	return ret;
 }
@@ -1809,14 +1808,14 @@ bool btrfs_use_zone_append(struct btrfs_bio *bbio)
 {
 	u64 start = (bbio->bio.bi_iter.bi_sector << SECTOR_SHIFT);
 	struct btrfs_inode *inode = bbio->inode;
-	struct btrfs_fs_info *fs_info = bbio->fs_info;
+	struct btrfs_fs_info *fs_info = inode->root->fs_info;
 	struct btrfs_block_group *cache;
 	bool ret = false;
 
 	if (!btrfs_is_zoned(fs_info))
 		return false;
 
-	if (!inode || !is_data_inode(inode))
+	if (!is_data_inode(inode))
 		return false;
 
 	if (btrfs_op(&bbio->bio) != BTRFS_MAP_WRITE)
@@ -2750,10 +2749,9 @@ int btrfs_zone_finish_one_bg(struct btrfs_fs_info *fs_info)
 	return ret < 0 ? ret : 1;
 }
 
-int btrfs_zoned_activate_one_bg(struct btrfs_fs_info *fs_info,
-				struct btrfs_space_info *space_info,
-				bool do_finish)
+int btrfs_zoned_activate_one_bg(struct btrfs_space_info *space_info, bool do_finish)
 {
+	struct btrfs_fs_info *fs_info = space_info->fs_info;
 	struct btrfs_block_group *bg;
 	int index;
 
