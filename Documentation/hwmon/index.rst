@@ -151,6 +151,7 @@ Hardware Monitoring Kernel Drivers
    max1619
    max16601
    max1668
+   max17616
    max197
    max20730
    max20751
@@ -177,6 +178,7 @@ Hardware Monitoring Kernel Drivers
    mp2869
    mp2888
    mp2891
+   mp2925
    mp29502
    mp2975
    mp2993
@@ -184,6 +186,7 @@ Hardware Monitoring Kernel Drivers
    mp5920
    mp5990
    mp9941
+   mp9945
    mpq8785
    nct6683
    nct6775
