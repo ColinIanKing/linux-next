@@ -442,8 +442,8 @@ struct iomap_writeback_ops {
 	 * Returns the number of bytes processed or a negative errno.
 	 */
 	ssize_t (*writeback_range)(struct iomap_writepage_ctx *wpc,
-			struct folio *folio, u64 pos, unsigned int len,
-			u64 end_pos);
+			struct folio *folio, loff_t pos, unsigned int len,
+			loff_t end_pos);
 
 	/*
 	 * Submit a writeback context previously build up by ->writeback_range.

@@ -86,7 +86,8 @@ static inline bool ifs_block_is_dirty(struct folio *folio,
 }
 
 static unsigned ifs_find_dirty_range(struct folio *folio,
-		struct iomap_folio_state *ifs, u64 *range_start, u64 range_end)
+		struct iomap_folio_state *ifs, loff_t *range_start,
+		loff_t range_end)
 {
 	struct inode *inode = folio->mapping->host;
 	unsigned start_blk =
@@ -110,8 +111,8 @@ static unsigned ifs_find_dirty_range(struct folio *folio,
 	return nblks << inode->i_blkbits;
 }
 
-static unsigned iomap_find_dirty_range(struct folio *folio, u64 *range_start,
-		u64 range_end)
+static unsigned iomap_find_dirty_range(struct folio *folio, loff_t *range_start,
+		loff_t range_end)
 {
 	struct iomap_folio_state *ifs = folio->private;
 
@@ -1683,7 +1684,7 @@ void iomap_finish_folio_write(struct inode *inode, struct folio *folio,
 EXPORT_SYMBOL_GPL(iomap_finish_folio_write);
 
 static int iomap_writeback_range(struct iomap_writepage_ctx *wpc,
-		struct folio *folio, u64 pos, u32 rlen, u64 end_pos,
+		struct folio *folio, loff_t pos, u32 rlen, loff_t end_pos,
 		size_t *bytes_submitted)
 {
 	do {
@@ -1715,7 +1716,7 @@ static int iomap_writeback_range(struct iomap_writepage_ctx *wpc,
  * i_size, adjust end_pos and zero all data beyond i_size.
  */
 static bool iomap_writeback_handle_eof(struct folio *folio, struct inode *inode,
-		u64 *end_pos)
+		loff_t *end_pos)
 {
 	u64 isize = i_size_read(inode);
 
@@ -1770,9 +1771,9 @@ int iomap_writeback_folio(struct iomap_writepage_ctx *wpc, struct folio *folio)
 {
 	struct iomap_folio_state *ifs = folio->private;
 	struct inode *inode = wpc->inode;
-	u64 pos = folio_pos(folio);
-	u64 end_pos = pos + folio_size(folio);
-	u64 end_aligned = 0;
+	loff_t pos = folio_pos(folio);
+	loff_t end_pos = pos + folio_size(folio);
+	loff_t end_aligned = 0;
 	size_t bytes_submitted = 0;
 	int error = 0;
 	u32 rlen;
