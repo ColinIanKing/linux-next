@@ -2526,6 +2526,18 @@ static void quirk_disable_aspm_l0s_l1(struct pci_dev *dev)
 DECLARE_PCI_FIXUP_FINAL(PCI_VENDOR_ID_ASMEDIA, 0x1080, quirk_disable_aspm_l0s_l1);
 
 /*
+ * Remove ASPM L0s and L1 support from cached copy of Link Capabilities so
+ * aspm.c won't try to enable them.
+ */
+static void quirk_disable_aspm_l0s_l1_cap(struct pci_dev *dev)
+{
+	dev->lnkcap &= ~PCI_EXP_LNKCAP_ASPM_L0S;
+	dev->lnkcap &= ~PCI_EXP_LNKCAP_ASPM_L1;
+	pci_info(dev, "ASPM: L0s L1 removed from Link Capabilities to work around device defect\n");
+}
+DECLARE_PCI_FIXUP_HEADER(PCI_VENDOR_ID_FREESCALE, 0x0451, quirk_disable_aspm_l0s_l1_cap);
+
+/*
  * Some Pericom PCIe-to-PCI bridges in reverse mode need the PCIe Retrain
  * Link bit cleared after starting the link retrain process to allow this
  * process to finish.
