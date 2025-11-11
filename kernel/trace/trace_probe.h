@@ -89,6 +89,7 @@ enum fetch_op {
 	FETCH_OP_STACK,		/* Stack : .param = index */
 	FETCH_OP_STACKP,	/* Stack pointer */
 	FETCH_OP_RETVAL,	/* Return value */
+	FETCH_OP_BADDR,		/* Break address */
 	FETCH_OP_IMM,		/* Immediate : .immediate */
 	FETCH_OP_COMM,		/* Current comm */
 	FETCH_OP_ARG,		/* Function argument : .param */
@@ -401,6 +402,7 @@ static inline int traceprobe_get_entry_data_size(struct trace_probe *tp)
 #define TPARG_FL_USER   BIT(4)
 #define TPARG_FL_FPROBE BIT(5)
 #define TPARG_FL_TPOINT BIT(6)
+#define TPARG_FL_WPROBE BIT(7)
 #define TPARG_FL_LOC_MASK	GENMASK(4, 0)
 
 static inline bool tparg_is_function_entry(unsigned int flags)
@@ -561,7 +563,11 @@ extern int traceprobe_define_arg_fields(struct trace_event_call *event_call,
 	C(BAD_TYPE4STR,		"This type does not fit for string."),\
 	C(NEED_STRING_TYPE,	"$comm and immediate-string only accepts string type"),\
 	C(TOO_MANY_ARGS,	"Too many arguments are specified"),	\
-	C(TOO_MANY_EARGS,	"Too many entry arguments specified"),
+	C(TOO_MANY_EARGS,	"Too many entry arguments specified"),	\
+	C(BAD_ACCESS_FMT,	"Access memory address requires @"),	\
+	C(BAD_ACCESS_TYPE,	"Bad memory access type"),	\
+	C(BAD_ACCESS_LEN,	"This memory access length is not supported"), \
+	C(BAD_ACCESS_ADDR,	"Invalid access memory address"),
 
 #undef C
 #define C(a, b)		TP_ERR_##a
@@ -578,10 +584,12 @@ struct trace_probe_log {
 	int		index;
 };
 
-void trace_probe_log_init(const char *subsystem, int argc, const char **argv);
+const char *trace_probe_log_init(const char *subsystem, int argc, const char **argv);
 void trace_probe_log_set_index(int index);
 void trace_probe_log_clear(void);
 void __trace_probe_log_err(int offset, int err);
+
+DEFINE_FREE(trace_probe_log_clear, const char *, if (_T) trace_probe_log_clear())
 
 #define trace_probe_log_err(offs, err)	\
 	__trace_probe_log_err(offs, TP_ERR_##err)
