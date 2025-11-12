@@ -550,7 +550,8 @@ static void blkdev_readahead(struct readahead_control *rac)
 }
 
 static ssize_t blkdev_writeback_range(struct iomap_writepage_ctx *wpc,
-		struct folio *folio, u64 offset, unsigned int len, u64 end_pos)
+		struct folio *folio, loff_t offset, unsigned int len,
+		loff_t end_pos)
 {
 	loff_t isize = i_size_read(wpc->inode);
 
