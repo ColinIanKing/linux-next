@@ -6561,6 +6561,7 @@ release_timer:
 	timer_delete(timerid);
 release_msr:
 	free(per_cpu_msr_sum);
+	per_cpu_msr_sum = NULL;
 }
 
 /*
