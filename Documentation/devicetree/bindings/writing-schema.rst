@@ -222,6 +222,10 @@ In order to perform validation of DT source files, use the ``dtbs_check`` target
 
     make dtbs_check
 
+Or to validate a single DTB target::
+
+    make CHECK_DTBS=y arm/fvp-base-revc.dtb
+
 Note that ``dtbs_check`` will skip any binding schema files with errors. It is
 necessary to use ``dt_binding_check`` to get all the validation errors in the
 binding schema files.
