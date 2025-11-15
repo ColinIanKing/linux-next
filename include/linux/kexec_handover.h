@@ -105,13 +105,13 @@ static inline int kho_unpreserve_vmalloc(struct kho_vmalloc *preservation)
 	return -EOPNOTSUPP;
 }
 
-void *kho_alloc_preserve(size_t size)
+static inline void *kho_alloc_preserve(size_t size)
 {
 	return ERR_PTR(-EOPNOTSUPP);
 }
 
-void kho_unpreserve_free(void *mem) { }
-void kho_restore_free(void *mem) { }
+static inline void kho_unpreserve_free(void *mem) { }
+static inline void kho_restore_free(void *mem) { }
 
 static inline struct folio *kho_restore_folio(phys_addr_t phys)
 {
