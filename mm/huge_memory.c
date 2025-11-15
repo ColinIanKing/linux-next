@@ -3743,12 +3743,11 @@ static int __folio_freeze_and_split_unmapped(struct folio *folio, unsigned int n
 					     struct page *split_at, struct xa_state *xas,
 					     struct address_space *mapping, bool do_lru,
 					     struct list_head *list, enum split_type split_type,
-					     pgoff_t end, int extra_pins)
+					     pgoff_t end, int *nr_shmem_dropped, int extra_pins)
 {
 	struct folio *end_folio = folio_next(folio);
 	struct folio *new_folio, *next;
 	int old_order = folio_order(folio);
-	int nr_shmem_dropped = 0;
 	int ret = 0;
 	struct deferred_split *ds_queue;
 
@@ -3851,9 +3850,10 @@ static int __folio_freeze_and_split_unmapped(struct folio *folio, unsigned int n
 				continue;
 			}
 
+			VM_WARN_ON_ONCE(!nr_shmem_dropped);
 			/* Drop folio beyond EOF: ->index >= end */
-			if (shmem_mapping(mapping))
-				nr_shmem_dropped += nr_pages;
+			if (shmem_mapping(mapping) && nr_shmem_dropped)
+				*nr_shmem_dropped += nr_pages;
 			else if (folio_test_clear_dirty(new_folio))
 				folio_account_cleaned(
 					new_folio, inode_to_wb(mapping->host));
@@ -4039,7 +4039,8 @@ static int __folio_split(struct folio *folio, unsigned int new_order,
 	}
 
 	ret = __folio_freeze_and_split_unmapped(folio, new_order, split_at, &xas, mapping,
-						true, list, split_type, end, extra_pins);
+						true, list, split_type, end, &nr_shmem_dropped,
+						extra_pins);
 fail:
 	if (mapping)
 		xas_unlock(&xas);
@@ -4104,9 +4105,10 @@ int folio_split_unmapped(struct folio *folio, unsigned int new_order)
 {
 	int extra_pins, ret = 0;
 
-	VM_WARN_ON_FOLIO(folio_mapped(folio), folio);
+	VM_WARN_ON_ONCE_FOLIO(folio_mapped(folio), folio);
 	VM_WARN_ON_ONCE_FOLIO(!folio_test_locked(folio), folio);
 	VM_WARN_ON_ONCE_FOLIO(!folio_test_large(folio), folio);
+	VM_WARN_ON_ONCE_FOLIO(!folio_test_anon(folio), folio);
 
 	if (!can_split_folio(folio, 1, &extra_pins))
 		return -EAGAIN;
@@ -4114,7 +4116,7 @@ int folio_split_unmapped(struct folio *folio, unsigned int new_order)
 	local_irq_disable();
 	ret = __folio_freeze_and_split_unmapped(folio, new_order, &folio->page, NULL,
 						NULL, false, NULL, SPLIT_TYPE_UNIFORM,
-						0, extra_pins);
+						0, NULL, extra_pins);
 	local_irq_enable();
 	return ret;
 }
