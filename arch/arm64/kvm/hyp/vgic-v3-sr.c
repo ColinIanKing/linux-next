@@ -60,7 +60,7 @@ u64 __gic_v3_get_lr(unsigned int lr)
 	unreachable();
 }
 
-static void __gic_v3_set_lr(u64 val, int lr)
+void __gic_v3_set_lr(u64 val, int lr)
 {
 	switch (lr & 0xf) {
 	case 0:
@@ -243,7 +243,14 @@ void __vgic_v3_save_state(struct vgic_v3_cpu_if *cpu_if)
 		cpu_if->vgic_hcr |= val & ICH_HCR_EL2_EOIcount;
 	}
 
-	write_gicreg(compute_ich_hcr(cpu_if) & ~ICH_HCR_EL2_En, ICH_HCR_EL2);
+	write_gicreg(0, ICH_HCR_EL2);
+
+	/*
+	 * Hack alert: On NV, this results in a trap so that the above
+	 * write actually takes effect...
+	 */
+	isb();
+	read_gicreg(ICH_MISR_EL2);
 }
 
 void __vgic_v3_restore_state(struct vgic_v3_cpu_if *cpu_if)
