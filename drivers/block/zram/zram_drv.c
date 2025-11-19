@@ -760,6 +760,9 @@ static void release_wb_req(struct zram_wb_req *req)
 
 static void release_wb_ctl(struct zram_wb_ctl *wb_ctl)
 {
+	if (!wb_ctl)
+		return;
+
 	/* We should never have inflight requests at this point */
 	WARN_ON(!list_empty(&wb_ctl->inflight_reqs));
 
