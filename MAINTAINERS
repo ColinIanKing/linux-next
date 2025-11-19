@@ -4406,6 +4406,8 @@ F:	block/
 F:	drivers/block/
 F:	include/linux/bio.h
 F:	include/linux/blk*
+F:	include/uapi/linux/blk*
+F:	include/uapi/linux/ioprio.h
 F:	kernel/trace/blktrace.c
 F:	lib/sbitmap.c
 
@@ -28310,6 +28312,13 @@ M:	Tony W Wang-oc <TonyWWang-oc@zhaoxin.com>
 L:	linux-kernel@vger.kernel.org
 S:	Maintained
 F:	arch/x86/kernel/cpu/zhaoxin.c
+
+ZONED BLOCK DEVICE (BLOCK LAYER)
+M:	Damien Le Moal <dlemoal@kernel.org>
+L:	linux-block@vger.kernel.org
+S:	Maintained
+F:	block/blk-zoned.c
+F:	include/uapi/linux/blkzoned.h
 
 ZONED LOOP DEVICE
 M:	Damien Le Moal <dlemoal@kernel.org>
