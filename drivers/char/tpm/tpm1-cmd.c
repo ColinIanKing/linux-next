@@ -530,7 +530,7 @@ struct tpm1_get_random_out {
 int tpm1_get_random(struct tpm_chip *chip, u8 *dest, size_t max)
 {
 	struct tpm1_get_random_out *out;
-	u32 num_bytes =  min_t(u32, max, TPM_MAX_RNG_DATA);
+	u32 num_bytes =  min(max, TPM_MAX_RNG_DATA);
 	struct tpm_buf buf;
 	u32 total = 0;
 	int retries = 5;
