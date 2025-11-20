@@ -1058,12 +1058,12 @@ static void object_set_excess_ref(unsigned long ptr, unsigned long excess_ref)
  * pointer. Such object will not be scanned by kmemleak but references to it
  * are searched.
  */
-static void object_no_scan(unsigned long ptr)
+static void object_no_scan_flags(unsigned long ptr, unsigned long objflags)
 {
 	unsigned long flags;
 	struct kmemleak_object *object;
 
-	object = find_and_get_object(ptr, 0);
+	object = __find_and_get_object(ptr, 0, objflags);
 	if (!object) {
 		kmemleak_warn("Not scanning unknown object at 0x%08lx\n", ptr);
 		return;
@@ -1328,9 +1328,18 @@ void __ref kmemleak_no_scan(const void *ptr)
 	pr_debug("%s(0x%px)\n", __func__, ptr);
 
 	if (kmemleak_enabled && ptr && !IS_ERR(ptr))
-		object_no_scan((unsigned long)ptr);
+		object_no_scan_flags((unsigned long)ptr, 0);
 }
 EXPORT_SYMBOL(kmemleak_no_scan);
+
+void __ref kmemleak_no_scan_phys(phys_addr_t phys)
+{
+	pr_debug("%s(%pap)\n", __func__, &phys);
+
+	if (kmemleak_enabled)
+		object_no_scan_flags((unsigned long)phys, OBJECT_PHYS);
+}
+EXPORT_SYMBOL(kmemleak_no_scan_phys);
 
 /**
  * kmemleak_alloc_phys - similar to kmemleak_alloc but taking a physical

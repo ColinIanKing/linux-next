@@ -31,6 +31,7 @@ extern void kmemleak_ignore(const void *ptr) __ref;
 extern void kmemleak_ignore_percpu(const void __percpu *ptr) __ref;
 extern void kmemleak_scan_area(const void *ptr, size_t size, gfp_t gfp) __ref;
 extern void kmemleak_no_scan(const void *ptr) __ref;
+extern void kmemleak_no_scan_phys(phys_addr_t phys) __ref;
 extern void kmemleak_alloc_phys(phys_addr_t phys, size_t size,
 				gfp_t gfp) __ref;
 extern void kmemleak_free_part_phys(phys_addr_t phys, size_t size) __ref;
@@ -111,6 +112,9 @@ static inline void kmemleak_erase(void **ptr)
 {
 }
 static inline void kmemleak_no_scan(const void *ptr)
+{
+}
+static inline void kmemleak_no_scan_phys(phys_addr_t phys)
 {
 }
 static inline void kmemleak_alloc_phys(phys_addr_t phys, size_t size,
