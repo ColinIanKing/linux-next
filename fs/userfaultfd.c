@@ -312,7 +312,7 @@ again:
 		return true;
 
 	/*
-	 * A race could arise which would result in a softleaf entry such a
+	 * A race could arise which would result in a softleaf entry such as
 	 * migration entry unexpectedly being present in the PMD, so explicitly
 	 * check for this and bail out if so.
 	 */
