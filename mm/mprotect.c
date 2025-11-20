@@ -297,12 +297,31 @@ static long change_pte_range(struct mmu_gather *tlb,
 				prot_commit_flush_ptes(vma, addr, pte, oldpte, ptent,
 					nr_ptes, /* idx = */ 0, /* set_write = */ false, tlb);
 			pages += nr_ptes;
-		} else if (is_swap_pte(oldpte)) {
-			swp_entry_t entry = pte_to_swp_entry(oldpte);
+		} else if (pte_none(oldpte)) {
+			/*
+			 * Nobody plays with any none ptes besides
+			 * userfaultfd when applying the protections.
+			 */
+			if (likely(!uffd_wp))
+				continue;
+
+			if (userfaultfd_wp_use_markers(vma)) {
+				/*
+				 * For file-backed mem, we need to be able to
+				 * wr-protect a none pte, because even if the
+				 * pte is none, the page/swap cache could
+				 * exist.  Doing that by install a marker.
+				 */
+				set_pte_at(vma->vm_mm, addr, pte,
+					   make_pte_marker(PTE_MARKER_UFFD_WP));
+				pages++;
+			}
+		} else  {
+			softleaf_t entry = softleaf_from_pte(oldpte);
 			pte_t newpte;
 
-			if (is_writable_migration_entry(entry)) {
-				struct folio *folio = pfn_swap_entry_folio(entry);
+			if (softleaf_is_migration_write(entry)) {
+				const struct folio *folio = softleaf_to_folio(entry);
 
 				/*
 				 * A protection check is difficult so
@@ -316,7 +335,7 @@ static long change_pte_range(struct mmu_gather *tlb,
 				newpte = swp_entry_to_pte(entry);
 				if (pte_swp_soft_dirty(oldpte))
 					newpte = pte_swp_mksoft_dirty(newpte);
-			} else if (is_writable_device_private_entry(entry)) {
+			} else if (softleaf_is_device_private_write(entry)) {
 				/*
 				 * We do not preserve soft-dirtiness. See
 				 * copy_nonpresent_pte() for explanation.
@@ -326,14 +345,14 @@ static long change_pte_range(struct mmu_gather *tlb,
 				newpte = swp_entry_to_pte(entry);
 				if (pte_swp_uffd_wp(oldpte))
 					newpte = pte_swp_mkuffd_wp(newpte);
-			} else if (is_pte_marker_entry(entry)) {
+			} else if (softleaf_is_marker(entry)) {
 				/*
 				 * Ignore error swap entries unconditionally,
 				 * because any access should sigbus/sigsegv
 				 * anyway.
 				 */
-				if (is_poisoned_swp_entry(entry) ||
-				    is_guard_swp_entry(entry))
+				if (softleaf_is_poison_marker(entry) ||
+				    softleaf_is_guard_marker(entry))
 					continue;
 				/*
 				 * If this is uffd-wp pte marker and we'd like
@@ -356,28 +375,6 @@ static long change_pte_range(struct mmu_gather *tlb,
 
 			if (!pte_same(oldpte, newpte)) {
 				set_pte_at(vma->vm_mm, addr, pte, newpte);
-				pages++;
-			}
-		} else {
-			/* It must be an none page, or what else?.. */
-			WARN_ON_ONCE(!pte_none(oldpte));
-
-			/*
-			 * Nobody plays with any none ptes besides
-			 * userfaultfd when applying the protections.
-			 */
-			if (likely(!uffd_wp))
-				continue;
-
-			if (userfaultfd_wp_use_markers(vma)) {
-				/*
-				 * For file-backed mem, we need to be able to
-				 * wr-protect a none pte, because even if the
-				 * pte is none, the page/swap cache could
-				 * exist.  Doing that by install a marker.
-				 */
-				set_pte_at(vma->vm_mm, addr, pte,
-					   make_pte_marker(PTE_MARKER_UFFD_WP));
 				pages++;
 			}
 		}
@@ -477,7 +474,7 @@ again:
 			goto next;
 
 		_pmd = pmdp_get_lockless(pmd);
-		if (is_swap_pmd(_pmd) || pmd_trans_huge(_pmd)) {
+		if (pmd_is_huge(_pmd)) {
 			if ((next - addr != HPAGE_PMD_SIZE) ||
 			    pgtable_split_needed(vma, cp_flags)) {
 				__split_huge_pmd(vma, pmd, addr, false);
