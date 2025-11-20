@@ -8,7 +8,7 @@
 #ifndef __ASM_MMU_CONTEXT_H
 #define __ASM_MMU_CONTEXT_H
 
-#ifndef __ASSEMBLY__
+#ifndef __ASSEMBLER__
 
 #include <linux/compiler.h>
 #include <linux/sched.h>
@@ -68,10 +68,10 @@ static inline void __cpu_set_tcr_t0sz(unsigned long t0sz)
 {
 	unsigned long tcr = read_sysreg(tcr_el1);
 
-	if ((tcr & TCR_T0SZ_MASK) == t0sz)
+	if ((tcr & TCR_EL1_T0SZ_MASK) == t0sz)
 		return;
 
-	tcr &= ~TCR_T0SZ_MASK;
+	tcr &= ~TCR_EL1_T0SZ_MASK;
 	tcr |= t0sz;
 	write_sysreg(tcr, tcr_el1);
 	isb();
@@ -322,6 +322,6 @@ static inline void deactivate_mm(struct task_struct *tsk,
 
 #include <asm-generic/mmu_context.h>
 
-#endif /* !__ASSEMBLY__ */
+#endif /* !__ASSEMBLER__ */
 
 #endif /* !__ASM_MMU_CONTEXT_H */
