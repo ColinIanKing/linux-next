@@ -143,7 +143,7 @@ static inline unsigned long shmem_swap_usage(struct vm_area_struct *vma)
 	return 0;
 }
 
-static void shmem_uncharge(struct inode *inode, long pages)
+static inline void shmem_uncharge(struct inode *inode, long pages)
 {
 }
 #endif
