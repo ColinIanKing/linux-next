@@ -3751,6 +3751,7 @@ static int __folio_freeze_and_split_unmapped(struct folio *folio, unsigned int n
 	int ret = 0;
 	struct deferred_split *ds_queue;
 
+	VM_WARN_ON_ONCE(!mapping && end);
 	/* Prevent deferred_split_scan() touching ->_refcount */
 	ds_queue = folio_split_queue_lock(folio);
 	if (folio_ref_freeze(folio, 1 + extra_pins)) {
@@ -3919,7 +3920,7 @@ static int __folio_split(struct folio *folio, unsigned int new_order,
 	int nr_shmem_dropped = 0;
 	int remap_flags = 0;
 	int extra_pins, ret;
-	pgoff_t end;
+	pgoff_t end = 0;
 	bool is_hzp;
 
 	VM_WARN_ON_ONCE_FOLIO(!folio_test_locked(folio), folio);
@@ -4090,16 +4091,27 @@ out:
 	return ret;
 }
 
-/*
- * This function is a helper for splitting folios that have already been unmapped.
- * The use case is that the device or the CPU can refuse to migrate THP pages in
- * the middle of migration, due to allocation issues on either side
+/**
+ * folio_split_unmapped() - split a large anon folio that is already unmapped
+ * @folio: folio to split
+ * @new_order: the order of folios after split
  *
- * The high level code is copied from __folio_split, since the pages are anonymous
- * and are already isolated from the LRU, the code has been simplified to not
- * burden __folio_split with unmapped sprinkled into the code.
+ * This function is a helper for splitting folios that have already been
+ * unmapped. The use case is that the device or the CPU can refuse to migrate
+ * THP pages in the middle of migration, due to allocation issues on either
+ * side.
  *
- * None of the split folios are unlocked
+ * anon_vma_lock is not required to be held, mmap_read_lock() or
+ * mmap_write_lock() should be held. @folio is expected to be locked by the
+ * caller. device-private and non device-private folios are supported along
+ * with folios that are in the swapcache. @folio should also be unmapped and
+ * isolated from LRU (if applicable)
+ *
+ * Upon return, the folio is not remapped, split folios are not added to LRU,
+ * free_folio_and_swap_cache() is not called, and new folios remain locked.
+ *
+ * Return: 0 on success, -EAGAIN if the folio cannot be split (e.g., due to
+ *         insufficient reference count or extra pins).
  */
 int folio_split_unmapped(struct folio *folio, unsigned int new_order)
 {
