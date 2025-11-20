@@ -11,6 +11,7 @@
 
 #include <linux/cleanup.h>
 #include <linux/cma.h>
+#include <linux/kmemleak.h>
 #include <linux/count_zeros.h>
 #include <linux/kexec.h>
 #include <linux/kexec_handover.h>
@@ -654,6 +655,7 @@ static void __init kho_reserve_scratch(void)
 	if (!addr)
 		goto err_free_scratch_desc;
 
+	kmemleak_no_scan_phys(addr);
 	kho_scratch[i].addr = addr;
 	kho_scratch[i].size = size;
 	i++;
@@ -664,6 +666,7 @@ static void __init kho_reserve_scratch(void)
 	if (!addr)
 		goto err_free_scratch_areas;
 
+	kmemleak_no_scan_phys(addr);
 	kho_scratch[i].addr = addr;
 	kho_scratch[i].size = size;
 	i++;
@@ -676,6 +679,7 @@ static void __init kho_reserve_scratch(void)
 		if (!addr)
 			goto err_free_scratch_areas;
 
+		kmemleak_no_scan_phys(addr);
 		kho_scratch[i].addr = addr;
 		kho_scratch[i].size = size;
 		i++;
