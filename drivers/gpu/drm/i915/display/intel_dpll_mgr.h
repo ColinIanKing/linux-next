@@ -255,6 +255,11 @@ struct intel_c20pll_state {
 		u16 mplla[10];
 		u16 mpllb[11];
 	};
+	struct intel_c20pll_vdr_state {
+		u8 custom_width;
+		u8 serdes_rate;
+		u8 hdmi_rate;
+	} vdr;
 };
 
 struct intel_cx0pll_state {
@@ -262,6 +267,7 @@ struct intel_cx0pll_state {
 		struct intel_c10pll_state c10;
 		struct intel_c20pll_state c20;
 	};
+	int lane_count;
 	bool ssc_enabled;
 	bool use_c10;
 	bool tbt_mode;
@@ -444,6 +450,7 @@ bool intel_dpll_compare_hw_state(struct intel_display *display,
 				 const struct intel_dpll_hw_state *a,
 				 const struct intel_dpll_hw_state *b);
 enum intel_dpll_id icl_tc_port_to_pll_id(enum tc_port tc_port);
+enum intel_dpll_id mtl_port_to_pll_id(struct intel_display *display, enum port port);
 bool intel_dpll_is_combophy(enum intel_dpll_id id);
 
 void intel_dpll_state_verify(struct intel_atomic_state *state,

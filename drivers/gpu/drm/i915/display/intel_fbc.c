@@ -47,10 +47,6 @@
 
 #include "gem/i915_gem_stolen.h"
 
-#include "gt/intel_gt_types.h"
-
-#include "i915_drv.h"
-#include "i915_vgpu.h"
 #include "i915_vma.h"
 #include "i9xx_plane_regs.h"
 #include "intel_de.h"
@@ -64,6 +60,8 @@
 #include "intel_fbc.h"
 #include "intel_fbc_regs.h"
 #include "intel_frontbuffer.h"
+#include "intel_parent.h"
+#include "intel_step.h"
 
 #define for_each_fbc_id(__display, __fbc_id) \
 	for ((__fbc_id) = INTEL_FBC_A; (__fbc_id) < I915_MAX_FBCS; (__fbc_id)++) \
@@ -267,9 +265,7 @@ static u16 intel_fbc_override_cfb_stride(const struct intel_plane_state *plane_s
 
 static bool intel_fbc_has_fences(struct intel_display *display)
 {
-	struct drm_i915_private __maybe_unused *i915 = to_i915(display->drm);
-
-	return intel_gt_support_legacy_fencing(to_gt(i915));
+	return intel_parent_has_fenced_regions(display);
 }
 
 static u32 i8xx_fbc_ctl(struct intel_fbc *fbc)
@@ -1485,7 +1481,6 @@ static int intel_fbc_check_plane(struct intel_atomic_state *state,
 				 struct intel_plane *plane)
 {
 	struct intel_display *display = to_intel_display(state->base.dev);
-	struct drm_i915_private *i915 = to_i915(display->drm);
 	struct intel_plane_state *plane_state =
 		intel_atomic_get_new_plane_state(state, plane);
 	const struct drm_framebuffer *fb = plane_state->hw.fb;
@@ -1501,7 +1496,7 @@ static int intel_fbc_check_plane(struct intel_atomic_state *state,
 		return 0;
 	}
 
-	if (intel_vgpu_active(i915)) {
+	if (intel_parent_vgpu_active(display)) {
 		plane_state->no_fbc_reason = "VGPU active";
 		return 0;
 	}
@@ -1518,6 +1513,16 @@ static int intel_fbc_check_plane(struct intel_atomic_state *state,
 
 	if (intel_display_wa(display, 16023588340)) {
 		plane_state->no_fbc_reason = "Wa_16023588340";
+		return 0;
+	}
+
+	/*
+	 * Wa_15018326506:
+	 * Fixes: Underrun during media decode
+	 * Workaround: Do not enable FBC
+	 */
+	if (intel_display_wa(display, 15018326506)) {
+		plane_state->no_fbc_reason = "Wa_15018326506";
 		return 0;
 	}
 

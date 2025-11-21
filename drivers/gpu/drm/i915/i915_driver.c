@@ -81,6 +81,7 @@
 #include "gt/intel_gt_pm.h"
 #include "gt/intel_gt_print.h"
 #include "gt/intel_rc6.h"
+#include "gt/intel_rps.h"
 
 #include "pxp/intel_pxp.h"
 #include "pxp/intel_pxp_debugfs.h"
@@ -739,8 +740,29 @@ static void i915_welcome_messages(struct drm_i915_private *dev_priv)
 			 "DRM_I915_DEBUG_RUNTIME_PM enabled\n");
 }
 
+static bool vgpu_active(struct drm_device *drm)
+{
+	return intel_vgpu_active(to_i915(drm));
+}
+
+static bool has_fenced_regions(struct drm_device *drm)
+{
+	return intel_gt_support_legacy_fencing(to_gt(to_i915(drm)));
+}
+
+static void fence_priority_display(struct dma_fence *fence)
+{
+	if (dma_fence_is_i915(fence))
+		i915_gem_fence_wait_priority_display(fence);
+}
+
 static const struct intel_display_parent_interface parent = {
 	.rpm = &i915_display_rpm_interface,
+	.irq = &i915_display_irq_interface,
+	.rps = &i915_display_rps_interface,
+	.vgpu_active = vgpu_active,
+	.has_fenced_regions = has_fenced_regions,
+	.fence_priority_display = fence_priority_display,
 };
 
 const struct intel_display_parent_interface *i915_driver_parent_interface(void)
