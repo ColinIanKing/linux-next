@@ -541,12 +541,6 @@ static void show_one_worker_pool(struct worker_pool *pool);
 			 !lockdep_is_held(&wq_pool_mutex),		\
 			 "RCU or wq_pool_mutex should be held")
 
-#define assert_rcu_or_wq_mutex_or_pool_mutex(wq)			\
-	RCU_LOCKDEP_WARN(!rcu_read_lock_any_held() &&			\
-			 !lockdep_is_held(&wq->mutex) &&		\
-			 !lockdep_is_held(&wq_pool_mutex),		\
-			 "RCU, wq->mutex or wq_pool_mutex should be held")
-
 #define for_each_bh_worker_pool(pool, cpu)				\
 	for ((pool) = &per_cpu(bh_worker_pools, cpu)[0];		\
 	     (pool) < &per_cpu(bh_worker_pools, cpu)[NR_STD_WORKER_POOLS]; \
@@ -5380,11 +5374,6 @@ static void apply_wqattrs_commit(struct apply_wqattrs_ctx *ctx)
 	/* update node_nr_active->max */
 	wq_update_node_max_active(ctx->wq, -1);
 
-	/* rescuer needs to respect wq cpumask changes */
-	if (ctx->wq->rescuer)
-		set_cpus_allowed_ptr(ctx->wq->rescuer->task,
-				     unbound_effective_cpumask(ctx->wq));
-
 	mutex_unlock(&ctx->wq->mutex);
 }
 
@@ -5618,10 +5607,13 @@ static int init_rescuer(struct workqueue_struct *wq)
 	}
 
 	wq->rescuer = rescuer;
-	if (wq->flags & WQ_UNBOUND)
-		kthread_bind_mask(rescuer->task, unbound_effective_cpumask(wq));
+
+	/* initial cpumask is consistent with the detached rescuer and unbind_worker() */
+	if (cpumask_intersects(wq_unbound_cpumask, cpu_active_mask))
+		kthread_bind_mask(rescuer->task, wq_unbound_cpumask);
 	else
 		kthread_bind_mask(rescuer->task, cpu_possible_mask);
+
 	wake_up_process(rescuer->task);
 
 	return 0;
@@ -6941,8 +6933,26 @@ static int workqueue_apply_unbound_cpumask(const cpumask_var_t unbound_cpumask)
 	}
 
 	if (!ret) {
+		int cpu;
+		struct worker_pool *pool;
+		struct worker *worker;
+
 		mutex_lock(&wq_pool_attach_mutex);
 		cpumask_copy(wq_unbound_cpumask, unbound_cpumask);
+		/* rescuer needs to respect cpumask changes when it is not attached */
+		list_for_each_entry(wq, &workqueues, list) {
+			if (wq->rescuer && !wq->rescuer->pool)
+				unbind_worker(wq->rescuer);
+		}
+		/* DISASSOCIATED worker needs to respect wq_unbound_cpumask */
+		for_each_possible_cpu(cpu) {
+			for_each_cpu_worker_pool(pool, cpu) {
+				if (!(pool->flags & POOL_DISASSOCIATED))
+					continue;
+				for_each_pool_worker(worker, pool)
+					unbind_worker(worker);
+			}
+		}
 		mutex_unlock(&wq_pool_attach_mutex);
 	}
 	return ret;
