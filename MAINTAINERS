@@ -22200,8 +22200,8 @@ M:	Clément Léger <cleger@rivosinc.com>
 R:	Himanshu Chauhan <himanshu@thechauhan.dev>
 L:	linux-riscv@lists.infradead.org
 S:	Maintained
-F:	drivers/firmware/riscv/riscv_sse.c
-F:	include/linux/riscv_sse.h
+F:	drivers/firmware/riscv/riscv_sbi_sse.c
+F:	include/linux/riscv_sbi_sse.h
 
 RISC-V THEAD SoC SUPPORT
 M:	Drew Fustini <fustini@kernel.org>
