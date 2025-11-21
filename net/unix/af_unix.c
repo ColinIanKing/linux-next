@@ -1210,25 +1210,16 @@ static struct sock *unix_find_bsd(struct sockaddr_un *sunaddr, int addr_len,
 	unix_mkname_bsd(sunaddr, addr_len);
 
 	if (flags & SOCK_COREDUMP) {
-		const struct cred *cred;
-		struct cred *kcred;
 		struct path root;
-
-		kcred = prepare_kernel_cred(&init_task);
-		if (!kcred) {
-			err = -ENOMEM;
-			goto fail;
-		}
 
 		task_lock(&init_task);
 		get_fs_root(init_task.fs, &root);
 		task_unlock(&init_task);
 
-		cred = override_creds(kcred);
-		err = vfs_path_lookup(root.dentry, root.mnt, sunaddr->sun_path,
-				      LOOKUP_BENEATH | LOOKUP_NO_SYMLINKS |
-				      LOOKUP_NO_MAGICLINKS, &path);
-		put_cred(revert_creds(cred));
+		scoped_with_kernel_creds()
+			err = vfs_path_lookup(root.dentry, root.mnt, sunaddr->sun_path,
+					      LOOKUP_BENEATH | LOOKUP_NO_SYMLINKS |
+					      LOOKUP_NO_MAGICLINKS, &path);
 		path_put(&root);
 		if (err)
 			goto fail;
@@ -1399,7 +1390,7 @@ static int unix_bind_bsd(struct sock *sk, struct sockaddr_un *sunaddr,
 	idmap = mnt_idmap(parent.mnt);
 	err = security_path_mknod(&parent, dentry, mode, 0);
 	if (!err)
-		err = vfs_mknod(idmap, d_inode(parent.dentry), dentry, mode, 0);
+		err = vfs_mknod(idmap, d_inode(parent.dentry), dentry, mode, 0, NULL);
 	if (err)
 		goto out_path;
 	err = mutex_lock_interruptible(&u->bindlock);
