@@ -1,4 +1,8 @@
 soc/arm
+	mediatek/arm
+		https://git.kernel.org/pub/scm/linux/kernel/git/mediatek/linux tags/mtk-arm32-for-v6.19
+	patch
+		ARM: versatile: Fix typo in versatile.c
 
 soc/dt
 	mmp/dt
@@ -55,7 +59,7 @@ soc/dt
 		https://github.com/sophgo/linux tags/riscv-sophgo-dt-for-v6.19
 	mvebu/dt
 		git://git.kernel.org/pub/scm/linux/kernel/git/gclement/mvebu tags/mvebu-dt64-6.19-1
-	<no branch> (56baa9190988f35d53b1479a87c1bf44f6c979c6)
+	k3/dt-2
 		https://git.kernel.org/pub/scm/linux/kernel/git/ti/linux tags/ti-k3-dt-for-v6.19-part2
 
 soc/drivers
@@ -63,38 +67,40 @@ soc/drivers
 		https://github.com/Xilinx/linux-xlnx tags/zynqmp-soc-for-6.18
 
 soc/defconfig
-
-soc/late
+	patch
+		arm64: defconfig: Remove the redundant SCHED_MC/SCHED_SMT
+	renesas/defconfig
+		git://git.kernel.org/pub/scm/linux/kernel/git/geert/renesas-devel tags/renesas-arm-defconfig-for-v6.19-tag1
+	patch
+		arm64: defconfig: enable Exynos ACPM clocks
+	mediatek/defconfig
+		https://git.kernel.org/pub/scm/linux/kernel/git/mediatek/linux tags/mtk-defconfig-for-v6.19
+	tegra/defconfig32
+		git://git.kernel.org/pub/scm/linux/kernel/git/tegra/linux tags/tegra-for-6.19-arm-defconfig
+	tegra/defconfig64
+		git://git.kernel.org/pub/scm/linux/kernel/git/tegra/linux tags/tegra-for-6.19-arm64-defconfig
+	imx/defconfig
+		https://git.kernel.org/pub/scm/linux/kernel/git/shawnguo/linux tags/imx-defconfig-6.19
+	at91/defconfig
+		https://git.kernel.org/pub/scm/linux/kernel/git/at91/linux tags/at91-defconfig-6.19
+	omap/defconfig
+		git://git.kernel.org/pub/scm/linux/kernel/git/khilman/linux-omap tags/omap-for-v6.19/defconfig-signed
+	qcom/defconfig
+		https://git.kernel.org/pub/scm/linux/kernel/git/qcom/linux tags/qcom-arm64-defconfig-for-6.19
+	rockchip/defconfig
+		git://git.kernel.org/pub/scm/linux/kernel/git/mmind/linux-rockchip tags/v6.19-rockchip-defconfig64-1
 
 arm/fixes
-	<no branch> (ce121914f38aaa59504e20a1a625e5988fc6ead4)
-		git://git.kernel.org/pub/scm/linux/kernel/git/tegra/linux tags/tegra-for-6.18-arm64-dt-fixes
-	<no branch> (85893094535cced32b33766e283240164a5b11f8)
-		https://git.kernel.org/pub/scm/linux/kernel/git/bmc/linux tags/aspeed-6.18-fixes-0
-	<no branch> (6f37469a933030692741710db809722076f71973)
-		https://git.kernel.org/pub/scm/linux/kernel/git/krzk/linux-mem-ctrl tags/memory-controller-drv-fixes-6.18
-	patch
-		MAINTAINERS: Update Krzysztof Kozlowski's email
-	<no branch> (6504297872c7a5d0d06247970d32940eba26b8b3)
-		https://git.kernel.org/pub/scm/linux/kernel/git/shawnguo/linux tags/imx-fixes-6.18
-	<no branch> (9c16e4d216d8103a8178bbe070eb21f779f190c0)
-		https://github.com/Broadcom/stblinux tags/arm-soc/for-6.18/defconfig-arm64-fixes
-	<no branch> (3d1c795bdef43363ed1ff71e3f476d86c22e059b)
-		https://github.com/Broadcom/stblinux tags/arm-soc/for-6.18/devicetree-fixes-part2
-	<no branch> (997c06330fd5c2e220b692f2a358986c6c8fd5a2)
-		https://git.pengutronix.de/git/pza/linux tags/reset-fixes-for-v6.18
-	<no branch> (5e44c5a2cc84bed6b92cdfd9c567fcdb9f792604)
-		https://github.com/Broadcom/stblinux tags/arm-soc/for-6.18/devicetree-arm64-fixes-v2
-	<no branch> (aaf46c6a6df6052881c2e75cba65aeb6f1cfa88a)
-		git://git.kernel.org/pub/scm/linux/kernel/git/jenswi/linux-tee tags/tee-fix-for-v6.18
-	<no branch> (b5414520793e68d266fdd97a84989d9831156aad)
-		git://git.kernel.org/pub/scm/linux/kernel/git/mmind/linux-rockchip tags/v6.18-rockchip-dtsfixes1
-	patch
-		MAINTAINERS: sync omap devicetree maintainers with omap platform
+	imx/fixes-2
+		https://git.kernel.org/pub/scm/linux/kernel/git/shawnguo/linux tags/imx-fixes-6.18-2
+	tee/qcomtee-fixes
+		git://git.kernel.org/pub/scm/linux/kernel/git/jenswi/linux-tee tags/qcomtee-fixes2-for-6.18
 
 soc/newsoc
 	tenstorrent/newsoc
 		https://github.com/tenstorrent/linux tags/tenstorrent-dt-for-v6.19
 	bst/newsoc
 		Merge branch 'bst/newsoc' into soc/newsoc
+	anlogic/newsoc
+		https://git.kernel.org/pub/scm/linux/kernel/git/conor/linux tags/anlogic-initial-6.19-v2
 
