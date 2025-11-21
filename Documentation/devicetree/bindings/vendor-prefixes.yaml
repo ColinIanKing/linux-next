@@ -253,6 +253,8 @@ patternProperties:
     description: Shanghai Broadmobi Communication Technology Co.,Ltd.
   "^bsh,.*":
     description: BSH Hausgeraete GmbH
+  "^bst,.*":
+    description: Black Sesame Technologies Co., Ltd.
   "^bticino,.*":
     description: Bticino International
   "^buffalo,.*":
@@ -1614,6 +1616,8 @@ patternProperties:
     description: Tempo Semiconductor
   "^tenda,.*":
     description: Shenzhen Tenda Technology Co., Ltd.
+  "^tenstorrent,.*":
+    description: Tenstorrent AI ULC
   "^terasic,.*":
     description: Terasic Inc.
   "^tesla,.*":
