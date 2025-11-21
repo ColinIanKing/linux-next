@@ -261,56 +261,6 @@ static int imx8ulp_dsp_reset(struct imx_dsp_rproc *priv)
 	return 0;
 }
 
-/* Specific configuration for i.MX8MP */
-static const struct imx_rproc_dcfg dsp_rproc_cfg_imx8mp = {
-	.att		= imx_dsp_rproc_att_imx8mp,
-	.att_size	= ARRAY_SIZE(imx_dsp_rproc_att_imx8mp),
-	.method		= IMX_RPROC_RESET_CONTROLLER,
-};
-
-static const struct imx_dsp_rproc_dcfg imx_dsp_rproc_cfg_imx8mp = {
-	.dcfg		= &dsp_rproc_cfg_imx8mp,
-	.reset          = imx8mp_dsp_reset,
-};
-
-/* Specific configuration for i.MX8ULP */
-static const struct imx_rproc_dcfg dsp_rproc_cfg_imx8ulp = {
-	.src_reg	= IMX8ULP_SIM_LPAV_REG_SYSCTRL0,
-	.src_mask	= IMX8ULP_SYSCTRL0_DSP_STALL,
-	.src_start	= 0,
-	.src_stop	= IMX8ULP_SYSCTRL0_DSP_STALL,
-	.att		= imx_dsp_rproc_att_imx8ulp,
-	.att_size	= ARRAY_SIZE(imx_dsp_rproc_att_imx8ulp),
-	.method		= IMX_RPROC_MMIO,
-};
-
-static const struct imx_dsp_rproc_dcfg imx_dsp_rproc_cfg_imx8ulp = {
-	.dcfg		= &dsp_rproc_cfg_imx8ulp,
-	.reset          = imx8ulp_dsp_reset,
-};
-
-/* Specific configuration for i.MX8QXP */
-static const struct imx_rproc_dcfg dsp_rproc_cfg_imx8qxp = {
-	.att		= imx_dsp_rproc_att_imx8qxp,
-	.att_size	= ARRAY_SIZE(imx_dsp_rproc_att_imx8qxp),
-	.method		= IMX_RPROC_SCU_API,
-};
-
-static const struct imx_dsp_rproc_dcfg imx_dsp_rproc_cfg_imx8qxp = {
-	.dcfg		= &dsp_rproc_cfg_imx8qxp,
-};
-
-/* Specific configuration for i.MX8QM */
-static const struct imx_rproc_dcfg dsp_rproc_cfg_imx8qm = {
-	.att		= imx_dsp_rproc_att_imx8qm,
-	.att_size	= ARRAY_SIZE(imx_dsp_rproc_att_imx8qm),
-	.method		= IMX_RPROC_SCU_API,
-};
-
-static const struct imx_dsp_rproc_dcfg imx_dsp_rproc_cfg_imx8qm = {
-	.dcfg		= &dsp_rproc_cfg_imx8qm,
-};
-
 static int imx_dsp_rproc_ready(struct rproc *rproc)
 {
 	struct imx_dsp_rproc *priv = rproc->priv;
@@ -388,6 +338,28 @@ static int imx_dsp_rproc_handle_rsc(struct rproc *rproc, u32 rsc_type,
 	return RSC_HANDLED;
 }
 
+static int imx_dsp_rproc_mmio_start(struct rproc *rproc)
+{
+	struct imx_dsp_rproc *priv = rproc->priv;
+	const struct imx_rproc_dcfg *dcfg = priv->dsp_dcfg->dcfg;
+
+	return regmap_update_bits(priv->regmap, dcfg->src_reg, dcfg->src_mask, dcfg->src_start);
+}
+
+static int imx_dsp_rproc_reset_ctrl_start(struct rproc *rproc)
+{
+	struct imx_dsp_rproc *priv = rproc->priv;
+
+	return reset_control_deassert(priv->run_stall);
+}
+
+static int imx_dsp_rproc_scu_api_start(struct rproc *rproc)
+{
+	struct imx_dsp_rproc *priv = rproc->priv;
+
+	return imx_sc_pm_cpu_start(priv->ipc_handle, IMX_SC_R_DSP, true, rproc->bootaddr);
+}
+
 /*
  * Start function for rproc_ops
  *
@@ -404,32 +376,41 @@ static int imx_dsp_rproc_start(struct rproc *rproc)
 	struct device *dev = rproc->dev.parent;
 	int ret;
 
-	switch (dcfg->method) {
-	case IMX_RPROC_MMIO:
-		ret = regmap_update_bits(priv->regmap,
-					 dcfg->src_reg,
-					 dcfg->src_mask,
-					 dcfg->src_start);
-		break;
-	case IMX_RPROC_SCU_API:
-		ret = imx_sc_pm_cpu_start(priv->ipc_handle,
-					  IMX_SC_R_DSP,
-					  true,
-					  rproc->bootaddr);
-		break;
-	case IMX_RPROC_RESET_CONTROLLER:
-		ret = reset_control_deassert(priv->run_stall);
-		break;
-	default:
+	if (!dcfg->ops || !dcfg->ops->start)
 		return -EOPNOTSUPP;
+
+	ret = dcfg->ops->start(rproc);
+	if (ret) {
+		dev_err(dev, "Failed to enable remote core!\n");
+		return ret;
 	}
 
-	if (ret)
-		dev_err(dev, "Failed to enable remote core!\n");
-	else if (priv->flags & WAIT_FW_READY)
+	if (priv->flags & WAIT_FW_READY)
 		return imx_dsp_rproc_ready(rproc);
 
-	return ret;
+	return 0;
+}
+
+static int imx_dsp_rproc_mmio_stop(struct rproc *rproc)
+{
+	struct imx_dsp_rproc *priv = rproc->priv;
+	const struct imx_rproc_dcfg *dcfg = priv->dsp_dcfg->dcfg;
+
+	return regmap_update_bits(priv->regmap, dcfg->src_reg, dcfg->src_mask, dcfg->src_stop);
+}
+
+static int imx_dsp_rproc_reset_ctrl_stop(struct rproc *rproc)
+{
+	struct imx_dsp_rproc *priv = rproc->priv;
+
+	return reset_control_assert(priv->run_stall);
+}
+
+static int imx_dsp_rproc_scu_api_stop(struct rproc *rproc)
+{
+	struct imx_dsp_rproc *priv = rproc->priv;
+
+	return imx_sc_pm_cpu_start(priv->ipc_handle, IMX_SC_R_DSP, false, rproc->bootaddr);
 }
 
 /*
@@ -449,30 +430,18 @@ static int imx_dsp_rproc_stop(struct rproc *rproc)
 		return 0;
 	}
 
-	switch (dcfg->method) {
-	case IMX_RPROC_MMIO:
-		ret = regmap_update_bits(priv->regmap, dcfg->src_reg, dcfg->src_mask,
-					 dcfg->src_stop);
-		break;
-	case IMX_RPROC_SCU_API:
-		ret = imx_sc_pm_cpu_start(priv->ipc_handle,
-					  IMX_SC_R_DSP,
-					  false,
-					  rproc->bootaddr);
-		break;
-	case IMX_RPROC_RESET_CONTROLLER:
-		ret = reset_control_assert(priv->run_stall);
-		break;
-	default:
+	if (!dcfg->ops || !dcfg->ops->stop)
 		return -EOPNOTSUPP;
+
+	ret = dcfg->ops->stop(rproc);
+	if (ret) {
+		dev_err(dev, "Failed to stop remote core\n");
+		return ret;
 	}
 
-	if (ret)
-		dev_err(dev, "Failed to stop remote core\n");
-	else
-		priv->flags &= ~REMOTE_IS_READY;
+	priv->flags &= ~REMOTE_IS_READY;
 
-	return ret;
+	return 0;
 }
 
 /**
@@ -784,7 +753,7 @@ static int imx_dsp_rproc_prepare(struct rproc *rproc)
 
 	pm_runtime_get_sync(dev);
 
-	return  0;
+	return 0;
 }
 
 /* Unprepare function for rproc_ops */
@@ -792,7 +761,7 @@ static int imx_dsp_rproc_unprepare(struct rproc *rproc)
 {
 	pm_runtime_put_sync(rproc->dev.parent);
 
-	return  0;
+	return 0;
 }
 
 /* Kick function for rproc_ops */
@@ -1062,14 +1031,50 @@ static const struct rproc_ops imx_dsp_rproc_ops = {
 static int imx_dsp_attach_pm_domains(struct imx_dsp_rproc *priv)
 {
 	struct device *dev = priv->rproc->dev.parent;
-	int ret;
 
 	/* A single PM domain is already attached. */
 	if (dev->pm_domain)
 		return 0;
 
-	ret = dev_pm_domain_attach_list(dev, NULL, &priv->pd_list);
-	return ret < 0 ? ret : 0;
+	return devm_pm_domain_attach_list(dev, NULL, &priv->pd_list);
+}
+
+static int imx_dsp_rproc_mmio_detect_mode(struct rproc *rproc)
+{
+	struct imx_dsp_rproc *priv = rproc->priv;
+	struct device *dev = rproc->dev.parent;
+	struct regmap *regmap;
+
+	regmap = syscon_regmap_lookup_by_phandle(dev->of_node, "fsl,dsp-ctrl");
+	if (IS_ERR(regmap)) {
+		dev_err(dev, "failed to find syscon\n");
+		return PTR_ERR(regmap);
+	}
+
+	priv->regmap = regmap;
+
+	return 0;
+}
+
+static int imx_dsp_rproc_reset_ctrl_detect_mode(struct rproc *rproc)
+{
+	struct imx_dsp_rproc *priv = rproc->priv;
+	struct device *dev = rproc->dev.parent;
+
+	priv->run_stall = devm_reset_control_get_exclusive(dev, "runstall");
+	if (IS_ERR(priv->run_stall)) {
+		dev_err(dev, "Failed to get DSP runstall reset control\n");
+		return PTR_ERR(priv->run_stall);
+	}
+
+	return 0;
+}
+
+static int imx_dsp_rproc_scu_api_detect_mode(struct rproc *rproc)
+{
+	struct imx_dsp_rproc *priv = rproc->priv;
+
+	return imx_scu_get_handle(&priv->ipc_handle);
 }
 
 /**
@@ -1087,38 +1092,12 @@ static int imx_dsp_attach_pm_domains(struct imx_dsp_rproc *priv)
 static int imx_dsp_rproc_detect_mode(struct imx_dsp_rproc *priv)
 {
 	const struct imx_dsp_rproc_dcfg *dsp_dcfg = priv->dsp_dcfg;
-	struct device *dev = priv->rproc->dev.parent;
-	struct regmap *regmap;
-	int ret = 0;
+	const struct imx_rproc_dcfg *dcfg = dsp_dcfg->dcfg;
 
-	switch (dsp_dcfg->dcfg->method) {
-	case IMX_RPROC_SCU_API:
-		ret = imx_scu_get_handle(&priv->ipc_handle);
-		if (ret)
-			return ret;
-		break;
-	case IMX_RPROC_MMIO:
-		regmap = syscon_regmap_lookup_by_phandle(dev->of_node, "fsl,dsp-ctrl");
-		if (IS_ERR(regmap)) {
-			dev_err(dev, "failed to find syscon\n");
-			return PTR_ERR(regmap);
-		}
+	if (dcfg->ops && dcfg->ops->detect_mode)
+		return dcfg->ops->detect_mode(priv->rproc);
 
-		priv->regmap = regmap;
-		break;
-	case IMX_RPROC_RESET_CONTROLLER:
-		priv->run_stall = devm_reset_control_get_exclusive(dev, "runstall");
-		if (IS_ERR(priv->run_stall)) {
-			dev_err(dev, "Failed to get DSP runstall reset control\n");
-			return PTR_ERR(priv->run_stall);
-		}
-		break;
-	default:
-		ret = -EOPNOTSUPP;
-		break;
-	}
-
-	return ret;
+	return -EOPNOTSUPP;
 }
 
 static const char *imx_dsp_clks_names[DSP_RPROC_CLK_MAX] = {
@@ -1152,11 +1131,8 @@ static int imx_dsp_rproc_probe(struct platform_device *pdev)
 		return -ENODEV;
 
 	ret = rproc_of_parse_firmware(dev, 0, &fw_name);
-	if (ret) {
-		dev_err(dev, "failed to parse firmware-name property, ret = %d\n",
-			ret);
-		return ret;
-	}
+	if (ret)
+		return dev_err_probe(dev, ret, "failed to parse firmware-name property\n");
 
 	rproc = devm_rproc_alloc(dev, "imx-dsp-rproc", &imx_dsp_rproc_ops,
 				 fw_name, sizeof(*priv));
@@ -1179,52 +1155,28 @@ static int imx_dsp_rproc_probe(struct platform_device *pdev)
 	INIT_WORK(&priv->rproc_work, imx_dsp_rproc_vq_work);
 
 	ret = imx_dsp_rproc_detect_mode(priv);
-	if (ret) {
-		dev_err(dev, "failed on imx_dsp_rproc_detect_mode\n");
-		return ret;
-	}
+	if (ret)
+		return dev_err_probe(dev, ret, "failed on imx_dsp_rproc_detect_mode\n");
 
 	/* There are multiple power domains required by DSP on some platform */
 	ret = imx_dsp_attach_pm_domains(priv);
-	if (ret) {
-		dev_err(dev, "failed on imx_dsp_attach_pm_domains\n");
-		return ret;
-	}
+	if (ret < 0)
+		return dev_err_probe(dev, ret, "failed on imx_dsp_attach_pm_domains\n");
+
 	/* Get clocks */
 	ret = imx_dsp_rproc_clk_get(priv);
-	if (ret) {
-		dev_err(dev, "failed on imx_dsp_rproc_clk_get\n");
-		goto err_detach_domains;
-	}
+	if (ret)
+		return dev_err_probe(dev, ret, "failed on imx_dsp_rproc_clk_get\n");
 
 	init_completion(&priv->pm_comp);
 	rproc->auto_boot = false;
-	ret = rproc_add(rproc);
-	if (ret) {
-		dev_err(dev, "rproc_add failed\n");
-		goto err_detach_domains;
-	}
+	ret = devm_rproc_add(dev, rproc);
+	if (ret)
+		return dev_err_probe(dev, ret, "rproc_add failed\n");
 
 	rproc_coredump_set_elf_info(rproc, ELFCLASS32, EM_XTENSA);
 
-	pm_runtime_enable(dev);
-
-	return 0;
-
-err_detach_domains:
-	dev_pm_domain_detach_list(priv->pd_list);
-
-	return ret;
-}
-
-static void imx_dsp_rproc_remove(struct platform_device *pdev)
-{
-	struct rproc *rproc = platform_get_drvdata(pdev);
-	struct imx_dsp_rproc *priv = rproc->priv;
-
-	pm_runtime_disable(&pdev->dev);
-	rproc_del(rproc);
-	dev_pm_domain_detach_list(priv->pd_list);
+	return devm_pm_runtime_enable(dev);
 }
 
 /* pm runtime functions */
@@ -1364,6 +1316,74 @@ static const struct dev_pm_ops imx_dsp_rproc_pm_ops = {
 	RUNTIME_PM_OPS(imx_dsp_runtime_suspend, imx_dsp_runtime_resume, NULL)
 };
 
+static const struct imx_rproc_plat_ops imx_dsp_rproc_ops_mmio = {
+	.start		= imx_dsp_rproc_mmio_start,
+	.stop		= imx_dsp_rproc_mmio_stop,
+	.detect_mode	= imx_dsp_rproc_mmio_detect_mode,
+};
+
+static const struct imx_rproc_plat_ops imx_dsp_rproc_ops_reset_ctrl = {
+	.start		= imx_dsp_rproc_reset_ctrl_start,
+	.stop		= imx_dsp_rproc_reset_ctrl_stop,
+	.detect_mode	= imx_dsp_rproc_reset_ctrl_detect_mode,
+};
+
+static const struct imx_rproc_plat_ops imx_dsp_rproc_ops_scu_api = {
+	.start		= imx_dsp_rproc_scu_api_start,
+	.stop		= imx_dsp_rproc_scu_api_stop,
+	.detect_mode	= imx_dsp_rproc_scu_api_detect_mode,
+};
+
+/* Specific configuration for i.MX8MP */
+static const struct imx_rproc_dcfg dsp_rproc_cfg_imx8mp = {
+	.att		= imx_dsp_rproc_att_imx8mp,
+	.att_size	= ARRAY_SIZE(imx_dsp_rproc_att_imx8mp),
+	.ops		= &imx_dsp_rproc_ops_reset_ctrl,
+};
+
+static const struct imx_dsp_rproc_dcfg imx_dsp_rproc_cfg_imx8mp = {
+	.dcfg		= &dsp_rproc_cfg_imx8mp,
+	.reset          = imx8mp_dsp_reset,
+};
+
+/* Specific configuration for i.MX8ULP */
+static const struct imx_rproc_dcfg dsp_rproc_cfg_imx8ulp = {
+	.src_reg	= IMX8ULP_SIM_LPAV_REG_SYSCTRL0,
+	.src_mask	= IMX8ULP_SYSCTRL0_DSP_STALL,
+	.src_start	= 0,
+	.src_stop	= IMX8ULP_SYSCTRL0_DSP_STALL,
+	.att		= imx_dsp_rproc_att_imx8ulp,
+	.att_size	= ARRAY_SIZE(imx_dsp_rproc_att_imx8ulp),
+	.ops		= &imx_dsp_rproc_ops_mmio,
+};
+
+static const struct imx_dsp_rproc_dcfg imx_dsp_rproc_cfg_imx8ulp = {
+	.dcfg		= &dsp_rproc_cfg_imx8ulp,
+	.reset          = imx8ulp_dsp_reset,
+};
+
+/* Specific configuration for i.MX8QXP */
+static const struct imx_rproc_dcfg dsp_rproc_cfg_imx8qxp = {
+	.att		= imx_dsp_rproc_att_imx8qxp,
+	.att_size	= ARRAY_SIZE(imx_dsp_rproc_att_imx8qxp),
+	.ops		= &imx_dsp_rproc_ops_scu_api,
+};
+
+static const struct imx_dsp_rproc_dcfg imx_dsp_rproc_cfg_imx8qxp = {
+	.dcfg		= &dsp_rproc_cfg_imx8qxp,
+};
+
+/* Specific configuration for i.MX8QM */
+static const struct imx_rproc_dcfg dsp_rproc_cfg_imx8qm = {
+	.att		= imx_dsp_rproc_att_imx8qm,
+	.att_size	= ARRAY_SIZE(imx_dsp_rproc_att_imx8qm),
+	.ops		= &imx_dsp_rproc_ops_scu_api,
+};
+
+static const struct imx_dsp_rproc_dcfg imx_dsp_rproc_cfg_imx8qm = {
+	.dcfg		= &dsp_rproc_cfg_imx8qm,
+};
+
 static const struct of_device_id imx_dsp_rproc_of_match[] = {
 	{ .compatible = "fsl,imx8qxp-hifi4", .data = &imx_dsp_rproc_cfg_imx8qxp },
 	{ .compatible = "fsl,imx8qm-hifi4",  .data = &imx_dsp_rproc_cfg_imx8qm },
@@ -1375,7 +1395,6 @@ MODULE_DEVICE_TABLE(of, imx_dsp_rproc_of_match);
 
 static struct platform_driver imx_dsp_rproc_driver = {
 	.probe = imx_dsp_rproc_probe,
-	.remove = imx_dsp_rproc_remove,
 	.driver = {
 		.name = "imx-dsp-rproc",
 		.of_match_table = imx_dsp_rproc_of_match,
