@@ -3085,10 +3085,13 @@ EXPORT_SYMBOL(cpu_all_bits);
 #ifdef CONFIG_INIT_ALL_POSSIBLE
 struct cpumask __cpu_possible_mask __ro_after_init
 	= {CPU_BITS_ALL};
+unsigned int __num_possible_cpus __ro_after_init = NR_CPUS;
 #else
 struct cpumask __cpu_possible_mask __ro_after_init;
+unsigned int __num_possible_cpus __ro_after_init;
 #endif
 EXPORT_SYMBOL(__cpu_possible_mask);
+EXPORT_SYMBOL(__num_possible_cpus);
 
 struct cpumask __cpu_online_mask __read_mostly;
 EXPORT_SYMBOL(__cpu_online_mask);
@@ -3107,9 +3110,6 @@ EXPORT_SYMBOL(__cpu_dying_mask);
 
 atomic_t __num_online_cpus __read_mostly;
 EXPORT_SYMBOL(__num_online_cpus);
-
-unsigned int __num_possible_cpus __ro_after_init = NR_CPUS;
-EXPORT_SYMBOL(__num_possible_cpus);
 
 void init_cpu_present(const struct cpumask *src)
 {
