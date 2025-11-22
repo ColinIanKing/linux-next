@@ -660,6 +660,11 @@ void err_on_hypervisor(void)
 	}
 
 	flags = strstr(buffer, "flags");
+	if (!flags) {
+		fclose(cpuinfo);
+		free(buffer);
+		err(1, "Failed to find 'flags' in /proc/cpuinfo");
+	}
 	rewind(cpuinfo);
 	fseek(cpuinfo, flags - buffer, SEEK_SET);
 	if (!fgets(buffer, 4096, cpuinfo)) {
