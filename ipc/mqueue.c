@@ -899,7 +899,7 @@ static int do_mq_open(const char __user *u_name, int oflag, umode_t mode,
 	struct dentry *root = mnt->mnt_root;
 	struct filename *name;
 	struct path path;
-	int fd, error;
+	int ret;
 	int ro;
 
 	audit_mq_open(oflag, mode, attr);
@@ -908,38 +908,25 @@ static int do_mq_open(const char __user *u_name, int oflag, umode_t mode,
 	if (IS_ERR(name))
 		return PTR_ERR(name);
 
-	fd = get_unused_fd_flags(O_CLOEXEC);
-	if (fd < 0)
-		goto out_putname;
-
 	ro = mnt_want_write(mnt);	/* we'll drop it in any case */
 	inode_lock(d_inode(root));
 	path.dentry = lookup_noperm(&QSTR(name->name), root);
 	if (IS_ERR(path.dentry)) {
-		error = PTR_ERR(path.dentry);
-		goto out_putfd;
+		ret = PTR_ERR(path.dentry);
+		goto out_unlock;
 	}
 	path.mnt = mntget(mnt);
-	error = prepare_open(path.dentry, oflag, ro, mode, name, attr);
-	if (!error) {
-		struct file *file = dentry_open(&path, oflag, current_cred());
-		if (!IS_ERR(file))
-			fd_install(fd, file);
-		else
-			error = PTR_ERR(file);
-	}
+	ret = prepare_open(path.dentry, oflag, ro, mode, name, attr);
+	if (!ret)
+		ret = FD_ADD(O_CLOEXEC, dentry_open(&path, oflag, current_cred()));
 	path_put(&path);
-out_putfd:
-	if (error) {
-		put_unused_fd(fd);
-		fd = error;
-	}
+
+out_unlock:
 	inode_unlock(d_inode(root));
 	if (!ro)
 		mnt_drop_write(mnt);
-out_putname:
 	putname(name);
-	return fd;
+	return ret;
 }
 
 SYSCALL_DEFINE4(mq_open, const char __user *, u_name, int, oflag, umode_t, mode,

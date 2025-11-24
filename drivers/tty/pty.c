@@ -602,41 +602,21 @@ static struct cdev ptmx_cdev;
 int ptm_open_peer(struct file *master, struct tty_struct *tty, int flags)
 {
 	int fd;
-	struct file *filp;
-	int retval = -EINVAL;
 	struct path path;
 
 	if (tty->driver != ptm_driver)
 		return -EIO;
 
-	fd = get_unused_fd_flags(flags);
-	if (fd < 0) {
-		retval = fd;
-		goto err;
-	}
-
 	/* Compute the slave's path */
 	path.mnt = devpts_mntget(master, tty->driver_data);
-	if (IS_ERR(path.mnt)) {
-		retval = PTR_ERR(path.mnt);
-		goto err_put;
-	}
+	if (IS_ERR(path.mnt))
+		return PTR_ERR(path.mnt);
 	path.dentry = tty->link->driver_data;
 
-	filp = dentry_open(&path, flags, current_cred());
-	mntput(path.mnt);
-	if (IS_ERR(filp)) {
-		retval = PTR_ERR(filp);
-		goto err_put;
-	}
-
-	fd_install(fd, filp);
+	fd = FD_ADD(flags, dentry_open(&path, flags, current_cred()));
+	if (fd < 0)
+		mntput(path.mnt);
 	return fd;
-
-err_put:
-	put_unused_fd(fd);
-err:
-	return retval;
 }
 
 static int pty_unix98_ioctl(struct tty_struct *tty,
