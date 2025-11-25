@@ -698,7 +698,7 @@ static void ext4_handle_error(struct super_block *sb, bool force_ro, int error,
 		WARN_ON_ONCE(1);
 
 	if (!continue_fs && !ext4_emergency_ro(sb) && journal)
-		jbd2_journal_abort(journal, -EIO);
+		jbd2_journal_abort(journal, -error);
 
 	if (!bdev_read_only(sb->s_bdev)) {
 		save_error_info(sb, error, ino, block, func, line);
@@ -1396,6 +1396,7 @@ static struct inode *ext4_alloc_inode(struct super_block *sb)
 
 	inode_set_iversion(&ei->vfs_inode, 1);
 	ei->i_flags = 0;
+	ext4_clear_state_flags(ei);	/* Only relevant on 32-bit archs */
 	spin_lock_init(&ei->i_raw_lock);
 	ei->i_prealloc_node = RB_ROOT;
 	atomic_set(&ei->i_prealloc_active, 0);
@@ -1406,6 +1407,7 @@ static struct inode *ext4_alloc_inode(struct super_block *sb)
 	ei->i_es_all_nr = 0;
 	ei->i_es_shk_nr = 0;
 	ei->i_es_shrink_lblk = 0;
+	ei->i_es_seq = 0;
 	ei->i_reserved_data_blocks = 0;
 	spin_lock_init(&(ei->i_block_reservation_lock));
 	ext4_init_pending_tree(&ei->i_pending_tree);
@@ -2475,7 +2477,7 @@ static int parse_apply_sb_mount_options(struct super_block *sb,
 					struct ext4_fs_context *m_ctx)
 {
 	struct ext4_sb_info *sbi = EXT4_SB(sb);
-	char s_mount_opts[65];
+	char s_mount_opts[64];
 	struct ext4_fs_context *s_ctx = NULL;
 	struct fs_context *fc = NULL;
 	int ret = -ENOMEM;
@@ -2483,7 +2485,8 @@ static int parse_apply_sb_mount_options(struct super_block *sb,
 	if (!sbi->s_es->s_mount_opts[0])
 		return 0;
 
-	strscpy_pad(s_mount_opts, sbi->s_es->s_mount_opts);
+	if (strscpy_pad(s_mount_opts, sbi->s_es->s_mount_opts) < 0)
+		return -E2BIG;
 
 	fc = kzalloc(sizeof(struct fs_context), GFP_KERNEL);
 	if (!fc)
@@ -5842,7 +5845,7 @@ static int ext4_journal_bmap(journal_t *journal, sector_t *block)
 		ext4_msg(journal->j_inode->i_sb, KERN_CRIT,
 			 "journal bmap failed: block %llu ret %d\n",
 			 *block, ret);
-		jbd2_journal_abort(journal, ret ? ret : -EIO);
+		jbd2_journal_abort(journal, ret ? ret : -EFSCORRUPTED);
 		return ret;
 	}
 	*block = map.m_pblk;
