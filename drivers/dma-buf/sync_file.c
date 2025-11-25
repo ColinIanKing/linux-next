@@ -213,56 +213,38 @@ static __poll_t sync_file_poll(struct file *file, poll_table *wait)
 static long sync_file_ioctl_merge(struct sync_file *sync_file,
 				  unsigned long arg)
 {
-	int fd = get_unused_fd_flags(O_CLOEXEC);
-	int err;
 	struct sync_file *fence2, *fence3;
 	struct sync_merge_data data;
 
-	if (fd < 0)
-		return fd;
+	if (copy_from_user(&data, (void __user *)arg, sizeof(data)))
+		return -EFAULT;
 
-	if (copy_from_user(&data, (void __user *)arg, sizeof(data))) {
-		err = -EFAULT;
-		goto err_put_fd;
-	}
-
-	if (data.flags || data.pad) {
-		err = -EINVAL;
-		goto err_put_fd;
-	}
+	if (data.flags || data.pad)
+		return -EINVAL;
 
 	fence2 = sync_file_fdget(data.fd2);
-	if (!fence2) {
-		err = -ENOENT;
-		goto err_put_fd;
-	}
+	if (!fence2)
+		return -ENOENT;
 
 	data.name[sizeof(data.name) - 1] = '\0';
 	fence3 = sync_file_merge(data.name, sync_file, fence2);
 	if (!fence3) {
-		err = -ENOMEM;
-		goto err_put_fence2;
+		fput(fence2->file);
+		return -ENOMEM;
 	}
 
-	data.fence = fd;
-	if (copy_to_user((void __user *)arg, &data, sizeof(data))) {
-		err = -EFAULT;
-		goto err_put_fence3;
+	FD_PREPARE(fdf, O_CLOEXEC, fence3->file);
+	fput(fence2->file);
+	if (fdf.err) {
+		fput(fence3->file);
+		return fdf.err;
 	}
 
-	fd_install(fd, fence3->file);
-	fput(fence2->file);
-	return 0;
+	data.fence = fd_prepare_fd(fdf);
+	if (copy_to_user((void __user *)arg, &data, sizeof(data)))
+		return -EFAULT;
 
-err_put_fence3:
-	fput(fence3->file);
-
-err_put_fence2:
-	fput(fence2->file);
-
-err_put_fd:
-	put_unused_fd(fd);
-	return err;
+	return fd_publish(fdf);
 }
 
 static int sync_fill_fence_info(struct dma_fence *fence,
