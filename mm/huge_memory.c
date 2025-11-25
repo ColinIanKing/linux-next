@@ -3714,7 +3714,8 @@ int folio_check_splittable(struct folio *folio, unsigned int new_order,
 	 * caller that there was a race.
 	 *
 	 * TODO: this will also currently refuse shmem folios that are in the
-	 * swapcache.
+	 * swapcache.  Currently it will also refuse folios without a mapping
+	 * in the swapcache (shmem or to-be-anon folios).
 	 */
 	if (!folio_test_anon(folio) && !folio->mapping)
 		return -EBUSY;
