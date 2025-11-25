@@ -4,6 +4,7 @@
  */
 
 #define _GNU_SOURCE /* memmem() */
+#include <fnmatch.h>
 #include <string.h>
 #include <stdlib.h>
 #include <inttypes.h>
@@ -12,8 +13,10 @@
 #include <objtool/builtin.h>
 #include <objtool/cfi.h>
 #include <objtool/arch.h>
+#include <objtool/disas.h>
 #include <objtool/check.h>
 #include <objtool/special.h>
+#include <objtool/trace.h>
 #include <objtool/warn.h>
 #include <objtool/checksum.h>
 #include <objtool/util.h>
@@ -24,17 +27,16 @@
 #include <linux/static_call_types.h>
 #include <linux/string.h>
 
-struct alternative {
-	struct alternative *next;
-	struct instruction *insn;
-};
-
 static unsigned long nr_cfi, nr_cfi_reused, nr_cfi_cache;
 
 static struct cfi_init_state initial_func_cfi;
 static struct cfi_state init_cfi;
 static struct cfi_state func_cfi;
 static struct cfi_state force_undefined_cfi;
+
+struct disas_context *objtool_disas_ctx;
+
+size_t sym_name_max_len;
 
 struct instruction *find_insn(struct objtool_file *file,
 			      struct section *sec, unsigned long offset)
@@ -132,15 +134,6 @@ static struct instruction *prev_insn_same_sym(struct objtool_file *file,
 #define sec_for_each_insn_continue(file, insn)				\
 	for (insn = next_insn_same_sec(file, insn); insn;		\
 	     insn = next_insn_same_sec(file, insn))
-
-static inline struct symbol *insn_call_dest(struct instruction *insn)
-{
-	if (insn->type == INSN_JUMP_DYNAMIC ||
-	    insn->type == INSN_CALL_DYNAMIC)
-		return NULL;
-
-	return insn->_call_dest;
-}
 
 static inline struct reloc *insn_jump_table(struct instruction *insn)
 {
@@ -1758,6 +1751,7 @@ static int handle_group_alt(struct objtool_file *file,
 		orig_alt_group->last_insn = last_orig_insn;
 		orig_alt_group->nop = NULL;
 		orig_alt_group->ignore = orig_insn->ignore_alts;
+		orig_alt_group->feature = 0;
 	} else {
 		if (orig_alt_group->last_insn->offset + orig_alt_group->last_insn->len -
 		    orig_alt_group->first_insn->offset != special_alt->orig_len) {
@@ -1862,6 +1856,7 @@ end:
 	new_alt_group->nop = nop;
 	new_alt_group->ignore = (*new_insn)->ignore_alts;
 	new_alt_group->cfi = orig_alt_group->cfi;
+	new_alt_group->feature = special_alt->feature;
 	return 0;
 }
 
@@ -1926,7 +1921,9 @@ static int add_special_section_alts(struct objtool_file *file)
 	struct list_head special_alts;
 	struct instruction *orig_insn, *new_insn;
 	struct special_alt *special_alt, *tmp;
+	enum alternative_type alt_type;
 	struct alternative *alt;
+	struct alternative *a;
 
 	if (special_get_alts(file->elf, &special_alts))
 		return -1;
@@ -1961,9 +1958,15 @@ static int add_special_section_alts(struct objtool_file *file)
 			if (handle_group_alt(file, special_alt, orig_insn, &new_insn))
 				return -1;
 
+			alt_type = ALT_TYPE_INSTRUCTIONS;
+
 		} else if (special_alt->jump_or_nop) {
 			if (handle_jump_alt(file, special_alt, orig_insn, &new_insn))
 				return -1;
+
+			alt_type = ALT_TYPE_JUMP_TABLE;
+		} else {
+			alt_type = ALT_TYPE_EX_TABLE;
 		}
 
 		alt = calloc(1, sizeof(*alt));
@@ -1973,8 +1976,20 @@ static int add_special_section_alts(struct objtool_file *file)
 		}
 
 		alt->insn = new_insn;
-		alt->next = orig_insn->alts;
-		orig_insn->alts = alt;
+		alt->type = alt_type;
+		alt->next = NULL;
+
+		/*
+		 * Store alternatives in the same order they have been
+		 * defined.
+		 */
+		if (!orig_insn->alts) {
+			orig_insn->alts = alt;
+		} else {
+			for (a = orig_insn->alts; a->next; a = a->next)
+				;
+			a->next = alt;
+		}
 
 		list_del(&special_alt->list);
 		free(special_alt);
@@ -2471,6 +2486,7 @@ static bool is_profiling_func(const char *name)
 static int classify_symbols(struct objtool_file *file)
 {
 	struct symbol *func;
+	size_t len;
 
 	for_each_sym(file->elf, func) {
 		if (is_notype_sym(func) && strstarts(func->name, ".L"))
@@ -2497,6 +2513,10 @@ static int classify_symbols(struct objtool_file *file)
 
 		if (is_profiling_func(func->name))
 			func->profiling_func = true;
+
+		len = strlen(func->name);
+		if (len > sym_name_max_len)
+			sym_name_max_len = len;
 	}
 
 	return 0;
@@ -2605,7 +2625,7 @@ static int decode_sections(struct objtool_file *file)
 	 * Must be before add_jump_destinations(), which depends on 'func'
 	 * being set for alternatives, to enable proper sibling call detection.
 	 */
-	if (validate_branch_enabled() || opts.noinstr || opts.hack_jump_label) {
+	if (validate_branch_enabled() || opts.noinstr || opts.hack_jump_label || opts.disas) {
 		if (add_special_section_alts(file))
 			return -1;
 	}
@@ -3557,8 +3577,10 @@ static bool skip_alt_group(struct instruction *insn)
 		return false;
 
 	/* ANNOTATE_IGNORE_ALTERNATIVE */
-	if (insn->alt_group->ignore)
+	if (insn->alt_group->ignore) {
+		TRACE_ALT(insn, "alt group ignored");
 		return true;
+	}
 
 	/*
 	 * For NOP patched with CLAC/STAC, only follow the latter to avoid
@@ -3662,24 +3684,291 @@ static void checksum_update_insn(struct objtool_file *file, struct symbol *func,
 	checksum_update(func, insn, &offset, sizeof(offset));
 }
 
+static int validate_branch(struct objtool_file *file, struct symbol *func,
+			   struct instruction *insn, struct insn_state state);
+static int do_validate_branch(struct objtool_file *file, struct symbol *func,
+			      struct instruction *insn, struct insn_state state);
+
+static int validate_insn(struct objtool_file *file, struct symbol *func,
+			 struct instruction *insn, struct insn_state *statep,
+			 struct instruction *prev_insn, struct instruction *next_insn,
+			 bool *dead_end)
+{
+	/* prev_state and alt_name are not used if there is no disassembly support */
+	struct insn_state prev_state __maybe_unused;
+	char *alt_name __maybe_unused = NULL;
+	struct alternative *alt;
+	u8 visited;
+	int ret;
+
+	/*
+	 * Any returns before the end of this function are effectively dead
+	 * ends, i.e. validate_branch() has reached the end of the branch.
+	 */
+	*dead_end = true;
+
+	visited = VISITED_BRANCH << statep->uaccess;
+	if (insn->visited & VISITED_BRANCH_MASK) {
+		if (!insn->hint && !insn_cfi_match(insn, &statep->cfi))
+			return 1;
+
+		if (insn->visited & visited) {
+			TRACE_INSN(insn, "already visited");
+			return 0;
+		}
+	} else {
+		nr_insns_visited++;
+	}
+
+	if (statep->noinstr)
+		statep->instr += insn->instr;
+
+	if (insn->hint) {
+		if (insn->restore) {
+			struct instruction *save_insn, *i;
+
+			i = insn;
+			save_insn = NULL;
+
+			sym_for_each_insn_continue_reverse(file, func, i) {
+				if (i->save) {
+					save_insn = i;
+					break;
+				}
+			}
+
+			if (!save_insn) {
+				WARN_INSN(insn, "no corresponding CFI save for CFI restore");
+				return 1;
+			}
+
+			if (!save_insn->visited) {
+				/*
+				 * If the restore hint insn is at the
+				 * beginning of a basic block and was
+				 * branched to from elsewhere, and the
+				 * save insn hasn't been visited yet,
+				 * defer following this branch for now.
+				 * It will be seen later via the
+				 * straight-line path.
+				 */
+				if (!prev_insn) {
+					TRACE_INSN(insn, "defer restore");
+					return 0;
+				}
+
+				WARN_INSN(insn, "objtool isn't smart enough to handle this CFI save/restore combo");
+				return 1;
+			}
+
+			insn->cfi = save_insn->cfi;
+			nr_cfi_reused++;
+		}
+
+		statep->cfi = *insn->cfi;
+	} else {
+		/* XXX track if we actually changed statep->cfi */
+
+		if (prev_insn && !cficmp(prev_insn->cfi, &statep->cfi)) {
+			insn->cfi = prev_insn->cfi;
+			nr_cfi_reused++;
+		} else {
+			insn->cfi = cfi_hash_find_or_add(&statep->cfi);
+		}
+	}
+
+	insn->visited |= visited;
+
+	if (propagate_alt_cfi(file, insn))
+		return 1;
+
+	if (insn->alts) {
+		for (alt = insn->alts; alt; alt = alt->next) {
+			TRACE_ALT_BEGIN(insn, alt, alt_name);
+			ret = validate_branch(file, func, alt->insn, *statep);
+			TRACE_ALT_END(insn, alt, alt_name);
+			if (ret) {
+				BT_INSN(insn, "(alt)");
+				return ret;
+			}
+		}
+		TRACE_ALT_INFO_NOADDR(insn, "/ ", "DEFAULT");
+	}
+
+	if (skip_alt_group(insn))
+		return 0;
+
+	prev_state = *statep;
+	ret = handle_insn_ops(insn, next_insn, statep);
+	TRACE_INSN_STATE(insn, &prev_state, statep);
+
+	if (ret)
+		return 1;
+
+	switch (insn->type) {
+
+	case INSN_RETURN:
+		TRACE_INSN(insn, "return");
+		return validate_return(func, insn, statep);
+
+	case INSN_CALL:
+	case INSN_CALL_DYNAMIC:
+		if (insn->type == INSN_CALL)
+			TRACE_INSN(insn, "call");
+		else
+			TRACE_INSN(insn, "indirect call");
+
+		ret = validate_call(file, insn, statep);
+		if (ret)
+			return ret;
+
+		if (opts.stackval && func && !is_special_call(insn) &&
+		    !has_valid_stack_frame(statep)) {
+			WARN_INSN(insn, "call without frame pointer save/setup");
+			return 1;
+		}
+
+		break;
+
+	case INSN_JUMP_CONDITIONAL:
+	case INSN_JUMP_UNCONDITIONAL:
+		if (is_sibling_call(insn)) {
+			TRACE_INSN(insn, "sibling call");
+			ret = validate_sibling_call(file, insn, statep);
+			if (ret)
+				return ret;
+
+		} else if (insn->jump_dest) {
+			if (insn->type == INSN_JUMP_UNCONDITIONAL)
+				TRACE_INSN(insn, "unconditional jump");
+			else
+				TRACE_INSN(insn, "jump taken");
+
+			ret = validate_branch(file, func, insn->jump_dest, *statep);
+			if (ret) {
+				BT_INSN(insn, "(branch)");
+				return ret;
+			}
+		}
+
+		if (insn->type == INSN_JUMP_UNCONDITIONAL)
+			return 0;
+
+		TRACE_INSN(insn, "jump not taken");
+		break;
+
+	case INSN_JUMP_DYNAMIC:
+	case INSN_JUMP_DYNAMIC_CONDITIONAL:
+		TRACE_INSN(insn, "indirect jump");
+		if (is_sibling_call(insn)) {
+			ret = validate_sibling_call(file, insn, statep);
+			if (ret)
+				return ret;
+		}
+
+		if (insn->type == INSN_JUMP_DYNAMIC)
+			return 0;
+
+		break;
+
+	case INSN_SYSCALL:
+		TRACE_INSN(insn, "syscall");
+		if (func && (!next_insn || !next_insn->hint)) {
+			WARN_INSN(insn, "unsupported instruction in callable function");
+			return 1;
+		}
+
+		break;
+
+	case INSN_SYSRET:
+		TRACE_INSN(insn, "sysret");
+		if (func && (!next_insn || !next_insn->hint)) {
+			WARN_INSN(insn, "unsupported instruction in callable function");
+			return 1;
+		}
+
+		return 0;
+
+	case INSN_STAC:
+		TRACE_INSN(insn, "stac");
+		if (!opts.uaccess)
+			break;
+
+		if (statep->uaccess) {
+			WARN_INSN(insn, "recursive UACCESS enable");
+			return 1;
+		}
+
+		statep->uaccess = true;
+		break;
+
+	case INSN_CLAC:
+		TRACE_INSN(insn, "clac");
+		if (!opts.uaccess)
+			break;
+
+		if (!statep->uaccess && func) {
+			WARN_INSN(insn, "redundant UACCESS disable");
+			return 1;
+		}
+
+		if (func_uaccess_safe(func) && !statep->uaccess_stack) {
+			WARN_INSN(insn, "UACCESS-safe disables UACCESS");
+			return 1;
+		}
+
+		statep->uaccess = false;
+		break;
+
+	case INSN_STD:
+		TRACE_INSN(insn, "std");
+		if (statep->df) {
+			WARN_INSN(insn, "recursive STD");
+			return 1;
+		}
+
+		statep->df = true;
+		break;
+
+	case INSN_CLD:
+		TRACE_INSN(insn, "cld");
+		if (!statep->df && func) {
+			WARN_INSN(insn, "redundant CLD");
+			return 1;
+		}
+
+		statep->df = false;
+		break;
+
+	default:
+		break;
+	}
+
+	if (insn->dead_end)
+		TRACE_INSN(insn, "dead end");
+
+	*dead_end = insn->dead_end;
+	return 0;
+}
+
 /*
  * Follow the branch starting at the given instruction, and recursively follow
  * any other branches (jumps).  Meanwhile, track the frame pointer state at
  * each instruction and validate all the rules described in
  * tools/objtool/Documentation/objtool.txt.
  */
-static int validate_branch(struct objtool_file *file, struct symbol *func,
-			   struct instruction *insn, struct insn_state state)
+static int do_validate_branch(struct objtool_file *file, struct symbol *func,
+			      struct instruction *insn, struct insn_state state)
 {
-	struct alternative *alt;
 	struct instruction *next_insn, *prev_insn = NULL;
-	u8 visited;
+	bool dead_end;
 	int ret;
 
 	if (func && func->ignore)
 		return 0;
 
-	while (1) {
+	do {
+		insn->trace = 0;
 		next_insn = next_insn_to_validate(file, insn);
 
 		if (opts.checksum && func && insn->sec)
@@ -3700,217 +3989,17 @@ static int validate_branch(struct objtool_file *file, struct symbol *func,
 			return 1;
 		}
 
-		visited = VISITED_BRANCH << state.uaccess;
-		if (insn->visited & VISITED_BRANCH_MASK) {
-			if (!insn->hint && !insn_cfi_match(insn, &state.cfi))
-				return 1;
+		ret = validate_insn(file, func, insn, &state, prev_insn, next_insn,
+				    &dead_end);
 
-			if (insn->visited & visited)
-				return 0;
-		} else {
-			nr_insns_visited++;
-		}
-
-		if (state.noinstr)
-			state.instr += insn->instr;
-
-		if (insn->hint) {
-			if (insn->restore) {
-				struct instruction *save_insn, *i;
-
-				i = insn;
-				save_insn = NULL;
-
-				sym_for_each_insn_continue_reverse(file, func, i) {
-					if (i->save) {
-						save_insn = i;
-						break;
-					}
-				}
-
-				if (!save_insn) {
-					WARN_INSN(insn, "no corresponding CFI save for CFI restore");
-					return 1;
-				}
-
-				if (!save_insn->visited) {
-					/*
-					 * If the restore hint insn is at the
-					 * beginning of a basic block and was
-					 * branched to from elsewhere, and the
-					 * save insn hasn't been visited yet,
-					 * defer following this branch for now.
-					 * It will be seen later via the
-					 * straight-line path.
-					 */
-					if (!prev_insn)
-						return 0;
-
-					WARN_INSN(insn, "objtool isn't smart enough to handle this CFI save/restore combo");
-					return 1;
-				}
-
-				insn->cfi = save_insn->cfi;
-				nr_cfi_reused++;
-			}
-
-			state.cfi = *insn->cfi;
-		} else {
-			/* XXX track if we actually changed state.cfi */
-
-			if (prev_insn && !cficmp(prev_insn->cfi, &state.cfi)) {
-				insn->cfi = prev_insn->cfi;
-				nr_cfi_reused++;
-			} else {
-				insn->cfi = cfi_hash_find_or_add(&state.cfi);
-			}
-		}
-
-		insn->visited |= visited;
-
-		if (propagate_alt_cfi(file, insn))
-			return 1;
-
-		if (insn->alts) {
-			for (alt = insn->alts; alt; alt = alt->next) {
-				ret = validate_branch(file, func, alt->insn, state);
-				if (ret) {
-					BT_INSN(insn, "(alt)");
-					return ret;
-				}
-			}
-		}
-
-		if (skip_alt_group(insn))
-			return 0;
-
-		if (handle_insn_ops(insn, next_insn, &state))
-			return 1;
-
-		switch (insn->type) {
-
-		case INSN_RETURN:
-			return validate_return(func, insn, &state);
-
-		case INSN_CALL:
-		case INSN_CALL_DYNAMIC:
-			ret = validate_call(file, insn, &state);
+		if (!insn->trace) {
 			if (ret)
-				return ret;
-
-			if (opts.stackval && func && !is_special_call(insn) &&
-			    !has_valid_stack_frame(&state)) {
-				WARN_INSN(insn, "call without frame pointer save/setup");
-				return 1;
-			}
-
-			break;
-
-		case INSN_JUMP_CONDITIONAL:
-		case INSN_JUMP_UNCONDITIONAL:
-			if (is_sibling_call(insn)) {
-				ret = validate_sibling_call(file, insn, &state);
-				if (ret)
-					return ret;
-
-			} else if (insn->jump_dest) {
-				ret = validate_branch(file, func,
-						      insn->jump_dest, state);
-				if (ret) {
-					BT_INSN(insn, "(branch)");
-					return ret;
-				}
-			}
-
-			if (insn->type == INSN_JUMP_UNCONDITIONAL)
-				return 0;
-
-			break;
-
-		case INSN_JUMP_DYNAMIC:
-		case INSN_JUMP_DYNAMIC_CONDITIONAL:
-			if (is_sibling_call(insn)) {
-				ret = validate_sibling_call(file, insn, &state);
-				if (ret)
-					return ret;
-			}
-
-			if (insn->type == INSN_JUMP_DYNAMIC)
-				return 0;
-
-			break;
-
-		case INSN_SYSCALL:
-			if (func && (!next_insn || !next_insn->hint)) {
-				WARN_INSN(insn, "unsupported instruction in callable function");
-				return 1;
-			}
-
-			break;
-
-		case INSN_SYSRET:
-			if (func && (!next_insn || !next_insn->hint)) {
-				WARN_INSN(insn, "unsupported instruction in callable function");
-				return 1;
-			}
-
-			return 0;
-
-		case INSN_STAC:
-			if (!opts.uaccess)
-				break;
-
-			if (state.uaccess) {
-				WARN_INSN(insn, "recursive UACCESS enable");
-				return 1;
-			}
-
-			state.uaccess = true;
-			break;
-
-		case INSN_CLAC:
-			if (!opts.uaccess)
-				break;
-
-			if (!state.uaccess && func) {
-				WARN_INSN(insn, "redundant UACCESS disable");
-				return 1;
-			}
-
-			if (func_uaccess_safe(func) && !state.uaccess_stack) {
-				WARN_INSN(insn, "UACCESS-safe disables UACCESS");
-				return 1;
-			}
-
-			state.uaccess = false;
-			break;
-
-		case INSN_STD:
-			if (state.df) {
-				WARN_INSN(insn, "recursive STD");
-				return 1;
-			}
-
-			state.df = true;
-			break;
-
-		case INSN_CLD:
-			if (!state.df && func) {
-				WARN_INSN(insn, "redundant CLD");
-				return 1;
-			}
-
-			state.df = false;
-			break;
-
-		default:
-			break;
+				TRACE_INSN(insn, "warning (%d)", ret);
+			else
+				TRACE_INSN(insn, NULL);
 		}
 
-		if (insn->dead_end)
-			return 0;
-
-		if (!next_insn) {
+		if (!dead_end && !next_insn) {
 			if (state.cfi.cfa.base == CFI_UNDEFINED)
 				return 0;
 			if (file->ignore_unreachables)
@@ -3924,9 +4013,22 @@ static int validate_branch(struct objtool_file *file, struct symbol *func,
 
 		prev_insn = insn;
 		insn = next_insn;
-	}
 
-	return 0;
+	} while (!dead_end);
+
+	return ret;
+}
+
+static int validate_branch(struct objtool_file *file, struct symbol *func,
+			   struct instruction *insn, struct insn_state state)
+{
+	int ret;
+
+	trace_depth_inc();
+	ret = do_validate_branch(file, func, insn, state);
+	trace_depth_dec();
+
+	return ret;
 }
 
 static int validate_unwind_hint(struct objtool_file *file,
@@ -4385,9 +4487,17 @@ static int validate_symbol(struct objtool_file *file, struct section *sec,
 	if (opts.checksum)
 		checksum_init(func);
 
+	if (opts.trace && !fnmatch(opts.trace, sym->name, 0)) {
+		trace_enable();
+		TRACE("%s: validation begin\n", sym->name);
+	}
+
 	ret = validate_branch(file, func, insn, *state);
 	if (ret)
 		BT_INSN(insn, "<=== (sym)");
+
+	TRACE("%s: validation %s\n\n", sym->name, ret ? "failed" : "end");
+	trace_disable();
 
 	if (opts.checksum)
 		checksum_finish(func);
@@ -4657,6 +4767,8 @@ static int validate_ibt(struct objtool_file *file)
 		    !strcmp(sec->name, ".llvm.call-graph-profile")	||
 		    !strcmp(sec->name, ".llvm_bb_addr_map")		||
 		    !strcmp(sec->name, "__tracepoints")			||
+		    !strcmp(sec->name, ".return_sites")			||
+		    !strcmp(sec->name, ".call_sites")			||
 		    !strcmp(sec->name, "__patchable_function_entries"))
 			continue;
 
@@ -4731,87 +4843,6 @@ static int validate_reachable_instructions(struct objtool_file *file)
 	return warnings;
 }
 
-/* 'funcs' is a space-separated list of function names */
-static void disas_funcs(const char *funcs)
-{
-	const char *objdump_str, *cross_compile;
-	int size, ret;
-	char *cmd;
-
-	cross_compile = getenv("CROSS_COMPILE");
-	if (!cross_compile)
-		cross_compile = "";
-
-	objdump_str = "%sobjdump -wdr %s | gawk -M -v _funcs='%s' '"
-			"BEGIN { split(_funcs, funcs); }"
-			"/^$/ { func_match = 0; }"
-			"/<.*>:/ { "
-				"f = gensub(/.*<(.*)>:/, \"\\\\1\", 1);"
-				"for (i in funcs) {"
-					"if (funcs[i] == f) {"
-						"func_match = 1;"
-						"base = strtonum(\"0x\" $1);"
-						"break;"
-					"}"
-				"}"
-			"}"
-			"{"
-				"if (func_match) {"
-					"addr = strtonum(\"0x\" $1);"
-					"printf(\"%%04x \", addr - base);"
-					"print;"
-				"}"
-			"}' 1>&2";
-
-	/* fake snprintf() to calculate the size */
-	size = snprintf(NULL, 0, objdump_str, cross_compile, objname, funcs) + 1;
-	if (size <= 0) {
-		WARN("objdump string size calculation failed");
-		return;
-	}
-
-	cmd = malloc(size);
-
-	/* real snprintf() */
-	snprintf(cmd, size, objdump_str, cross_compile, objname, funcs);
-	ret = system(cmd);
-	if (ret) {
-		WARN("disassembly failed: %d", ret);
-		return;
-	}
-}
-
-static void disas_warned_funcs(struct objtool_file *file)
-{
-	struct symbol *sym;
-	char *funcs = NULL, *tmp;
-
-	for_each_sym(file->elf, sym) {
-		if (sym->warned) {
-			if (!funcs) {
-				funcs = malloc(strlen(sym->name) + 1);
-				if (!funcs) {
-					ERROR_GLIBC("malloc");
-					return;
-				}
-				strcpy(funcs, sym->name);
-			} else {
-				tmp = malloc(strlen(funcs) + strlen(sym->name) + 2);
-				if (!tmp) {
-					ERROR_GLIBC("malloc");
-					return;
-				}
-				sprintf(tmp, "%s %s", funcs, sym->name);
-				free(funcs);
-				funcs = tmp;
-			}
-		}
-	}
-
-	if (funcs)
-		disas_funcs(funcs);
-}
-
 __weak bool arch_absolute_reloc(struct elf *elf, struct reloc *reloc)
 {
 	unsigned int type = reloc_type(reloc);
@@ -4881,9 +4912,34 @@ static void free_insns(struct objtool_file *file)
 		free(chunk->addr);
 }
 
+const char *objtool_disas_insn(struct instruction *insn)
+{
+	struct disas_context *dctx = objtool_disas_ctx;
+
+	if (!dctx)
+		return "";
+
+	disas_insn(dctx, insn);
+	return disas_result(dctx);
+}
+
 int check(struct objtool_file *file)
 {
+	struct disas_context *disas_ctx = NULL;
 	int ret = 0, warnings = 0;
+
+	/*
+	 * Create a disassembly context if we might disassemble any
+	 * instruction or function.
+	 */
+	if (opts.verbose || opts.backtrace || opts.trace || opts.disas) {
+		disas_ctx = disas_context_create(file);
+		if (!disas_ctx) {
+			opts.disas = false;
+			opts.trace = false;
+		}
+		objtool_disas_ctx = disas_ctx;
+	}
 
 	arch_initial_func_cfi_state(&initial_func_cfi);
 	init_cfi_state(&init_cfi);
@@ -5005,8 +5061,6 @@ int check(struct objtool_file *file)
 			goto out;
 	}
 
-	free_insns(file);
-
 	if (opts.stats) {
 		printf("nr_insns_visited: %ld\n", nr_insns_visited);
 		printf("nr_cfi: %ld\n", nr_cfi);
@@ -5015,17 +5069,29 @@ int check(struct objtool_file *file)
 	}
 
 out:
+	if (ret || warnings) {
+		if (opts.werror && warnings)
+			ret = 1;
+
+		if (opts.verbose) {
+			if (opts.werror && warnings)
+				WARN("%d warning(s) upgraded to errors", warnings);
+			disas_warned_funcs(disas_ctx);
+		}
+	}
+
+	if (opts.disas)
+		disas_funcs(disas_ctx);
+
+	if (disas_ctx) {
+		disas_context_destroy(disas_ctx);
+		objtool_disas_ctx = NULL;
+	}
+
+	free_insns(file);
+
 	if (!ret && !warnings)
 		return 0;
-
-	if (opts.werror && warnings)
-		ret = 1;
-
-	if (opts.verbose) {
-		if (opts.werror && warnings)
-			WARN("%d warning(s) upgraded to errors", warnings);
-		disas_warned_funcs(file);
-	}
 
 	if (opts.backup && make_backup())
 		return 1;
