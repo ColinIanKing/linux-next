@@ -358,6 +358,13 @@ void pci_bus_add_device(struct pci_dev *dev)
 	pci_bridge_d3_update(dev);
 
 	/*
+	 * Save config space for error recoverability.  Clear state_saved
+	 * to detect whether drivers invoked pci_save_state() on suspend.
+	 */
+	pci_save_state(dev);
+	dev->state_saved = false;
+
+	/*
 	 * If the PCI device is associated with a pwrctrl device with a
 	 * power supply, create a device link between the PCI device and
 	 * pwrctrl device.  This ensures that pwrctrl drivers are probed
