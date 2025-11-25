@@ -3,6 +3,9 @@ soc/arm
 		https://git.kernel.org/pub/scm/linux/kernel/git/mediatek/linux tags/mtk-arm32-for-v6.19
 	patch
 		ARM: versatile: Fix typo in versatile.c
+		ARM: gemini: fix typos in comments
+	omap/arm
+		git://git.kernel.org/pub/scm/linux/kernel/git/khilman/linux-omap tags/omap-for-v6.19/soc-signed
 
 soc/dt
 	mmp/dt
@@ -61,10 +64,46 @@ soc/dt
 		git://git.kernel.org/pub/scm/linux/kernel/git/gclement/mvebu tags/mvebu-dt64-6.19-1
 	k3/dt-2
 		https://git.kernel.org/pub/scm/linux/kernel/git/ti/linux tags/ti-k3-dt-for-v6.19-part2
+	imx/dt-bindings
+		https://git.kernel.org/pub/scm/linux/kernel/git/shawnguo/linux tags/imx-bindings-6.19
+	patch
+		arm64: dts: sprd: sc9860: Simplify clock nodes
+	rockchip/dt-2
+		git://git.kernel.org/pub/scm/linux/kernel/git/mmind/linux-rockchip tags/v6.19-rockchip-dts64-2
 
 soc/drivers
 	zynq/soc-driver
 		https://github.com/Xilinx/linux-xlnx tags/zynqmp-soc-for-6.18
+	renesas/drivers
+		git://git.kernel.org/pub/scm/linux/kernel/git/geert/renesas-devel tags/renesas-drivers-for-v6.19-tag1
+	<no branch> (1463299a227d02b40c842a5d91d989cb26da5bbb)
+		https://git.kernel.org/pub/scm/linux/kernel/git/krzk/linux-mem-ctrl tags/memory-controller-drv-6.19-2
+	exynos/drivers
+		https://git.kernel.org/pub/scm/linux/kernel/git/krzk/linux tags/samsung-drivers-6.19
+	renesas/drivers-2
+		git://git.kernel.org/pub/scm/linux/kernel/git/geert/renesas-devel tags/renesas-drivers-for-v6.19-tag2
+	tegra/drivers
+		git://git.kernel.org/pub/scm/linux/kernel/git/tegra/linux tags/tegra-for-6.19-core
+	tegra/syscore-changes
+		git://git.kernel.org/pub/scm/linux/kernel/git/tegra/linux tags/tegra-for-6.19-syscore
+	tegra/soc-driver
+		git://git.kernel.org/pub/scm/linux/kernel/git/tegra/linux tags/tegra-for-6.19-soc
+	sunxi/drivers
+		https://git.kernel.org/pub/scm/linux/kernel/git/sunxi/linux tags/sunxi-drivers-for-6.19
+	imx/scu-driver
+		https://git.kernel.org/pub/scm/linux/kernel/git/shawnguo/linux tags/imx-drivers-6.19
+	ti/drivers
+		https://git.kernel.org/pub/scm/linux/kernel/git/ti/linux tags/ti-driver-soc-for-v6.19
+	omap/drivers
+		git://git.kernel.org/pub/scm/linux/kernel/git/khilman/linux-omap tags/omap-for-v6.19/drivers-signed
+	qcom/drivers
+		https://git.kernel.org/pub/scm/linux/kernel/git/qcom/linux tags/qcom-drivers-for-6.19
+	rockchip/drivers
+		git://git.kernel.org/pub/scm/linux/kernel/git/mmind/linux-rockchip tags/v6.19-rockchip-drivers1
+	stm32/firewall
+		git://git.kernel.org/pub/scm/linux/kernel/git/atorgue/stm32 tags/stm32-bus-firewall-for-v6.19-1
+	drivers/reset
+		https://git.pengutronix.de/git/pza/linux tags/reset-for-v6.19
 
 soc/defconfig
 	patch
@@ -90,11 +129,15 @@ soc/defconfig
 	rockchip/defconfig
 		git://git.kernel.org/pub/scm/linux/kernel/git/mmind/linux-rockchip tags/v6.19-rockchip-defconfig64-1
 
+soc/late
+
 arm/fixes
 	imx/fixes-2
 		https://git.kernel.org/pub/scm/linux/kernel/git/shawnguo/linux tags/imx-fixes-6.18-2
 	tee/qcomtee-fixes
 		git://git.kernel.org/pub/scm/linux/kernel/git/jenswi/linux-tee tags/qcomtee-fixes2-for-6.18
+	<no branch> (517d066dc080fc297f1ab5e8c6fda7c59d48ef8d)
+		git://git.kernel.org/pub/scm/linux/kernel/git/khilman/linux-omap tags/omap-for-v6.19/maintainers-signed
 
 soc/newsoc
 	tenstorrent/newsoc
