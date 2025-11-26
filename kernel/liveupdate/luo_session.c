@@ -387,9 +387,9 @@ int luo_session_deserialize(void)
 
 		err = luo_session_insert(sh, session);
 		if (err) {
-			luo_session_free(session);
 			pr_warn("Failed to insert session [%s] %pe\n",
 				session->name, ERR_PTR(err));
+			luo_session_free(session);
 			return err;
 		}
 	}
