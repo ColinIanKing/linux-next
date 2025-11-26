@@ -589,6 +589,23 @@ static inline void legacy_pty_init(void) { }
 #ifdef CONFIG_UNIX98_PTYS
 static struct cdev ptmx_cdev;
 
+static struct file *ptm_open_peer_file(struct file *master,
+				       struct tty_struct *tty, int flags)
+{
+	struct path path;
+	struct file *file;
+
+	/* Compute the slave's path */
+	path.mnt = devpts_mntget(master, tty->driver_data);
+	if (IS_ERR(path.mnt))
+		return ERR_CAST(path.mnt);
+	path.dentry = tty->link->driver_data;
+
+	file = dentry_open(&path, flags, current_cred());
+	mntput(path.mnt);
+	return file;
+}
+
 /**
  *	ptm_open_peer - open the peer of a pty
  *	@master: the open struct file of the ptmx device node
@@ -601,22 +618,10 @@ static struct cdev ptmx_cdev;
  */
 int ptm_open_peer(struct file *master, struct tty_struct *tty, int flags)
 {
-	int fd;
-	struct path path;
-
 	if (tty->driver != ptm_driver)
 		return -EIO;
 
-	/* Compute the slave's path */
-	path.mnt = devpts_mntget(master, tty->driver_data);
-	if (IS_ERR(path.mnt))
-		return PTR_ERR(path.mnt);
-	path.dentry = tty->link->driver_data;
-
-	fd = FD_ADD(flags, dentry_open(&path, flags, current_cred()));
-	if (fd < 0)
-		mntput(path.mnt);
-	return fd;
+	return FD_ADD(flags, ptm_open_peer_file(master, tty, flags));
 }
 
 static int pty_unix98_ioctl(struct tty_struct *tty,
