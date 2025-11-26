@@ -734,6 +734,15 @@ static void disable_delayed_refill(struct virtnet_info *vi)
 	spin_unlock_bh(&vi->refill_lock);
 }
 
+static void virtnet_schedule_refill_work(struct virtnet_info *vi,
+					 unsigned long delay)
+{
+	spin_lock_bh(&vi->refill_lock);
+	if (vi->refill_enabled)
+		schedule_delayed_work(&vi->refill, delay);
+	spin_unlock_bh(&vi->refill_lock);
+}
+
 static void enable_rx_mode_work(struct virtnet_info *vi)
 {
 	rtnl_lock();
@@ -2965,7 +2974,7 @@ static void refill_work(struct work_struct *work)
 		 * we will *never* try to fill again.
 		 */
 		if (still_empty)
-			schedule_delayed_work(&vi->refill, HZ/2);
+			virtnet_schedule_refill_work(vi, HZ / 2);
 	}
 }
 
@@ -3032,12 +3041,8 @@ static int virtnet_receive(struct receive_queue *rq, int budget,
 		packets = virtnet_receive_packets(vi, rq, budget, xdp_xmit, &stats);
 
 	if (rq->vq->num_free > min((unsigned int)budget, virtqueue_get_vring_size(rq->vq)) / 2) {
-		if (!try_fill_recv(vi, rq, GFP_ATOMIC)) {
-			spin_lock(&vi->refill_lock);
-			if (vi->refill_enabled)
-				schedule_delayed_work(&vi->refill, 0);
-			spin_unlock(&vi->refill_lock);
-		}
+		if (!try_fill_recv(vi, rq, GFP_ATOMIC))
+			virtnet_schedule_refill_work(vi, 0);
 	}
 
 	u64_stats_set(&stats.packets, packets);
@@ -3222,7 +3227,7 @@ static int virtnet_open(struct net_device *dev)
 		if (i < vi->curr_queue_pairs)
 			/* Make sure we have some buffers: if oom use wq. */
 			if (!try_fill_recv(vi, &vi->rq[i], GFP_KERNEL))
-				schedule_delayed_work(&vi->refill, 0);
+				virtnet_schedule_refill_work(vi, 0);
 
 		err = virtnet_enable_queue_pair(vi, i);
 		if (err < 0)
@@ -3475,7 +3480,7 @@ static void __virtnet_rx_resume(struct virtnet_info *vi,
 		virtnet_napi_enable(rq);
 
 	if (schedule_refill)
-		schedule_delayed_work(&vi->refill, 0);
+		virtnet_schedule_refill_work(vi, 0);
 }
 
 static void virtnet_rx_resume_all(struct virtnet_info *vi)
@@ -3821,10 +3826,8 @@ static int virtnet_set_queues(struct virtnet_info *vi, u16 queue_pairs)
 succ:
 	vi->curr_queue_pairs = queue_pairs;
 	/* virtnet_open() will refill when device is going to up. */
-	spin_lock_bh(&vi->refill_lock);
-	if (dev->flags & IFF_UP && vi->refill_enabled)
-		schedule_delayed_work(&vi->refill, 0);
-	spin_unlock_bh(&vi->refill_lock);
+	if (dev->flags & IFF_UP)
+		virtnet_schedule_refill_work(vi, 0);
 
 	return 0;
 }
