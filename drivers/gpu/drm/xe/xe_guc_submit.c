@@ -822,7 +822,7 @@ static void submit_exec_queue(struct xe_exec_queue *q, struct xe_sched_job *job)
 
 	xe_gt_assert(guc_to_gt(guc), exec_queue_registered(q));
 
-	if (!job->skip_emit || job->last_replay) {
+	if (!job->restore_replay || job->last_replay) {
 		if (xe_exec_queue_is_parallel(q))
 			wq_item_append(q);
 		else
@@ -881,10 +881,10 @@ guc_exec_queue_run_job(struct drm_sched_job *drm_job)
 	if (!killed_or_banned_or_wedged && !xe_sched_job_is_error(job)) {
 		if (!exec_queue_registered(q))
 			register_exec_queue(q, GUC_CONTEXT_NORMAL);
-		if (!job->skip_emit)
+		if (!job->restore_replay)
 			q->ring_ops->emit_job(job);
 		submit_exec_queue(q, job);
-		job->skip_emit = false;
+		job->restore_replay = false;
 	}
 
 	/*
@@ -1225,7 +1225,6 @@ guc_exec_queue_timedout_job(struct drm_sched_job *drm_job)
 	struct xe_guc *guc = exec_queue_to_guc(q);
 	const char *process_name = "no process";
 	struct xe_device *xe = guc_to_xe(guc);
-	unsigned int fw_ref;
 	int err = -ETIME;
 	pid_t pid = -1;
 	int i = 0;
@@ -1258,13 +1257,11 @@ guc_exec_queue_timedout_job(struct drm_sched_job *drm_job)
 	if (!exec_queue_killed(q) && !xe->devcoredump.captured &&
 	    !xe_guc_capture_get_matching_and_lock(q)) {
 		/* take force wake before engine register manual capture */
-		fw_ref = xe_force_wake_get(gt_to_fw(q->gt), XE_FORCEWAKE_ALL);
-		if (!xe_force_wake_ref_has_domain(fw_ref, XE_FORCEWAKE_ALL))
+		CLASS(xe_force_wake, fw_ref)(gt_to_fw(q->gt), XE_FORCEWAKE_ALL);
+		if (!xe_force_wake_ref_has_domain(fw_ref.domains, XE_FORCEWAKE_ALL))
 			xe_gt_info(q->gt, "failed to get forcewake for coredump capture\n");
 
 		xe_engine_snapshot_capture_for_queue(q);
-
-		xe_force_wake_put(gt_to_fw(q->gt), fw_ref);
 	}
 
 	/*
@@ -1455,7 +1452,7 @@ static void __guc_exec_queue_destroy_async(struct work_struct *w)
 	struct xe_exec_queue *q = ge->q;
 	struct xe_guc *guc = exec_queue_to_guc(q);
 
-	xe_pm_runtime_get(guc_to_xe(guc));
+	guard(xe_pm_runtime)(guc_to_xe(guc));
 	trace_xe_exec_queue_destroy(q);
 
 	if (xe_exec_queue_is_lr(q))
@@ -1464,8 +1461,6 @@ static void __guc_exec_queue_destroy_async(struct work_struct *w)
 	cancel_delayed_work_sync(&ge->sched.base.work_tdr);
 
 	xe_exec_queue_fini(q);
-
-	xe_pm_runtime_put(guc_to_xe(guc));
 }
 
 static void guc_exec_queue_destroy_async(struct xe_exec_queue *q)
@@ -2112,6 +2107,18 @@ static void guc_exec_queue_revert_pending_state_change(struct xe_guc *guc,
 	q->guc->resume_time = 0;
 }
 
+static void lrc_parallel_clear(struct xe_lrc *lrc)
+{
+	struct xe_device *xe = gt_to_xe(lrc->gt);
+	struct iosys_map map = xe_lrc_parallel_map(lrc);
+	int i;
+
+	for (i = 0; i < WQ_SIZE / sizeof(u32); ++i)
+		parallel_write(xe, map, wq[i],
+			       FIELD_PREP(WQ_TYPE_MASK, WQ_TYPE_NOOP) |
+			       FIELD_PREP(WQ_LEN_MASK, 0));
+}
+
 /*
  * This function is quite complex but only real way to ensure no state is lost
  * during VF resume flows. The function scans the queue state, make adjustments
@@ -2135,8 +2142,8 @@ static void guc_exec_queue_pause(struct xe_guc *guc, struct xe_exec_queue *q)
 	guc_exec_queue_revert_pending_state_change(guc, q);
 
 	if (xe_exec_queue_is_parallel(q)) {
-		struct xe_device *xe = guc_to_xe(guc);
-		struct iosys_map map = xe_lrc_parallel_map(q->lrc[0]);
+		/* Pairs with WRITE_ONCE in __xe_exec_queue_init  */
+		struct xe_lrc *lrc = READ_ONCE(q->lrc[0]);
 
 		/*
 		 * NOP existing WQ commands that may contain stale GGTT
@@ -2144,14 +2151,14 @@ static void guc_exec_queue_pause(struct xe_guc *guc, struct xe_exec_queue *q)
 		 * seems to get confused if the WQ head/tail pointers are
 		 * adjusted.
 		 */
-		for (i = 0; i < WQ_SIZE / sizeof(u32); ++i)
-			parallel_write(xe, map, wq[i],
-				       FIELD_PREP(WQ_TYPE_MASK, WQ_TYPE_NOOP) |
-				       FIELD_PREP(WQ_LEN_MASK, 0));
+		if (lrc)
+			lrc_parallel_clear(lrc);
 	}
 
 	job = xe_sched_first_pending_job(sched);
 	if (job) {
+		job->restore_replay = true;
+
 		/*
 		 * Adjust software tail so jobs submitted overwrite previous
 		 * position in ring buffer with new GGTT addresses.
@@ -2241,17 +2248,18 @@ static void guc_exec_queue_unpause_prepare(struct xe_guc *guc,
 					   struct xe_exec_queue *q)
 {
 	struct xe_gpu_scheduler *sched = &q->guc->sched;
-	struct drm_sched_job *s_job;
 	struct xe_sched_job *job = NULL;
+	bool restore_replay = false;
 
-	list_for_each_entry(s_job, &sched->base.pending_list, list) {
-		job = to_xe_sched_job(s_job);
+	list_for_each_entry(job, &sched->base.pending_list, drm.list) {
+		restore_replay |= job->restore_replay;
+		if (restore_replay) {
+			xe_gt_dbg(guc_to_gt(guc), "Replay JOB - guc_id=%d, seqno=%d",
+				  q->guc->id, xe_sched_job_seqno(job));
 
-		xe_gt_dbg(guc_to_gt(guc), "Replay JOB - guc_id=%d, seqno=%d",
-			  q->guc->id, xe_sched_job_seqno(job));
-
-		q->ring_ops->emit_job(job);
-		job->skip_emit = true;
+			q->ring_ops->emit_job(job);
+			job->restore_replay = true;
+		}
 	}
 
 	if (job)
