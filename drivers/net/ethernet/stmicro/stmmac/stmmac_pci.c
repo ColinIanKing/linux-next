@@ -23,30 +23,10 @@ static void common_default_data(struct plat_stmmacenet_data *plat)
 {
 	/* clk_csr_i = 20-35MHz & MDC = clk_csr_i/16 */
 	plat->clk_csr = STMMAC_CSR_20_35M;
-	plat->has_gmac = 1;
+	plat->core_type = DWMAC_CORE_GMAC;
 	plat->force_sf_dma_mode = 1;
 
 	plat->mdio_bus_data->needs_reset = true;
-
-	/* Set default value for multicast hash bins */
-	plat->multicast_filter_bins = HASH_TABLE_SIZE;
-
-	/* Set default value for unicast filter entries */
-	plat->unicast_filter_entries = 1;
-
-	/* Set the maxmtu to a default of JUMBO_LEN */
-	plat->maxmtu = JUMBO_LEN;
-
-	/* Set default number of RX and TX queues to use */
-	plat->tx_queues_to_use = 1;
-	plat->rx_queues_to_use = 1;
-
-	/* Disable Priority config by default */
-	plat->tx_queues_cfg[0].use_prio = false;
-	plat->rx_queues_cfg[0].use_prio = false;
-
-	/* Disable RX queues routing by default */
-	plat->rx_queues_cfg[0].pkt_route = 0x0;
 }
 
 static int stmmac_default_data(struct pci_dev *pdev,
@@ -76,19 +56,10 @@ static int snps_gmac5_default_data(struct pci_dev *pdev,
 	int i;
 
 	plat->clk_csr = STMMAC_CSR_250_300M;
-	plat->has_gmac4 = 1;
+	plat->core_type = DWMAC_CORE_GMAC4;
 	plat->force_sf_dma_mode = 1;
 	plat->flags |= STMMAC_FLAG_TSO_EN;
 	plat->pmt = 1;
-
-	/* Set default value for multicast hash bins */
-	plat->multicast_filter_bins = HASH_TABLE_SIZE;
-
-	/* Set default value for unicast filter entries */
-	plat->unicast_filter_entries = 1;
-
-	/* Set the maxmtu to a default of JUMBO_LEN */
-	plat->maxmtu = JUMBO_LEN;
 
 	/* Set default number of RX and TX queues to use */
 	plat->tx_queues_to_use = 4;
@@ -96,7 +67,6 @@ static int snps_gmac5_default_data(struct pci_dev *pdev,
 
 	plat->tx_sched_algorithm = MTL_TX_ALGORITHM_WRR;
 	for (i = 0; i < plat->tx_queues_to_use; i++) {
-		plat->tx_queues_cfg[i].use_prio = false;
 		plat->tx_queues_cfg[i].mode_to_use = MTL_QUEUE_DCB;
 		plat->tx_queues_cfg[i].weight = 25;
 		if (i > 0)
@@ -104,15 +74,10 @@ static int snps_gmac5_default_data(struct pci_dev *pdev,
 	}
 
 	plat->rx_sched_algorithm = MTL_RX_ALGORITHM_SP;
-	for (i = 0; i < plat->rx_queues_to_use; i++) {
-		plat->rx_queues_cfg[i].use_prio = false;
+	for (i = 0; i < plat->rx_queues_to_use; i++)
 		plat->rx_queues_cfg[i].mode_to_use = MTL_QUEUE_DCB;
-		plat->rx_queues_cfg[i].pkt_route = 0x0;
-		plat->rx_queues_cfg[i].chan = i;
-	}
 
 	plat->bus_id = 1;
-	plat->phy_addr = -1;
 	plat->phy_interface = PHY_INTERFACE_MODE_GMII;
 
 	plat->dma_cfg->pbl = 32;
@@ -127,10 +92,8 @@ static int snps_gmac5_default_data(struct pci_dev *pdev,
 	plat->axi->axi_rd_osr_lmt = 31;
 
 	plat->axi->axi_fb = false;
-	plat->axi->axi_blen[0] = 4;
-	plat->axi->axi_blen[1] = 8;
-	plat->axi->axi_blen[2] = 16;
-	plat->axi->axi_blen[3] = 32;
+	plat->axi->axi_blen_regval = DMA_AXI_BLEN4 | DMA_AXI_BLEN8 |
+				     DMA_AXI_BLEN16 | DMA_AXI_BLEN32;
 
 	return 0;
 }
@@ -191,7 +154,7 @@ static int stmmac_pci_probe(struct pci_dev *pdev,
 	int ret;
 	int i;
 
-	plat = devm_kzalloc(&pdev->dev, sizeof(*plat), GFP_KERNEL);
+	plat = stmmac_plat_dat_alloc(&pdev->dev);
 	if (!plat)
 		return -ENOMEM;
 
