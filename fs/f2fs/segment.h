@@ -69,11 +69,16 @@ static inline void sanity_check_seg_type(struct f2fs_sb_info *sbi,
 	((!__is_valid_data_blkaddr(blk_addr)) ?			\
 	NULL_SEGNO : GET_L2R_SEGNO(FREE_I(sbi),			\
 		GET_SEGNO_FROM_SEG0(sbi, blk_addr)))
+#ifdef CONFIG_BLK_DEV_ZONED
 #define CAP_BLKS_PER_SEC(sbi)					\
 	(BLKS_PER_SEC(sbi) - (sbi)->unusable_blocks_per_sec)
 #define CAP_SEGS_PER_SEC(sbi)					\
 	(SEGS_PER_SEC(sbi) -					\
 	BLKS_TO_SEGS(sbi, (sbi)->unusable_blocks_per_sec))
+#else
+#define CAP_BLKS_PER_SEC(sbi) BLKS_PER_SEC(sbi)
+#define CAP_SEGS_PER_SEC(sbi) SEGS_PER_SEC(sbi)
+#endif
 #define GET_START_SEG_FROM_SEC(sbi, segno)			\
 	(rounddown(segno, SEGS_PER_SEC(sbi)))
 #define GET_SEC_FROM_SEG(sbi, segno)				\
@@ -85,8 +90,12 @@ static inline void sanity_check_seg_type(struct f2fs_sb_info *sbi,
 #define GET_ZONE_FROM_SEG(sbi, segno)				\
 	GET_ZONE_FROM_SEC(sbi, GET_SEC_FROM_SEG(sbi, segno))
 
-#define GET_SUM_BLOCK(sbi, segno)				\
-	((sbi)->sm_info->ssa_blkaddr + (segno))
+#define SUMS_PER_BLOCK (F2FS_BLKSIZE / F2FS_SUM_BLKSIZE)
+#define GET_SUM_BLOCK(sbi, segno)	\
+	(SM_I(sbi)->ssa_blkaddr + (segno / SUMS_PER_BLOCK))
+#define GET_SUM_BLKOFF(segno) (segno % SUMS_PER_BLOCK)
+#define SUM_BLK_PAGE_ADDR(folio, segno)	\
+	(folio_address(folio) + GET_SUM_BLKOFF(segno) * F2FS_SUM_BLKSIZE)
 
 #define GET_SUM_TYPE(footer) ((footer)->entry_type)
 #define SET_SUM_TYPE(footer, type) ((footer)->entry_type = (type))
@@ -626,21 +635,21 @@ static inline bool has_curseg_enough_space(struct f2fs_sb_info *sbi,
 
 		left_blocks = get_left_section_blocks(sbi, i, segno);
 
-		blocks = i <= CURSEG_COLD_DATA ? data_blocks : node_blocks;
+		if (i <= CURSEG_COLD_DATA) {
+			blocks = data_blocks;
+			/*
+			 * With active_logs == 6, dentry blocks can be allocated to
+			 * any data segment. With active_logs != 6, dentry blocks
+			 * are always allocated to HOT_DATA segment.
+			 */
+			if ((F2FS_OPTION(sbi).active_logs == 6) || (i == CURSEG_HOT_DATA))
+				blocks += dent_blocks;
+		} else {
+			blocks = node_blocks;
+		}
 		if (blocks > left_blocks)
 			return false;
 	}
-
-	/* check current data section for dentry blocks. */
-	segno = CURSEG_I(sbi, CURSEG_HOT_DATA)->segno;
-
-	if (unlikely(segno == NULL_SEGNO))
-		return false;
-
-	left_blocks = get_left_section_blocks(sbi, CURSEG_HOT_DATA, segno);
-
-	if (dent_blocks > left_blocks)
-		return false;
 	return true;
 }
 
