@@ -620,37 +620,34 @@ static void nfs_local_call_read(struct work_struct *work)
 	struct nfs_local_kiocb *iocb =
 		container_of(work, struct nfs_local_kiocb, work);
 	struct file *filp = iocb->kiocb.ki_filp;
-	const struct cred *save_cred;
 	bool force_done = false;
 	ssize_t status;
 	int n_iters;
 
-	save_cred = override_creds(filp->f_cred);
+	scoped_with_creds(filp->f_cred) {
+		n_iters = atomic_read(&iocb->n_iters);
+		for (int i = 0; i < n_iters ; i++) {
+			if (iocb->iter_is_dio_aligned[i]) {
+				iocb->kiocb.ki_flags |= IOCB_DIRECT;
+				/* Only use AIO completion if DIO-aligned segment is last */
+				if (i == iocb->end_iter_index) {
+					iocb->kiocb.ki_complete = nfs_local_read_aio_complete;
+					iocb->aio_complete_work = nfs_local_read_aio_complete_work;
+				}
+			} else
+				iocb->kiocb.ki_flags &= ~IOCB_DIRECT;
 
-	n_iters = atomic_read(&iocb->n_iters);
-	for (int i = 0; i < n_iters ; i++) {
-		if (iocb->iter_is_dio_aligned[i]) {
-			iocb->kiocb.ki_flags |= IOCB_DIRECT;
-			/* Only use AIO completion if DIO-aligned segment is last */
-			if (i == iocb->end_iter_index) {
-				iocb->kiocb.ki_complete = nfs_local_read_aio_complete;
-				iocb->aio_complete_work = nfs_local_read_aio_complete_work;
-			}
-		} else
-			iocb->kiocb.ki_flags &= ~IOCB_DIRECT;
-
-		status = filp->f_op->read_iter(&iocb->kiocb, &iocb->iters[i]);
-		if (status != -EIOCBQUEUED) {
-			if (unlikely(status >= 0 && status < iocb->iters[i].count))
-				force_done = true; /* Partial read */
-			if (nfs_local_pgio_done(iocb, status, force_done)) {
-				nfs_local_read_iocb_done(iocb);
-				break;
+			status = filp->f_op->read_iter(&iocb->kiocb, &iocb->iters[i]);
+			if (status != -EIOCBQUEUED) {
+				if (unlikely(status >= 0 && status < iocb->iters[i].count))
+					force_done = true; /* Partial read */
+				if (nfs_local_pgio_done(iocb, status, force_done)) {
+					nfs_local_read_iocb_done(iocb);
+					break;
+				}
 			}
 		}
 	}
-
-	revert_creds(save_cred);
 }
 
 static int
@@ -826,40 +823,39 @@ static void nfs_local_call_write(struct work_struct *work)
 		container_of(work, struct nfs_local_kiocb, work);
 	struct file *filp = iocb->kiocb.ki_filp;
 	unsigned long old_flags = current->flags;
-	const struct cred *save_cred;
 	bool force_done = false;
 	ssize_t status;
 	int n_iters;
 
 	current->flags |= PF_LOCAL_THROTTLE | PF_MEMALLOC_NOIO;
-	save_cred = override_creds(filp->f_cred);
 
+	scoped_with_creds(filp->f_cred) {
 	file_start_write(filp);
-	n_iters = atomic_read(&iocb->n_iters);
-	for (int i = 0; i < n_iters ; i++) {
-		if (iocb->iter_is_dio_aligned[i]) {
-			iocb->kiocb.ki_flags |= IOCB_DIRECT;
-			/* Only use AIO completion if DIO-aligned segment is last */
-			if (i == iocb->end_iter_index) {
-				iocb->kiocb.ki_complete = nfs_local_write_aio_complete;
-				iocb->aio_complete_work = nfs_local_write_aio_complete_work;
-			}
-		} else
-			iocb->kiocb.ki_flags &= ~IOCB_DIRECT;
+		n_iters = atomic_read(&iocb->n_iters);
+		for (int i = 0; i < n_iters ; i++) {
+			if (iocb->iter_is_dio_aligned[i]) {
+				iocb->kiocb.ki_flags |= IOCB_DIRECT;
+				/* Only use AIO completion if DIO-aligned segment is last */
+				if (i == iocb->end_iter_index) {
+					iocb->kiocb.ki_complete = nfs_local_write_aio_complete;
+					iocb->aio_complete_work = nfs_local_write_aio_complete_work;
+				}
+			} else
+				iocb->kiocb.ki_flags &= ~IOCB_DIRECT;
 
-		status = filp->f_op->write_iter(&iocb->kiocb, &iocb->iters[i]);
-		if (status != -EIOCBQUEUED) {
-			if (unlikely(status >= 0 && status < iocb->iters[i].count))
-				force_done = true; /* Partial write */
-			if (nfs_local_pgio_done(iocb, status, force_done)) {
-				nfs_local_write_iocb_done(iocb);
-				break;
+			status = filp->f_op->write_iter(&iocb->kiocb, &iocb->iters[i]);
+			if (status != -EIOCBQUEUED) {
+				if (unlikely(status >= 0 && status < iocb->iters[i].count))
+					force_done = true; /* Partial write */
+				if (nfs_local_pgio_done(iocb, status, force_done)) {
+					nfs_local_write_iocb_done(iocb);
+					break;
+				}
 			}
 		}
+		file_end_write(filp);
 	}
-	file_end_write(filp);
 
-	revert_creds(save_cred);
 	current->flags = old_flags;
 }
 
