@@ -95,9 +95,9 @@ impl ReallocRequest {
 impl IdPool {
     /// Constructs a new [`IdPool`].
     ///
-    /// The pool will have a capacity of [`NO_ALLOC_MAX_LEN`].
+    /// The pool will have a capacity of [`MAX_INLINE_LEN`].
     ///
-    /// [`NO_ALLOC_MAX_LEN`]: BitmapVec::NO_ALLOC_MAX_LEN
+    /// [`MAX_INLINE_LEN`]: BitmapVec::MAX_INLINE_LEN
     #[inline]
     pub fn new() -> Self {
         Self {
