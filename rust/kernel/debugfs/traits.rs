@@ -4,6 +4,7 @@
 //! Traits for rendering or updating values exported to DebugFS.
 
 use crate::alloc::Allocator;
+use crate::fmt;
 use crate::fs::file;
 use crate::prelude::*;
 use crate::sync::Arc;
@@ -11,7 +12,6 @@ use crate::sync::atomic::{Atomic, AtomicBasicOps, AtomicType, Relaxed};
 use crate::sync::Mutex;
 use crate::transmute::{AsBytes, FromBytes};
 use crate::uaccess::{UserSliceReader, UserSliceWriter};
-use core::fmt::{self, Debug, Formatter};
 use core::ops::{Deref, DerefMut};
 use core::str::FromStr;
 
@@ -26,17 +26,17 @@ use core::str::FromStr;
 /// explicitly instead.
 pub trait Writer {
     /// Formats the value using the given formatter.
-    fn write(&self, f: &mut Formatter<'_>) -> fmt::Result;
+    fn write(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result;
 }
 
 impl<T: Writer> Writer for Mutex<T> {
-    fn write(&self, f: &mut Formatter<'_>) -> fmt::Result {
+    fn write(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.lock().write(f)
     }
 }
 
-impl<T: Debug> Writer for T {
-    fn write(&self, f: &mut Formatter<'_>) -> fmt::Result {
+impl<T: fmt::Debug> Writer for T {
+    fn write(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "{self:?}")
     }
 }
