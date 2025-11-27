@@ -12,10 +12,11 @@ endif
 libdir  ?= $(prefix)/$(libdir_relative)
 includedir ?= $(prefix)/include
 
-SUBDIRS = lib generated samples
+SUBDIRS = lib generated samples ynltool tests
 
 all: $(SUBDIRS) libynl.a
 
+ynltool: | lib generated libynl.a
 samples: | lib generated
 libynl.a: | lib generated
 	@echo -e "\tAR $@"
@@ -48,5 +49,9 @@ install: libynl.a lib/*.h
 	@echo -e "\tINSTALL pyynl"
 	@pip install --prefix=$(DESTDIR)$(prefix) .
 	@make -C generated install
+	@make -C tests install
 
-.PHONY: all clean distclean install $(SUBDIRS)
+run_tests:
+	@$(MAKE) -C tests run_tests
+
+.PHONY: all clean distclean install run_tests $(SUBDIRS)
