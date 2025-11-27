@@ -376,6 +376,11 @@ enum {
 	 * has similar constraints to shadow stacks.
 	 */
 	DECLARE_VMA_BIT_ALIAS(SHADOW_STACK, HIGH_ARCH_6),
+#elif defined(CONFIG_RISCV_USER_CFI)
+	/*
+	 * Following x86 and picking up the same bitpos.
+	 */
+	DECLARE_VMA_BIT_ALIAS(SHADOW_STACK, HIGH_ARCH_5),
 #endif
 	DECLARE_VMA_BIT_ALIAS(SAO, ARCH_1),		/* Strong Access Ordering (powerpc) */
 	DECLARE_VMA_BIT_ALIAS(GROWSUP, ARCH_1),		/* parisc */
