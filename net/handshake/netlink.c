@@ -121,7 +121,8 @@ int handshake_nl_accept_doit(struct sk_buff *skb, struct genl_info *info)
 			goto out_complete; /* Automatic cleanup handles fput */
 
 		trace_handshake_cmd_accept(net, req, req->hr_sk, fd_prepare_fd(fdf));
-		return fd_publish(fdf);
+		fd_publish(fdf);
+		return 0;
 	}
 
 out_complete:
