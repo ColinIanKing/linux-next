@@ -631,6 +631,14 @@ escapes may be possible, especially when running in a standard desktop
 environment, such as by using systemd-run, or sockets exposed by other
 common applications.
 
+Thread synchronization (ABI < 9)
+--------------------------------
+
+Starting with the Landlock ABI version 9, it is now possible to
+enforce Landlock rulesets across all threads of the calling process
+using the ``LANDLOCK_RESTRICT_SELF_TSYNC`` flag passed to
+sys_landlock_restrict_self().
+
 .. _kernel_support:
 
 Kernel support
