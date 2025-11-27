@@ -70,6 +70,12 @@ soc/dt
 		arm64: dts: sprd: sc9860: Simplify clock nodes
 	rockchip/dt-2
 		git://git.kernel.org/pub/scm/linux/kernel/git/mmind/linux-rockchip tags/v6.19-rockchip-dts64-2
+	amlogic/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/amlogic/linux tags/amlogic-arm64-dt-for-v6.19
+	patch
+		arm64: dts: mediatek: mt8195: Fix address range for JPEG decoder core 1
+	riscv/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/conor/linux tags/riscv-dt-for-v6.19
 
 soc/drivers
 	zynq/soc-driver
@@ -130,6 +136,8 @@ soc/defconfig
 		https://git.kernel.org/pub/scm/linux/kernel/git/qcom/linux tags/qcom-arm64-defconfig-for-6.19
 	rockchip/defconfig
 		git://git.kernel.org/pub/scm/linux/kernel/git/mmind/linux-rockchip tags/v6.19-rockchip-defconfig64-1
+	riscv/defconfig
+		https://git.kernel.org/pub/scm/linux/kernel/git/conor/linux tags/riscv-config-for-v6.19
 
 soc/late
 
@@ -142,6 +150,22 @@ arm/fixes
 		git://git.kernel.org/pub/scm/linux/kernel/git/khilman/linux-omap tags/omap-for-v6.19/maintainers-signed
 	<no branch> (9f393d8e757f79060baf4b2e703bd6b2d0d8d323)
 		https://git.kernel.org/pub/scm/linux/kernel/git/sunxi/linux tags/sunxi-fixes-for-6.18
+
+soc/drivers-late
+	drivers/reset-gpio
+		https://git.pengutronix.de/git/pza/linux tags/reset-gpio-for-v6.19
+	<no branch> (527250cd9092461f1beac3e4180a4481bffa01b5)
+		https://git.pengutronix.de/git/pza/linux tags/reset-gpio-for-v6.19-2
+	amlogic/drivers
+		https://git.kernel.org/pub/scm/linux/kernel/git/amlogic/linux tags/amlogic-drivers-for-v6.19
+	drivers/fsl
+		git://git.kernel.org/pub/scm/linux/kernel/git/chleroy/linux tags/soc_fsl-6.19-1
+	apple/soc-drivers
+		https://git.kernel.org/pub/scm/linux/kernel/git/sven/linux tags/apple-soc-drivers-6.19
+	microchip/soc-drivers
+		https://git.kernel.org/pub/scm/linux/kernel/git/conor/linux tags/soc-drivers-for-v6.19
+	drivers/cache
+		https://git.kernel.org/pub/scm/linux/kernel/git/conor/linux tags/cache-for-v6.19
 
 soc/newsoc
 	tenstorrent/newsoc
