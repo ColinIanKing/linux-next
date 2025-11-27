@@ -94,7 +94,11 @@ int load_other_segments(struct kimage *image,
 			char *initrd, unsigned long initrd_len,
 			char *cmdline)
 {
-	struct kexec_buf kbuf = {};
+	struct kexec_buf kbuf = {
+#ifdef CONFIG_CRASH_DUMP
+		.random = false,
+#endif
+	};
 	void *dtb = NULL;
 	unsigned long initrd_load_addr = 0, dtb_len,
 		      orig_segments = image->nr_segments;
