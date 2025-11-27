@@ -723,8 +723,9 @@ static int ntsync_obj_get_fd(struct ntsync_obj *obj)
 {
 	FD_PREPARE(fdf, O_CLOEXEC,
 		   anon_inode_getfile("ntsync", &ntsync_obj_fops, obj, O_RDWR));
-	if (!fdf.err)
-		obj->file = fd_prepare_file(fdf);
+	if (fdf.err)
+		return fdf.err;
+	obj->file = fd_prepare_file(fdf);
 	return fd_publish(fdf);
 }
 
