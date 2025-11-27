@@ -28,6 +28,7 @@ struct opts {
 	bool static_call;
 	bool uaccess;
 	int prefix;
+	const char *disas;
 
 	/* options: */
 	bool backtrace;
@@ -41,8 +42,10 @@ struct opts {
 	const char *output;
 	bool sec_address;
 	bool stats;
+	const char *trace;
 	bool verbose;
 	bool werror;
+	bool wide;
 };
 
 extern struct opts opts;
