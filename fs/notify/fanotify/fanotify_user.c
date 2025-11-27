@@ -1598,10 +1598,10 @@ static struct hlist_head *fanotify_alloc_merge_hash(void)
 }
 
 DEFINE_CLASS(fsnotify_group,
-	      struct fsnotify_group *,
-	      if (_T) fsnotify_destroy_group(_T),
-	      fsnotify_alloc_group(ops, flags),
-	      const struct fsnotify_ops *ops, int flags)
+	     struct fsnotify_group *,
+	     if (!IS_ERR_OR_NULL(_T)) fsnotify_destroy_group(_T),
+	     fsnotify_alloc_group(ops, flags),
+	     const struct fsnotify_ops *ops, int flags)
 
 /* fanotify syscalls */
 SYSCALL_DEFINE2(fanotify_init, unsigned int, flags, unsigned int, event_f_flags)
