@@ -76,6 +76,9 @@ static void *image_load(struct kimage *image,
 	kbuf.buf_min = 0;
 	kbuf.buf_max = ULONG_MAX;
 	kbuf.top_down = false;
+#ifdef CONFIG_CRASH_DUMP
+	kbuf.random = false;
+#endif
 
 	kbuf.buffer = kernel;
 	kbuf.bufsz = kernel_len;
