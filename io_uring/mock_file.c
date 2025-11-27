@@ -270,7 +270,8 @@ static int io_create_mock_file(struct io_uring_cmd *cmd, unsigned int issue_flag
 	if (copy_to_user(uarg, &mc, uarg_size))
 		return -EFAULT;
 
-	return fd_publish(fdf);
+	fd_publish(fdf);
+	return 0;
 }
 
 static int io_probe_mock(struct io_uring_cmd *cmd)
