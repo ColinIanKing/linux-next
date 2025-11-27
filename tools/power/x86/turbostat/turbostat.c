@@ -466,8 +466,6 @@ static void bic_groups_init(void)
 #define PCL_10 14		/* PC10 */
 #define PCLUNL 15		/* Unlimited */
 
-struct amperf_group_fd;
-
 char *proc_stat = "/proc/stat";
 FILE *outf;
 int *fd_percpu;
@@ -1210,6 +1208,9 @@ static const struct platform_data turbostat_pdata[] = {
 	{ INTEL_ARROWLAKE, &adl_features },
 	{ INTEL_LUNARLAKE_M, &lnl_features },
 	{ INTEL_PANTHERLAKE_L, &lnl_features },
+	{ INTEL_NOVALAKE, &lnl_features },
+	{ INTEL_NOVALAKE_L, &lnl_features },
+	{ INTEL_WILDCATLAKE_L, &lnl_features },
 	{ INTEL_ATOM_SILVERMONT, &slv_features },
 	{ INTEL_ATOM_SILVERMONT_D, &slvd_features },
 	{ INTEL_ATOM_AIRMONT, &amt_features },
@@ -2702,6 +2703,42 @@ void bic_lookup(cpu_set_t *ret_set, char *name_list, enum show_hide_mode mode)
 	}
 }
 
+/*
+ * print_name()
+ * Print column header name for 64-bit counter in 16 columns (at least 8-char plus a tab)
+ * Otherwise, allow the name + tab to fit within 8-coumn tab-stop.
+ * In both cases, left justififed, just like other turbostat columns,
+ * to allow the column values to consume the tab.
+ *
+ * Yes, 32-bit counters can overflow 8-columns, but then they are usually 64-bit counters.
+ * 64-bit counters can overflow 16-columns, but rarely do.
+ */
+static inline int print_name(int width, int *printed, char *delim, char *name)
+{
+	if (width <= 32)
+		return (sprintf(outp, "%s%s", (*printed++ ? delim : ""), name));
+	else
+		return (sprintf(outp, "%s%-8s", (*printed++ ? delim : ""), name));
+}
+static inline int print_hex_value(int width, int *printed, char *delim, unsigned long long value)
+{
+	if (width <= 32)
+		return (sprintf(outp, "%s%08x", (*printed++ ? delim : ""), (unsigned int)value));
+	else
+		return (sprintf(outp, "%s%016llx", (*printed++ ? delim : ""), value));
+}
+static inline int print_decimal_value(int width, int *printed, char *delim, unsigned long long value)
+{
+	if (width <= 32)
+		return (sprintf(outp, "%s%d", (*printed++ ? delim : ""), (unsigned int)value));
+	else
+		return (sprintf(outp, "%s%-8lld", (*printed++ ? delim : ""), value));
+}
+static inline int print_float_value(int *printed, char *delim, double value)
+{
+	return (sprintf(outp, "%s%0.2f", (*printed++ ? delim : ""), value));
+}
+
 void print_header(char *delim)
 {
 	struct msr_counter *mp;
@@ -2757,50 +2794,22 @@ void print_header(char *delim)
 	if (DO_BIC(BIC_SMI))
 		outp += sprintf(outp, "%sSMI", (printed++ ? delim : ""));
 
-	for (mp = sys.tp; mp; mp = mp->next) {
+	for (mp = sys.tp; mp; mp = mp->next)
+		outp += print_name(mp->width, &printed, delim, mp->name);
 
-		if (mp->format == FORMAT_RAW || mp->format == FORMAT_AVERAGE) {
-			if (mp->width == 64)
-				outp += sprintf(outp, "%s%18.18s", (printed++ ? delim : ""), mp->name);
-			else
-				outp += sprintf(outp, "%s%10.10s", (printed++ ? delim : ""), mp->name);
-		} else {
-			if ((mp->type == COUNTER_ITEMS) && sums_need_wide_columns)
-				outp += sprintf(outp, "%s%8s", (printed++ ? delim : ""), mp->name);
-			else
-				outp += sprintf(outp, "%s%s", (printed++ ? delim : ""), mp->name);
-		}
-	}
-
-	for (pp = sys.perf_tp; pp; pp = pp->next) {
-
-		if (pp->format == FORMAT_RAW) {
-			if (pp->width == 64)
-				outp += sprintf(outp, "%s%18.18s", (printed++ ? delim : ""), pp->name);
-			else
-				outp += sprintf(outp, "%s%10.10s", (printed++ ? delim : ""), pp->name);
-		} else {
-			if ((pp->type == COUNTER_ITEMS) && sums_need_wide_columns)
-				outp += sprintf(outp, "%s%8s", (printed++ ? delim : ""), pp->name);
-			else
-				outp += sprintf(outp, "%s%s", (printed++ ? delim : ""), pp->name);
-		}
-	}
+	for (pp = sys.perf_tp; pp; pp = pp->next)
+		outp += print_name(pp->width, &printed, delim, pp->name);
 
 	ppmt = sys.pmt_tp;
 	while (ppmt) {
 		switch (ppmt->type) {
 		case PMT_TYPE_RAW:
-			if (pmt_counter_get_width(ppmt) <= 32)
-				outp += sprintf(outp, "%s%10.10s", (printed++ ? delim : ""), ppmt->name);
-			else
-				outp += sprintf(outp, "%s%18.18s", (printed++ ? delim : ""), ppmt->name);
-
+			outp += print_name(pmt_counter_get_width(ppmt), &printed, delim, ppmt->name);
 			break;
 
 		case PMT_TYPE_XTAL_TIME:
 		case PMT_TYPE_TCORE_CLOCK:
-			outp += sprintf(outp, "%s%s", (printed++ ? delim : ""), ppmt->name);
+			outp += print_name(32, &printed, delim, ppmt->name);
 			break;
 		}
 
@@ -2833,49 +2842,23 @@ void print_header(char *delim)
 			outp += sprintf(outp, "%sCor_J", (printed++ ? delim : ""));
 	}
 
-	for (mp = sys.cp; mp; mp = mp->next) {
-		if (mp->format == FORMAT_RAW || mp->format == FORMAT_AVERAGE) {
-			if (mp->width == 64)
-				outp += sprintf(outp, "%s%18.18s", delim, mp->name);
-			else
-				outp += sprintf(outp, "%s%10.10s", delim, mp->name);
-		} else {
-			if ((mp->type == COUNTER_ITEMS) && sums_need_wide_columns)
-				outp += sprintf(outp, "%s%8s", delim, mp->name);
-			else
-				outp += sprintf(outp, "%s%s", delim, mp->name);
-		}
-	}
+	for (mp = sys.cp; mp; mp = mp->next)
+		outp += print_name(mp->width, &printed, delim, mp->name);
 
-	for (pp = sys.perf_cp; pp; pp = pp->next) {
-
-		if (pp->format == FORMAT_RAW) {
-			if (pp->width == 64)
-				outp += sprintf(outp, "%s%18.18s", (printed++ ? delim : ""), pp->name);
-			else
-				outp += sprintf(outp, "%s%10.10s", (printed++ ? delim : ""), pp->name);
-		} else {
-			if ((pp->type == COUNTER_ITEMS) && sums_need_wide_columns)
-				outp += sprintf(outp, "%s%8s", (printed++ ? delim : ""), pp->name);
-			else
-				outp += sprintf(outp, "%s%s", (printed++ ? delim : ""), pp->name);
-		}
-	}
+	for (pp = sys.perf_cp; pp; pp = pp->next)
+		outp += print_name(pp->width, &printed, delim, pp->name);
 
 	ppmt = sys.pmt_cp;
 	while (ppmt) {
 		switch (ppmt->type) {
 		case PMT_TYPE_RAW:
-			if (pmt_counter_get_width(ppmt) <= 32)
-				outp += sprintf(outp, "%s%10.10s", (printed++ ? delim : ""), ppmt->name);
-			else
-				outp += sprintf(outp, "%s%18.18s", (printed++ ? delim : ""), ppmt->name);
+			outp += print_name(pmt_counter_get_width(ppmt), &printed, delim, ppmt->name);
 
 			break;
 
 		case PMT_TYPE_XTAL_TIME:
 		case PMT_TYPE_TCORE_CLOCK:
-			outp += sprintf(outp, "%s%s", (printed++ ? delim : ""), ppmt->name);
+			outp += print_name(32, &printed, delim, ppmt->name);
 			break;
 		}
 
@@ -2963,51 +2946,22 @@ void print_header(char *delim)
 	if (DO_BIC(BIC_UNCORE_MHZ))
 		outp += sprintf(outp, "%sUncMHz", (printed++ ? delim : ""));
 
-	for (mp = sys.pp; mp; mp = mp->next) {
-		if (mp->format == FORMAT_RAW || mp->format == FORMAT_AVERAGE) {
-			if (mp->width == 64)
-				outp += sprintf(outp, "%s%18.18s", delim, mp->name);
-			else if (mp->width == 32)
-				outp += sprintf(outp, "%s%10.10s", delim, mp->name);
-			else
-				outp += sprintf(outp, "%s%7.7s", delim, mp->name);
-		} else {
-			if ((mp->type == COUNTER_ITEMS) && sums_need_wide_columns)
-				outp += sprintf(outp, "%s%8s", delim, mp->name);
-			else
-				outp += sprintf(outp, "%s%7.7s", delim, mp->name);
-		}
-	}
+	for (mp = sys.pp; mp; mp = mp->next)
+		outp += print_name(mp->width, &printed, delim, mp->name);
 
-	for (pp = sys.perf_pp; pp; pp = pp->next) {
-
-		if (pp->format == FORMAT_RAW) {
-			if (pp->width == 64)
-				outp += sprintf(outp, "%s%18.18s", (printed++ ? delim : ""), pp->name);
-			else
-				outp += sprintf(outp, "%s%10.10s", (printed++ ? delim : ""), pp->name);
-		} else {
-			if ((pp->type == COUNTER_ITEMS) && sums_need_wide_columns)
-				outp += sprintf(outp, "%s%8s", (printed++ ? delim : ""), pp->name);
-			else
-				outp += sprintf(outp, "%s%s", (printed++ ? delim : ""), pp->name);
-		}
-	}
+	for (pp = sys.perf_pp; pp; pp = pp->next)
+		outp += print_name(pp->width, &printed, delim, pp->name);
 
 	ppmt = sys.pmt_pp;
 	while (ppmt) {
 		switch (ppmt->type) {
 		case PMT_TYPE_RAW:
-			if (pmt_counter_get_width(ppmt) <= 32)
-				outp += sprintf(outp, "%s%10.10s", (printed++ ? delim : ""), ppmt->name);
-			else
-				outp += sprintf(outp, "%s%18.18s", (printed++ ? delim : ""), ppmt->name);
-
+			outp += print_name(pmt_counter_get_width(ppmt), &printed, delim, ppmt->name);
 			break;
 
 		case PMT_TYPE_XTAL_TIME:
 		case PMT_TYPE_TCORE_CLOCK:
-			outp += sprintf(outp, "%s%s", (printed++ ? delim : ""), ppmt->name);
+			outp += print_name(32, &printed, delim, ppmt->name);
 			break;
 		}
 
@@ -3283,65 +3237,41 @@ int format_counters(PER_THREAD_PARAMS)
 	if (DO_BIC(BIC_SMI))
 		outp += sprintf(outp, "%s%d", (printed++ ? delim : ""), t->smi_count);
 
-	/* Added counters */
+	/* Added Thread Counters */
 	for (i = 0, mp = sys.tp; mp; i++, mp = mp->next) {
-		if (mp->format == FORMAT_RAW || mp->format == FORMAT_AVERAGE) {
-			if (mp->width == 32)
-				outp +=
-				    sprintf(outp, "%s0x%08x", (printed++ ? delim : ""), (unsigned int)t->counter[i]);
-			else
-				outp += sprintf(outp, "%s0x%016llx", (printed++ ? delim : ""), t->counter[i]);
-		} else if (mp->format == FORMAT_DELTA) {
-			if ((mp->type == COUNTER_ITEMS) && sums_need_wide_columns)
-				outp += sprintf(outp, "%s%8lld", (printed++ ? delim : ""), t->counter[i]);
-			else
-				outp += sprintf(outp, "%s%lld", (printed++ ? delim : ""), t->counter[i]);
-		} else if (mp->format == FORMAT_PERCENT) {
+		if (mp->format == FORMAT_RAW)
+			outp += print_hex_value(mp->width, &printed, delim, t->counter[i]);
+		else if (mp->format == FORMAT_DELTA || mp->format == FORMAT_AVERAGE)
+			outp += print_decimal_value(mp->width, &printed, delim, t->counter[i]);
+		else if (mp->format == FORMAT_PERCENT) {
 			if (mp->type == COUNTER_USEC)
-				outp +=
-				    sprintf(outp, "%s%.2f", (printed++ ? delim : ""),
-					    t->counter[i] / interval_float / 10000);
+				outp += print_float_value(&printed, delim, t->counter[i] / interval_float / 10000);
 			else
-				outp += sprintf(outp, "%s%.2f", (printed++ ? delim : ""), 100.0 * t->counter[i] / tsc);
+				outp += print_float_value(&printed, delim, 100.0 * t->counter[i] / tsc);
 		}
 	}
 
-	/* Added perf counters */
+	/* Added perf Thread Counters */
 	for (i = 0, pp = sys.perf_tp; pp; ++i, pp = pp->next) {
-		if (pp->format == FORMAT_RAW) {
-			if (pp->width == 32)
-				outp +=
-				    sprintf(outp, "%s0x%08x", (printed++ ? delim : ""),
-					    (unsigned int)t->perf_counter[i]);
-			else
-				outp += sprintf(outp, "%s0x%016llx", (printed++ ? delim : ""), t->perf_counter[i]);
-		} else if (pp->format == FORMAT_DELTA) {
-			if ((pp->type == COUNTER_ITEMS) && sums_need_wide_columns)
-				outp += sprintf(outp, "%s%8lld", (printed++ ? delim : ""), t->perf_counter[i]);
-			else
-				outp += sprintf(outp, "%s%lld", (printed++ ? delim : ""), t->perf_counter[i]);
-		} else if (pp->format == FORMAT_PERCENT) {
+		if (pp->format == FORMAT_RAW)
+			outp += print_hex_value(pp->width, &printed, delim, t->perf_counter[i]);
+		else if (pp->format == FORMAT_DELTA || mp->format == FORMAT_AVERAGE)
+			outp += print_decimal_value(pp->width, &printed, delim, t->perf_counter[i]);
+		else if (pp->format == FORMAT_PERCENT) {
 			if (pp->type == COUNTER_USEC)
-				outp +=
-				    sprintf(outp, "%s%.2f", (printed++ ? delim : ""),
-					    t->perf_counter[i] / interval_float / 10000);
+				outp += print_float_value(&printed, delim, t->perf_counter[i] / interval_float / 10000);
 			else
-				outp +=
-				    sprintf(outp, "%s%.2f", (printed++ ? delim : ""), 100.0 * t->perf_counter[i] / tsc);
+				outp += print_float_value(&printed, delim, 100.0 * t->perf_counter[i] / tsc);
 		}
 	}
 
+	/* Added PMT Thread Counters */
 	for (i = 0, ppmt = sys.pmt_tp; ppmt; i++, ppmt = ppmt->next) {
 		const unsigned long value_raw = t->pmt_counter[i];
 		double value_converted;
 		switch (ppmt->type) {
 		case PMT_TYPE_RAW:
-			if (pmt_counter_get_width(ppmt) <= 32)
-				outp += sprintf(outp, "%s0x%08x", (printed++ ? delim : ""),
-						(unsigned int)t->pmt_counter[i]);
-			else
-				outp += sprintf(outp, "%s0x%016llx", (printed++ ? delim : ""), t->pmt_counter[i]);
-
+			outp += print_hex_value(pmt_counter_get_width(ppmt), &printed, delim, t->pmt_counter[i]);
 			break;
 
 		case PMT_TYPE_XTAL_TIME:
@@ -3381,62 +3311,43 @@ int format_counters(PER_THREAD_PARAMS)
 	if (DO_BIC(BIC_CORE_THROT_CNT))
 		outp += sprintf(outp, "%s%lld", (printed++ ? delim : ""), c->core_throt_cnt);
 
+	/* Added Core Counters */
 	for (i = 0, mp = sys.cp; mp; i++, mp = mp->next) {
-		if (mp->format == FORMAT_RAW || mp->format == FORMAT_AVERAGE) {
-			if (mp->width == 32)
-				outp +=
-				    sprintf(outp, "%s0x%08x", (printed++ ? delim : ""), (unsigned int)c->counter[i]);
-			else
-				outp += sprintf(outp, "%s0x%016llx", (printed++ ? delim : ""), c->counter[i]);
-		} else if (mp->format == FORMAT_DELTA) {
-			if ((mp->type == COUNTER_ITEMS) && sums_need_wide_columns)
-				outp += sprintf(outp, "%s%8lld", (printed++ ? delim : ""), c->counter[i]);
-			else
-				outp += sprintf(outp, "%s%lld", (printed++ ? delim : ""), c->counter[i]);
-		} else if (mp->format == FORMAT_PERCENT) {
-			outp += sprintf(outp, "%s%.2f", (printed++ ? delim : ""), 100.0 * c->counter[i] / tsc);
-		}
+		if (mp->format == FORMAT_RAW)
+			outp += print_hex_value(mp->width, &printed, delim, c->counter[i]);
+		else if (mp->format == FORMAT_DELTA || mp->format == FORMAT_AVERAGE)
+			outp += print_decimal_value(mp->width, &printed, delim, c->counter[i]);
+		else if (mp->format == FORMAT_PERCENT)
+			outp += print_float_value(&printed, delim, 100.0 * c->counter[i] / tsc);
 	}
 
+	/* Added perf Core counters */
 	for (i = 0, pp = sys.perf_cp; pp; i++, pp = pp->next) {
-		if (pp->format == FORMAT_RAW) {
-			if (pp->width == 32)
-				outp +=
-				    sprintf(outp, "%s0x%08x", (printed++ ? delim : ""),
-					    (unsigned int)c->perf_counter[i]);
-			else
-				outp += sprintf(outp, "%s0x%016llx", (printed++ ? delim : ""), c->perf_counter[i]);
-		} else if (pp->format == FORMAT_DELTA) {
-			if ((pp->type == COUNTER_ITEMS) && sums_need_wide_columns)
-				outp += sprintf(outp, "%s%8lld", (printed++ ? delim : ""), c->perf_counter[i]);
-			else
-				outp += sprintf(outp, "%s%lld", (printed++ ? delim : ""), c->perf_counter[i]);
-		} else if (pp->format == FORMAT_PERCENT) {
-			outp += sprintf(outp, "%s%.2f", (printed++ ? delim : ""), 100.0 * c->perf_counter[i] / tsc);
-		}
+		if (pp->format == FORMAT_RAW)
+			outp += print_hex_value(pp->width, &printed, delim, c->perf_counter[i]);
+		else if (pp->format == FORMAT_DELTA || mp->format == FORMAT_AVERAGE)
+			outp += print_decimal_value(pp->width, &printed, delim, c->perf_counter[i]);
+		else if (pp->format == FORMAT_PERCENT)
+			outp += print_float_value(&printed, delim, 100.0 * c->perf_counter[i] / tsc);
 	}
 
+	/* Added PMT Core counters */
 	for (i = 0, ppmt = sys.pmt_cp; ppmt; i++, ppmt = ppmt->next) {
 		const unsigned long value_raw = c->pmt_counter[i];
 		double value_converted;
 		switch (ppmt->type) {
 		case PMT_TYPE_RAW:
-			if (pmt_counter_get_width(ppmt) <= 32)
-				outp += sprintf(outp, "%s0x%08x", (printed++ ? delim : ""),
-						(unsigned int)c->pmt_counter[i]);
-			else
-				outp += sprintf(outp, "%s0x%016llx", (printed++ ? delim : ""), c->pmt_counter[i]);
-
+			outp += print_hex_value(pmt_counter_get_width(ppmt), &printed, delim, c->pmt_counter[i]);
 			break;
 
 		case PMT_TYPE_XTAL_TIME:
 			value_converted = 100.0 * value_raw / crystal_hz / interval_float;
-			outp += sprintf(outp, "%s%.2f", (printed++ ? delim : ""), value_converted);
+			outp += print_float_value(&printed, delim, value_converted);
 			break;
 
 		case PMT_TYPE_TCORE_CLOCK:
 			value_converted = 100.0 * value_raw / tcore_clock_freq_hz / interval_float;
-			outp += sprintf(outp, "%s%.2f", (printed++ ? delim : ""), value_converted);
+			outp += print_float_value(&printed, delim, value_converted);
 		}
 	}
 
@@ -3580,66 +3491,48 @@ int format_counters(PER_THREAD_PARAMS)
 	if (DO_BIC(BIC_UNCORE_MHZ))
 		outp += sprintf(outp, "%s%d", (printed++ ? delim : ""), p->uncore_mhz);
 
+	/* Added Package Counters */
 	for (i = 0, mp = sys.pp; mp; i++, mp = mp->next) {
-		if (mp->format == FORMAT_RAW || mp->format == FORMAT_AVERAGE) {
-			if (mp->width == 32)
-				outp +=
-				    sprintf(outp, "%s0x%08x", (printed++ ? delim : ""), (unsigned int)p->counter[i]);
-			else
-				outp += sprintf(outp, "%s0x%016llx", (printed++ ? delim : ""), p->counter[i]);
-		} else if (mp->format == FORMAT_DELTA) {
-			if ((mp->type == COUNTER_ITEMS) && sums_need_wide_columns)
-				outp += sprintf(outp, "%s%8lld", (printed++ ? delim : ""), p->counter[i]);
-			else
-				outp += sprintf(outp, "%s%lld", (printed++ ? delim : ""), p->counter[i]);
-		} else if (mp->format == FORMAT_PERCENT) {
-			outp += sprintf(outp, "%s%.2f", (printed++ ? delim : ""), 100.0 * p->counter[i] / tsc);
-		} else if (mp->type == COUNTER_K2M)
+		if (mp->format == FORMAT_RAW)
+			outp += print_hex_value(mp->width, &printed, delim, p->counter[i]);
+		else if (mp->type == COUNTER_K2M)
 			outp += sprintf(outp, "%s%d", (printed++ ? delim : ""), (unsigned int)p->counter[i] / 1000);
+		else if (mp->format == FORMAT_DELTA || mp->format == FORMAT_AVERAGE)
+			outp += print_decimal_value(mp->width, &printed, delim, p->counter[i]);
+		else if (mp->format == FORMAT_PERCENT)
+			outp += print_float_value(&printed, delim, 100.0 * p->counter[i] / tsc);
 	}
 
+	/* Added perf Package Counters */
 	for (i = 0, pp = sys.perf_pp; pp; i++, pp = pp->next) {
-		if (pp->format == FORMAT_RAW) {
-			if (pp->width == 32)
-				outp +=
-				    sprintf(outp, "%s0x%08x", (printed++ ? delim : ""),
-					    (unsigned int)p->perf_counter[i]);
-			else
-				outp += sprintf(outp, "%s0x%016llx", (printed++ ? delim : ""), p->perf_counter[i]);
-		} else if (pp->format == FORMAT_DELTA) {
-			if ((pp->type == COUNTER_ITEMS) && sums_need_wide_columns)
-				outp += sprintf(outp, "%s%8lld", (printed++ ? delim : ""), p->perf_counter[i]);
-			else
-				outp += sprintf(outp, "%s%lld", (printed++ ? delim : ""), p->perf_counter[i]);
-		} else if (pp->format == FORMAT_PERCENT) {
-			outp += sprintf(outp, "%s%.2f", (printed++ ? delim : ""), 100.0 * p->perf_counter[i] / tsc);
-		} else if (pp->type == COUNTER_K2M) {
+		if (pp->format == FORMAT_RAW)
+			outp += print_hex_value(pp->width, &printed, delim, p->perf_counter[i]);
+		else if (pp->type == COUNTER_K2M)
 			outp +=
 			    sprintf(outp, "%s%d", (printed++ ? delim : ""), (unsigned int)p->perf_counter[i] / 1000);
-		}
+		else if (pp->format == FORMAT_DELTA || mp->format == FORMAT_AVERAGE)
+			outp += print_decimal_value(pp->width, &printed, delim, p->perf_counter[i]);
+		else if (pp->format == FORMAT_PERCENT)
+			outp += print_float_value(&printed, delim, 100.0 * p->perf_counter[i] / tsc);
 	}
 
+	/* Added PMT Package Counters */
 	for (i = 0, ppmt = sys.pmt_pp; ppmt; i++, ppmt = ppmt->next) {
 		const unsigned long value_raw = p->pmt_counter[i];
 		double value_converted;
 		switch (ppmt->type) {
 		case PMT_TYPE_RAW:
-			if (pmt_counter_get_width(ppmt) <= 32)
-				outp += sprintf(outp, "%s0x%08x", (printed++ ? delim : ""),
-						(unsigned int)p->pmt_counter[i]);
-			else
-				outp += sprintf(outp, "%s0x%016llx", (printed++ ? delim : ""), p->pmt_counter[i]);
-
+			outp += print_hex_value(pmt_counter_get_width(ppmt), &printed, delim, p->pmt_counter[i]);
 			break;
 
 		case PMT_TYPE_XTAL_TIME:
 			value_converted = 100.0 * value_raw / crystal_hz / interval_float;
-			outp += sprintf(outp, "%s%.2f", (printed++ ? delim : ""), value_converted);
+			outp += print_float_value(&printed, delim, value_converted);
 			break;
 
 		case PMT_TYPE_TCORE_CLOCK:
 			value_converted = 100.0 * value_raw / tcore_clock_freq_hz / interval_float;
-			outp += sprintf(outp, "%s%.2f", (printed++ ? delim : ""), value_converted);
+			outp += print_float_value(&printed, delim, value_converted);
 		}
 	}
 
@@ -3758,7 +3651,7 @@ int delta_package(struct pkg_data *new, struct pkg_data *old)
 	    new->rapl_dram_perf_status.raw_value - old->rapl_dram_perf_status.raw_value;
 
 	for (i = 0, mp = sys.pp; mp; i++, mp = mp->next) {
-		if (mp->format == FORMAT_RAW || mp->format == FORMAT_AVERAGE)
+		if (mp->format == FORMAT_RAW)
 			old->counter[i] = new->counter[i];
 		else if (mp->format == FORMAT_AVERAGE)
 			old->counter[i] = new->counter[i];
@@ -4522,11 +4415,6 @@ int get_core_throt_cnt(int cpu, unsigned long long *cnt)
 
 	return 0;
 }
-
-struct amperf_group_fd {
-	int aperf;		/* Also the group descriptor */
-	int mperf;
-};
 
 static int read_perf_counter_info(const char *const path, const char *const parse_format, void *value_ptr)
 {
@@ -6673,6 +6561,7 @@ release_timer:
 	timer_delete(timerid);
 release_msr:
 	free(per_cpu_msr_sum);
+	per_cpu_msr_sum = NULL;
 }
 
 /*
@@ -10126,7 +10015,7 @@ int get_and_dump_counters(void)
 
 void print_version()
 {
-	fprintf(outf, "turbostat version 2025.09.09 - Len Brown <lenb@kernel.org>\n");
+	fprintf(outf, "turbostat version 2025.10.18 - Len Brown <lenb@kernel.org>\n");
 }
 
 #define COMMAND_LINE_SIZE 2048
