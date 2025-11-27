@@ -128,7 +128,7 @@ extern void __fput_sync(struct file *);
 extern unsigned int sysctl_nr_open_min, sysctl_nr_open_max;
 
 /*
- * class_fd_prepare_t: Combined fd + file allocation cleanup class.
+ * fd_prepare: Combined fd + file allocation cleanup class.
  * @err: Error code to indicate if allocation succeeded.
  * @__fd: Allocated fd (may not be accessed directly)
  * @__file: Allocated struct file pointer (may not be accessed directly)
@@ -139,24 +139,27 @@ extern unsigned int sysctl_nr_open_min, sysctl_nr_open_max;
  *
  * Do not use directly.
  */
-typedef struct {
+struct fd_prepare {
 	s32 err;
 	s32 __fd; /* do not access directly */
 	struct file *__file; /* do not access directly */
-} class_fd_prepare_t;
+};
+
+/* Typedef for fd_prepare cleanup guards. */
+typedef struct fd_prepare class_fd_prepare_t;
 
 /*
  * Accessors for fd_prepare class members.
  * _Generic() is used for zero-cost type safety.
  */
 #define fd_prepare_fd(_fdf) \
-	(_Generic((_fdf), class_fd_prepare_t: (_fdf).__fd))
+	(_Generic((_fdf), struct fd_prepare: (_fdf).__fd))
 
 #define fd_prepare_file(_fdf) \
-	(_Generic((_fdf), class_fd_prepare_t: (_fdf).__file))
+	(_Generic((_fdf), struct fd_prepare: (_fdf).__file))
 
 /* Do not use directly. */
-static inline void class_fd_prepare_destructor(const class_fd_prepare_t *fdf)
+static inline void class_fd_prepare_destructor(const struct fd_prepare *fdf)
 {
 	if (unlikely(fdf->err)) {
 		if (likely(fdf->__fd >= 0))
@@ -167,7 +170,7 @@ static inline void class_fd_prepare_destructor(const class_fd_prepare_t *fdf)
 }
 
 /* Do not use directly. */
-static inline int class_fd_prepare_lock_err(const class_fd_prepare_t *fdf)
+static inline int class_fd_prepare_lock_err(const struct fd_prepare *fdf)
 {
 	if (unlikely(fdf->err))
 		return fdf->err;
@@ -193,7 +196,7 @@ static inline int class_fd_prepare_lock_err(const class_fd_prepare_t *fdf)
  */
 #define __FD_PREPARE_INIT(_fd_flags, _file_owned)                 \
 	({                                                        \
-		class_fd_prepare_t fdf = {                        \
+		struct fd_prepare fdf = {                         \
 			.__fd = get_unused_fd_flags((_fd_flags)), \
 		};                                                \
 		if (likely(fdf.__fd >= 0))                        \
@@ -222,7 +225,7 @@ static inline int class_fd_prepare_lock_err(const class_fd_prepare_t *fdf)
  */
 #define fd_publish(_fdf)                                       \
 	({                                                     \
-		class_fd_prepare_t *fdp = &(_fdf);             \
+		struct fd_prepare *fdp = &(_fdf);              \
 		VFS_WARN_ON_ONCE(fdp->err);                    \
 		VFS_WARN_ON_ONCE(fdp->__fd < 0);               \
 		VFS_WARN_ON_ONCE(IS_ERR_OR_NULL(fdp->__file)); \
