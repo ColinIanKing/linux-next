@@ -244,7 +244,8 @@ static long sync_file_ioctl_merge(struct sync_file *sync_file,
 	if (copy_to_user((void __user *)arg, &data, sizeof(data)))
 		return -EFAULT;
 
-	return fd_publish(fdf);
+	fd_publish(fdf);
+	return 0;
 }
 
 static int sync_fill_fence_info(struct dma_fence *fence,

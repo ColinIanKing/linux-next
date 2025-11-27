@@ -369,7 +369,8 @@ static long sw_sync_ioctl_create_fence(struct sync_timeline *obj,
 	if (copy_to_user((void __user *)arg, &data, sizeof(data)))
 		return -EFAULT;
 
-	return fd_publish(fdf);
+	fd_publish(fdf);
+	return 0;
 }
 
 static long sw_sync_ioctl_inc(struct sync_timeline *obj, unsigned long arg)
