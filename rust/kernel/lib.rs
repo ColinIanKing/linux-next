@@ -115,6 +115,7 @@ pub mod mm;
 pub mod module_param;
 #[cfg(CONFIG_NET)]
 pub mod net;
+pub mod num;
 pub mod of;
 #[cfg(CONFIG_PM_OPP)]
 pub mod opp;
