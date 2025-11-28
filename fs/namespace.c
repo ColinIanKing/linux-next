@@ -4271,9 +4271,10 @@ static unsigned int attr_flags_to_mnt_flags(u64 attr_flags)
 SYSCALL_DEFINE3(fsmount, int, fs_fd, unsigned int, flags,
 		unsigned int, attr_flags)
 {
+	struct path new_path __free(path_put) = {};
 	struct mnt_namespace *ns;
 	struct fs_context *fc;
-	struct path newmount __free(path_put) = {};
+	struct vfsmount *new_mnt;
 	struct mount *mnt;
 	unsigned int mnt_flags = 0;
 	long ret;
@@ -4334,11 +4335,13 @@ SYSCALL_DEFINE3(fsmount, int, fs_fd, unsigned int, flags,
 	if (fc->sb_flags & SB_MANDLOCK)
 		warn_mandlock();
 
-	newmount.mnt = vfs_create_mount(fc);
-	if (IS_ERR(newmount.mnt))
-		return PTR_ERR(newmount.mnt);
-	newmount.dentry = dget(fc->root);
-	newmount.mnt->mnt_flags = mnt_flags;
+	new_mnt = vfs_create_mount(fc);
+	if (IS_ERR(new_mnt))
+		return PTR_ERR(new_mnt);
+	new_mnt->mnt_flags = mnt_flags;
+
+	new_path.dentry = dget(fc->root);
+	new_path.mnt = new_mnt;
 
 	/* We've done the mount bit - now move the file context into more or
 	 * less the same state as if we'd done an fspick().  We don't want to
@@ -4350,16 +4353,16 @@ SYSCALL_DEFINE3(fsmount, int, fs_fd, unsigned int, flags,
 	ns = alloc_mnt_ns(current->nsproxy->mnt_ns->user_ns, true);
 	if (IS_ERR(ns))
 		return PTR_ERR(ns);
-	mnt = real_mount(newmount.mnt);
+	mnt = real_mount(new_path.mnt);
 	ns->root = mnt;
 	ns->nr_mounts = 1;
 	mnt_add_to_ns(ns, mnt);
-	mntget(newmount.mnt);
+	mntget(new_path.mnt);
 
 	FD_PREPARE(fdf, (flags & FSMOUNT_CLOEXEC) ? O_CLOEXEC : 0,
-		   dentry_open(&newmount, O_PATH, fc->cred));
+		   dentry_open(&new_path, O_PATH, fc->cred));
 	if (fdf.err) {
-		dissolve_on_fput(newmount.mnt);
+		dissolve_on_fput(new_path.mnt);
 		return fdf.err;
 	}
 
