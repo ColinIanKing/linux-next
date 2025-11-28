@@ -153,7 +153,7 @@ protect key sealing and parameter decryption to protect key unsealing
 and random number generation.
 
 Null Primary Key Certification in Userspace
-===========================================
+-------------------------------------------
 
 Every TPM comes shipped with a couple of X.509 certificates for the
 primary endorsement key.  This document assumes that the Elliptic
