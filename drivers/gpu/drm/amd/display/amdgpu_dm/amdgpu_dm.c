@@ -5125,6 +5125,21 @@ static void amdgpu_dm_backlight_set_level(struct amdgpu_display_manager *dm,
 	struct dc_link *link;
 	u32 brightness;
 	bool rc, reallow_idle = false;
+	struct drm_connector *connector;
+
+	list_for_each_entry(connector, &dm->ddev->mode_config.connector_list, head) {
+		struct amdgpu_dm_connector *aconnector = to_amdgpu_dm_connector(connector);
+
+		if (aconnector->bl_idx != bl_idx)
+			continue;
+
+		/* if connector is off, save the brightness for next time it's on */
+		if (!aconnector->base.encoder) {
+			dm->brightness[bl_idx] = user_brightness;
+			dm->actual_brightness[bl_idx] = 0;
+			return;
+		}
+	}
 
 	amdgpu_dm_update_backlight_caps(dm, bl_idx);
 	caps = &dm->backlight_caps[bl_idx];
@@ -8820,8 +8835,14 @@ static void amdgpu_dm_connector_add_freesync_modes(struct drm_connector *connect
 	if (!(amdgpu_freesync_vid_mode && drm_edid))
 		return;
 
-	if (!amdgpu_dm_connector->dc_sink || amdgpu_dm_connector->dc_sink->edid_caps.analog ||
-		!dc_supports_vrr(amdgpu_dm_connector->dc_sink->ctx->dce_version))
+	if (!amdgpu_dm_connector->dc_sink || !amdgpu_dm_connector->dc_link)
+		return;
+
+	if (!dc_supports_vrr(amdgpu_dm_connector->dc_sink->ctx->dce_version))
+		return;
+
+	if (dc_connector_supports_analog(amdgpu_dm_connector->dc_link->link_id.id) &&
+	    amdgpu_dm_connector->dc_sink->edid_caps.analog)
 		return;
 
 	if (amdgpu_dm_connector->max_vfreq - amdgpu_dm_connector->min_vfreq > 10)
@@ -8833,11 +8854,11 @@ static int amdgpu_dm_connector_get_modes(struct drm_connector *connector)
 {
 	struct amdgpu_dm_connector *amdgpu_dm_connector =
 			to_amdgpu_dm_connector(connector);
+	struct dc_link *dc_link = amdgpu_dm_connector->dc_link;
 	struct drm_encoder *encoder;
 	const struct drm_edid *drm_edid = amdgpu_dm_connector->drm_edid;
-	struct dc_link_settings *verified_link_cap =
-			&amdgpu_dm_connector->dc_link->verified_link_cap;
-	const struct dc *dc = amdgpu_dm_connector->dc_link->dc;
+	struct dc_link_settings *verified_link_cap = &dc_link->verified_link_cap;
+	const struct dc *dc = dc_link->dc;
 
 	encoder = amdgpu_dm_connector_to_encoder(connector);
 
@@ -8848,7 +8869,9 @@ static int amdgpu_dm_connector_get_modes(struct drm_connector *connector)
 			amdgpu_dm_connector->num_modes +=
 				drm_add_modes_noedid(connector, 1920, 1080);
 
-		if (amdgpu_dm_connector->dc_sink && amdgpu_dm_connector->dc_sink->edid_caps.analog) {
+		if (amdgpu_dm_connector->dc_sink &&
+		    amdgpu_dm_connector->dc_sink->edid_caps.analog &&
+		    dc_connector_supports_analog(dc_link->link_id.id)) {
 			/* Analog monitor connected by DAC load detection.
 			 * Add common modes. It will be up to the user to select one that works.
 			 */
