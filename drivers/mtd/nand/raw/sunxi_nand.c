@@ -30,8 +30,8 @@
 #include <linux/reset.h>
 
 /* non compile-time field get/prep */
-#define field_get(_mask, _reg) (((_reg) & (_mask)) >> (ffs(_mask) - 1))
-#define field_prep(_mask, _val) (((_val) << (ffs(_mask) - 1)) & (_mask))
+#define sunxi_field_get(_mask, _reg) (((_reg) & (_mask)) >> (ffs(_mask) - 1))
+#define sunxi_field_prep(_mask, _val) (((_val) << (ffs(_mask) - 1)) & (_mask))
 
 #define NFC_REG_CTL		0x0000
 #define NFC_REG_ST		0x0004
@@ -185,7 +185,7 @@
 #define NFC_RANDOM_EN(nfc)	(nfc->caps->random_en_mask)
 #define NFC_RANDOM_DIRECTION(nfc) (nfc->caps->random_dir_mask)
 #define NFC_ECC_MODE_MSK(nfc)	(nfc->caps->ecc_mode_mask)
-#define NFC_ECC_MODE(nfc, x)	field_prep(NFC_ECC_MODE_MSK(nfc), (x))
+#define NFC_ECC_MODE(nfc, x)	sunxi_field_prep(NFC_ECC_MODE_MSK(nfc), (x))
 /* RANDOM_PAGE_SIZE: 0: ECC block size  1: page size */
 #define NFC_A23_RANDOM_PAGE_SIZE	BIT(11)
 #define NFC_H6_RANDOM_PAGE_SIZE	BIT(7)
@@ -879,7 +879,7 @@ static void sunxi_nfc_set_user_data_len(struct sunxi_nfc *nfc,
 	val = readl(nfc->regs + NFC_REG_USER_DATA_LEN(nfc, step));
 
 	val &= ~NFC_USER_DATA_LEN_MSK(step);
-	val |= field_prep(NFC_USER_DATA_LEN_MSK(step), i);
+	val |= sunxi_field_prep(NFC_USER_DATA_LEN_MSK(step), i);
 	writel(val, nfc->regs + NFC_REG_USER_DATA_LEN(nfc, step));
 }
 
@@ -992,7 +992,7 @@ static int sunxi_nfc_hw_ecc_read_chunk(struct nand_chip *nand,
 	*cur_off = oob_off + ecc->bytes + USER_DATA_SZ;
 
 	pattern_found = readl(nfc->regs + nfc->caps->reg_pat_found);
-	pattern_found = field_get(NFC_ECC_PAT_FOUND_MSK(nfc), pattern_found);
+	pattern_found = sunxi_field_get(NFC_ECC_PAT_FOUND_MSK(nfc), pattern_found);
 
 	ret = sunxi_nfc_hw_ecc_correct(nand, data, oob_required ? oob : NULL, 0,
 				       readl(nfc->regs + NFC_REG_ECC_ST),
@@ -1121,7 +1121,7 @@ static int sunxi_nfc_hw_ecc_read_chunks_dma(struct nand_chip *nand, uint8_t *buf
 
 	status = readl(nfc->regs + NFC_REG_ECC_ST);
 	pattern_found = readl(nfc->regs + nfc->caps->reg_pat_found);
-	pattern_found = field_get(NFC_ECC_PAT_FOUND_MSK(nfc), pattern_found);
+	pattern_found = sunxi_field_get(NFC_ECC_PAT_FOUND_MSK(nfc), pattern_found);
 
 	for (i = 0; i < nchunks; i++) {
 		int data_off = i * ecc->size;
