@@ -7,6 +7,7 @@
 #include <linux/vfio_pci_core.h>
 #include <linux/delay.h>
 #include <linux/jiffies.h>
+#include <linux/pci-p2pdma.h>
 
 #ifdef CONFIG_MEMORY_FAILURE
 #include <linux/memory-failure.h>
@@ -248,35 +249,25 @@ static int nvgrace_gpu_mmap(struct vfio_device *core_vdev,
 	return ret;
 }
 
-static long
-nvgrace_gpu_ioctl_get_region_info(struct vfio_device *core_vdev,
-				  unsigned long arg)
+static int nvgrace_gpu_ioctl_get_region_info(struct vfio_device *core_vdev,
+					     struct vfio_region_info *info,
+					     struct vfio_info_cap *caps)
 {
 	struct nvgrace_gpu_pci_core_device *nvdev =
 		container_of(core_vdev, struct nvgrace_gpu_pci_core_device,
 			     core_device.vdev);
-	unsigned long minsz = offsetofend(struct vfio_region_info, offset);
-	struct vfio_info_cap caps = { .buf = NULL, .size = 0 };
 	struct vfio_region_info_cap_sparse_mmap *sparse;
-	struct vfio_region_info info;
 	struct mem_region *memregion;
 	u32 size;
 	int ret;
-
-	if (copy_from_user(&info, (void __user *)arg, minsz))
-		return -EFAULT;
-
-	if (info.argsz < minsz)
-		return -EINVAL;
 
 	/*
 	 * Request to determine the BAR region information. Send the
 	 * GPU memory information.
 	 */
-	memregion = nvgrace_gpu_memregion(info.index, nvdev);
+	memregion = nvgrace_gpu_memregion(info->index, nvdev);
 	if (!memregion)
-		return vfio_pci_core_ioctl(core_vdev,
-					   VFIO_DEVICE_GET_REGION_INFO, arg);
+		return vfio_pci_ioctl_get_region_info(core_vdev, info, caps);
 
 	size = struct_size(sparse, areas, 1);
 
@@ -295,49 +286,28 @@ nvgrace_gpu_ioctl_get_region_info(struct vfio_device *core_vdev,
 	sparse->header.id = VFIO_REGION_INFO_CAP_SPARSE_MMAP;
 	sparse->header.version = 1;
 
-	ret = vfio_info_add_capability(&caps, &sparse->header, size);
+	ret = vfio_info_add_capability(caps, &sparse->header, size);
 	kfree(sparse);
 	if (ret)
 		return ret;
 
-	info.offset = VFIO_PCI_INDEX_TO_OFFSET(info.index);
+	info->offset = VFIO_PCI_INDEX_TO_OFFSET(info->index);
 	/*
 	 * The region memory size may not be power-of-2 aligned.
 	 * Given that the memory is a BAR and may not be
 	 * aligned, roundup to the next power-of-2.
 	 */
-	info.size = memregion->bar_size;
-	info.flags = VFIO_REGION_INFO_FLAG_READ |
+	info->size = memregion->bar_size;
+	info->flags = VFIO_REGION_INFO_FLAG_READ |
 		     VFIO_REGION_INFO_FLAG_WRITE |
 		     VFIO_REGION_INFO_FLAG_MMAP;
-
-	if (caps.size) {
-		info.flags |= VFIO_REGION_INFO_FLAG_CAPS;
-		if (info.argsz < sizeof(info) + caps.size) {
-			info.argsz = sizeof(info) + caps.size;
-			info.cap_offset = 0;
-		} else {
-			vfio_info_cap_shift(&caps, sizeof(info));
-			if (copy_to_user((void __user *)arg +
-					 sizeof(info), caps.buf,
-					 caps.size)) {
-				kfree(caps.buf);
-				return -EFAULT;
-			}
-			info.cap_offset = sizeof(info);
-		}
-		kfree(caps.buf);
-	}
-	return copy_to_user((void __user *)arg, &info, minsz) ?
-			    -EFAULT : 0;
+	return 0;
 }
 
 static long nvgrace_gpu_ioctl(struct vfio_device *core_vdev,
 			      unsigned int cmd, unsigned long arg)
 {
 	switch (cmd) {
-	case VFIO_DEVICE_GET_REGION_INFO:
-		return nvgrace_gpu_ioctl_get_region_info(core_vdev, arg);
 	case VFIO_DEVICE_IOEVENTFD:
 		return -ENOTTY;
 	case VFIO_DEVICE_RESET:
@@ -726,6 +696,50 @@ nvgrace_gpu_write(struct vfio_device *core_vdev,
 	return vfio_pci_core_write(core_vdev, buf, count, ppos);
 }
 
+static int nvgrace_get_dmabuf_phys(struct vfio_pci_core_device *core_vdev,
+				   struct p2pdma_provider **provider,
+				   unsigned int region_index,
+				   struct dma_buf_phys_vec *phys_vec,
+				   struct vfio_region_dma_range *dma_ranges,
+				   size_t nr_ranges)
+{
+	struct nvgrace_gpu_pci_core_device *nvdev = container_of(
+		core_vdev, struct nvgrace_gpu_pci_core_device, core_device);
+	struct pci_dev *pdev = core_vdev->pdev;
+	struct mem_region *mem_region;
+
+	/*
+	 * if (nvdev->resmem.memlength && region_index == RESMEM_REGION_INDEX) {
+	 * 	The P2P properties of the non-BAR memory is the same as the
+	 * 	BAR memory, so just use the provider for index 0. Someday
+	 * 	when CXL gets P2P support we could create CXLish providers
+	 * 	for the non-BAR memory.
+	 * } else if (region_index == USEMEM_REGION_INDEX) {
+	 * 	This is actually cachable memory and isn't treated as P2P in
+	 * 	the chip. For now we have no way to push cachable memory
+	 * 	through everything and the Grace HW doesn't care what caching
+	 * 	attribute is programmed into the SMMU. So use BAR 0.
+	 * }
+	 */
+	mem_region = nvgrace_gpu_memregion(region_index, nvdev);
+	if (mem_region) {
+		*provider = pcim_p2pdma_provider(pdev, 0);
+		if (!*provider)
+			return -EINVAL;
+		return vfio_pci_core_fill_phys_vec(phys_vec, dma_ranges,
+						   nr_ranges,
+						   mem_region->memphys,
+						   mem_region->memlength);
+	}
+
+	return vfio_pci_core_get_dmabuf_phys(core_vdev, provider, region_index,
+					     phys_vec, dma_ranges, nr_ranges);
+}
+
+static const struct vfio_pci_device_ops nvgrace_gpu_pci_dev_ops = {
+	.get_dmabuf_phys = nvgrace_get_dmabuf_phys,
+};
+
 static const struct vfio_device_ops nvgrace_gpu_pci_ops = {
 	.name		= "nvgrace-gpu-vfio-pci",
 	.init		= vfio_pci_core_init_dev,
@@ -733,6 +747,7 @@ static const struct vfio_device_ops nvgrace_gpu_pci_ops = {
 	.open_device	= nvgrace_gpu_open_device,
 	.close_device	= nvgrace_gpu_close_device,
 	.ioctl		= nvgrace_gpu_ioctl,
+	.get_region_info_caps = nvgrace_gpu_ioctl_get_region_info,
 	.device_feature	= vfio_pci_core_ioctl_feature,
 	.read		= nvgrace_gpu_read,
 	.write		= nvgrace_gpu_write,
@@ -746,6 +761,10 @@ static const struct vfio_device_ops nvgrace_gpu_pci_ops = {
 	.detach_ioas	= vfio_iommufd_physical_detach_ioas,
 };
 
+static const struct vfio_pci_device_ops nvgrace_gpu_pci_dev_core_ops = {
+	.get_dmabuf_phys = vfio_pci_core_get_dmabuf_phys,
+};
+
 static const struct vfio_device_ops nvgrace_gpu_pci_core_ops = {
 	.name		= "nvgrace-gpu-vfio-pci-core",
 	.init		= vfio_pci_core_init_dev,
@@ -753,6 +772,7 @@ static const struct vfio_device_ops nvgrace_gpu_pci_core_ops = {
 	.open_device	= nvgrace_gpu_open_device,
 	.close_device	= vfio_pci_core_close_device,
 	.ioctl		= vfio_pci_core_ioctl,
+	.get_region_info_caps = vfio_pci_ioctl_get_region_info,
 	.device_feature	= vfio_pci_core_ioctl_feature,
 	.read		= vfio_pci_core_read,
 	.write		= vfio_pci_core_write,
@@ -1008,6 +1028,9 @@ static int nvgrace_gpu_probe(struct pci_dev *pdev,
 						    memphys, memlength);
 		if (ret)
 			goto out_put_vdev;
+		nvdev->core_device.pci_ops = &nvgrace_gpu_pci_dev_ops;
+	} else {
+		nvdev->core_device.pci_ops = &nvgrace_gpu_pci_dev_core_ops;
 	}
 
 	ret = vfio_pci_core_register_device(&nvdev->core_device);
