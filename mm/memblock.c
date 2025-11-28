@@ -20,8 +20,8 @@
 
 #ifdef CONFIG_KEXEC_HANDOVER
 #include <linux/libfdt.h>
-#include <linux/kexec_handover.h>
 #endif /* CONFIG_KEXEC_HANDOVER */
+#include <linux/kexec_handover.h>
 
 #include <asm/sections.h>
 #include <linux/io.h>
@@ -1126,8 +1126,10 @@ int __init_memblock memblock_reserved_mark_noinit(phys_addr_t base, phys_addr_t 
  */
 __init int memblock_mark_kho_scratch(phys_addr_t base, phys_addr_t size)
 {
-	return memblock_setclr_flag(&memblock.memory, base, size, 1,
-				    MEMBLOCK_KHO_SCRATCH);
+	if (is_kho_boot())
+		return memblock_setclr_flag(&memblock.memory, base, size, 1,
+					    MEMBLOCK_KHO_SCRATCH);
+	return 0;
 }
 
 /**
@@ -1140,8 +1142,10 @@ __init int memblock_mark_kho_scratch(phys_addr_t base, phys_addr_t size)
  */
 __init int memblock_clear_kho_scratch(phys_addr_t base, phys_addr_t size)
 {
-	return memblock_setclr_flag(&memblock.memory, base, size, 0,
-				    MEMBLOCK_KHO_SCRATCH);
+	if (is_kho_boot())
+		return memblock_setclr_flag(&memblock.memory, base, size, 0,
+					    MEMBLOCK_KHO_SCRATCH);
+	return 0;
 }
 
 static bool should_skip_region(struct memblock_type *type,
