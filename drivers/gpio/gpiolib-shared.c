@@ -58,6 +58,7 @@ static LIST_HEAD(gpio_shared_list);
 static DEFINE_MUTEX(gpio_shared_lock);
 static DEFINE_IDA(gpio_shared_ida);
 
+#if IS_ENABLED(CONFIG_OF)
 static struct gpio_shared_entry *
 gpio_shared_find_entry(struct fwnode_handle *controller_node,
 		       unsigned int offset)
@@ -72,7 +73,6 @@ gpio_shared_find_entry(struct fwnode_handle *controller_node,
 	return NULL;
 }
 
-#if IS_ENABLED(CONFIG_OF)
 static int gpio_shared_of_traverse(struct device_node *curr)
 {
 	struct gpio_shared_entry *entry;
@@ -205,7 +205,10 @@ static int gpio_shared_of_traverse(struct device_node *curr)
 
 static int gpio_shared_of_scan(void)
 {
-	return gpio_shared_of_traverse(of_root);
+	if (of_root)
+		return gpio_shared_of_traverse(of_root);
+
+	return 0;
 }
 #else
 static int gpio_shared_of_scan(void)
@@ -250,6 +253,84 @@ static int gpio_shared_make_adev(struct gpio_device *gdev,
 	return 0;
 }
 
+#if IS_ENABLED(CONFIG_RESET_GPIO)
+/*
+ * Special case: reset-gpio is an auxiliary device that's created dynamically
+ * and put in between the GPIO controller and consumers of shared GPIOs
+ * referred to by the "reset-gpios" property.
+ *
+ * If the supposed consumer of a shared GPIO didn't match any of the mappings
+ * we created when scanning the firmware nodes, it's still possible that it's
+ * the reset-gpio device which didn't exist at the time of the scan.
+ *
+ * This function verifies it an return true if it's the case.
+ */
+static bool gpio_shared_dev_is_reset_gpio(struct device *consumer,
+					  struct gpio_shared_entry *entry,
+					  struct gpio_shared_ref *ref)
+{
+	struct fwnode_handle *reset_fwnode = dev_fwnode(consumer);
+	struct fwnode_reference_args ref_args, aux_args;
+	struct device *parent = consumer->parent;
+	bool match;
+	int ret;
+
+	/* The reset-gpio device must have a parent AND a firmware node. */
+	if (!parent || !reset_fwnode)
+		return false;
+
+	/*
+	 * FIXME: use device_is_compatible() once the reset-gpio drivers gains
+	 * a compatible string which it currently does not have.
+	 */
+	if (!strstarts(dev_name(consumer), "reset.gpio."))
+		return false;
+
+	/*
+	 * Parent of the reset-gpio auxiliary device is the GPIO chip whose
+	 * fwnode we stored in the entry structure.
+	 */
+	if (!device_match_fwnode(parent, entry->fwnode))
+		return false;
+
+	/*
+	 * The device associated with the shared reference's firmware node is
+	 * the consumer of the reset control exposed by the reset-gpio device.
+	 * It must have a "reset-gpios" property that's referencing the entry's
+	 * firmware node.
+	 *
+	 * The reference args must agree between the real consumer and the
+	 * auxiliary reset-gpio device.
+	 */
+	ret = fwnode_property_get_reference_args(ref->fwnode, "reset-gpios",
+						 NULL, 2, 0, &ref_args);
+	if (ret)
+		return false;
+
+	ret = fwnode_property_get_reference_args(reset_fwnode, "reset-gpios",
+						 NULL, 2, 0, &aux_args);
+	if (ret) {
+		fwnode_handle_put(ref_args.fwnode);
+		return false;
+	}
+
+	match = ((ref_args.fwnode == entry->fwnode) &&
+		 (aux_args.fwnode == entry->fwnode) &&
+		 (ref_args.args[0] == aux_args.args[0]));
+
+	fwnode_handle_put(ref_args.fwnode);
+	fwnode_handle_put(aux_args.fwnode);
+	return match;
+}
+#else
+static bool gpio_shared_dev_is_reset_gpio(struct device *consumer,
+					  struct gpio_shared_entry *entry,
+					  struct gpio_shared_ref *ref)
+{
+	return false;
+}
+#endif /* CONFIG_RESET_GPIO */
+
 int gpio_shared_add_proxy_lookup(struct device *consumer, unsigned long lflags)
 {
 	const char *dev_id = dev_name(consumer);
@@ -265,7 +346,8 @@ int gpio_shared_add_proxy_lookup(struct device *consumer, unsigned long lflags)
 
 	list_for_each_entry(entry, &gpio_shared_list, list) {
 		list_for_each_entry(ref, &entry->refs, list) {
-			if (!device_match_fwnode(consumer, ref->fwnode))
+			if (!device_match_fwnode(consumer, ref->fwnode) &&
+			    !gpio_shared_dev_is_reset_gpio(consumer, entry, ref))
 				continue;
 
 			/* We've already done that on a previous request. */
@@ -462,7 +544,7 @@ static struct gpio_shared_entry *gpiod_shared_find(struct auxiliary_device *adev
 			entry->shared_desc = shared_desc;
 
 			pr_debug("Device %s acquired a reference to the shared GPIO %u owned by %s\n",
-				 dev_name(&adev->dev), gpio_chip_hwgpio(shared_desc->desc),
+				 dev_name(&adev->dev), gpiod_hwgpio(shared_desc->desc),
 				 gpio_device_get_label(shared_desc->desc->gdev));
 
 
