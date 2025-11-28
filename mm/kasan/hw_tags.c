@@ -317,7 +317,7 @@ static void init_vmalloc_pages(const void *start, unsigned long size)
 }
 
 void *__kasan_unpoison_vmalloc(const void *start, unsigned long size,
-				kasan_vmalloc_flags_t flags)
+				kasan_vmalloc_flags_t flags, bool reuse_tag)
 {
 	u8 tag;
 	unsigned long redzone_start, redzone_size;
@@ -361,7 +361,7 @@ void *__kasan_unpoison_vmalloc(const void *start, unsigned long size,
 		return (void *)start;
 	}
 
-	tag = kasan_random_tag();
+	tag = reuse_tag ? get_tag(start) : kasan_random_tag();
 	start = set_tag(start, tag);
 
 	/* Unpoison and initialize memory up to size. */

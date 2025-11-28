@@ -596,13 +596,23 @@ static inline void kasan_release_vmalloc(unsigned long start,
 #endif /* CONFIG_KASAN_GENERIC || CONFIG_KASAN_SW_TAGS */
 
 void *__kasan_unpoison_vmalloc(const void *start, unsigned long size,
-			       kasan_vmalloc_flags_t flags);
+			       kasan_vmalloc_flags_t flags, bool reuse_tag);
+
+static __always_inline void *kasan_unpoison_vrealloc(const void *start,
+						     unsigned long size,
+						     kasan_vmalloc_flags_t flags)
+{
+	if (kasan_enabled())
+		return __kasan_unpoison_vmalloc(start, size, flags, true);
+	return (void *)start;
+}
+
 static __always_inline void *kasan_unpoison_vmalloc(const void *start,
 						unsigned long size,
 						kasan_vmalloc_flags_t flags)
 {
 	if (kasan_enabled())
-		return __kasan_unpoison_vmalloc(start, size, flags);
+		return __kasan_unpoison_vmalloc(start, size, flags, false);
 	return (void *)start;
 }
 
@@ -628,6 +638,13 @@ static inline void kasan_release_vmalloc(unsigned long start,
 					 unsigned long free_region_start,
 					 unsigned long free_region_end,
 					 unsigned long flags) { }
+
+static inline void *kasan_unpoison_vrealloc(const void *start,
+					    unsigned long size,
+					    kasan_vmalloc_flags_t flags)
+{
+	return (void *)start;
+}
 
 static inline void *kasan_unpoison_vmalloc(const void *start,
 					   unsigned long size,
