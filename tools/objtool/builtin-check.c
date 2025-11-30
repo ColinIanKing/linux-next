@@ -75,6 +75,7 @@ static const struct option check_options[] = {
 	OPT_GROUP("Actions:"),
 	OPT_BOOLEAN(0,		 "checksum", &opts.checksum, "generate per-function checksums"),
 	OPT_BOOLEAN(0,		 "cfi", &opts.cfi, "annotate kernel control flow integrity (kCFI) function preambles"),
+	OPT_STRING_OPTARG('d',	 "disas", &opts.disas, "function-pattern", "disassemble functions", "*"),
 	OPT_CALLBACK_OPTARG('h', "hacks", NULL, NULL, "jump_label,noinstr,skylake", "patch toolchain bugs/limitations", parse_hacks),
 	OPT_BOOLEAN('i',	 "ibt", &opts.ibt, "validate and annotate IBT"),
 	OPT_BOOLEAN('m',	 "mcount", &opts.mcount, "annotate mcount/fentry calls for ftrace"),
@@ -103,8 +104,10 @@ static const struct option check_options[] = {
 	OPT_STRING('o',		 "output", &opts.output, "file", "output file name"),
 	OPT_BOOLEAN(0,		 "sec-address", &opts.sec_address, "print section addresses in warnings"),
 	OPT_BOOLEAN(0,		 "stats", &opts.stats, "print statistics"),
+	OPT_STRING(0,		 "trace", &opts.trace, "func", "trace function validation"),
 	OPT_BOOLEAN('v',	 "verbose", &opts.verbose, "verbose warnings"),
 	OPT_BOOLEAN(0,		 "werror", &opts.werror, "return error on warnings"),
+	OPT_BOOLEAN(0,		 "wide", &opts.wide, "wide output"),
 
 	OPT_END(),
 };
@@ -175,6 +178,7 @@ static bool opts_valid(void)
 	}
 
 	if (opts.checksum		||
+	    opts.disas			||
 	    opts.hack_jump_label	||
 	    opts.hack_noinstr		||
 	    opts.ibt			||
