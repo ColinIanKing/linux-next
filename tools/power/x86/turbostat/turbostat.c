@@ -492,6 +492,7 @@ unsigned int quiet;
 unsigned int shown;
 unsigned int sums_need_wide_columns;
 unsigned int rapl_joules;
+unsigned int rapl_msrs;
 unsigned int summary_only;
 unsigned int list_header_only;
 unsigned int dump_only;
@@ -2136,7 +2137,7 @@ off_t idx_to_offset(int idx)
 
 	switch (idx) {
 	case IDX_PKG_ENERGY:
-		if (platform->rapl_msrs & RAPL_AMD_F17H)
+		if (rapl_msrs & RAPL_AMD_F17H)
 			offset = MSR_PKG_ENERGY_STAT;
 		else
 			offset = MSR_PKG_ENERGY_STATUS;
@@ -2202,19 +2203,19 @@ int idx_valid(int idx)
 {
 	switch (idx) {
 	case IDX_PKG_ENERGY:
-		return platform->rapl_msrs & (RAPL_PKG | RAPL_AMD_F17H);
+		return rapl_msrs & (RAPL_PKG | RAPL_AMD_F17H);
 	case IDX_DRAM_ENERGY:
-		return platform->rapl_msrs & RAPL_DRAM;
+		return rapl_msrs & RAPL_DRAM;
 	case IDX_PP0_ENERGY:
-		return platform->rapl_msrs & RAPL_CORE_ENERGY_STATUS;
+		return rapl_msrs & RAPL_CORE_ENERGY_STATUS;
 	case IDX_PP1_ENERGY:
-		return platform->rapl_msrs & RAPL_GFX;
+		return rapl_msrs & RAPL_GFX;
 	case IDX_PKG_PERF:
-		return platform->rapl_msrs & RAPL_PKG_PERF_STATUS;
+		return rapl_msrs & RAPL_PKG_PERF_STATUS;
 	case IDX_DRAM_PERF:
-		return platform->rapl_msrs & RAPL_DRAM_PERF_STATUS;
+		return rapl_msrs & RAPL_DRAM_PERF_STATUS;
 	case IDX_PSYS_ENERGY:
-		return platform->rapl_msrs & RAPL_PSYS;
+		return rapl_msrs & RAPL_PSYS;
 	default:
 		return 0;
 	}
@@ -2517,7 +2518,7 @@ int add_rapl_msr_counter(int cpu, const struct rapl_counter_arch_info *cai)
 {
 	int ret;
 
-	if (!(platform->rapl_msrs & cai->feature_mask))
+	if (!(rapl_msrs & cai->feature_mask))
 		return -1;
 
 	ret = add_msr_counter(cpu, cai->msr);
@@ -2850,10 +2851,10 @@ void print_header(char *delim)
 	if (DO_BIC(BIC_CORE_THROT_CNT))
 		outp += sprintf(outp, "%sCoreThr", (printed++ ? delim : ""));
 
-	if (platform->rapl_msrs && !rapl_joules) {
+	if (rapl_msrs && !rapl_joules) {
 		if (DO_BIC(BIC_CorWatt) && platform->has_per_core_rapl)
 			outp += sprintf(outp, "%sCorWatt", (printed++ ? delim : ""));
-	} else if (platform->rapl_msrs && rapl_joules) {
+	} else if (rapl_msrs && rapl_joules) {
 		if (DO_BIC(BIC_Cor_J) && platform->has_per_core_rapl)
 			outp += sprintf(outp, "%sCor_J", (printed++ ? delim : ""));
 	}
@@ -7572,7 +7573,7 @@ double get_tdp_intel(void)
 {
 	unsigned long long msr;
 
-	if (platform->rapl_msrs & RAPL_PKG_POWER_INFO)
+	if (rapl_msrs & RAPL_PKG_POWER_INFO)
 		if (!get_msr(base_cpu, MSR_PKG_POWER_INFO, &msr))
 			return ((msr >> 0) & RAPL_POWER_GRANULARITY) * rapl_power_units;
 	return get_quirk_tdp();
@@ -7603,12 +7604,12 @@ void rapl_probe_intel(void)
 		CLR_BIC(BIC_GFX_J, &bic_enabled);
 	}
 
-	if (!platform->rapl_msrs || no_msr)
+	if (!rapl_msrs || no_msr)
 		return;
 
-	if (!(platform->rapl_msrs & RAPL_PKG_PERF_STATUS))
+	if (!(rapl_msrs & RAPL_PKG_PERF_STATUS))
 		CLR_BIC(BIC_PKG__, &bic_enabled);
-	if (!(platform->rapl_msrs & RAPL_DRAM_PERF_STATUS))
+	if (!(rapl_msrs & RAPL_DRAM_PERF_STATUS))
 		CLR_BIC(BIC_RAM__, &bic_enabled);
 
 	/* units on package 0, verify later other packages match */
@@ -7657,7 +7658,7 @@ void rapl_probe_amd(void)
 		CLR_BIC(BIC_Cor_J, &bic_enabled);
 	}
 
-	if (!platform->rapl_msrs || no_msr)
+	if (!rapl_msrs || no_msr)
 		return;
 
 	if (get_msr(base_cpu, MSR_RAPL_PWR_UNIT, &msr))
@@ -7847,7 +7848,7 @@ int print_rapl(PER_THREAD_PARAMS)
 	UNUSED(c);
 	UNUSED(p);
 
-	if (!platform->rapl_msrs)
+	if (!rapl_msrs)
 		return 0;
 
 	/* RAPL counters are per package, so print only for 1st thread/package */
@@ -7860,7 +7861,7 @@ int print_rapl(PER_THREAD_PARAMS)
 		return -1;
 	}
 
-	if (platform->rapl_msrs & RAPL_AMD_F17H) {
+	if (rapl_msrs & RAPL_AMD_F17H) {
 		msr_name = "MSR_RAPL_PWR_UNIT";
 		if (get_msr(cpu, MSR_RAPL_PWR_UNIT, &msr))
 			return -1;
@@ -7873,7 +7874,7 @@ int print_rapl(PER_THREAD_PARAMS)
 	fprintf(outf, "cpu%d: %s: 0x%08llx (%f Watts, %f Joules, %f sec.)\n", cpu, msr_name, msr,
 		rapl_power_units, rapl_energy_units, rapl_time_units);
 
-	if (platform->rapl_msrs & RAPL_PKG_POWER_INFO) {
+	if (rapl_msrs & RAPL_PKG_POWER_INFO) {
 
 		if (get_msr(cpu, MSR_PKG_POWER_INFO, &msr))
 			return -5;
@@ -7886,7 +7887,7 @@ int print_rapl(PER_THREAD_PARAMS)
 			((msr >> 48) & RAPL_TIME_GRANULARITY) * rapl_time_units);
 
 	}
-	if (platform->rapl_msrs & RAPL_PKG) {
+	if (rapl_msrs & RAPL_PKG) {
 
 		if (get_msr(cpu, MSR_PKG_POWER_LIMIT, &msr))
 			return -9;
@@ -7910,7 +7911,7 @@ int print_rapl(PER_THREAD_PARAMS)
 			cpu, ((msr >> 0) & 0x1FFF) * rapl_power_units, (msr >> 31) & 1 ? "" : "UN");
 	}
 
-	if (platform->rapl_msrs & RAPL_DRAM_POWER_INFO) {
+	if (rapl_msrs & RAPL_DRAM_POWER_INFO) {
 		if (get_msr(cpu, MSR_DRAM_POWER_INFO, &msr))
 			return -6;
 
@@ -7921,7 +7922,7 @@ int print_rapl(PER_THREAD_PARAMS)
 			((msr >> 32) & RAPL_POWER_GRANULARITY) * rapl_power_units,
 			((msr >> 48) & RAPL_TIME_GRANULARITY) * rapl_time_units);
 	}
-	if (platform->rapl_msrs & RAPL_DRAM) {
+	if (rapl_msrs & RAPL_DRAM) {
 		if (get_msr(cpu, MSR_DRAM_POWER_LIMIT, &msr))
 			return -9;
 		fprintf(outf, "cpu%d: MSR_DRAM_POWER_LIMIT: 0x%08llx (%slocked)\n",
@@ -7929,20 +7930,20 @@ int print_rapl(PER_THREAD_PARAMS)
 
 		print_power_limit_msr(cpu, msr, "DRAM Limit");
 	}
-	if (platform->rapl_msrs & RAPL_CORE_POLICY) {
+	if (rapl_msrs & RAPL_CORE_POLICY) {
 		if (get_msr(cpu, MSR_PP0_POLICY, &msr))
 			return -7;
 
 		fprintf(outf, "cpu%d: MSR_PP0_POLICY: %lld\n", cpu, msr & 0xF);
 	}
-	if (platform->rapl_msrs & RAPL_CORE_POWER_LIMIT) {
+	if (rapl_msrs & RAPL_CORE_POWER_LIMIT) {
 		if (get_msr(cpu, MSR_PP0_POWER_LIMIT, &msr))
 			return -9;
 		fprintf(outf, "cpu%d: MSR_PP0_POWER_LIMIT: 0x%08llx (%slocked)\n",
 			cpu, msr, (msr >> 31) & 1 ? "" : "UN");
 		print_power_limit_msr(cpu, msr, "Cores Limit");
 	}
-	if (platform->rapl_msrs & RAPL_GFX) {
+	if (rapl_msrs & RAPL_GFX) {
 		if (get_msr(cpu, MSR_PP1_POLICY, &msr))
 			return -8;
 
@@ -7974,7 +7975,7 @@ void probe_rapl(void)
 
 	print_rapl_sysfs();
 
-	if (!platform->rapl_msrs || no_msr)
+	if (!rapl_msrs || no_msr)
 		return;
 
 	for_all_cpus(print_rapl, ODD_COUNTERS);
@@ -8872,6 +8873,7 @@ void process_cpuid()
 	}
 
 	probe_platform_features(family, model);
+	rapl_msrs = platform->rapl_msrs;
 
 	if (!(edx_flags & (1 << 5)))
 		errx(1, "CPUID: no MSR");
