@@ -7,6 +7,7 @@
 
 #include <linux/pagemap.h>
 #include <linux/vfs.h>
+#include <linux/fs_struct.h>
 #include <uapi/linux/magic.h>
 #include "cifsglob.h"
 #include "cifsproto.h"
@@ -647,7 +648,7 @@ static int cifs_query_path_info(const unsigned int xid,
 
 	if (!rc) {
 		move_cifs_info_to_smb2(&data->fi, &fi);
-		data->reparse_point = le32_to_cpu(fi.Attributes) & ATTR_REPARSE;
+		data->reparse_point = le32_to_cpu(fi.Attributes) & ATTR_REPARSE_POINT;
 	}
 
 #ifdef CONFIG_CIFS_XATTR
