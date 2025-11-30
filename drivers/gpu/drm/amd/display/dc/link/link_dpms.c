@@ -2226,7 +2226,11 @@ static enum dc_status enable_link(
 {
 	enum dc_status status = DC_ERROR_UNEXPECTED;
 	struct dc_stream_state *stream = pipe_ctx->stream;
-	struct dc_link *link = stream->link;
+	struct dc_link *link = NULL;
+
+	if (stream == NULL)
+		return DC_ERROR_UNEXPECTED;
+	link = stream->link;
 
 	/* There's some scenarios where driver is unloaded with display
 	 * still enabled. When driver is reloaded, it may cause a display
@@ -2374,8 +2378,7 @@ void link_set_dpms_off(struct pipe_ctx *pipe_ctx)
 			set_avmute(pipe_ctx, true);
 	}
 
-	if (!dc_is_rgb_signal(pipe_ctx->stream->signal))
-		dc->hwss.disable_audio_stream(pipe_ctx);
+	dc->hwss.disable_audio_stream(pipe_ctx);
 
 	update_psp_stream_config(pipe_ctx, true);
 	dc->hwss.blank_stream(pipe_ctx);
