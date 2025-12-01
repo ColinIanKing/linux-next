@@ -446,7 +446,7 @@ int __init ima_get_kexec_buffer(void **addr, size_t *size)
 
 	/*
 	 * Calculate the PFNs for the buffer and ensure
-	 * they are with in addressable memory.
+	 * they are within addressable memory.
 	 */
 	start_pfn = PFN_DOWN(ima_kexec_buffer_phys);
 	end_pfn = PFN_DOWN(ima_kexec_buffer_phys + ima_kexec_buffer_size - 1);
