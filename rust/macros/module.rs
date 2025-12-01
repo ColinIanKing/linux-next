@@ -133,10 +133,10 @@ impl<'a> ModInfoBuilder<'a> {
                         ::kernel::module_param::KernelParam::new(
                             ::kernel::bindings::kernel_param {{
                                 name: if ::core::cfg!(MODULE) {{
-                                    ::kernel::c_str!(\"{param_name}\").as_bytes_with_nul()
+                                    ::kernel::c_str!(\"{param_name}\").to_bytes_with_nul()
                                 }} else {{
                                     ::kernel::c_str!(\"{module_name}.{param_name}\")
-                                        .as_bytes_with_nul()
+                                        .to_bytes_with_nul()
                                 }}.as_ptr(),
                                 // SAFETY: `__this_module` is constructed by the kernel at load
                                 // time and will not be freed until the module is unloaded.
@@ -391,7 +391,7 @@ pub(crate) fn module(ts: TokenStream) -> TokenStream {
             type LocalModule = {type_};
 
             impl ::kernel::ModuleMetadata for {type_} {{
-                const NAME: &'static ::kernel::str::CStr = ::kernel::c_str!(\"{name}\");
+                const NAME: &'static ::kernel::str::CStr = c\"{name}\";
             }}
 
             // Double nested modules, since then nobody can access the public items inside.
