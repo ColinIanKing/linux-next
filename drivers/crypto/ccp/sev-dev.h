@@ -34,6 +34,8 @@ struct sev_misc_dev {
 	struct miscdevice misc;
 };
 
+struct sev_tio_status;
+
 struct sev_device {
 	struct device *dev;
 	struct psp_device *psp;
@@ -61,10 +63,17 @@ struct sev_device {
 
 	struct sev_user_data_snp_status snp_plat_status;
 	struct snp_feature_info snp_feat_info_0;
+
+#if defined(CONFIG_PCI_TSM)
+	struct tsm_dev *tsmdev;
+	struct sev_tio_status *tio_status;
+#endif
 };
 
 int sev_dev_init(struct psp_device *psp);
 void sev_dev_destroy(struct psp_device *psp);
+
+int __sev_do_cmd_locked(int cmd, void *data, int *psp_ret);
 
 void sev_pci_init(void);
 void sev_pci_exit(void);
