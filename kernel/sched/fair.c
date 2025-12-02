@@ -7140,7 +7140,7 @@ static DEFINE_PER_CPU(cpumask_var_t, should_we_balance_tmpmask);
 static struct {
 	cpumask_var_t idle_cpus_mask;
 	atomic_t nr_cpus;
-	int has_blocked;		/* Idle CPUS has blocked load */
+	int has_blocked_load;		/* Idle CPUS has blocked load */
 	int needs_update;		/* Newly idle CPUs need their next_balance collated */
 	unsigned long next_balance;     /* in jiffy units */
 	unsigned long next_blocked;	/* Next update of blocked load in jiffies */
@@ -9776,7 +9776,7 @@ static void attach_tasks(struct lb_env *env)
 }
 
 #ifdef CONFIG_NO_HZ_COMMON
-static inline bool cfs_rq_has_blocked(struct cfs_rq *cfs_rq)
+static inline bool cfs_rq_has_blocked_load(struct cfs_rq *cfs_rq)
 {
 	if (cfs_rq->avg.load_avg)
 		return true;
@@ -9809,16 +9809,16 @@ static inline void update_blocked_load_tick(struct rq *rq)
 	WRITE_ONCE(rq->last_blocked_load_update_tick, jiffies);
 }
 
-static inline void update_blocked_load_status(struct rq *rq, bool has_blocked)
+static inline void update_has_blocked_load_status(struct rq *rq, bool has_blocked_load)
 {
-	if (!has_blocked)
+	if (!has_blocked_load)
 		rq->has_blocked_load = 0;
 }
 #else /* !CONFIG_NO_HZ_COMMON: */
-static inline bool cfs_rq_has_blocked(struct cfs_rq *cfs_rq) { return false; }
+static inline bool cfs_rq_has_blocked_load(struct cfs_rq *cfs_rq) { return false; }
 static inline bool others_have_blocked(struct rq *rq) { return false; }
 static inline void update_blocked_load_tick(struct rq *rq) {}
-static inline void update_blocked_load_status(struct rq *rq, bool has_blocked) {}
+static inline void update_has_blocked_load_status(struct rq *rq, bool has_blocked_load) {}
 #endif /* !CONFIG_NO_HZ_COMMON */
 
 static bool __update_blocked_others(struct rq *rq, bool *done)
@@ -9875,7 +9875,7 @@ static bool __update_blocked_fair(struct rq *rq, bool *done)
 			list_del_leaf_cfs_rq(cfs_rq);
 
 		/* Don't need periodic decay once load/util_avg are null */
-		if (cfs_rq_has_blocked(cfs_rq))
+		if (cfs_rq_has_blocked_load(cfs_rq))
 			*done = false;
 	}
 
@@ -9935,7 +9935,7 @@ static bool __update_blocked_fair(struct rq *rq, bool *done)
 	bool decayed;
 
 	decayed = update_cfs_rq_load_avg(cfs_rq_clock_pelt(cfs_rq), cfs_rq);
-	if (cfs_rq_has_blocked(cfs_rq))
+	if (cfs_rq_has_blocked_load(cfs_rq))
 		*done = false;
 
 	return decayed;
@@ -9956,7 +9956,7 @@ static void __sched_balance_update_blocked_averages(struct rq *rq)
 	decayed |= __update_blocked_others(rq, &done);
 	decayed |= __update_blocked_fair(rq, &done);
 
-	update_blocked_load_status(rq, !done);
+	update_has_blocked_load_status(rq, !done);
 	if (decayed)
 		cpufreq_update_util(rq, 0);
 }
@@ -12452,7 +12452,7 @@ static void nohz_balancer_kick(struct rq *rq)
 	if (likely(!atomic_read(&nohz.nr_cpus)))
 		return;
 
-	if (READ_ONCE(nohz.has_blocked) &&
+	if (READ_ONCE(nohz.has_blocked_load) &&
 	    time_after(now, READ_ONCE(nohz.next_blocked)))
 		flags = NOHZ_STATS_KICK;
 
@@ -12613,9 +12613,9 @@ void nohz_balance_enter_idle(int cpu)
 
 	/*
 	 * The tick is still stopped but load could have been added in the
-	 * meantime. We set the nohz.has_blocked flag to trig a check of the
+	 * meantime. We set the nohz.has_blocked_load flag to trig a check of the
 	 * *_avg. The CPU is already part of nohz.idle_cpus_mask so the clear
-	 * of nohz.has_blocked can only happen after checking the new load
+	 * of nohz.has_blocked_load can only happen after checking the new load
 	 */
 	if (rq->nohz_tick_stopped)
 		goto out;
@@ -12631,7 +12631,7 @@ void nohz_balance_enter_idle(int cpu)
 
 	/*
 	 * Ensures that if nohz_idle_balance() fails to observe our
-	 * @idle_cpus_mask store, it must observe the @has_blocked
+	 * @idle_cpus_mask store, it must observe the @has_blocked_load
 	 * and @needs_update stores.
 	 */
 	smp_mb__after_atomic();
@@ -12644,7 +12644,7 @@ out:
 	 * Each time a cpu enter idle, we assume that it has blocked load and
 	 * enable the periodic update of the load of idle CPUs
 	 */
-	WRITE_ONCE(nohz.has_blocked, 1);
+	WRITE_ONCE(nohz.has_blocked_load, 1);
 }
 
 static bool update_nohz_stats(struct rq *rq)
@@ -12685,8 +12685,8 @@ static void _nohz_idle_balance(struct rq *this_rq, unsigned int flags)
 
 	/*
 	 * We assume there will be no idle load after this update and clear
-	 * the has_blocked flag. If a cpu enters idle in the mean time, it will
-	 * set the has_blocked flag and trigger another update of idle load.
+	 * the has_blocked_load flag. If a cpu enters idle in the mean time, it will
+	 * set the has_blocked_load flag and trigger another update of idle load.
 	 * Because a cpu that becomes idle, is added to idle_cpus_mask before
 	 * setting the flag, we are sure to not clear the state and not
 	 * check the load of an idle cpu.
@@ -12694,12 +12694,12 @@ static void _nohz_idle_balance(struct rq *this_rq, unsigned int flags)
 	 * Same applies to idle_cpus_mask vs needs_update.
 	 */
 	if (flags & NOHZ_STATS_KICK)
-		WRITE_ONCE(nohz.has_blocked, 0);
+		WRITE_ONCE(nohz.has_blocked_load, 0);
 	if (flags & NOHZ_NEXT_KICK)
 		WRITE_ONCE(nohz.needs_update, 0);
 
 	/*
-	 * Ensures that if we miss the CPU, we must see the has_blocked
+	 * Ensures that if we miss the CPU, we must see the has_blocked_load
 	 * store from nohz_balance_enter_idle().
 	 */
 	smp_mb();
@@ -12766,7 +12766,7 @@ static void _nohz_idle_balance(struct rq *this_rq, unsigned int flags)
 abort:
 	/* There is still blocked load, enable periodic update */
 	if (has_blocked_load)
-		WRITE_ONCE(nohz.has_blocked, 1);
+		WRITE_ONCE(nohz.has_blocked_load, 1);
 }
 
 /*
@@ -12828,7 +12828,7 @@ static void nohz_newidle_balance(struct rq *this_rq)
 		return;
 
 	/* Don't need to update blocked load of idle CPUs*/
-	if (!READ_ONCE(nohz.has_blocked) ||
+	if (!READ_ONCE(nohz.has_blocked_load) ||
 	    time_before(jiffies, READ_ONCE(nohz.next_blocked)))
 		return;
 
