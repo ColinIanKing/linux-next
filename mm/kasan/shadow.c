@@ -625,7 +625,7 @@ void kasan_release_vmalloc(unsigned long start, unsigned long end,
 }
 
 void *__kasan_unpoison_vmalloc(const void *start, unsigned long size,
-			       kasan_vmalloc_flags_t flags)
+			       kasan_vmalloc_flags_t flags, bool reuse_tag)
 {
 	/*
 	 * Software KASAN modes unpoison both VM_ALLOC and non-VM_ALLOC
@@ -648,7 +648,9 @@ void *__kasan_unpoison_vmalloc(const void *start, unsigned long size,
 	    !(flags & KASAN_VMALLOC_PROT_NORMAL))
 		return (void *)start;
 
-	start = set_tag(start, kasan_random_tag());
+	if (!reuse_tag)
+		start = set_tag(start, kasan_random_tag());
+
 	kasan_unpoison(start, size, false);
 	return (void *)start;
 }
