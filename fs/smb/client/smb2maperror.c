@@ -9,11 +9,11 @@
  */
 #include <linux/errno.h>
 #include "cifsglob.h"
+#include "cifsproto.h"
 #include "cifs_debug.h"
-#include "smb2pdu.h"
 #include "smb2proto.h"
-#include "../common/smb2status.h"
 #include "smb2glob.h"
+#include "../common/smb2status.h"
 #include "trace.h"
 
 struct status_to_posix_error {
@@ -2477,5 +2477,7 @@ map_smb2_to_linux_error(char *buf, bool log_err)
 			   le16_to_cpu(shdr->Command),
 			   le64_to_cpu(shdr->MessageId),
 			   le32_to_cpu(smb2err), rc);
+	if (rc == -EIO)
+		smb_EIO1(smb_eio_trace_smb2_received_error, le32_to_cpu(smb2err));
 	return rc;
 }
