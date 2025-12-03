@@ -168,6 +168,7 @@ static const struct xe_device_desc tgl_desc = {
 	.pre_gmdid_media_ip = &media_ip_xem,
 	PLATFORM(TIGERLAKE),
 	.dma_mask_size = 39,
+	.has_cached_pt = true,
 	.has_display = true,
 	.has_llc = true,
 	.has_sriov = true,
@@ -182,6 +183,7 @@ static const struct xe_device_desc rkl_desc = {
 	.pre_gmdid_media_ip = &media_ip_xem,
 	PLATFORM(ROCKETLAKE),
 	.dma_mask_size = 39,
+	.has_cached_pt = true,
 	.has_display = true,
 	.has_llc = true,
 	.max_gt_per_tile = 1,
@@ -197,6 +199,7 @@ static const struct xe_device_desc adl_s_desc = {
 	.pre_gmdid_media_ip = &media_ip_xem,
 	PLATFORM(ALDERLAKE_S),
 	.dma_mask_size = 39,
+	.has_cached_pt = true,
 	.has_display = true,
 	.has_llc = true,
 	.has_sriov = true,
@@ -217,6 +220,7 @@ static const struct xe_device_desc adl_p_desc = {
 	.pre_gmdid_media_ip = &media_ip_xem,
 	PLATFORM(ALDERLAKE_P),
 	.dma_mask_size = 39,
+	.has_cached_pt = true,
 	.has_display = true,
 	.has_llc = true,
 	.has_sriov = true,
@@ -235,6 +239,7 @@ static const struct xe_device_desc adl_n_desc = {
 	.pre_gmdid_media_ip = &media_ip_xem,
 	PLATFORM(ALDERLAKE_N),
 	.dma_mask_size = 39,
+	.has_cached_pt = true,
 	.has_display = true,
 	.has_llc = true,
 	.has_sriov = true,
@@ -407,6 +412,7 @@ static const struct xe_device_desc cri_desc = {
 	.has_display = false,
 	.has_flat_ccs = false,
 	.has_mbx_power_limits = true,
+	.has_mert = true,
 	.has_sriov = true,
 	.max_gt_per_tile = 2,
 	.require_force_probe = true,
@@ -663,6 +669,7 @@ static int xe_info_init_early(struct xe_device *xe,
 	xe->info.vram_flags = desc->vram_flags;
 
 	xe->info.is_dgfx = desc->is_dgfx;
+	xe->info.has_cached_pt = desc->has_cached_pt;
 	xe->info.has_fan_control = desc->has_fan_control;
 	/* runtime fusing may force flat_ccs to disabled later */
 	xe->info.has_flat_ccs = desc->has_flat_ccs;
@@ -672,6 +679,7 @@ static int xe_info_init_early(struct xe_device *xe,
 	xe->info.has_heci_cscfi = desc->has_heci_cscfi;
 	xe->info.has_late_bind = desc->has_late_bind;
 	xe->info.has_llc = desc->has_llc;
+	xe->info.has_mert = desc->has_mert;
 	xe->info.has_pxp = desc->has_pxp;
 	xe->info.has_sriov = xe_configfs_primary_gt_allowed(to_pci_dev(xe->drm.dev)) &&
 		desc->has_sriov;
@@ -1153,6 +1161,15 @@ static int xe_pci_runtime_suspend(struct device *dev)
 	struct xe_device *xe = pdev_to_xe_device(pdev);
 	int err;
 
+	/*
+	 * We hold an additional reference to the runtime PM to keep PF in D0
+	 * during VFs lifetime, as our VFs do not implement the PM capability.
+	 * This means we should never be runtime suspending as long as VFs are
+	 * enabled.
+	 */
+	xe_assert(xe, !IS_SRIOV_VF(xe));
+	xe_assert(xe, !pci_num_vf(pdev));
+
 	err = xe_pm_runtime_suspend(xe);
 	if (err)
 		return err;
@@ -1222,6 +1239,23 @@ static struct pci_driver xe_pci_driver = {
 	.driver.pm = &xe_pm_ops,
 #endif
 };
+
+/**
+ * xe_pci_to_pf_device() - Get PF &xe_device.
+ * @pdev: the VF &pci_dev device
+ *
+ * Return: pointer to PF &xe_device, NULL otherwise.
+ */
+struct xe_device *xe_pci_to_pf_device(struct pci_dev *pdev)
+{
+	struct drm_device *drm;
+
+	drm = pci_iov_get_pf_drvdata(pdev, &xe_pci_driver);
+	if (IS_ERR(drm))
+		return NULL;
+
+	return to_xe_device(drm);
+}
 
 int xe_register_pci_driver(void)
 {

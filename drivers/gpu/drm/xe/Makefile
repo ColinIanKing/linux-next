@@ -173,6 +173,7 @@ xe-$(CONFIG_PCI_IOV) += \
 	xe_lmtt.o \
 	xe_lmtt_2l.o \
 	xe_lmtt_ml.o \
+	xe_mert.o \
 	xe_pci_sriov.o \
 	xe_sriov_packet.o \
 	xe_sriov_pf.o \
@@ -183,6 +184,10 @@ xe-$(CONFIG_PCI_IOV) += \
 	xe_sriov_pf_service.o \
 	xe_sriov_pf_sysfs.o \
 	xe_tile_sriov_pf_debugfs.o
+
+ifeq ($(CONFIG_PCI_IOV),y)
+	xe-$(CONFIG_XE_VFIO_PCI) += xe_sriov_vfio.o
+endif
 
 # include helpers for tests even when XE is built-in
 ifdef CONFIG_DRM_XE_KUNIT_TEST
