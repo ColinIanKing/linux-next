@@ -1831,10 +1831,12 @@ drm_atomic_helper_wait_for_vblanks(struct drm_device *dev,
 	}
 
 	for_each_old_crtc_in_state(state, crtc, old_crtc_state, i) {
+		wait_queue_head_t *queue = drm_crtc_vblank_waitqueue(crtc);
+
 		if (!(crtc_mask & drm_crtc_mask(crtc)))
 			continue;
 
-		ret = wait_event_timeout(dev->vblank[i].queue,
+		ret = wait_event_timeout(*queue,
 					 state->crtcs[i].last_vblank_count !=
 						drm_crtc_vblank_count(crtc),
 					 msecs_to_jiffies(100));
@@ -3236,7 +3238,7 @@ int drm_atomic_helper_swap_state(struct drm_atomic_state *state,
 		old_conn_state->state = state;
 		new_conn_state->state = NULL;
 
-		state->connectors[i].state = old_conn_state;
+		state->connectors[i].state_to_destroy = old_conn_state;
 		connector->state = new_conn_state;
 	}
 
@@ -3246,7 +3248,7 @@ int drm_atomic_helper_swap_state(struct drm_atomic_state *state,
 		old_crtc_state->state = state;
 		new_crtc_state->state = NULL;
 
-		state->crtcs[i].state = old_crtc_state;
+		state->crtcs[i].state_to_destroy = old_crtc_state;
 		crtc->state = new_crtc_state;
 
 		if (new_crtc_state->commit) {
@@ -3266,7 +3268,7 @@ int drm_atomic_helper_swap_state(struct drm_atomic_state *state,
 		old_plane_state->state = state;
 		new_plane_state->state = NULL;
 
-		state->planes[i].state = old_plane_state;
+		state->planes[i].state_to_destroy = old_plane_state;
 		plane->state = new_plane_state;
 	}
 	drm_panic_unlock(state->dev, flags);
@@ -3277,7 +3279,7 @@ int drm_atomic_helper_swap_state(struct drm_atomic_state *state,
 		old_obj_state->state = state;
 		new_obj_state->state = NULL;
 
-		state->private_objs[i].state = old_obj_state;
+		state->private_objs[i].state_to_destroy = old_obj_state;
 		obj->state = new_obj_state;
 	}
 
