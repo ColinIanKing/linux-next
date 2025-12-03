@@ -8,9 +8,11 @@
 
 struct kmem_cache *key_cache;
 
-static inline struct pcache_cache_info *get_cache_info_addr(struct pcache_cache *cache)
+static inline struct pcache_cache_info *
+get_cache_info_addr(struct pcache_cache *cache)
 {
-	return cache->cache_info_addr + cache->info_index;
+	return (struct pcache_cache_info *)((char *)cache->cache_info_addr +
+						(size_t)cache->info_index * PCACHE_CACHE_INFO_SIZE);
 }
 
 static void cache_info_write(struct pcache_cache *cache)
@@ -40,7 +42,12 @@ static int cache_info_init(struct pcache_cache *cache, struct pcache_cache_optio
 	if (IS_ERR(cache_info_addr))
 		return PTR_ERR(cache_info_addr);
 
-	if (cache_info_addr) {
+    if (cache_info_addr) {
+		int index = ((char *)cache_info_addr - (char *)cache->cache_info_addr) /
+				PCACHE_CACHE_INFO_SIZE;
+
+		cache->info_index = (index + 1) % PCACHE_META_INDEX_MAX;
+
 		if (opts->data_crc !=
 				(cache->cache_info.flags & PCACHE_CACHE_FLAGS_DATA_CRC)) {
 			pcache_dev_err(pcache, "invalid option for data_crc: %s, expected: %s",
