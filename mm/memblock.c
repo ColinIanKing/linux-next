@@ -20,8 +20,8 @@
 
 #ifdef CONFIG_KEXEC_HANDOVER
 #include <linux/libfdt.h>
-#include <linux/kexec_handover.h>
 #endif /* CONFIG_KEXEC_HANDOVER */
+#include <linux/kexec_handover.h>
 
 #include <asm/sections.h>
 #include <linux/io.h>
@@ -112,7 +112,7 @@ unsigned long min_low_pfn;
 unsigned long max_pfn;
 unsigned long long max_possible_pfn;
 
-#ifdef CONFIG_MEMBLOCK_KHO_SCRATCH
+#ifdef CONFIG_KEXEC_HANDOVER
 /* When set to true, only allocate from MEMBLOCK_KHO_SCRATCH ranges */
 static bool kho_scratch_only;
 #else
@@ -948,7 +948,7 @@ int __init_memblock memblock_physmem_add(phys_addr_t base, phys_addr_t size)
 }
 #endif
 
-#ifdef CONFIG_MEMBLOCK_KHO_SCRATCH
+#ifdef CONFIG_KEXEC_HANDOVER
 __init void memblock_set_kho_scratch_only(void)
 {
 	kho_scratch_only = true;
@@ -1126,8 +1126,10 @@ int __init_memblock memblock_reserved_mark_noinit(phys_addr_t base, phys_addr_t 
  */
 __init int memblock_mark_kho_scratch(phys_addr_t base, phys_addr_t size)
 {
-	return memblock_setclr_flag(&memblock.memory, base, size, 1,
-				    MEMBLOCK_KHO_SCRATCH);
+	if (is_kho_boot())
+		return memblock_setclr_flag(&memblock.memory, base, size, 1,
+					    MEMBLOCK_KHO_SCRATCH);
+	return 0;
 }
 
 /**
@@ -1140,8 +1142,10 @@ __init int memblock_mark_kho_scratch(phys_addr_t base, phys_addr_t size)
  */
 __init int memblock_clear_kho_scratch(phys_addr_t base, phys_addr_t size)
 {
-	return memblock_setclr_flag(&memblock.memory, base, size, 0,
-				    MEMBLOCK_KHO_SCRATCH);
+	if (is_kho_boot())
+		return memblock_setclr_flag(&memblock.memory, base, size, 0,
+					    MEMBLOCK_KHO_SCRATCH);
+	return 0;
 }
 
 static bool should_skip_region(struct memblock_type *type,
