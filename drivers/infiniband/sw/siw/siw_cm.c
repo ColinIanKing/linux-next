@@ -1389,11 +1389,11 @@ static int kernel_bindconnect(struct socket *s, struct sockaddr *laddr,
 			return rv;
 	}
 
-	rv = s->ops->bind(s, laddr, size);
+	rv = s->ops->bind(s, (struct sockaddr_unsized *)laddr, size);
 	if (rv < 0)
 		return rv;
 
-	rv = s->ops->connect(s, raddr, size, flags);
+	rv = s->ops->connect(s, (struct sockaddr_unsized *)raddr, size, flags);
 
 	return rv < 0 ? rv : 0;
 }
@@ -1840,7 +1840,7 @@ int siw_create_listen(struct iw_cm_id *id, int backlog)
 				goto error;
 			}
 		}
-		rv = s->ops->bind(s, (struct sockaddr *)laddr,
+		rv = s->ops->bind(s, (struct sockaddr_unsized *)laddr,
 				  sizeof(struct sockaddr_in));
 	} else {
 		struct sockaddr_in6 *laddr = &to_sockaddr_in6(id->local_addr);
@@ -1864,7 +1864,7 @@ int siw_create_listen(struct iw_cm_id *id, int backlog)
 				goto error;
 			}
 		}
-		rv = s->ops->bind(s, (struct sockaddr *)laddr,
+		rv = s->ops->bind(s, (struct sockaddr_unsized *)laddr,
 				  sizeof(struct sockaddr_in6));
 	}
 	if (rv) {
