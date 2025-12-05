@@ -395,7 +395,8 @@ enum {
 #undef DECLARE_VMA_BIT
 #undef DECLARE_VMA_BIT_ALIAS
 
-#define INIT_VM_FLAG(name) BIT((__force int) VMA_ ## name ## _BIT)
+#define INIT_VM_FLAG(name) (1UL << (__force int)(VMA_ ## name ## _BIT))
+
 #define VM_READ		INIT_VM_FLAG(READ)
 #define VM_WRITE	INIT_VM_FLAG(WRITE)
 #define VM_EXEC		INIT_VM_FLAG(EXEC)
