@@ -3022,11 +3022,8 @@ struct dentry *start_removing_user_path_at(int dfd,
 					   const char __user *name,
 					   struct path *path)
 {
-	struct filename *filename = getname(name);
-	struct dentry *res = __start_removing_path(dfd, filename, path);
-
-	putname(filename);
-	return res;
+	CLASS(filename, filename)(name);
+	return __start_removing_path(dfd, filename, path);
 }
 EXPORT_SYMBOL(start_removing_user_path_at);
 
@@ -3604,11 +3601,8 @@ int path_pts(struct path *path)
 int user_path_at(int dfd, const char __user *name, unsigned flags,
 		 struct path *path)
 {
-	struct filename *filename = getname_flags(name, flags);
-	int ret = filename_lookup(dfd, filename, flags, path, NULL);
-
-	putname(filename);
-	return ret;
+	CLASS(filename_flags, filename)(name, flags);
+	return filename_lookup(dfd, filename, flags, path, NULL);
 }
 EXPORT_SYMBOL(user_path_at);
 
@@ -4967,11 +4961,8 @@ inline struct dentry *start_creating_user_path(
 	int dfd, const char __user *pathname,
 	struct path *path, unsigned int lookup_flags)
 {
-	struct filename *filename = getname(pathname);
-	struct dentry *res = filename_create(dfd, filename, path, lookup_flags);
-
-	putname(filename);
-	return res;
+	CLASS(filename, filename)(pathname);
+	return filename_create(dfd, filename, path, lookup_flags);
 }
 EXPORT_SYMBOL(start_creating_user_path);
 
