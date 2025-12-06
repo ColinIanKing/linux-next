@@ -5063,9 +5063,10 @@ static int may_mknod(umode_t mode)
 	}
 }
 
-static int do_mknodat(int dfd, struct filename *name, umode_t mode,
+static int do_mknodat(int dfd, struct filename *__name, umode_t mode,
 		unsigned int dev)
 {
+	CLASS(filename_consume, name)(__name);
 	struct delegated_inode di = { };
 	struct mnt_idmap *idmap;
 	struct dentry *dentry;
@@ -5075,12 +5076,11 @@ static int do_mknodat(int dfd, struct filename *name, umode_t mode,
 
 	error = may_mknod(mode);
 	if (error)
-		goto out1;
+		return error;
 retry:
 	dentry = filename_create(dfd, name, &path, lookup_flags);
-	error = PTR_ERR(dentry);
 	if (IS_ERR(dentry))
-		goto out1;
+		return PTR_ERR(dentry);
 
 	error = security_path_mknod(&path, dentry,
 			mode_strip_umask(path.dentry->d_inode, mode), dev);
@@ -5114,8 +5114,6 @@ out2:
 		lookup_flags |= LOOKUP_REVAL;
 		goto retry;
 	}
-out1:
-	putname(name);
 	return error;
 }
 
@@ -5198,8 +5196,9 @@ err:
 }
 EXPORT_SYMBOL(vfs_mkdir);
 
-int do_mkdirat(int dfd, struct filename *name, umode_t mode)
+int do_mkdirat(int dfd, struct filename *__name, umode_t mode)
 {
+	CLASS(filename_consume, name)(__name);
 	struct dentry *dentry;
 	struct path path;
 	int error;
@@ -5208,9 +5207,8 @@ int do_mkdirat(int dfd, struct filename *name, umode_t mode)
 
 retry:
 	dentry = filename_create(dfd, name, &path, lookup_flags);
-	error = PTR_ERR(dentry);
 	if (IS_ERR(dentry))
-		goto out_putname;
+		return PTR_ERR(dentry);
 
 	error = security_path_mkdir(&path, dentry,
 			mode_strip_umask(path.dentry->d_inode, mode));
@@ -5230,8 +5228,6 @@ retry:
 		lookup_flags |= LOOKUP_REVAL;
 		goto retry;
 	}
-out_putname:
-	putname(name);
 	return error;
 }
 
@@ -5305,8 +5301,9 @@ out:
 }
 EXPORT_SYMBOL(vfs_rmdir);
 
-int do_rmdir(int dfd, struct filename *name)
+int do_rmdir(int dfd, struct filename *__name)
 {
+	CLASS(filename_consume, name)(__name);
 	int error;
 	struct dentry *dentry;
 	struct path path;
@@ -5317,7 +5314,7 @@ int do_rmdir(int dfd, struct filename *name)
 retry:
 	error = filename_parentat(dfd, name, lookup_flags, &path, &last, &type);
 	if (error)
-		goto exit1;
+		return error;
 
 	switch (type) {
 	case LAST_DOTDOT:
@@ -5359,8 +5356,6 @@ exit2:
 		lookup_flags |= LOOKUP_REVAL;
 		goto retry;
 	}
-exit1:
-	putname(name);
 	return error;
 }
 
@@ -5448,8 +5443,9 @@ EXPORT_SYMBOL(vfs_unlink);
  * writeout happening, and we don't want to prevent access to the directory
  * while waiting on the I/O.
  */
-int do_unlinkat(int dfd, struct filename *name)
+int do_unlinkat(int dfd, struct filename *__name)
 {
+	CLASS(filename_consume, name)(__name);
 	int error;
 	struct dentry *dentry;
 	struct path path;
@@ -5461,7 +5457,7 @@ int do_unlinkat(int dfd, struct filename *name)
 retry:
 	error = filename_parentat(dfd, name, lookup_flags, &path, &last, &type);
 	if (error)
-		goto exit_putname;
+		return error;
 
 	error = -EISDIR;
 	if (type != LAST_NORM)
@@ -5508,8 +5504,6 @@ exit_path_put:
 		lookup_flags |= LOOKUP_REVAL;
 		goto retry;
 	}
-exit_putname:
-	putname(name);
 	return error;
 }
 
