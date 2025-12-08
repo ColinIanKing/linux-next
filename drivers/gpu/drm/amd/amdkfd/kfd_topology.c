@@ -491,6 +491,10 @@ static ssize_t node_show(struct kobject *kobj, struct attribute *attr,
 			      dev->node_props.num_sdma_queues_per_engine);
 	sysfs_show_32bit_prop(buffer, offs, "num_cp_queues",
 			      dev->node_props.num_cp_queues);
+	sysfs_show_32bit_prop(buffer, offs, "cwsr_size",
+			      dev->node_props.cwsr_size);
+	sysfs_show_32bit_prop(buffer, offs, "ctl_stack_size",
+			      dev->node_props.ctl_stack_size);
 
 	if (dev->gpu) {
 		log_max_watch_addr =
@@ -2404,3 +2408,26 @@ int kfd_debugfs_rls_by_device(struct seq_file *m, void *data)
 }
 
 #endif
+
+void kfd_update_svm_support_properties(struct amdgpu_device *adev)
+{
+	struct kfd_topology_device *dev;
+	int ret;
+
+	down_write(&topology_lock);
+	list_for_each_entry(dev, &topology_device_list, list) {
+		if (!dev->gpu || dev->gpu->adev != adev)
+			continue;
+
+		if (KFD_IS_SVM_API_SUPPORTED(adev)) {
+			dev->node_props.capability |= HSA_CAP_SVMAPI_SUPPORTED;
+			ret = kfd_topology_update_sysfs();
+			if (!ret)
+				sys_props.generation_count++;
+			else
+				dev_err(adev->dev, "Failed to update SVM support properties. ret=%d\n", ret);
+		} else
+			dev->node_props.capability &= ~HSA_CAP_SVMAPI_SUPPORTED;
+	}
+	up_write(&topology_lock);
+}
