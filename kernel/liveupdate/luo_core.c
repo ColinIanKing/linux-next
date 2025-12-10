@@ -128,7 +128,9 @@ static int __init luo_early_startup(void)
 	if (err)
 		return err;
 
-	return 0;
+	err = luo_flb_setup_incoming(luo_global.fdt_in);
+
+	return err;
 }
 
 static int __init liveupdate_early_init(void)
@@ -165,6 +167,7 @@ static int __init luo_fdt_setup(void)
 	err |= fdt_property_string(fdt_out, "compatible", LUO_FDT_COMPATIBLE);
 	err |= fdt_property(fdt_out, LUO_FDT_LIVEUPDATE_NUM, &ln, sizeof(ln));
 	err |= luo_session_setup_outgoing(fdt_out);
+	err |= luo_flb_setup_outgoing(fdt_out);
 	err |= fdt_end_node(fdt_out);
 	err |= fdt_finish(fdt_out);
 	if (err)
@@ -225,6 +228,8 @@ int liveupdate_reboot(void)
 	err = luo_session_serialize();
 	if (err)
 		return err;
+
+	luo_flb_serialize();
 
 	err = kho_finalize();
 	if (err) {
@@ -399,10 +404,8 @@ static long luo_ioctl(struct file *filep, unsigned int cmd, unsigned long arg)
 	int err;
 
 	nr = _IOC_NR(cmd);
-	if (nr < LIVEUPDATE_CMD_BASE ||
-	    (nr - LIVEUPDATE_CMD_BASE) >= ARRAY_SIZE(luo_ioctl_ops)) {
+	if (nr - LIVEUPDATE_CMD_BASE >= ARRAY_SIZE(luo_ioctl_ops))
 		return -EINVAL;
-	}
 
 	ucmd.ubuffer = (void __user *)arg;
 	err = get_user(ucmd.user_size, (u32 __user *)ucmd.ubuffer);
