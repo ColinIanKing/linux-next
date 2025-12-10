@@ -15,6 +15,10 @@ obj-${CONFIG_BPF_LSM}	  += bpf_inode_storage.o
 obj-$(CONFIG_BPF_SYSCALL) += disasm.o mprog.o
 obj-$(CONFIG_BPF_JIT) += trampoline.o
 obj-$(CONFIG_BPF_SYSCALL) += btf.o memalloc.o rqspinlock.o stream.o
+# Disable incorrect warning. bpf printf-like helpers cannot use
+# gnu_printf attribute.
+CFLAGS_helpers.o += -Wno-suggest-attribute=format
+CFLAGS_stream.o += -Wno-suggest-attribute=format
 ifeq ($(CONFIG_MMU)$(CONFIG_64BIT),yy)
 obj-$(CONFIG_BPF_SYSCALL) += arena.o range_tree.o
 endif
