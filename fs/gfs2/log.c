@@ -890,7 +890,7 @@ void gfs2_write_log_header(struct gfs2_sbd *sdp, struct gfs2_jdesc *jd,
 
 	gfs2_log_write(sdp, jd, page, sb->s_blocksize, 0, dblock,
 		       REQ_OP_WRITE | op_flags);
-	gfs2_log_submit_write(&jd->jd_log_bio);
+	gfs2_log_submit_write(sdp, &jd->jd_log_bio);
 }
 
 /**
@@ -1097,7 +1097,7 @@ repeat:
 	if (gfs2_withdrawn(sdp))
 		goto out_withdraw;
 	if (sdp->sd_jdesc)
-		gfs2_log_submit_write(&sdp->sd_jdesc->jd_log_bio);
+		gfs2_log_submit_write(sdp, &sdp->sd_jdesc->jd_log_bio);
 	if (gfs2_withdrawn(sdp))
 		goto out_withdraw;
 

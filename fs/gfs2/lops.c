@@ -230,18 +230,20 @@ static void gfs2_end_log_write(struct bio *bio)
 
 /**
  * gfs2_log_submit_write - Submit a pending log write bio
+ * @sdp: The super block
  * @biop: Address of the bio pointer
  *
  * Submit any pending part-built or full bio to the block device. If
  * there is no pending bio, then this is a no-op.
  */
 
-void gfs2_log_submit_write(struct bio **biop)
+void gfs2_log_submit_write(struct gfs2_sbd *sdp, struct bio **biop)
 {
 	struct bio *bio = *biop;
 	if (bio) {
-		struct gfs2_sbd *sdp = bio->bi_private;
 		atomic_inc(&sdp->sd_log_in_flight);
+		bio->bi_private = sdp;
+		bio->bi_end_io = gfs2_end_log_write;
 		submit_bio(bio);
 		*biop = NULL;
 	}
@@ -251,7 +253,6 @@ void gfs2_log_submit_write(struct bio **biop)
  * gfs2_log_alloc_bio - Allocate a bio
  * @sdp: The super block
  * @blkno: The device block number we want to write to
- * @end_io: The bi_end_io callback
  * @opf: REQ_OP | op_flags
  *
  * Allocate a new bio, initialize it with the given parameters and return it.
@@ -260,14 +261,12 @@ void gfs2_log_submit_write(struct bio **biop)
  */
 
 static struct bio *gfs2_log_alloc_bio(struct gfs2_sbd *sdp, u64 blkno,
-				      bio_end_io_t *end_io, blk_opf_t opf)
+				      blk_opf_t opf)
 {
 	struct super_block *sb = sdp->sd_vfs;
 	struct bio *bio = bio_alloc(sb->s_bdev, BIO_MAX_VECS, opf, GFP_NOIO);
 
 	bio->bi_iter.bi_sector = blkno << sdp->sd_fsb2bb_shift;
-	bio->bi_end_io = end_io;
-	bio->bi_private = sdp;
 
 	return bio;
 }
@@ -291,7 +290,7 @@ static struct bio *gfs2_log_alloc_bio(struct gfs2_sbd *sdp, u64 blkno,
 
 static struct bio *gfs2_log_get_bio(struct gfs2_sbd *sdp, u64 blkno,
 				    struct bio **biop, enum req_op op,
-				    bio_end_io_t *end_io, bool flush)
+				    bool flush)
 {
 	struct bio *bio = *biop;
 
@@ -302,10 +301,10 @@ static struct bio *gfs2_log_get_bio(struct gfs2_sbd *sdp, u64 blkno,
 		nblk >>= sdp->sd_fsb2bb_shift;
 		if (blkno == nblk && !flush)
 			return bio;
-		gfs2_log_submit_write(biop);
+		gfs2_log_submit_write(sdp, biop);
 	}
 
-	*biop = gfs2_log_alloc_bio(sdp, blkno, end_io, op);
+	*biop = gfs2_log_alloc_bio(sdp, blkno, op);
 	return *biop;
 }
 
@@ -331,12 +330,10 @@ void gfs2_log_write(struct gfs2_sbd *sdp, struct gfs2_jdesc *jd,
 	struct bio *bio;
 	int ret;
 
-	bio = gfs2_log_get_bio(sdp, blkno, &jd->jd_log_bio, opf,
-			       gfs2_end_log_write, false);
+	bio = gfs2_log_get_bio(sdp, blkno, &jd->jd_log_bio, opf, false);
 	ret = bio_add_page(bio, page, size, offset);
 	if (ret == 0) {
-		bio = gfs2_log_get_bio(sdp, blkno, &jd->jd_log_bio,
-				       opf, gfs2_end_log_write, true);
+		bio = gfs2_log_get_bio(sdp, blkno, &jd->jd_log_bio, opf, true);
 		ret = bio_add_page(bio, page, size, offset);
 		WARN_ON(ret == 0);
 	}
@@ -491,6 +488,12 @@ static struct bio *gfs2_chain_bio(struct bio *prev, unsigned int nr_iovecs,
 	return new;
 }
 
+static void gfs2_log_submit_read(struct bio *bio)
+{
+	bio->bi_end_io = gfs2_end_log_read;
+	submit_bio(bio);
+}
+
 /**
  * gfs2_find_jhead - find the head of a log
  * @jd: The journal descriptor
@@ -556,11 +559,10 @@ int gfs2_find_jhead(struct gfs2_jdesc *jd, struct gfs2_log_header_host *head)
 
 			if (bio) {
 				blocks_submitted = block;
-				submit_bio(bio);
+				gfs2_log_submit_read(bio);
 			}
 
-			bio = gfs2_log_alloc_bio(sdp, dblock, gfs2_end_log_read,
-						 REQ_OP_READ);
+			bio = gfs2_log_alloc_bio(sdp, dblock, REQ_OP_READ);
 add_block_to_new_bio:
 			bio_add_folio_nofail(bio, folio, bsize, off);
 block_added:
@@ -581,7 +583,7 @@ block_added:
 
 out:
 	if (bio)
-		submit_bio(bio);
+		gfs2_log_submit_read(bio);
 	while (blocks_read < block) {
 		gfs2_jhead_process_page(jd, blocks_read >> shift, head, &done);
 		blocks_read += PAGE_SIZE >> bsize_shift;
