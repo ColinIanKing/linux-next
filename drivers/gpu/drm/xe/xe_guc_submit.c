@@ -722,21 +722,23 @@ static int wq_wait_for_space(struct xe_exec_queue *q, u32 wqi_size)
 	struct xe_guc *guc = exec_queue_to_guc(q);
 	struct xe_device *xe = guc_to_xe(guc);
 	struct iosys_map map = xe_lrc_parallel_map(q->lrc[0]);
-	unsigned int sleep_period_ms = 1;
+	unsigned int sleep_period_ms = 1, sleep_total_ms = 0;
 
 #define AVAILABLE_SPACE \
 	CIRC_SPACE(q->guc->wqi_tail, q->guc->wqi_head, WQ_SIZE)
 	if (wqi_size > AVAILABLE_SPACE && !vf_recovery(guc)) {
 try_again:
 		q->guc->wqi_head = parallel_read(xe, map, wq_desc.head);
-		if (wqi_size > AVAILABLE_SPACE) {
-			if (sleep_period_ms == 1024) {
+		if (wqi_size > AVAILABLE_SPACE && !vf_recovery(guc)) {
+			if (sleep_total_ms > 2000) {
 				xe_gt_reset_async(q->gt);
 				return -ENODEV;
 			}
 
 			msleep(sleep_period_ms);
-			sleep_period_ms <<= 1;
+			sleep_total_ms += sleep_period_ms;
+			if (sleep_period_ms < 64)
+				sleep_period_ms <<= 1;
 			goto try_again;
 		}
 	}
@@ -1225,7 +1227,6 @@ guc_exec_queue_timedout_job(struct drm_sched_job *drm_job)
 	struct xe_guc *guc = exec_queue_to_guc(q);
 	const char *process_name = "no process";
 	struct xe_device *xe = guc_to_xe(guc);
-	unsigned int fw_ref;
 	int err = -ETIME;
 	pid_t pid = -1;
 	int i = 0;
@@ -1258,13 +1259,11 @@ guc_exec_queue_timedout_job(struct drm_sched_job *drm_job)
 	if (!exec_queue_killed(q) && !xe->devcoredump.captured &&
 	    !xe_guc_capture_get_matching_and_lock(q)) {
 		/* take force wake before engine register manual capture */
-		fw_ref = xe_force_wake_get(gt_to_fw(q->gt), XE_FORCEWAKE_ALL);
-		if (!xe_force_wake_ref_has_domain(fw_ref, XE_FORCEWAKE_ALL))
+		CLASS(xe_force_wake, fw_ref)(gt_to_fw(q->gt), XE_FORCEWAKE_ALL);
+		if (!xe_force_wake_ref_has_domain(fw_ref.domains, XE_FORCEWAKE_ALL))
 			xe_gt_info(q->gt, "failed to get forcewake for coredump capture\n");
 
 		xe_engine_snapshot_capture_for_queue(q);
-
-		xe_force_wake_put(gt_to_fw(q->gt), fw_ref);
 	}
 
 	/*
@@ -1455,7 +1454,7 @@ static void __guc_exec_queue_destroy_async(struct work_struct *w)
 	struct xe_exec_queue *q = ge->q;
 	struct xe_guc *guc = exec_queue_to_guc(q);
 
-	xe_pm_runtime_get(guc_to_xe(guc));
+	guard(xe_pm_runtime)(guc_to_xe(guc));
 	trace_xe_exec_queue_destroy(q);
 
 	if (xe_exec_queue_is_lr(q))
@@ -1464,8 +1463,6 @@ static void __guc_exec_queue_destroy_async(struct work_struct *w)
 	cancel_delayed_work_sync(&ge->sched.base.work_tdr);
 
 	xe_exec_queue_fini(q);
-
-	xe_pm_runtime_put(guc_to_xe(guc));
 }
 
 static void guc_exec_queue_destroy_async(struct xe_exec_queue *q)
@@ -2182,6 +2179,22 @@ void xe_guc_submit_pause(struct xe_guc *guc)
 	struct xe_exec_queue *q;
 	unsigned long index;
 
+	mutex_lock(&guc->submission_state.lock);
+	xa_for_each(&guc->submission_state.exec_queue_lookup, index, q)
+		xe_sched_submission_stop(&q->guc->sched);
+	mutex_unlock(&guc->submission_state.lock);
+}
+
+/**
+ * xe_guc_submit_pause_vf - Stop further runs of submission tasks for VF.
+ * @guc: the &xe_guc struct instance whose scheduler is to be disabled
+ */
+void xe_guc_submit_pause_vf(struct xe_guc *guc)
+{
+	struct xe_exec_queue *q;
+	unsigned long index;
+
+	xe_gt_assert(guc_to_gt(guc), IS_SRIOV_VF(guc_to_xe(guc)));
 	xe_gt_assert(guc_to_gt(guc), vf_recovery(guc));
 
 	mutex_lock(&guc->submission_state.lock);
@@ -2253,10 +2266,11 @@ static void guc_exec_queue_unpause_prepare(struct xe_guc *guc,
 					   struct xe_exec_queue *q)
 {
 	struct xe_gpu_scheduler *sched = &q->guc->sched;
-	struct xe_sched_job *job = NULL;
+	struct xe_sched_job *job = NULL, *__job;
 	bool restore_replay = false;
 
-	list_for_each_entry(job, &sched->base.pending_list, drm.list) {
+	list_for_each_entry(__job, &sched->base.pending_list, drm.list) {
+		job = __job;
 		restore_replay |= job->restore_replay;
 		if (restore_replay) {
 			xe_gt_dbg(guc_to_gt(guc), "Replay JOB - guc_id=%d, seqno=%d",
@@ -2272,14 +2286,15 @@ static void guc_exec_queue_unpause_prepare(struct xe_guc *guc,
 }
 
 /**
- * xe_guc_submit_unpause_prepare - Prepare unpause submission tasks on given GuC.
+ * xe_guc_submit_unpause_prepare_vf - Prepare unpause submission tasks for VF.
  * @guc: the &xe_guc struct instance whose scheduler is to be prepared for unpause
  */
-void xe_guc_submit_unpause_prepare(struct xe_guc *guc)
+void xe_guc_submit_unpause_prepare_vf(struct xe_guc *guc)
 {
 	struct xe_exec_queue *q;
 	unsigned long index;
 
+	xe_gt_assert(guc_to_gt(guc), IS_SRIOV_VF(guc_to_xe(guc)));
 	xe_gt_assert(guc_to_gt(guc), vf_recovery(guc));
 
 	mutex_lock(&guc->submission_state.lock);
@@ -2354,6 +2369,23 @@ void xe_guc_submit_unpause(struct xe_guc *guc)
 {
 	struct xe_exec_queue *q;
 	unsigned long index;
+
+	mutex_lock(&guc->submission_state.lock);
+	xa_for_each(&guc->submission_state.exec_queue_lookup, index, q)
+		xe_sched_submission_start(&q->guc->sched);
+	mutex_unlock(&guc->submission_state.lock);
+}
+
+/**
+ * xe_guc_submit_unpause_vf - Allow further runs of submission tasks for VF.
+ * @guc: the &xe_guc struct instance whose scheduler is to be enabled
+ */
+void xe_guc_submit_unpause_vf(struct xe_guc *guc)
+{
+	struct xe_exec_queue *q;
+	unsigned long index;
+
+	xe_gt_assert(guc_to_gt(guc), IS_SRIOV_VF(guc_to_xe(guc)));
 
 	mutex_lock(&guc->submission_state.lock);
 	xa_for_each(&guc->submission_state.exec_queue_lookup, index, q) {
