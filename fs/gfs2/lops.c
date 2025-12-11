@@ -276,7 +276,7 @@ static struct bio *gfs2_log_alloc_bio(struct gfs2_sbd *sdp, u64 blkno,
  * @sdp: The super block
  * @blkno: The device block number we want to write to
  * @biop: The bio to get or allocate
- * @op: REQ_OP
+ * @opf: REQ_OP | op_flags
  * @end_io: The bi_end_io callback
  * @flush: Always flush the current bio and allocate a new one?
  *
@@ -289,7 +289,7 @@ static struct bio *gfs2_log_alloc_bio(struct gfs2_sbd *sdp, u64 blkno,
  */
 
 static struct bio *gfs2_log_get_bio(struct gfs2_sbd *sdp, u64 blkno,
-				    struct bio **biop, enum req_op op,
+				    struct bio **biop, blk_opf_t opf,
 				    bool flush)
 {
 	struct bio *bio = *biop;
@@ -304,7 +304,7 @@ static struct bio *gfs2_log_get_bio(struct gfs2_sbd *sdp, u64 blkno,
 		gfs2_log_submit_write(sdp, biop);
 	}
 
-	*biop = gfs2_log_alloc_bio(sdp, blkno, op);
+	*biop = gfs2_log_alloc_bio(sdp, blkno, opf);
 	return *biop;
 }
 
