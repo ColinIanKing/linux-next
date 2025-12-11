@@ -795,10 +795,12 @@ enum amd_hw_ip_block_type {
 	DCI_HWIP,
 	PCIE_HWIP,
 	ISP_HWIP,
+	ATU_HWIP,
+	AIGC_HWIP,
 	MAX_HWIP
 };
 
-#define HWIP_MAX_INSTANCE	44
+#define HWIP_MAX_INSTANCE	48
 
 #define HW_ID_MAX		300
 #define IP_VERSION_FULL(mj, mn, rv, var, srev) \
@@ -1545,8 +1547,13 @@ int emu_soc_asic_init(struct amdgpu_device *adev);
 #define amdgpu_asic_get_pcie_usage(adev, cnt0, cnt1) ((adev)->asic_funcs->get_pcie_usage((adev), (cnt0), (cnt1)))
 #define amdgpu_asic_need_reset_on_init(adev) (adev)->asic_funcs->need_reset_on_init((adev))
 #define amdgpu_asic_get_pcie_replay_count(adev) ((adev)->asic_funcs->get_pcie_replay_count((adev)))
-#define amdgpu_asic_supports_baco(adev) (adev)->asic_funcs->supports_baco((adev))
-#define amdgpu_asic_pre_asic_init(adev) (adev)->asic_funcs->pre_asic_init((adev))
+#define amdgpu_asic_supports_baco(adev) \
+    ((adev)->asic_funcs->supports_baco ? (adev)->asic_funcs->supports_baco((adev)) : 0)
+#define amdgpu_asic_pre_asic_init(adev)                                      \
+	{                                                                    \
+		if ((adev)->asic_funcs && (adev)->asic_funcs->pre_asic_init) \
+			(adev)->asic_funcs->pre_asic_init((adev));           \
+	}
 #define amdgpu_asic_update_umd_stable_pstate(adev, enter) \
 	((adev)->asic_funcs->update_umd_stable_pstate ? (adev)->asic_funcs->update_umd_stable_pstate((adev), (enter)) : 0)
 #define amdgpu_asic_query_video_codecs(adev, e, c) (adev)->asic_funcs->query_video_codecs((adev), (e), (c))

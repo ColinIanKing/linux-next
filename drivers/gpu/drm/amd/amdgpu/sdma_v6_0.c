@@ -1268,6 +1268,17 @@ static void sdma_v6_0_set_ras_funcs(struct amdgpu_device *adev)
 	}
 }
 
+/* all sizes are in bytes */
+#define SDMA6_CSA_SIZE       32
+#define SDMA6_CSA_ALIGNMENT  4
+
+static void sdma_v6_0_get_csa_info(struct amdgpu_device *adev,
+				   struct amdgpu_sdma_csa_info *csa_info)
+{
+	csa_info->size = SDMA6_CSA_SIZE;
+	csa_info->alignment = SDMA6_CSA_ALIGNMENT;
+}
+
 static int sdma_v6_0_early_init(struct amdgpu_ip_block *ip_block)
 {
 	struct amdgpu_device *adev = ip_block->adev;
@@ -1300,6 +1311,7 @@ static int sdma_v6_0_early_init(struct amdgpu_ip_block *ip_block)
 	sdma_v6_0_set_irq_funcs(adev);
 	sdma_v6_0_set_mqd_funcs(adev);
 	sdma_v6_0_set_ras_funcs(adev);
+	adev->sdma.get_csa_info = &sdma_v6_0_get_csa_info;
 
 	return 0;
 }
@@ -1586,7 +1598,7 @@ static int sdma_v6_0_reset_queue(struct amdgpu_ring *ring,
 
 	amdgpu_ring_reset_helper_begin(ring, timedout_fence);
 
-	r = amdgpu_mes_reset_legacy_queue(adev, ring, vmid, true);
+	r = amdgpu_mes_reset_legacy_queue(adev, ring, vmid, true, 0);
 	if (r)
 		return r;
 
