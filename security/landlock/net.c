@@ -68,28 +68,31 @@ static int current_check_access_socket(struct socket *const sock,
 
 	switch (address->sa_family) {
 	case AF_UNSPEC:
-		if (access_request == LANDLOCK_ACCESS_NET_CONNECT_TCP) {
+		if (access_request == LANDLOCK_ACCESS_NET_CONNECT_TCP ||
+		    access_request == LANDLOCK_ACCESS_NET_CONNECT_UDP) {
 			/*
 			 * Connecting to an address with AF_UNSPEC dissolves
-			 * the TCP association, which have the same effect as
-			 * closing the connection while retaining the socket
-			 * object (i.e., the file descriptor).  As for dropping
-			 * privileges, closing connections is always allowed.
-			 *
-			 * For a TCP access control system, this request is
-			 * legitimate. Let the network stack handle potential
+			 * the remote association while retaining the socket
+			 * object (i.e., the file descriptor). For TCP, it has
+			 * the same effect as closing the connection. For UDP,
+			 * it removes any preset remote address. As for
+			 * dropping privileges, these actions are always
+			 * allowed.
+			 * Let the network stack handle potential
 			 * inconsistencies and return -EINVAL if needed.
 			 */
 			return 0;
-		} else if (access_request == LANDLOCK_ACCESS_NET_BIND_TCP) {
+		} else if (access_request == LANDLOCK_ACCESS_NET_BIND_TCP ||
+			   access_request == LANDLOCK_ACCESS_NET_BIND_UDP) {
 			/*
 			 * Binding to an AF_UNSPEC address is treated
 			 * differently by IPv4 and IPv6 sockets. The socket's
 			 * family may change under our feet due to
 			 * setsockopt(IPV6_ADDRFORM), but that's ok: we either
 			 * reject entirely or require
-			 * %LANDLOCK_ACCESS_NET_BIND_TCP for the given port, so
-			 * it cannot be used to bypass the policy.
+			 * %LANDLOCK_ACCESS_NET_BIND_TCP or
+			 * %LANDLOCK_ACCESS_NET_BIND_UDP for the given port,
+			 * so it cannot be used to bypass the policy.
 			 *
 			 * IPv4 sockets map AF_UNSPEC to AF_INET for
 			 * retrocompatibility for bind accesses, only if the
@@ -132,10 +135,12 @@ static int current_check_access_socket(struct socket *const sock,
 		addr4 = (struct sockaddr_in *)address;
 		port = addr4->sin_port;
 
-		if (access_request == LANDLOCK_ACCESS_NET_CONNECT_TCP) {
+		if (access_request == LANDLOCK_ACCESS_NET_CONNECT_TCP ||
+		    access_request == LANDLOCK_ACCESS_NET_CONNECT_UDP) {
 			audit_net.dport = port;
 			audit_net.v4info.daddr = addr4->sin_addr.s_addr;
-		} else if (access_request == LANDLOCK_ACCESS_NET_BIND_TCP) {
+		} else if (access_request == LANDLOCK_ACCESS_NET_BIND_TCP ||
+			   access_request == LANDLOCK_ACCESS_NET_BIND_UDP) {
 			audit_net.sport = port;
 			audit_net.v4info.saddr = addr4->sin_addr.s_addr;
 		} else {
@@ -154,10 +159,12 @@ static int current_check_access_socket(struct socket *const sock,
 		addr6 = (struct sockaddr_in6 *)address;
 		port = addr6->sin6_port;
 
-		if (access_request == LANDLOCK_ACCESS_NET_CONNECT_TCP) {
+		if (access_request == LANDLOCK_ACCESS_NET_CONNECT_TCP ||
+		    access_request == LANDLOCK_ACCESS_NET_CONNECT_UDP) {
 			audit_net.dport = port;
 			audit_net.v6info.daddr = addr6->sin6_addr;
-		} else if (access_request == LANDLOCK_ACCESS_NET_BIND_TCP) {
+		} else if (access_request == LANDLOCK_ACCESS_NET_BIND_TCP ||
+			   access_request == LANDLOCK_ACCESS_NET_BIND_UDP) {
 			audit_net.sport = port;
 			audit_net.v6info.saddr = addr6->sin6_addr;
 		} else {
@@ -215,6 +222,8 @@ static int hook_socket_bind(struct socket *const sock,
 
 	if (sk_is_tcp(sock->sk))
 		access_request = LANDLOCK_ACCESS_NET_BIND_TCP;
+	else if (sk_is_udp(sock->sk))
+		access_request = LANDLOCK_ACCESS_NET_BIND_UDP;
 	else
 		return 0;
 
@@ -230,6 +239,8 @@ static int hook_socket_connect(struct socket *const sock,
 
 	if (sk_is_tcp(sock->sk))
 		access_request = LANDLOCK_ACCESS_NET_CONNECT_TCP;
+	else if (sk_is_udp(sock->sk))
+		access_request = LANDLOCK_ACCESS_NET_CONNECT_UDP;
 	else
 		return 0;
 

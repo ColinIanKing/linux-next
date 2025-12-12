@@ -199,9 +199,9 @@ struct landlock_net_port_attr {
 	 * with ``setsockopt(IP_LOCAL_PORT_RANGE)``.
 	 *
 	 * A Landlock rule with port 0 and the %LANDLOCK_ACCESS_NET_BIND_TCP
-	 * right means that requesting to bind on port 0 is allowed and it will
-	 * automatically translate to binding on a kernel-assigned ephemeral
-	 * port.
+	 * or %LANDLOCK_ACCESS_NET_BIND_UDP right means that requesting to bind
+	 * on port 0 is allowed and it will automatically translate to binding
+	 * on a kernel-assigned ephemeral port.
 	 */
 	__u64 port;
 };
@@ -350,10 +350,24 @@ struct landlock_net_port_attr {
  *   port. Support added in Landlock ABI version 4.
  * - %LANDLOCK_ACCESS_NET_CONNECT_TCP: Connect TCP sockets to the given
  *   remote port. Support added in Landlock ABI version 4.
+ *
+ * And similarly for UDP port numbers:
+ *
+ * - %LANDLOCK_ACCESS_NET_BIND_UDP: Bind UDP sockets to the given local
+ *   port. Support added in Landlock ABI version 9.
+ *   Note: this access right is not required if your program sends
+ *   datagrams and just uses the implicitly bound port assigned by the
+ *   kernel to reply. Conversely, denying this right only blocks a
+ *   program from binding to non-ephemeral ports if it can send datagrams.
+ * - %LANDLOCK_ACCESS_NET_CONNECT_UDP: Connect UDP sockets to remote
+ *   addresses with the given remote port. Support added in Landlock ABI
+ *   version 9.
  */
 /* clang-format off */
 #define LANDLOCK_ACCESS_NET_BIND_TCP			(1ULL << 0)
 #define LANDLOCK_ACCESS_NET_CONNECT_TCP			(1ULL << 1)
+#define LANDLOCK_ACCESS_NET_BIND_UDP			(1ULL << 2)
+#define LANDLOCK_ACCESS_NET_CONNECT_UDP			(1ULL << 3)
 /* clang-format on */
 
 /**
