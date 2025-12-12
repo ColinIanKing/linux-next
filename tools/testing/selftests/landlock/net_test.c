@@ -268,9 +268,68 @@ static int connect_variant(const int sock_fd,
 	return connect_variant_addrlen(sock_fd, srv, get_addrlen(srv, false));
 }
 
+static int sendto_variant_addrlen(const int sock_fd,
+				  const struct service_fixture *const srv,
+				  const socklen_t addrlen, void *buf,
+				  size_t len, size_t flags)
+{
+	const struct sockaddr *dst = NULL;
+	ssize_t ret;
+
+	/*
+	 * We never want our processes to be killed by SIGPIPE: we check
+	 * return codes and errno, so that we have actual error messages.
+	 */
+	flags |= MSG_NOSIGNAL;
+
+	if (srv) {
+		switch (srv->protocol.domain) {
+		case AF_UNSPEC:
+		case AF_INET:
+			dst = (const struct sockaddr *)&srv->ipv4_addr;
+			break;
+
+		case AF_INET6:
+			dst = (const struct sockaddr *)&srv->ipv6_addr;
+			break;
+
+		case AF_UNIX:
+			dst = (const struct sockaddr *)&srv->unix_addr;
+			break;
+
+		default:
+			errno = -EAFNOSUPPORT;
+			return -errno;
+		}
+	}
+
+	ret = sendto(sock_fd, buf, len, flags, dst, addrlen);
+	if (ret < 0)
+		return -errno;
+
+	/* errno is not set in cases of partial writes. */
+	if (ret != len)
+		return -EINTR;
+
+	return 0;
+}
+
+static int sendto_variant(const int sock_fd,
+			  const struct service_fixture *const srv, void *buf,
+			  size_t len, size_t flags)
+{
+	socklen_t addrlen = 0;
+
+	if (srv)
+		addrlen = get_addrlen(srv, false);
+
+	return sendto_variant_addrlen(sock_fd, srv, addrlen, buf, len, flags);
+}
+
 FIXTURE(protocol)
 {
-	struct service_fixture srv0, srv1, srv2, unspec_any0, unspec_srv0;
+	struct service_fixture srv0, srv1, srv2;
+	struct service_fixture unspec_any0, unspec_srv0, unspec_srv1;
 };
 
 FIXTURE_VARIANT(protocol)
@@ -292,6 +351,7 @@ FIXTURE_SETUP(protocol)
 	ASSERT_EQ(0, set_service(&self->srv2, variant->prot, 2));
 
 	ASSERT_EQ(0, set_service(&self->unspec_srv0, prot_unspec, 0));
+	ASSERT_EQ(0, set_service(&self->unspec_srv1, prot_unspec, 1));
 
 	ASSERT_EQ(0, set_service(&self->unspec_any0, prot_unspec, 0));
 	self->unspec_any0.ipv4_addr.sin_addr.s_addr = htonl(INADDR_ANY);
@@ -1073,6 +1133,185 @@ TEST_F(protocol, connect_unspec)
 
 	/* Closes listening socket. */
 	EXPECT_EQ(0, close(bind_fd));
+}
+
+TEST_F(protocol, sendmsg)
+{
+	/* Arbitrary value just to not block other tests indefinitely. */
+	const struct timeval read_timeout = {
+		.tv_sec = 0,
+		.tv_usec = 100000,
+	};
+	const bool sandboxed = variant->sandbox == UDP_SANDBOX &&
+			       (variant->prot.domain == AF_INET ||
+				variant->prot.domain == AF_INET6);
+	int res, srv1_fd, srv0_fd, client_fd;
+	char read_buf[1] = { 0 };
+
+	if (variant->prot.type != SOCK_DGRAM)
+		return;
+
+	disable_caps(_metadata);
+
+	/* Prepare server on port #0 to be denied */
+	ASSERT_EQ(0, set_service(&self->srv0, variant->prot, 0));
+	srv0_fd = socket_variant(&self->srv0);
+	ASSERT_LE(0, srv0_fd);
+	ASSERT_EQ(0, bind_variant(srv0_fd, &self->srv0));
+
+	/* And another server on port #1 to be allowed */
+	ASSERT_EQ(0, set_service(&self->srv1, variant->prot, 1));
+	srv1_fd = socket_variant(&self->srv1);
+	ASSERT_LE(0, srv1_fd);
+	ASSERT_EQ(0, bind_variant(srv1_fd, &self->srv1));
+
+	EXPECT_EQ(0, setsockopt(srv0_fd, SOL_SOCKET, SO_RCVTIMEO, &read_timeout,
+				sizeof(read_timeout)));
+	EXPECT_EQ(0, setsockopt(srv1_fd, SOL_SOCKET, SO_RCVTIMEO, &read_timeout,
+				sizeof(read_timeout)));
+
+	client_fd = socket_variant(&self->srv0);
+	ASSERT_LE(0, client_fd);
+
+	if (sandboxed) {
+		const struct landlock_ruleset_attr ruleset_attr = {
+			.handled_access_net = LANDLOCK_ACCESS_NET_SENDTO_UDP |
+					      LANDLOCK_ACCESS_NET_BIND_UDP,
+		};
+		const struct landlock_net_port_attr allow_one_server = {
+			.allowed_access = LANDLOCK_ACCESS_NET_SENDTO_UDP,
+			.port = self->srv1.port,
+		};
+		const int ruleset_fd = landlock_create_ruleset(
+			&ruleset_attr, sizeof(ruleset_attr), 0);
+		ASSERT_LE(0, ruleset_fd);
+		ASSERT_EQ(0,
+			  landlock_add_rule(ruleset_fd, LANDLOCK_RULE_NET_PORT,
+					    &allow_one_server, 0));
+		enforce_ruleset(_metadata, ruleset_fd);
+		EXPECT_EQ(0, close(ruleset_fd));
+	}
+
+	/* No connect(), NULL address */
+	EXPECT_EQ(-1, write(client_fd, "A", 1));
+	if (variant->prot.domain == AF_UNIX) {
+		EXPECT_EQ(ENOTCONN, errno);
+	} else {
+		EXPECT_EQ(EDESTADDRREQ, errno);
+	}
+
+	/* No connect(), non-NULL but too small explicit address */
+	EXPECT_EQ(-EINVAL,
+		  sendto_variant_addrlen(client_fd, &self->srv0,
+					 get_addrlen(&self->srv0, true) - 1,
+					 "B", 1, 0));
+
+	/* No connect(), explicit denied port */
+	res = sendto_variant(client_fd, &self->srv0, "C", 1, 0);
+	if (sandboxed) {
+		EXPECT_EQ(-EACCES, res);
+	} else {
+		EXPECT_EQ(0, res);
+		EXPECT_EQ(1, read(srv0_fd, read_buf, 1));
+		EXPECT_EQ(read_buf[0], 'C');
+	}
+
+	/* No connect(), explicit allowed port */
+	EXPECT_EQ(0, sendto_variant(client_fd, &self->srv1, "D", 1, 0));
+	EXPECT_EQ(1, read(srv1_fd, read_buf, 1));
+	EXPECT_EQ(read_buf[0], 'D');
+
+	/* Explicit AF_UNSPEC address but truncated */
+	EXPECT_EQ(-EINVAL, sendto_variant_addrlen(
+				   client_fd, &self->unspec_srv0,
+				   get_addrlen(&self->unspec_srv0, true) - 1,
+				   "E", 1, 0));
+
+	/* Explicit AF_UNSPEC address, should always be denied */
+	res = sendto_variant(client_fd, &self->unspec_srv1, "F", 1, 0);
+	if (sandboxed) {
+		EXPECT_EQ(-EACCES, res);
+	} else {
+		if (variant->prot.domain == AF_INET) {
+			/* IPv4 sockets treat AF_UNSPEC as AF_INET */
+			EXPECT_EQ(0, res);
+			EXPECT_EQ(1, read(srv1_fd, read_buf, 1))
+			{
+				TH_LOG("read() failed: %s", strerror(errno));
+			}
+			EXPECT_EQ(read_buf[0], 'F');
+		} else if (variant->prot.domain == AF_INET6) {
+			/* IPv6 sockets treat AF_UNSPEC as a NULL address */
+			EXPECT_EQ(-EDESTADDRREQ, res);
+		} else {
+			/* Unix sockets don't accept AF_UNSPEC */
+			EXPECT_EQ(-EINVAL, res);
+		}
+	}
+
+	/* With connect() on an allowed explicit port, no explicit address */
+	ASSERT_EQ(0, connect_variant(client_fd, &self->srv1));
+	EXPECT_EQ(0, sendto_variant(client_fd, NULL, "G", 1, 0));
+	EXPECT_EQ(1, read(srv1_fd, read_buf, 1));
+	EXPECT_EQ(read_buf[0], 'G');
+
+	/* With connect() on a denied explicit port, no explicit address */
+	ASSERT_EQ(0, connect_variant(client_fd, &self->srv0));
+	EXPECT_EQ(0, sendto_variant(client_fd, NULL, "H", 1, 0));
+	EXPECT_EQ(1, read(srv0_fd, read_buf, 1));
+	EXPECT_EQ(read_buf[0], 'H');
+
+	/* Explicit AF_UNSPEC minimal address (just the sa_family_t field) */
+	res = sendto_variant_addrlen(client_fd, &self->unspec_srv0,
+				     get_addrlen(&self->unspec_srv0, true), "I",
+				     1, 0);
+	if (sandboxed) {
+		EXPECT_EQ(-EACCES, res);
+	} else if (variant->prot.domain == AF_INET6) {
+		/*
+		 * IPv6 sockets treat AF_UNSPEC as a NULL address,
+		 * falling back to the connected address
+		 */
+		EXPECT_EQ(0, res);
+		EXPECT_EQ(1, read(srv0_fd, read_buf, 1));
+		EXPECT_EQ(read_buf[0], 'I');
+	} else {
+		/*
+		 * IPv4 socket will expect a struct sockaddr_in, our address
+		 * is considered truncated.
+		 * And Unix sockets don't accept AF_UNSPEC at all.
+		 */
+		EXPECT_EQ(-EINVAL, res);
+	}
+
+	/* Explicit AF_UNSPEC address, should always be denied */
+	res = sendto_variant(client_fd, &self->unspec_srv1, "J", 1, 0);
+	if (sandboxed) {
+		EXPECT_EQ(-EACCES, res);
+	} else if (variant->prot.domain == AF_INET ||
+		   variant->prot.domain == AF_INET6) {
+		int read_fd;
+
+		EXPECT_EQ(0, res);
+		if (variant->prot.domain == AF_INET) {
+			/* IPv4 sockets treat AF_UNSPEC as AF_INET */
+			read_fd = srv1_fd;
+		} else {
+			/*
+			 * IPv6 sockets treat AF_UNSPEC as a NULL address,
+			 * falling back to the connected address
+			 */
+			read_fd = srv0_fd;
+		}
+		EXPECT_EQ(1, read(read_fd, read_buf, 1))
+		{
+			TH_LOG("read failed: %s", strerror(errno));
+		}
+		EXPECT_EQ(read_buf[0], 'J');
+	} else {
+		/* Unix sockets don't accept AF_UNSPEC */
+		EXPECT_EQ(-EINVAL, res);
+	}
 }
 
 FIXTURE(ipv4)
@@ -2079,19 +2318,27 @@ static int matches_log_prot(const int audit_fd, const char *const blockers,
 			    const char *const dir_addr, const char *const addr,
 			    const char *const dir_port)
 {
-	static const char log_template[] = REGEX_LANDLOCK_PREFIX
+	static const char tmpl_with_addr_port[] = REGEX_LANDLOCK_PREFIX
 		" blockers=%s %s=%s %s=1024$";
+	static const char tmpl_no_addr_port[] = REGEX_LANDLOCK_PREFIX
+		" blockers=%s$";
 	/*
 	 * Max strlen(blockers): 16
 	 * Max strlen(dir_addr): 5
 	 * Max strlen(addr): 12
 	 * Max strlen(dir_port): 4
 	 */
-	char log_match[sizeof(log_template) + 37];
+	char log_match[sizeof(tmpl_with_addr_port) + 37];
 	int log_match_len;
 
-	log_match_len = snprintf(log_match, sizeof(log_match), log_template,
-				 blockers, dir_addr, addr, dir_port);
+	if (addr)
+		log_match_len = snprintf(log_match, sizeof(log_match),
+					 tmpl_with_addr_port, blockers,
+					 dir_addr, addr, dir_port);
+	else
+		log_match_len = snprintf(log_match, sizeof(log_match),
+					 tmpl_no_addr_port, blockers);
+
 	if (log_match_len > sizeof(log_match))
 		return -E2BIG;
 
@@ -2102,6 +2349,7 @@ static int matches_log_prot(const int audit_fd, const char *const blockers,
 FIXTURE(audit)
 {
 	struct service_fixture srv0;
+	struct service_fixture unspec_srv0;
 	struct audit_filter audit_filter;
 	int audit_fd;
 };
@@ -2154,7 +2402,13 @@ FIXTURE_VARIANT_ADD(audit, ipv6_udp) {
 
 FIXTURE_SETUP(audit)
 {
+	struct protocol_variant prot_unspec = variant->prot;
+
+	prot_unspec.domain = AF_UNSPEC;
+
 	ASSERT_EQ(0, set_service(&self->srv0, variant->prot, 0));
+	ASSERT_EQ(0, set_service(&self->unspec_srv0, prot_unspec, 0));
+
 	setup_loopback(_metadata);
 
 	set_cap(_metadata, CAP_AUDIT_CONTROL);
@@ -2238,6 +2492,45 @@ TEST_F(audit, connect)
 	EXPECT_EQ(0, audit_count_records(self->audit_fd, &records));
 	EXPECT_EQ(0, records.access);
 	EXPECT_EQ(1, records.domain);
+
+	EXPECT_EQ(0, close(sock_fd));
+}
+
+TEST_F(audit, sendmsg)
+{
+	const struct landlock_ruleset_attr ruleset_attr = {
+		.handled_access_net = LANDLOCK_ACCESS_NET_SENDTO_UDP,
+	};
+	struct audit_records records;
+	int ruleset_fd, sock_fd;
+
+	if (variant->prot.type != SOCK_DGRAM)
+		return;
+
+	ruleset_fd =
+		landlock_create_ruleset(&ruleset_attr, sizeof(ruleset_attr), 0);
+	ASSERT_LE(0, ruleset_fd);
+	enforce_ruleset(_metadata, ruleset_fd);
+	EXPECT_EQ(0, close(ruleset_fd));
+
+	sock_fd = socket_variant(&self->srv0);
+	ASSERT_LE(0, sock_fd);
+	EXPECT_EQ(-EACCES, sendto_variant(sock_fd, &self->srv0, "A", 1, 0));
+	EXPECT_EQ(0, matches_log_prot(self->audit_fd, "net.sendto_udp", "daddr",
+				      variant->addr, "dest"));
+
+	EXPECT_EQ(0, audit_count_records(self->audit_fd, &records));
+	EXPECT_EQ(0, records.access);
+	EXPECT_EQ(1, records.domain);
+
+	EXPECT_EQ(-EACCES,
+		  sendto_variant(sock_fd, &self->unspec_srv0, "B", 1, 0));
+	EXPECT_EQ(0, matches_log_prot(self->audit_fd, "net.sendto_udp", "daddr",
+				      NULL, "dest"));
+
+	EXPECT_EQ(0, audit_count_records(self->audit_fd, &records));
+	EXPECT_EQ(0, records.access);
+	EXPECT_EQ(0, records.domain);
 
 	EXPECT_EQ(0, close(sock_fd));
 }
