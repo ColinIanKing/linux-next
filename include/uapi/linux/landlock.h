@@ -362,12 +362,25 @@ struct landlock_net_port_attr {
  * - %LANDLOCK_ACCESS_NET_CONNECT_UDP: Connect UDP sockets to remote
  *   addresses with the given remote port. Support added in Landlock ABI
  *   version 9.
+ * - %LANDLOCK_ACCESS_NET_SENDTO_UDP: Send datagrams on UDP sockets with
+ *   an explicit destination address set to the given remote port.
+ *   Support added in Landlock ABI version 9. Note: this access right
+ *   does not control sending datagrams with no explicit destination
+ *   (e.g. via :manpage:`send(2)` or ``sendto(..., NULL, 0)``, so this
+ *   access right is not necessary when specifying a destination address
+ *   once and for all in :manpage:`connect(2)`.
+ *
+ *   Note: sending datagrams to an explicit ``AF_UNSPEC`` destination
+ *   address family is not supported. For IPv4 sockets, you will need to
+ *   use an ``AF_INET`` address instead, and for IPv6 sockets, you will
+ *   need to use a ``NULL`` address.
  */
 /* clang-format off */
 #define LANDLOCK_ACCESS_NET_BIND_TCP			(1ULL << 0)
 #define LANDLOCK_ACCESS_NET_CONNECT_TCP			(1ULL << 1)
 #define LANDLOCK_ACCESS_NET_BIND_UDP			(1ULL << 2)
 #define LANDLOCK_ACCESS_NET_CONNECT_UDP			(1ULL << 3)
+#define LANDLOCK_ACCESS_NET_SENDTO_UDP			(1ULL << 4)
 /* clang-format on */
 
 /**

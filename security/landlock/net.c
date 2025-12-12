@@ -121,6 +121,32 @@ static int current_check_access_socket(struct socket *const sock,
 				else
 					return -EAFNOSUPPORT;
 			}
+		} else if (access_request == LANDLOCK_ACCESS_NET_SENDTO_UDP) {
+			/*
+			 * We cannot allow LANDLOCK_ACCESS_NET_SENDTO_UDP on an
+			 * explicit AF_UNSPEC address. That's because semantics
+			 * of AF_UNSPEC change between socket families (e.g.
+			 * IPv6 treat it as "no address" in the sendmsg()
+			 * syscall family, so we should always allow, whilst
+			 * IPv4 treat it as AF_INET, so we should filter based
+			 * on port, and future address families might even do
+			 * something else), and the socket's family can change
+			 * under our feet due to setsockopt(IPV6_ADDRFORM).
+			 */
+			audit_net.family = AF_UNSPEC;
+			landlock_init_layer_masks(subject->domain,
+						  access_request, &layer_masks,
+						  LANDLOCK_KEY_NET_PORT);
+			landlock_log_denial(
+				subject,
+				&(struct landlock_request){
+					.type = LANDLOCK_REQUEST_NET_ACCESS,
+					.audit.type = LSM_AUDIT_DATA_NET,
+					.audit.u.net = &audit_net,
+					.access = access_request,
+					.masks = &layer_masks,
+				});
+			return -EACCES;
 		} else {
 			WARN_ON_ONCE(1);
 		}
@@ -136,7 +162,8 @@ static int current_check_access_socket(struct socket *const sock,
 		port = addr4->sin_port;
 
 		if (access_request == LANDLOCK_ACCESS_NET_CONNECT_TCP ||
-		    access_request == LANDLOCK_ACCESS_NET_CONNECT_UDP) {
+		    access_request == LANDLOCK_ACCESS_NET_CONNECT_UDP ||
+		    access_request == LANDLOCK_ACCESS_NET_SENDTO_UDP) {
 			audit_net.dport = port;
 			audit_net.v4info.daddr = addr4->sin_addr.s_addr;
 		} else if (access_request == LANDLOCK_ACCESS_NET_BIND_TCP ||
@@ -160,7 +187,8 @@ static int current_check_access_socket(struct socket *const sock,
 		port = addr6->sin6_port;
 
 		if (access_request == LANDLOCK_ACCESS_NET_CONNECT_TCP ||
-		    access_request == LANDLOCK_ACCESS_NET_CONNECT_UDP) {
+		    access_request == LANDLOCK_ACCESS_NET_CONNECT_UDP ||
+		    access_request == LANDLOCK_ACCESS_NET_SENDTO_UDP) {
 			audit_net.dport = port;
 			audit_net.v6info.daddr = addr6->sin6_addr;
 		} else if (access_request == LANDLOCK_ACCESS_NET_BIND_TCP ||
@@ -248,9 +276,36 @@ static int hook_socket_connect(struct socket *const sock,
 					   access_request);
 }
 
+static int hook_socket_sendmsg(struct socket *const sock,
+			       struct msghdr *const msg, const int size)
+{
+	struct sockaddr *const address = msg->msg_name;
+	const int addrlen = msg->msg_namelen;
+	access_mask_t access_request;
+
+	/*
+	 * If there is no explicit address in the message, we have no
+	 * policy to enforce here because either:
+	 * - the socket has a remote address assigned, so the appropriate
+	 *   access check has already been done back then at assignment time;
+	 * - or, we can let the networking stack reply -EDESTADDRREQ.
+	 */
+	if (!address)
+		return 0;
+
+	if (sk_is_udp(sock->sk))
+		access_request = LANDLOCK_ACCESS_NET_SENDTO_UDP;
+	else
+		return 0;
+
+	return current_check_access_socket(sock, address, addrlen,
+					   access_request);
+}
+
 static struct security_hook_list landlock_hooks[] __ro_after_init = {
 	LSM_HOOK_INIT(socket_bind, hook_socket_bind),
 	LSM_HOOK_INIT(socket_connect, hook_socket_connect),
+	LSM_HOOK_INIT(socket_sendmsg, hook_socket_sendmsg),
 };
 
 __init void landlock_add_net_hooks(void)
