@@ -48,6 +48,13 @@ struct oom_control {
 	unsigned long totalpages;
 	struct task_struct *chosen;
 	long chosen_points;
+	bool approximate;
+	/*
+	 * Number of precise badness points sums performed by this task
+	 * selection.
+	 */
+	int nr_precise;
+	unsigned long accuracy_under;
 
 	/* Used to print the constraint info. */
 	enum oom_constraint constraint;
@@ -97,7 +104,10 @@ static inline vm_fault_t check_stable_address_space(struct mm_struct *mm)
 }
 
 long oom_badness(struct task_struct *p,
-		unsigned long totalpages);
+		unsigned long totalpages,
+		bool approximate,
+		unsigned int *accuracy_under,
+		unsigned int *accuracy_over);
 
 extern bool out_of_memory(struct oom_control *oc);
 
