@@ -7,8 +7,10 @@
 SYM_FUNC_START(test_kprobes_add)
 	li a1, KPROBE_TEST_MAGIC_UPPER
 	li a2, KPROBE_TEST_MAGIC_LOWER
+.globl test_kprobes_add_addr1
 test_kprobes_add_addr1:
 	add a1, a1, a2
+.globl test_kprobes_add_addr2
 test_kprobes_add_addr2:
 	add a0, a1, x0
 	ret
@@ -19,6 +21,7 @@ SYM_FUNC_START(test_kprobes_jal)
 	mv a1, ra
 	.option push
 	.option norvc
+.globl test_kprobes_jal_addr1
 test_kprobes_jal_addr1:
 	jal x0, 2f
 	ret
@@ -27,6 +30,7 @@ test_kprobes_jal_addr1:
 	ret
 	.option push
 	.option norvc
+.globl test_kprobes_jal_addr2
 test_kprobes_jal_addr2:
 2:	jal 1b
 	.option pop
@@ -40,6 +44,7 @@ SYM_FUNC_START(test_kprobes_jalr)
 	mv a1, ra
 	.option push
 	.option norvc
+.globl test_kprobes_jalr_addr
 test_kprobes_jalr_addr:
 	jalr a0
 	.option pop
@@ -51,6 +56,7 @@ test_kprobes_jalr_addr:
 SYM_FUNC_END(test_kprobes_jalr)
 
 SYM_FUNC_START(test_kprobes_auipc)
+.globl test_kprobes_auipc_addr
 test_kprobes_auipc_addr:
 	auipc a0, KPROBE_TEST_MAGIC_LOWER
 	la a1, test_kprobes_auipc_addr
@@ -67,20 +73,26 @@ SYM_FUNC_START(test_kprobes_branch)
 	li a0, 0
 	li a1, 1
 	li a2, 2
+.globl test_kprobes_branch_addr1
 test_kprobes_branch_addr1:
 	beqz a0, 1f
 	ret
 1:
+.globl test_kprobes_branch_addr2
 test_kprobes_branch_addr2:
 	beqz a1, 3f
+.globl test_kprobes_branch_addr3
 test_kprobes_branch_addr3:
 	bnez a0, 3f
+.globl test_kprobes_branch_addr4
 test_kprobes_branch_addr4:
 	bnez a2, 1f
 	ret
 1:
+.globl test_kprobes_branch_addr5
 test_kprobes_branch_addr5:
 	bge a1, a2, 3f
+.globl test_kprobes_branch_addr6
 test_kprobes_branch_addr6:
 	bge a2, a1, 2f
 	ret
@@ -89,9 +101,11 @@ test_kprobes_branch_addr6:
 	add a0, a0, t0
 	ret
 2:
+.globl test_kprobes_branch_addr7
 test_kprobes_branch_addr7:
 	blt a2, a1, 3f
 	li a0, KPROBE_TEST_MAGIC_LOWER
+.globl test_kprobes_branch_addr8
 test_kprobes_branch_addr8:
 	blt a1, a2, 1b
 3:
@@ -104,6 +118,7 @@ SYM_FUNC_END(test_kprobes_branch)
 
 SYM_FUNC_START(test_kprobes_c_j)
 	li a0, 0
+.globl test_kprobes_branch_c_j_addr1
 test_kprobes_branch_c_j_addr1:
 	c.j 2f
 1:
@@ -111,12 +126,14 @@ test_kprobes_branch_c_j_addr1:
 	add a0, a0, a1
 	ret
 2:	li a0, KPROBE_TEST_MAGIC_LOWER
+.globl test_kprobes_branch_c_j_addr2
 test_kprobes_branch_c_j_addr2:
 	c.j 1b
 SYM_FUNC_END(test_kprobes_c_j)
 
 SYM_FUNC_START(test_kprobes_c_jr)
 	la a0, 2f
+.globl test_kprobes_c_jr_addr1
 test_kprobes_c_jr_addr1:
 	c.jr a0
 	ret
@@ -126,6 +143,7 @@ test_kprobes_c_jr_addr1:
 2:
 	li a0, KPROBE_TEST_MAGIC_UPPER
 	la a1, 1b
+.globl test_kprobes_c_jr_addr2
 test_kprobes_c_jr_addr2:
 	c.jr a1
 SYM_FUNC_END(test_kprobes_c_jr)
@@ -133,6 +151,7 @@ SYM_FUNC_END(test_kprobes_c_jr)
 SYM_FUNC_START(test_kprobes_c_jalr)
 	mv a1, ra
 	la a0, 1f
+.globl test_kprobes_c_jalr_addr
 test_kprobes_c_jalr_addr:
 	c.jalr a0
 	li a2, KPROBE_TEST_MAGIC_UPPER
@@ -145,16 +164,19 @@ SYM_FUNC_END(test_kprobes_c_jalr)
 SYM_FUNC_START(test_kprobes_c_beqz)
 	li a0, 0
 	li a1, 1
+.globl test_kprobes_c_beqz_addr1
 test_kprobes_c_beqz_addr1:
 	c.beqz a0, 2f
 	ret
 1:	li a1, KPROBE_TEST_MAGIC_UPPER
 	add a0, a0, a1
 	ret
+.globl test_kprobes_c_beqz_addr2
 test_kprobes_c_beqz_addr2:
 2:	c.beqz a1, 3f
 	li a0, KPROBE_TEST_MAGIC_LOWER
 	mv a1, x0
+.globl test_kprobes_c_beqz_addr3
 test_kprobes_c_beqz_addr3:
 	c.beqz a1, 1b
 3:	li a0, 0
@@ -164,15 +186,18 @@ SYM_FUNC_END(test_kprobes_c_beqz)
 SYM_FUNC_START(test_kprobes_c_bnez)
 	li a0, 0
 	li a1, 1
+.globl test_kprobes_c_bnez_addr1
 test_kprobes_c_bnez_addr1:
 	c.bnez a1, 2f
 	ret
 1:	li a1, KPROBE_TEST_MAGIC_UPPER
 	add a0, a0, a1
 	ret
+.globl test_kprobes_c_bnez_addr2
 test_kprobes_c_bnez_addr2:
 2:	c.bnez a0, 3f
 	li a0, KPROBE_TEST_MAGIC_LOWER
+.globl test_kprobes_c_bnez_addr3
 test_kprobes_c_bnez_addr3:
 	c.bnez a0, 1b
 3:	li a0, 0
@@ -181,6 +206,8 @@ SYM_FUNC_END(test_kprobes_c_bnez)
 
 #endif /* CONFIG_RISCV_ISA_C */
 
+.section .rodata
+.align 3
 SYM_DATA_START(test_kprobes_addresses)
 	RISCV_PTR test_kprobes_add_addr1
 	RISCV_PTR test_kprobes_add_addr2
@@ -212,6 +239,8 @@ SYM_DATA_START(test_kprobes_addresses)
 	RISCV_PTR 0
 SYM_DATA_END(test_kprobes_addresses)
 
+.section .rodata
+.align 3
 SYM_DATA_START(test_kprobes_functions)
 	RISCV_PTR test_kprobes_add
 	RISCV_PTR test_kprobes_jal
