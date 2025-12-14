@@ -1412,6 +1412,29 @@ out:
 	up_read(&devices_rwsem);
 }
 
+static int ib_check_netdev_state(struct ib_device *device, const char *id)
+{
+	struct ib_port_data *pdata;
+	u32 port;
+	struct net_device *ndev = NULL;
+	int ret = 0;
+
+	rcu_read_lock();
+	pdata = device->port_data;
+	if (pdata) {
+		rdma_for_each_port(device, port) {
+			ndev = rcu_dereference(pdata[port].netdev);
+			if (ndev && ndev->reg_state != NETREG_REGISTERED) {
+				pr_info("%s: netdev %s is no longer registered.\n", id, ndev->name);
+				ret = -ENODEV;
+				break;
+			}
+		}
+	}
+	rcu_read_unlock();
+	return ret;
+}
+
 /**
  * ib_register_device - Register an IB device with IB core
  * @device: Device to register
@@ -1484,7 +1507,9 @@ int ib_register_device(struct ib_device *device, const char *name,
 		goto dev_cleanup;
 	}
 
+	ib_check_netdev_state(device, "before enable_device_and_get()");
 	ret = enable_device_and_get(device);
+	ib_check_netdev_state(device, "after enable_device_and_get()");
 	if (ret) {
 		void (*dealloc_fn)(struct ib_device *);
 
@@ -1664,7 +1689,11 @@ static void ib_unregister_work(struct work_struct *work)
 	struct ib_device *ib_dev =
 		container_of(work, struct ib_device, unregistration_work);
 
+	if (IS_ENABLED(CONFIG_NET_DEV_REFCNT_TRACKER))
+		pr_info("netdevice_event(NETDEV_UNREGISTER) on %p start\n", ib_dev);
 	__ib_unregister_device(ib_dev);
+	if (IS_ENABLED(CONFIG_NET_DEV_REFCNT_TRACKER))
+		pr_info("netdevice_event(NETDEV_UNREGISTER) on %p end\n", ib_dev);
 	put_device(&ib_dev->dev);
 }
 
@@ -1712,6 +1741,7 @@ static int rdma_dev_change_netns(struct ib_device *device, struct net *cur_net,
 		ret = -ENODEV;
 		goto out;
 	}
+	ib_check_netdev_state(device, "inside rdma_dev_change_netns()");
 
 	kobject_uevent(&device->dev.kobj, KOBJ_REMOVE);
 	disable_device(device);
@@ -2254,6 +2284,8 @@ int ib_device_set_netdev(struct ib_device *ib_dev, struct net_device *ndev,
 	spin_unlock_irqrestore(&pdata->netdev_lock, flags);
 
 	add_ndev_hash(pdata);
+	if (IS_ENABLED(CONFIG_NET_DEV_REFCNT_TRACKER))
+		pr_info("add_ndev_hash(%s) on %p done\n", ndev->name, ib_dev);
 
 	/* Make sure that the device is registered before we send events */
 	if (xa_load(&devices, ib_dev->index) != ib_dev)
