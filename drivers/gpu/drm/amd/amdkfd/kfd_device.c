@@ -94,6 +94,8 @@ static void kfd_device_info_set_sdma_info(struct kfd_dev *kfd)
 	case IP_VERSION(5, 2, 2):/* NAVY_FLOUNDER */
 	case IP_VERSION(5, 2, 4):/* DIMGREY_CAVEFISH */
 	case IP_VERSION(5, 2, 5):/* BEIGE_GOBY */
+		kfd->device_info.num_sdma_queues_per_engine = 8;
+		break;
 	case IP_VERSION(6, 0, 0):
 	case IP_VERSION(6, 0, 1):
 	case IP_VERSION(6, 0, 2):
@@ -104,37 +106,16 @@ static void kfd_device_info_set_sdma_info(struct kfd_dev *kfd)
 	case IP_VERSION(6, 1, 3):
 	case IP_VERSION(7, 0, 0):
 	case IP_VERSION(7, 0, 1):
+	case IP_VERSION(7, 1, 0):
 		kfd->device_info.num_sdma_queues_per_engine = 8;
+		/* Reserve 1 for paging and 1 for gfx */
+		kfd->device_info.num_reserved_sdma_queues_per_engine = 2;
 		break;
 	default:
 		dev_warn(kfd_device,
 			"Default sdma queue per engine(8) is set due to mismatch of sdma ip block(SDMA_HWIP:0x%x).\n",
 			sdma_version);
 		kfd->device_info.num_sdma_queues_per_engine = 8;
-	}
-
-	bitmap_zero(kfd->device_info.reserved_sdma_queues_bitmap, KFD_MAX_SDMA_QUEUES);
-
-	switch (sdma_version) {
-	case IP_VERSION(6, 0, 0):
-	case IP_VERSION(6, 0, 1):
-	case IP_VERSION(6, 0, 2):
-	case IP_VERSION(6, 0, 3):
-	case IP_VERSION(6, 1, 0):
-	case IP_VERSION(6, 1, 1):
-	case IP_VERSION(6, 1, 2):
-	case IP_VERSION(6, 1, 3):
-	case IP_VERSION(7, 0, 0):
-	case IP_VERSION(7, 0, 1):
-		/* Reserve 1 for paging and 1 for gfx */
-		kfd->device_info.num_reserved_sdma_queues_per_engine = 2;
-		/* BIT(0)=engine-0 queue-0; BIT(1)=engine-1 queue-0; BIT(2)=engine-0 queue-1; ... */
-		bitmap_set(kfd->device_info.reserved_sdma_queues_bitmap, 0,
-			   kfd->adev->sdma.num_instances *
-			   kfd->device_info.num_reserved_sdma_queues_per_engine);
-		break;
-	default:
-		break;
 	}
 }
 
@@ -189,6 +170,10 @@ static void kfd_device_info_set_event_interrupt_class(struct kfd_dev *kfd)
 	case IP_VERSION(12, 0, 1):
 		/* GFX12_TODO: Change to v12 version. */
 		kfd->device_info.event_interrupt_class = &event_interrupt_class_v11;
+		break;
+	case IP_VERSION(12, 1, 0):
+		kfd->device_info.event_interrupt_class =
+						&event_interrupt_class_v12_1;
 		break;
 	default:
 		dev_warn(kfd_device, "v9 event interrupt handler is set due to "
@@ -464,6 +449,10 @@ struct kfd_dev *kgd2kfd_probe(struct amdgpu_device *adev, bool vf)
 			gfx_target_version = 120001;
 			f2g = &gfx_v12_kfd2kgd;
 			break;
+		case IP_VERSION(12, 1, 0):
+			gfx_target_version = 120500;
+			f2g = &gfx_v12_kfd2kgd;
+			break;
 		default:
 			break;
 		}
@@ -682,6 +671,7 @@ static void kfd_setup_interrupt_bitmap(struct kfd_node *node,
 	struct amdgpu_device *adev = node->adev;
 	uint32_t xcc_mask = node->xcc_mask;
 	uint32_t xcc, mapped_xcc;
+	uint32_t bitmap;
 	/*
 	 * Interrupt bitmap is setup for processing interrupts from
 	 * different XCDs and AIDs.
@@ -703,9 +693,22 @@ static void kfd_setup_interrupt_bitmap(struct kfd_node *node,
 	 * - AND VMID reported in the interrupt lies within the
 	 *   VMID range of the node.
 	 */
-	for_each_inst(xcc, xcc_mask) {
-		mapped_xcc = GET_INST(GC, xcc);
-		node->interrupt_bitmap |= (mapped_xcc % 2 ? 5 : 3) << (4 * (mapped_xcc / 2));
+	switch (KFD_GC_VERSION(node)) {
+	case IP_VERSION(12, 1, 0):
+		for_each_inst(xcc, xcc_mask) {
+			mapped_xcc = GET_INST(GC, xcc);
+			bitmap = 0x2 | (0x4 << (mapped_xcc % 4));
+			if (mapped_xcc/4)
+				bitmap = bitmap << 8;
+			node->interrupt_bitmap |= bitmap;
+		}
+		break;
+	default:
+		for_each_inst(xcc, xcc_mask) {
+			mapped_xcc = GET_INST(GC, xcc);
+			node->interrupt_bitmap |= (mapped_xcc % 2 ? 5 : 3) << (4 * (mapped_xcc / 2));
+		}
+		break;
 	}
 	dev_info(kfd_device, "Node: %d, interrupt_bitmap: %x\n", kfd_node_idx,
 							node->interrupt_bitmap);
@@ -768,7 +771,7 @@ bool kgd2kfd_device_init(struct kfd_dev *kfd,
 	 * If the VMID range changes for multi-partition capable GPUs, then
 	 * this code MUST be revisited.
 	 */
-	if (kfd->adev->xcp_mgr) {
+	if (kfd->adev->xcp_mgr && (KFD_GC_VERSION(kfd) != IP_VERSION(12, 1, 0))) {
 		partition_mode = amdgpu_xcp_query_partition_mode(kfd->adev->xcp_mgr,
 								 AMDGPU_XCP_FL_LOCKED);
 		if (partition_mode == AMDGPU_CPX_PARTITION_MODE &&
@@ -1059,7 +1062,7 @@ void kgd2kfd_suspend(struct kfd_dev *kfd, bool suspend_proc)
 
 int kgd2kfd_resume(struct kfd_dev *kfd, bool resume_proc)
 {
-	int ret, i;
+	int ret = 0, i;
 
 	if (!kfd->init_complete)
 		return 0;
@@ -1202,12 +1205,13 @@ int kgd2kfd_resume_mm(struct mm_struct *mm)
  *   prepare for safe eviction of KFD BOs that belong to the specified
  *   process.
  *
- * @mm: mm_struct that identifies the specified KFD process
+ * @mm: mm_struct that identifies a group of KFD processes
+ * @context_id: an id that identifies a specific KFD context in the above kfd process group
  * @fence: eviction fence attached to KFD process BOs
  *
  */
 int kgd2kfd_schedule_evict_and_restore_process(struct mm_struct *mm,
-					       struct dma_fence *fence)
+					       u16 context_id, struct dma_fence *fence)
 {
 	struct kfd_process *p;
 	unsigned long active_time;
@@ -1219,7 +1223,7 @@ int kgd2kfd_schedule_evict_and_restore_process(struct mm_struct *mm,
 	if (dma_fence_is_signaled(fence))
 		return 0;
 
-	p = kfd_lookup_process_by_mm(mm);
+	p = kfd_lookup_process_by_id(mm, context_id);
 	if (!p)
 		return -ENODEV;
 
@@ -1681,6 +1685,10 @@ bool kgd2kfd_vmfault_fast_path(struct amdgpu_device *adev, struct amdgpu_iv_entr
 {
 	struct kfd_process *p;
 	u32 cam_index;
+	u32 src_data_idx;
+
+	src_data_idx = (amdgpu_ip_version(adev, GC_HWIP, 0) == IP_VERSION(12, 1, 0)) ?
+			3 : 2;
 
 	if (entry->ih == &adev->irq.ih_soft || entry->ih == &adev->irq.ih1) {
 		p = kfd_lookup_process_by_pasid(entry->pasid, NULL);
@@ -1689,7 +1697,8 @@ bool kgd2kfd_vmfault_fast_path(struct amdgpu_device *adev, struct amdgpu_iv_entr
 
 		if (p->gpu_page_fault && !p->debug_trap_enabled) {
 			if (retry_fault && adev->irq.retry_cam_enabled) {
-				cam_index = entry->src_data[2] & 0x3ff;
+				cam_index = entry->src_data[src_data_idx] & 0x3ff;
+
 				WDOORBELL32(adev->irq.retry_cam_doorbell_index, cam_index);
 			}
 

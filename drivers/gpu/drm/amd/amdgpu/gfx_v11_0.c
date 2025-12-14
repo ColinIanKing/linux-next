@@ -416,7 +416,8 @@ static void gfx11_kiq_unmap_queues(struct amdgpu_ring *kiq_ring,
 	uint32_t eng_sel = ring->funcs->type == AMDGPU_RING_TYPE_GFX ? 4 : 0;
 
 	if (adev->enable_mes && !adev->gfx.kiq[0].ring.sched.ready) {
-		amdgpu_mes_unmap_legacy_queue(adev, ring, action, gpu_addr, seq);
+		amdgpu_mes_unmap_legacy_queue(adev, ring, action,
+					      gpu_addr, seq, 0);
 		return;
 	}
 
@@ -917,7 +918,7 @@ static int gfx_v11_0_rlc_init(struct amdgpu_device *adev)
 
 	/* init spm vmid with 0xf */
 	if (adev->gfx.rlc.funcs->update_spm_vmid)
-		adev->gfx.rlc.funcs->update_spm_vmid(adev, NULL, 0xf);
+		adev->gfx.rlc.funcs->update_spm_vmid(adev, 0, NULL, 0xf);
 
 	return 0;
 }
@@ -1052,10 +1053,14 @@ static void gfx_v11_0_select_me_pipe_q(struct amdgpu_device *adev,
 static void gfx_v11_0_get_gfx_shadow_info_nocheck(struct amdgpu_device *adev,
 					 struct amdgpu_gfx_shadow_info *shadow_info)
 {
+	/* for gfx */
 	shadow_info->shadow_size = MQD_SHADOW_BASE_SIZE;
 	shadow_info->shadow_alignment = MQD_SHADOW_BASE_ALIGNMENT;
 	shadow_info->csa_size = MQD_FWWORKAREA_SIZE;
 	shadow_info->csa_alignment = MQD_FWWORKAREA_ALIGNMENT;
+	/* for compute */
+	shadow_info->eop_size = GFX11_MEC_HPD_SIZE;
+	shadow_info->eop_alignment = 256;
 }
 
 static int gfx_v11_0_get_gfx_shadow_info(struct amdgpu_device *adev,
@@ -1080,6 +1085,7 @@ static const struct amdgpu_gfx_funcs gfx_v11_0_gfx_funcs = {
 	.select_me_pipe_q = &gfx_v11_0_select_me_pipe_q,
 	.update_perfmon_mgcg = &gfx_v11_0_update_perf_clk,
 	.get_gfx_shadow_info = &gfx_v11_0_get_gfx_shadow_info,
+	.get_hdp_flush_mask = &amdgpu_gfx_get_hdp_flush_mask,
 };
 
 static int gfx_v11_0_gpu_early_init(struct amdgpu_device *adev)
@@ -4593,7 +4599,7 @@ static int gfx_v11_0_cp_resume(struct amdgpu_device *adev)
 	}
 
 	if (adev->enable_mes_kiq && adev->mes.kiq_hw_init)
-		r = amdgpu_mes_kiq_hw_init(adev);
+		r = amdgpu_mes_kiq_hw_init(adev, 0);
 	else
 		r = gfx_v11_0_kiq_resume(adev);
 	if (r)
@@ -4901,7 +4907,7 @@ static int gfx_v11_0_hw_fini(struct amdgpu_ip_block *ip_block)
 		if (amdgpu_gfx_disable_kcq(adev, 0))
 			DRM_ERROR("KCQ disable failed\n");
 
-		amdgpu_mes_kiq_hw_fini(adev);
+		amdgpu_mes_kiq_hw_fini(adev, 0);
 	}
 
 	if (amdgpu_sriov_vf(adev))
@@ -5568,7 +5574,8 @@ static int gfx_v11_0_update_gfx_clock_gating(struct amdgpu_device *adev,
 	return 0;
 }
 
-static void gfx_v11_0_update_spm_vmid(struct amdgpu_device *adev, struct amdgpu_ring *ring, unsigned vmid)
+static void gfx_v11_0_update_spm_vmid(struct amdgpu_device *adev, int xcc_id,
+		struct amdgpu_ring *ring, unsigned vmid)
 {
 	u32 reg, pre_data, data;
 
@@ -5831,25 +5838,13 @@ static void gfx_v11_0_ring_emit_hdp_flush(struct amdgpu_ring *ring)
 {
 	struct amdgpu_device *adev = ring->adev;
 	u32 ref_and_mask, reg_mem_engine;
-	const struct nbio_hdp_flush_reg *nbio_hf_reg = adev->nbio.hdp_flush_reg;
 
-	if (ring->funcs->type == AMDGPU_RING_TYPE_COMPUTE) {
-		switch (ring->me) {
-		case 1:
-			ref_and_mask = nbio_hf_reg->ref_and_mask_cp2 << ring->pipe;
-			break;
-		case 2:
-			ref_and_mask = nbio_hf_reg->ref_and_mask_cp6 << ring->pipe;
-			break;
-		default:
-			return;
-		}
-		reg_mem_engine = 0;
-	} else {
-		ref_and_mask = nbio_hf_reg->ref_and_mask_cp0 << ring->pipe;
-		reg_mem_engine = 1; /* pfp */
+	if (!adev->gfx.funcs->get_hdp_flush_mask) {
+		dev_err(adev->dev, "%s: gfx hdp flush is not supported.\n", __func__);
+		return;
 	}
 
+	adev->gfx.funcs->get_hdp_flush_mask(ring, &ref_and_mask, &reg_mem_engine);
 	gfx_v11_0_wait_reg_mem(ring, reg_mem_engine, 0, 1,
 			       adev->nbio.funcs->get_hdp_flush_req_offset(adev),
 			       adev->nbio.funcs->get_hdp_flush_done_offset(adev),
@@ -6827,7 +6822,7 @@ static int gfx_v11_0_reset_kgq(struct amdgpu_ring *ring,
 
 	amdgpu_ring_reset_helper_begin(ring, timedout_fence);
 
-	r = amdgpu_mes_reset_legacy_queue(ring->adev, ring, vmid, false);
+	r = amdgpu_mes_reset_legacy_queue(ring->adev, ring, vmid, false, 0);
 	if (r) {
 
 		dev_warn(adev->dev, "reset via MES failed and try pipe reset %d\n", r);
@@ -6842,7 +6837,7 @@ static int gfx_v11_0_reset_kgq(struct amdgpu_ring *ring,
 		return r;
 	}
 
-	r = amdgpu_mes_map_legacy_queue(adev, ring);
+	r = amdgpu_mes_map_legacy_queue(adev, ring, 0);
 	if (r) {
 		dev_err(adev->dev, "failed to remap kgq\n");
 		return r;
@@ -6990,7 +6985,7 @@ static int gfx_v11_0_reset_kcq(struct amdgpu_ring *ring,
 
 	amdgpu_ring_reset_helper_begin(ring, timedout_fence);
 
-	r = amdgpu_mes_reset_legacy_queue(ring->adev, ring, vmid, true);
+	r = amdgpu_mes_reset_legacy_queue(ring->adev, ring, vmid, true, 0);
 	if (r) {
 		dev_warn(adev->dev, "fail(%d) to reset kcq and try pipe reset\n", r);
 		r = gfx_v11_0_reset_compute_pipe(ring);
@@ -7003,7 +6998,7 @@ static int gfx_v11_0_reset_kcq(struct amdgpu_ring *ring,
 		dev_err(adev->dev, "fail to init kcq\n");
 		return r;
 	}
-	r = amdgpu_mes_map_legacy_queue(adev, ring);
+	r = amdgpu_mes_map_legacy_queue(adev, ring, 0);
 	if (r) {
 		dev_err(adev->dev, "failed to remap kcq\n");
 		return r;
