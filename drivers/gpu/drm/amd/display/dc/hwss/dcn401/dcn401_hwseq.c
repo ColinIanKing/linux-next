@@ -1213,6 +1213,9 @@ void dcn401_set_cursor_position(struct pipe_ctx *pipe_ctx)
 	if (recout_y_pos + (int)hubp->curs_attr.height <= 0)
 		pos_cpy.enable = false;  /* not visible beyond top edge*/
 
+	pos_cpy.x = x_pos;
+	pos_cpy.y = y_pos;
+
 	hubp->funcs->set_cursor_position(hubp, &pos_cpy, &param);
 	dpp->funcs->set_cursor_position(dpp, &pos_cpy, &param, hubp->curs_attr.width, hubp->curs_attr.height);
 }
@@ -1508,14 +1511,15 @@ void dcn401_dmub_hw_control_lock_fast(union block_sequence_params *params)
 
 void dcn401_fams2_update_config(struct dc *dc, struct dc_state *context, bool enable)
 {
-	bool fams2_required;
+	bool fams2_info_required;
 
 	if (!dc->ctx || !dc->ctx->dmub_srv || !dc->debug.fams2_config.bits.enable)
 		return;
 
-	fams2_required = context->bw_ctx.bw.dcn.fams2_global_config.features.bits.enable;
+	fams2_info_required = context->bw_ctx.bw.dcn.fams2_global_config.features.bits.enable;
+	fams2_info_required |= context->bw_ctx.bw.dcn.fams2_global_config.features.bits.legacy_method_no_fams2;
 
-	dc_dmub_srv_fams2_update_config(dc, context, enable && fams2_required);
+	dc_dmub_srv_fams2_update_config(dc, context, enable && fams2_info_required);
 }
 
 static void update_dsc_for_odm_change(struct dc *dc, struct dc_state *context,
@@ -1769,7 +1773,8 @@ void dcn401_unblank_stream(struct pipe_ctx *pipe_ctx,
 void dcn401_hardware_release(struct dc *dc)
 {
 	if (!dc->debug.disable_force_pstate_allow_on_hw_release) {
-		dc_dmub_srv_fams2_update_config(dc, dc->current_state, false);
+		if (dc->ctx->dmub_srv && dc->debug.fams2_config.bits.enable)
+			dc_dmub_srv_fams2_update_config(dc, dc->current_state, false);
 
 		/* If pstate unsupported, or still supported
 		* by firmware, force it supported by dcn
@@ -1789,7 +1794,9 @@ void dcn401_hardware_release(struct dc *dc)
 			dc->clk_mgr->clks.p_state_change_support = false;
 			dc->clk_mgr->funcs->update_clocks(dc->clk_mgr, dc->current_state, true);
 		}
-		dc_dmub_srv_fams2_update_config(dc, dc->current_state, false);
+
+		if (dc->ctx->dmub_srv && dc->debug.fams2_config.bits.enable)
+			dc_dmub_srv_fams2_update_config(dc, dc->current_state, false);
 	}
 }
 
