@@ -2559,7 +2559,6 @@ static u64 get_alloc_profile_by_root(struct btrfs_root *root, int data)
 {
 	struct btrfs_fs_info *fs_info = root->fs_info;
 	u64 flags;
-	u64 ret;
 
 	if (data)
 		flags = BTRFS_BLOCK_GROUP_DATA;
@@ -2568,8 +2567,7 @@ static u64 get_alloc_profile_by_root(struct btrfs_root *root, int data)
 	else
 		flags = BTRFS_BLOCK_GROUP_METADATA;
 
-	ret = btrfs_get_alloc_profile(fs_info, flags);
-	return ret;
+	return btrfs_get_alloc_profile(fs_info, flags);
 }
 
 static u64 first_logical_byte(struct btrfs_fs_info *fs_info)
@@ -4191,10 +4189,8 @@ static int find_free_extent_update_loop(struct btrfs_fs_info *fs_info,
 			else
 				trans = btrfs_join_transaction(root);
 
-			if (IS_ERR(trans)) {
-				ret = PTR_ERR(trans);
-				return ret;
-			}
+			if (IS_ERR(trans))
+				return PTR_ERR(trans);
 
 			ret = btrfs_chunk_alloc(trans, space_info, ffe_ctl->flags,
 						CHUNK_ALLOC_FORCE_FOR_EXTENT);
@@ -5263,7 +5259,6 @@ struct walk_control {
  * @root:	the root we are currently deleting
  * @wc:		the walk control for this deletion
  * @eb:		the parent eb that we're currently visiting
- * @refs:	the number of refs for wc->level - 1
  * @flags:	the flags for wc->level - 1
  * @slot:	the slot in the eb that we're currently checking
  *
@@ -5458,12 +5453,12 @@ static noinline int walk_down_proc(struct btrfs_trans_handle *trans,
 	/* wc->stage == UPDATE_BACKREF */
 	if (!(wc->flags[level] & flag)) {
 		ASSERT(path->locks[level]);
-		ret = btrfs_inc_ref(trans, root, eb, 1);
+		ret = btrfs_inc_ref(trans, root, eb, true);
 		if (unlikely(ret)) {
 			btrfs_abort_transaction(trans, ret);
 			return ret;
 		}
-		ret = btrfs_dec_ref(trans, root, eb, 0);
+		ret = btrfs_dec_ref(trans, root, eb, false);
 		if (unlikely(ret)) {
 			btrfs_abort_transaction(trans, ret);
 			return ret;
@@ -5864,18 +5859,12 @@ static noinline int walk_up_proc(struct btrfs_trans_handle *trans,
 
 	if (wc->refs[level] == 1) {
 		if (level == 0) {
-			if (wc->flags[level] & BTRFS_BLOCK_FLAG_FULL_BACKREF) {
-				ret = btrfs_dec_ref(trans, root, eb, 1);
-				if (ret) {
-					btrfs_abort_transaction(trans, ret);
-					return ret;
-				}
-			} else {
-				ret = btrfs_dec_ref(trans, root, eb, 0);
-				if (unlikely(ret)) {
-					btrfs_abort_transaction(trans, ret);
-					return ret;
-				}
+			const bool full_backref = (wc->flags[level] & BTRFS_BLOCK_FLAG_FULL_BACKREF);
+
+			ret = btrfs_dec_ref(trans, root, eb, full_backref);
+			if (unlikely(ret)) {
+				btrfs_abort_transaction(trans, ret);
+				return ret;
 			}
 			if (btrfs_is_fstree(btrfs_root_id(root))) {
 				ret = btrfs_qgroup_trace_leaf_items(trans, eb);
