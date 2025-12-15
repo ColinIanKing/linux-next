@@ -58,7 +58,7 @@ static long mshv_region_process_chunk(struct mshv_mem_region *region,
 
 	page_order = folio_order(page_folio(page));
 	/* The hypervisor only supports 4K and 2M page sizes */
-	if (page_order && page_order != HPAGE_PMD_ORDER)
+	if (page_order && page_order != PMD_ORDER)
 		return -EINVAL;
 
 	stride = 1 << page_order;
@@ -494,19 +494,19 @@ static bool mshv_region_interval_invalidate(struct mmu_interval_notifier *mni,
 	unsigned long mstart, mend;
 	int ret = -EPERM;
 
-	if (mmu_notifier_range_blockable(range))
-		mutex_lock(&region->mutex);
-	else if (!mutex_trylock(&region->mutex))
-		goto out_fail;
-
-	mmu_interval_set_seq(mni, cur_seq);
-
 	mstart = max(range->start, region->start_uaddr);
 	mend = min(range->end, region->start_uaddr +
 		   (region->nr_pages << HV_HYP_PAGE_SHIFT));
 
 	page_offset = HVPFN_DOWN(mstart - region->start_uaddr);
 	page_count = HVPFN_DOWN(mend - mstart);
+
+	if (mmu_notifier_range_blockable(range))
+		mutex_lock(&region->mutex);
+	else if (!mutex_trylock(&region->mutex))
+		goto out_fail;
+
+	mmu_interval_set_seq(mni, cur_seq);
 
 	ret = mshv_region_remap_pages(region, HV_MAP_GPA_NO_ACCESS,
 				      page_offset, page_count);
