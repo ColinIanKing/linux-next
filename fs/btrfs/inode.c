@@ -485,10 +485,12 @@ static int insert_inline_extent(struct btrfs_trans_handle *trans,
 	 * The compressed size also needs to be no larger than a sector.
 	 * That's also why we only need one page as the parameter.
 	 */
-	if (compressed_folio)
+	if (compressed_folio) {
 		ASSERT(compressed_size <= sectorsize);
-	else
+		ASSERT(compressed_size <= PAGE_SIZE);
+	} else {
 		ASSERT(compressed_size == 0);
+	}
 
 	if (compressed_size && compressed_folio)
 		cur_size = compressed_size;
@@ -573,6 +575,18 @@ static bool can_cow_file_range_inline(struct btrfs_inode *inode,
 
 	/* Inline extents must start at offset 0. */
 	if (offset != 0)
+		return false;
+
+	/*
+	 * Even for bs > ps cases, cow_file_range_inline() can only accept a
+	 * single folio.
+	 *
+	 * This can be problematic and cause access beyond page boundary if a
+	 * page sized folio is passed into that function.
+	 * And encoded write is doing exactly that.
+	 * So here limits the inlined extent size to PAGE_SIZE.
+	 */
+	if (size > PAGE_SIZE || compressed_size > PAGE_SIZE)
 		return false;
 
 	/* Inline extents are limited to sectorsize. */
@@ -3220,6 +3234,21 @@ int btrfs_finish_one_ordered(struct btrfs_ordered_extent *ordered_extent)
 		btrfs_abort_transaction(trans, ret);
 		goto out;
 	}
+
+	/*
+	 * If we have no data checksum, either the OE is:
+	 * - Fully truncated
+	 *   Those ones won't reach here.
+	 *
+	 * - No data checksum
+	 *
+	 * - Belongs to data reloc inode
+	 *   Which doesn't have csum attached to OE, but cloned
+	 *   from original chunk.
+	 */
+	if (list_empty(&ordered_extent->list))
+		ASSERT(inode->flags & BTRFS_INODE_NODATASUM ||
+		       btrfs_is_data_reloc_root(inode->root));
 
 	ret = add_pending_csums(trans, &ordered_extent->list);
 	if (unlikely(ret)) {
