@@ -98,6 +98,17 @@ static int scmi_reset_attributes_get(const struct scmi_protocol_handle *ph,
 	return ret;
 }
 
+static struct reset_dom_info *
+scmi_reset_domain_lookup(const struct scmi_protocol_handle *ph, u32 domain)
+{
+	struct scmi_reset_info *pi = ph->get_priv(ph);
+
+	if (domain >= pi->num_domains)
+		return ERR_PTR(-EINVAL);
+
+	return pi->dom_info + domain;
+}
+
 static int
 scmi_reset_domain_attributes_get(const struct scmi_protocol_handle *ph,
 				 struct scmi_reset_info *pinfo,
@@ -106,8 +117,12 @@ scmi_reset_domain_attributes_get(const struct scmi_protocol_handle *ph,
 	int ret;
 	u32 attributes;
 	struct scmi_xfer *t;
+	struct reset_dom_info *dom_info;
 	struct scmi_msg_resp_reset_domain_attributes *attr;
-	struct reset_dom_info *dom_info = pinfo->dom_info + domain;
+
+	dom_info = scmi_reset_domain_lookup(ph, domain);
+	if (IS_ERR(dom_info))
+		return PTR_ERR(dom_info);
 
 	ret = ph->xops->xfer_get_init(ph, RESET_DOMAIN_ATTRIBUTES,
 				      sizeof(domain), sizeof(*attr), &t);
@@ -156,20 +171,25 @@ static int scmi_reset_num_domains_get(const struct scmi_protocol_handle *ph)
 static const char *
 scmi_reset_name_get(const struct scmi_protocol_handle *ph, u32 domain)
 {
-	struct scmi_reset_info *pi = ph->get_priv(ph);
+	struct reset_dom_info *dom_info;
 
-	struct reset_dom_info *dom = pi->dom_info + domain;
+	dom_info = scmi_reset_domain_lookup(ph, domain);
+	if (IS_ERR(dom_info))
+		return "unknown";
 
-	return dom->name;
+	return dom_info->name;
 }
 
 static int scmi_reset_latency_get(const struct scmi_protocol_handle *ph,
 				  u32 domain)
 {
-	struct scmi_reset_info *pi = ph->get_priv(ph);
-	struct reset_dom_info *dom = pi->dom_info + domain;
+	struct reset_dom_info *dom_info;
 
-	return dom->latency_us;
+	dom_info = scmi_reset_domain_lookup(ph, domain);
+	if (IS_ERR(dom_info))
+		return PTR_ERR(dom_info);
+
+	return dom_info->latency_us;
 }
 
 static int scmi_domain_reset(const struct scmi_protocol_handle *ph, u32 domain,
@@ -178,14 +198,13 @@ static int scmi_domain_reset(const struct scmi_protocol_handle *ph, u32 domain,
 	int ret;
 	struct scmi_xfer *t;
 	struct scmi_msg_reset_domain_reset *dom;
-	struct scmi_reset_info *pi = ph->get_priv(ph);
-	struct reset_dom_info *rdom;
+	struct reset_dom_info *dom_info;
 
-	if (domain >= pi->num_domains)
-		return -EINVAL;
+	dom_info = scmi_reset_domain_lookup(ph, domain);
+	if (IS_ERR(dom_info))
+		return PTR_ERR(dom_info);
 
-	rdom = pi->dom_info + domain;
-	if (rdom->async_reset && flags & AUTONOMOUS_RESET)
+	if (dom_info->async_reset && flags & AUTONOMOUS_RESET)
 		flags |= ASYNCHRONOUS_RESET;
 
 	ret = ph->xops->xfer_get_init(ph, RESET, sizeof(*dom), 0, &t);
@@ -238,15 +257,16 @@ static const struct scmi_reset_proto_ops reset_proto_ops = {
 static bool scmi_reset_notify_supported(const struct scmi_protocol_handle *ph,
 					u8 evt_id, u32 src_id)
 {
-	struct reset_dom_info *dom;
-	struct scmi_reset_info *pi = ph->get_priv(ph);
+	struct reset_dom_info *dom_info;
 
-	if (evt_id != SCMI_EVENT_RESET_ISSUED || src_id >= pi->num_domains)
+	if (evt_id != SCMI_EVENT_RESET_ISSUED)
 		return false;
 
-	dom = pi->dom_info + src_id;
+	dom_info = scmi_reset_domain_lookup(ph, src_id);
+	if (IS_ERR(dom_info))
+		return false;
 
-	return dom->reset_notify;
+	return dom_info->reset_notify;
 }
 
 static int scmi_reset_notify(const struct scmi_protocol_handle *ph,
