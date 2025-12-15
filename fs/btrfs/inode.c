@@ -3,7 +3,6 @@
  * Copyright (C) 2007 Oracle.  All rights reserved.
  */
 
-#include <crypto/hash.h>
 #include <linux/kernel.h>
 #include <linux/bio.h>
 #include <linux/blk-cgroup.h>
@@ -218,7 +217,7 @@ static void print_data_reloc_error(const struct btrfs_inode *inode, u64 file_off
 				   int mirror_num)
 {
 	struct btrfs_fs_info *fs_info = inode->root->fs_info;
-	struct btrfs_path path = { 0 };
+	BTRFS_PATH_AUTO_RELEASE(path);
 	struct btrfs_key found_key = { 0 };
 	struct extent_buffer *eb;
 	struct btrfs_extent_item *ei;
@@ -286,11 +285,14 @@ static void print_data_reloc_error(const struct btrfs_inode *inode, u64 file_off
 				(ref_level ? "node" : "leaf"),
 				ref_level, ref_root);
 		}
-		btrfs_release_path(&path);
 	} else {
 		struct btrfs_backref_walk_ctx ctx = { 0 };
 		struct data_reloc_warn reloc_warn = { 0 };
 
+		/*
+		 * Do not hold the path as later iterate_extent_inodes() call
+		 * can be time consuming.
+		 */
 		btrfs_release_path(&path);
 
 		ctx.bytenr = found_key.objectid;
@@ -484,10 +486,12 @@ static int insert_inline_extent(struct btrfs_trans_handle *trans,
 	 * The compressed size also needs to be no larger than a sector.
 	 * That's also why we only need one page as the parameter.
 	 */
-	if (compressed_folio)
+	if (compressed_folio) {
 		ASSERT(compressed_size <= sectorsize);
-	else
+		ASSERT(compressed_size <= PAGE_SIZE);
+	} else {
 		ASSERT(compressed_size == 0);
+	}
 
 	if (compressed_size && compressed_folio)
 		cur_size = compressed_size;
@@ -572,6 +576,18 @@ static bool can_cow_file_range_inline(struct btrfs_inode *inode,
 
 	/* Inline extents must start at offset 0. */
 	if (offset != 0)
+		return false;
+
+	/*
+	 * Even for bs > ps cases, cow_file_range_inline() can only accept a
+	 * single folio.
+	 *
+	 * This can be problematic and cause access beyond page boundary if a
+	 * page sized folio is passed into that function.
+	 * And encoded write is doing exactly that.
+	 * So here limits the inlined extent size to PAGE_SIZE.
+	 */
+	if (size > PAGE_SIZE || compressed_size > PAGE_SIZE)
 		return false;
 
 	/* Inline extents are limited to sectorsize. */
@@ -2349,7 +2365,6 @@ int btrfs_run_delalloc_range(struct btrfs_inode *inode, struct folio *locked_fol
 			     u64 start, u64 end, struct writeback_control *wbc)
 {
 	const bool zoned = btrfs_is_zoned(inode->root->fs_info);
-	int ret;
 
 	/*
 	 * The range must cover part of the @locked_folio, or a return of 1
@@ -2358,10 +2373,8 @@ int btrfs_run_delalloc_range(struct btrfs_inode *inode, struct folio *locked_fol
 	ASSERT(!(end <= folio_pos(locked_folio) ||
 		 start >= folio_next_pos(locked_folio)));
 
-	if (should_nocow(inode, start, end)) {
-		ret = run_delalloc_nocow(inode, locked_folio, start, end);
-		return ret;
-	}
+	if (should_nocow(inode, start, end))
+		return run_delalloc_nocow(inode, locked_folio, start, end);
 
 	if (btrfs_inode_can_compress(inode) &&
 	    inode_need_compress(inode, start, end) &&
@@ -2369,11 +2382,9 @@ int btrfs_run_delalloc_range(struct btrfs_inode *inode, struct folio *locked_fol
 		return 1;
 
 	if (zoned)
-		ret = run_delalloc_cow(inode, locked_folio, start, end, wbc,
-				       true);
+		return run_delalloc_cow(inode, locked_folio, start, end, wbc, true);
 	else
-		ret = cow_file_range(inode, locked_folio, start, end, NULL, 0);
-	return ret;
+		return cow_file_range(inode, locked_folio, start, end, NULL, 0);
 }
 
 void btrfs_split_delalloc_extent(struct btrfs_inode *inode,
@@ -3225,6 +3236,21 @@ int btrfs_finish_one_ordered(struct btrfs_ordered_extent *ordered_extent)
 		goto out;
 	}
 
+	/*
+	 * If we have no data checksum, either the OE is:
+	 * - Fully truncated
+	 *   Those ones won't reach here.
+	 *
+	 * - No data checksum
+	 *
+	 * - Belongs to data reloc inode
+	 *   Which doesn't have csum attached to OE, but cloned
+	 *   from original chunk.
+	 */
+	if (list_empty(&ordered_extent->list))
+		ASSERT(inode->flags & BTRFS_INODE_NODATASUM ||
+		       btrfs_is_data_reloc_root(inode->root));
+
 	ret = add_pending_csums(trans, &ordered_extent->list);
 	if (unlikely(ret)) {
 		btrfs_abort_transaction(trans, ret);
@@ -3395,20 +3421,19 @@ void btrfs_calculate_block_csum_pages(struct btrfs_fs_info *fs_info,
 	const u32 blocksize = fs_info->sectorsize;
 	const u32 step = min(blocksize, PAGE_SIZE);
 	const u32 nr_steps = blocksize / step;
-	SHASH_DESC_ON_STACK(shash, fs_info->csum_shash);
+	struct btrfs_csum_ctx csum;
 
-	shash->tfm = fs_info->csum_shash;
-	crypto_shash_init(shash);
+	btrfs_csum_init(&csum, fs_info->csum_type);
 	for (int i = 0; i < nr_steps; i++) {
 		const phys_addr_t paddr = paddrs[i];
 		void *kaddr;
 
 		ASSERT(offset_in_page(paddr) + step <= PAGE_SIZE);
 		kaddr = kmap_local_page(phys_to_page(paddr)) + offset_in_page(paddr);
-		crypto_shash_update(shash, kaddr, step);
+		btrfs_csum_update(&csum, kaddr, step);
 		kunmap_local(kaddr);
 	}
-	crypto_shash_final(shash, dest);
+	btrfs_csum_final(&csum, dest);
 }
 
 /*
