@@ -1,0 +1,177 @@
+soc/arm
+	mediatek/arm
+		https://git.kernel.org/pub/scm/linux/kernel/git/mediatek/linux tags/mtk-arm32-for-v6.19
+	patch
+		ARM: versatile: Fix typo in versatile.c
+		ARM: gemini: fix typos in comments
+	omap/arm
+		git://git.kernel.org/pub/scm/linux/kernel/git/khilman/linux-omap tags/omap-for-v6.19/soc-signed
+
+soc/dt
+	mmp/dt
+		https://gitlab.com/pxa1908-mainline/linux tags/pxa1908-dt-for-6.19
+	aspeed/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/bmc/linux tags/aspeed-6.19-devicetree-0
+	renesas/dt
+		git://git.kernel.org/pub/scm/linux/kernel/git/geert/renesas-devel tags/renesas-dts-for-v6.19-tag1
+	thead/dt
+		git://git.kernel.org/pub/scm/linux/kernel/git/fustini/linux tags/thead-dt-for-v6.19
+	exynos/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/krzk/linux tags/samsung-dt64-6.19
+	mediatek/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/mediatek/linux tags/mtk-dts32-for-v6.19
+	mediatek/dt64
+		https://git.kernel.org/pub/scm/linux/kernel/git/mediatek/linux tags/mtk-dts64-for-v6.19
+	spacemit/dt
+		https://github.com/spacemit-com/linux tags/spacemit-dt-for-6.19-1
+	renesas/dt2
+		git://git.kernel.org/pub/scm/linux/kernel/git/geert/renesas-devel tags/renesas-dts-for-v6.19-tag2
+	tegra/dt
+		git://git.kernel.org/pub/scm/linux/kernel/git/tegra/linux tags/tegra-for-6.19-dt-bindings
+	tegra/dt-2
+		git://git.kernel.org/pub/scm/linux/kernel/git/tegra/linux tags/tegra-for-6.19-arm-dt
+	tegra/dt64
+		git://git.kernel.org/pub/scm/linux/kernel/git/tegra/linux tags/tegra-for-6.19-arm64-dt
+	sunxi/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/sunxi/linux tags/sunxi-dt-for-6.19
+	imx/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/shawnguo/linux tags/imx-dt-6.19
+	imx/dt64
+		https://git.kernel.org/pub/scm/linux/kernel/git/shawnguo/linux tags/imx-dt64-6.19
+	socfpga/dt
+		git://git.kernel.org/pub/scm/linux/kernel/git/dinguyen/linux tags/socfpga_dts_updates_for_v6.19
+	k3/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/ti/linux tags/ti-k3-dt-for-v6.19
+	at91/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/at91/linux tags/at91-dt-6.19
+	omap/dt
+		git://git.kernel.org/pub/scm/linux/kernel/git/khilman/linux-omap tags/omap-for-v6.19/dt-signed
+	qcom/dt32
+		https://git.kernel.org/pub/scm/linux/kernel/git/qcom/linux tags/qcom-arm32-for-6.19
+	qcom/dt64
+		https://git.kernel.org/pub/scm/linux/kernel/git/qcom/linux tags/qcom-arm64-for-6.19
+	rockchip/dt32
+		git://git.kernel.org/pub/scm/linux/kernel/git/mmind/linux-rockchip tags/v6.19-rockchip-dts32-1
+	rockchip/dt64
+		git://git.kernel.org/pub/scm/linux/kernel/git/mmind/linux-rockchip tags/v6.19-rockchip-dts64-1
+	stm32/dt
+		git://git.kernel.org/pub/scm/linux/kernel/git/atorgue/stm32 tags/stm32-dt-for-v6.19-1
+	cix/dt
+		git://git.kernel.org/pub/scm/linux/kernel/git/peter.chen/cix tags/cix-dt-v6.19-rc1
+	sophgo/dt
+		https://github.com/sophgo/linux tags/riscv-sophgo-dt-for-v6.19
+	mvebu/dt
+		git://git.kernel.org/pub/scm/linux/kernel/git/gclement/mvebu tags/mvebu-dt64-6.19-1
+	k3/dt-2
+		https://git.kernel.org/pub/scm/linux/kernel/git/ti/linux tags/ti-k3-dt-for-v6.19-part2
+	imx/dt-bindings
+		https://git.kernel.org/pub/scm/linux/kernel/git/shawnguo/linux tags/imx-bindings-6.19
+	patch
+		arm64: dts: sprd: sc9860: Simplify clock nodes
+	rockchip/dt-2
+		git://git.kernel.org/pub/scm/linux/kernel/git/mmind/linux-rockchip tags/v6.19-rockchip-dts64-2
+	amlogic/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/amlogic/linux tags/amlogic-arm64-dt-for-v6.19
+	patch
+		arm64: dts: mediatek: mt8195: Fix address range for JPEG decoder core 1
+	riscv/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/conor/linux tags/riscv-dt-for-v6.19
+
+soc/drivers
+	zynq/soc-driver
+		https://github.com/Xilinx/linux-xlnx tags/zynqmp-soc-for-6.18
+	renesas/drivers
+		git://git.kernel.org/pub/scm/linux/kernel/git/geert/renesas-devel tags/renesas-drivers-for-v6.19-tag1
+	drivers/memory
+		https://git.kernel.org/pub/scm/linux/kernel/git/krzk/linux-mem-ctrl tags/memory-controller-drv-6.19-2
+	exynos/drivers
+		https://git.kernel.org/pub/scm/linux/kernel/git/krzk/linux tags/samsung-drivers-6.19
+	renesas/drivers-2
+		git://git.kernel.org/pub/scm/linux/kernel/git/geert/renesas-devel tags/renesas-drivers-for-v6.19-tag2
+	tegra/drivers
+		git://git.kernel.org/pub/scm/linux/kernel/git/tegra/linux tags/tegra-for-6.19-core
+	tegra/syscore-changes
+		git://git.kernel.org/pub/scm/linux/kernel/git/tegra/linux tags/tegra-for-6.19-syscore
+	tegra/soc-driver
+		git://git.kernel.org/pub/scm/linux/kernel/git/tegra/linux tags/tegra-for-6.19-soc
+	sunxi/drivers
+		https://git.kernel.org/pub/scm/linux/kernel/git/sunxi/linux tags/sunxi-drivers-for-6.19
+	imx/scu-driver
+		https://git.kernel.org/pub/scm/linux/kernel/git/shawnguo/linux tags/imx-drivers-6.19
+	ti/drivers
+		https://git.kernel.org/pub/scm/linux/kernel/git/ti/linux tags/ti-driver-soc-for-v6.19
+	omap/drivers
+		git://git.kernel.org/pub/scm/linux/kernel/git/khilman/linux-omap tags/omap-for-v6.19/drivers-signed
+	qcom/drivers
+		https://git.kernel.org/pub/scm/linux/kernel/git/qcom/linux tags/qcom-drivers-for-6.19
+	rockchip/drivers
+		git://git.kernel.org/pub/scm/linux/kernel/git/mmind/linux-rockchip tags/v6.19-rockchip-drivers1
+	stm32/firewall
+		git://git.kernel.org/pub/scm/linux/kernel/git/atorgue/stm32 tags/stm32-bus-firewall-for-v6.19-1
+	drivers/reset
+		https://git.pengutronix.de/git/pza/linux tags/reset-for-v6.19
+	mediatek/drivers
+		https://git.kernel.org/pub/scm/linux/kernel/git/mediatek/linux tags/mtk-soc-for-v6.19
+
+soc/defconfig
+	patch
+		arm64: defconfig: Remove the redundant SCHED_MC/SCHED_SMT
+	renesas/defconfig
+		git://git.kernel.org/pub/scm/linux/kernel/git/geert/renesas-devel tags/renesas-arm-defconfig-for-v6.19-tag1
+	patch
+		arm64: defconfig: enable Exynos ACPM clocks
+	mediatek/defconfig
+		https://git.kernel.org/pub/scm/linux/kernel/git/mediatek/linux tags/mtk-defconfig-for-v6.19
+	tegra/defconfig32
+		git://git.kernel.org/pub/scm/linux/kernel/git/tegra/linux tags/tegra-for-6.19-arm-defconfig
+	tegra/defconfig64
+		git://git.kernel.org/pub/scm/linux/kernel/git/tegra/linux tags/tegra-for-6.19-arm64-defconfig
+	imx/defconfig
+		https://git.kernel.org/pub/scm/linux/kernel/git/shawnguo/linux tags/imx-defconfig-6.19
+	at91/defconfig
+		https://git.kernel.org/pub/scm/linux/kernel/git/at91/linux tags/at91-defconfig-6.19
+	omap/defconfig
+		git://git.kernel.org/pub/scm/linux/kernel/git/khilman/linux-omap tags/omap-for-v6.19/defconfig-signed
+	qcom/defconfig
+		https://git.kernel.org/pub/scm/linux/kernel/git/qcom/linux tags/qcom-arm64-defconfig-for-6.19
+	rockchip/defconfig
+		git://git.kernel.org/pub/scm/linux/kernel/git/mmind/linux-rockchip tags/v6.19-rockchip-defconfig64-1
+	riscv/defconfig
+		https://git.kernel.org/pub/scm/linux/kernel/git/conor/linux tags/riscv-config-for-v6.19
+
+soc/late
+
+arm/fixes
+	imx/fixes-2
+		https://git.kernel.org/pub/scm/linux/kernel/git/shawnguo/linux tags/imx-fixes-6.18-2
+	tee/qcomtee-fixes
+		git://git.kernel.org/pub/scm/linux/kernel/git/jenswi/linux-tee tags/qcomtee-fixes2-for-6.18
+	<no branch> (517d066dc080fc297f1ab5e8c6fda7c59d48ef8d)
+		git://git.kernel.org/pub/scm/linux/kernel/git/khilman/linux-omap tags/omap-for-v6.19/maintainers-signed
+	<no branch> (9f393d8e757f79060baf4b2e703bd6b2d0d8d323)
+		https://git.kernel.org/pub/scm/linux/kernel/git/sunxi/linux tags/sunxi-fixes-for-6.18
+
+soc/drivers-late
+	drivers/reset-gpio
+		https://git.pengutronix.de/git/pza/linux tags/reset-gpio-for-v6.19
+	<no branch> (527250cd9092461f1beac3e4180a4481bffa01b5)
+		https://git.pengutronix.de/git/pza/linux tags/reset-gpio-for-v6.19-2
+	amlogic/drivers
+		https://git.kernel.org/pub/scm/linux/kernel/git/amlogic/linux tags/amlogic-drivers-for-v6.19
+	drivers/fsl
+		git://git.kernel.org/pub/scm/linux/kernel/git/chleroy/linux tags/soc_fsl-6.19-1
+	apple/soc-drivers
+		https://git.kernel.org/pub/scm/linux/kernel/git/sven/linux tags/apple-soc-drivers-6.19
+	microchip/soc-drivers
+		https://git.kernel.org/pub/scm/linux/kernel/git/conor/linux tags/soc-drivers-for-v6.19
+	drivers/cache
+		https://git.kernel.org/pub/scm/linux/kernel/git/conor/linux tags/cache-for-v6.19
+
+soc/newsoc
+	tenstorrent/newsoc
+		https://github.com/tenstorrent/linux tags/tenstorrent-dt-for-v6.19
+	bst/newsoc
+		Merge branch 'bst/newsoc' into soc/newsoc
+	anlogic/newsoc
+		https://git.kernel.org/pub/scm/linux/kernel/git/conor/linux tags/anlogic-initial-6.19-v2
+
