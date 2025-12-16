@@ -148,6 +148,7 @@ int ib_cache_gid_del_all_netdev_gids(struct ib_device *ib_dev, u32 port,
 
 int roce_gid_mgmt_init(void);
 void roce_gid_mgmt_cleanup(void);
+void roce_flush_gid_cache_wq(void);
 
 unsigned long roce_gid_type_mask_support(struct ib_device *ib_dev, u32 port);
 

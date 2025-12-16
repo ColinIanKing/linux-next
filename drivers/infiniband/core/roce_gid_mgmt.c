@@ -673,10 +673,7 @@ static int netdevice_queue_work(struct netdev_event_work_cmd *cmds,
 {
 	unsigned int i;
 	struct netdev_event_work *ndev_work =
-		kmalloc(sizeof(*ndev_work), GFP_KERNEL);
-
-	if (!ndev_work)
-		return NOTIFY_DONE;
+		kmalloc(sizeof(*ndev_work), GFP_KERNEL | __GFP_NOFAIL);
 
 	memcpy(ndev_work->cmds, cmds, sizeof(ndev_work->cmds));
 	for (i = 0; i < ARRAY_SIZE(ndev_work->cmds) && ndev_work->cmds[i].cb; i++) {
@@ -962,4 +959,9 @@ void __exit roce_gid_mgmt_cleanup(void)
 	 * so no issue with remaining hardware contexts.
 	 */
 	destroy_workqueue(gid_cache_wq);
+}
+
+void roce_flush_gid_cache_wq(void)
+{
+	flush_workqueue(gid_cache_wq);
 }

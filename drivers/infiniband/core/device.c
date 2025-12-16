@@ -1300,6 +1300,7 @@ static void disable_device(struct ib_device *device)
 
 	WARN_ON(!refcount_read(&device->refcount));
 
+	roce_flush_gid_cache_wq();
 	down_write(&devices_rwsem);
 	xa_clear_mark(&devices, device->index, DEVICE_REGISTERED);
 	up_write(&devices_rwsem);
