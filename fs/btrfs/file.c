@@ -88,7 +88,7 @@ int btrfs_dirty_folio(struct btrfs_inode *inode, struct folio *folio, loff_t pos
 	start_pos = round_down(pos, fs_info->sectorsize);
 	num_bytes = round_up(end_pos - start_pos, fs_info->sectorsize);
 	ASSERT(num_bytes <= U32_MAX);
-	ASSERT(folio_pos(folio) <= pos && folio_end(folio) >= end_pos);
+	ASSERT(folio_pos(folio) <= pos && folio_next_pos(folio) >= end_pos);
 
 	end_of_last_block = start_pos + num_bytes - 1;
 
@@ -798,7 +798,7 @@ static int prepare_uptodate_folio(struct inode *inode, struct folio *folio, u64 
 				  u64 len)
 {
 	u64 clamp_start = max_t(u64, pos, folio_pos(folio));
-	u64 clamp_end = min_t(u64, pos + len, folio_end(folio));
+	u64 clamp_end = min_t(u64, pos + len, folio_next_pos(folio));
 	const u32 blocksize = inode_to_fs_info(inode)->sectorsize;
 	int ret = 0;
 
@@ -859,7 +859,7 @@ static noinline int prepare_one_folio(struct inode *inode, struct folio **folio_
 	fgf_t fgp_flags = (nowait ? FGP_WRITEBEGIN | FGP_NOWAIT : FGP_WRITEBEGIN) |
 			  fgf_set_order(write_bytes);
 	struct folio *folio;
-	int ret = 0;
+	int ret;
 
 again:
 	folio = __filemap_get_folio(inode->i_mapping, index, fgp_flags, mask);
@@ -876,10 +876,8 @@ again:
 	if (ret) {
 		/* The folio is already unlocked. */
 		folio_put(folio);
-		if (!nowait && ret == -EAGAIN) {
-			ret = 0;
+		if (!nowait && ret == -EAGAIN)
 			goto again;
-		}
 		return ret;
 	}
 	*folio_ret = folio;
@@ -1253,8 +1251,8 @@ again:
 	 * The reserved range goes beyond the current folio, shrink the reserved
 	 * space to the folio boundary.
 	 */
-	if (reserved_start + reserved_len > folio_end(folio)) {
-		const u64 last_block = folio_end(folio);
+	if (reserved_start + reserved_len > folio_next_pos(folio)) {
+		const u64 last_block = folio_next_pos(folio);
 
 		shrink_reserved_space(inode, *data_reserved, reserved_start,
 				      reserved_len, last_block - reserved_start,
@@ -1274,8 +1272,7 @@ again:
 		btrfs_delalloc_release_extents(inode, reserved_len);
 		release_space(inode, *data_reserved, reserved_start, reserved_len,
 			      only_release_metadata);
-		ret = extents_locked;
-		return ret;
+		return extents_locked;
 	}
 
 	copied = copy_folio_from_iter_atomic(folio, offset_in_folio(folio, start),
