@@ -439,8 +439,22 @@ int __init ima_free_kexec_buffer(void)
 
 int __init ima_get_kexec_buffer(void **addr, size_t *size)
 {
+	unsigned long start_pfn, end_pfn;
+
 	if (!ima_kexec_buffer_size)
 		return -ENOENT;
+
+	/*
+	 * Calculate the PFNs for the buffer and ensure
+	 * they are within addressable memory.
+	 */
+	start_pfn = PFN_DOWN(ima_kexec_buffer_phys);
+	end_pfn = PFN_DOWN(ima_kexec_buffer_phys + ima_kexec_buffer_size - 1);
+	if (!pfn_range_is_mapped(start_pfn, end_pfn)) {
+		pr_warn("IMA buffer at 0x%llx, size = 0x%zx beyond memory\n",
+			ima_kexec_buffer_phys, ima_kexec_buffer_size);
+		return -EINVAL;
+	}
 
 	*addr = __va(ima_kexec_buffer_phys);
 	*size = ima_kexec_buffer_size;
