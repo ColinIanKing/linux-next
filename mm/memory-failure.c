@@ -1883,7 +1883,8 @@ static unsigned long __folio_free_raw_hwp(struct folio *folio, bool move_flag)
 	return count;
 }
 
-static int folio_set_hugetlb_hwpoison(struct folio *folio, struct page *page)
+static int folio_set_hugetlb_hwpoison(struct folio *folio, struct page *page,
+					bool *samepg)
 {
 	struct llist_head *head;
 	struct raw_hwp_page *raw_hwp;
@@ -1899,17 +1900,16 @@ static int folio_set_hugetlb_hwpoison(struct folio *folio, struct page *page)
 		return -EHWPOISON;
 	head = raw_hwp_list_head(folio);
 	llist_for_each_entry(p, head->first, node) {
-		if (p->page == page)
+		if (p->page == page) {
+			*samepg = true;
 			return -EHWPOISON;
+		}
 	}
 
 	raw_hwp = kmalloc(sizeof(struct raw_hwp_page), GFP_ATOMIC);
 	if (raw_hwp) {
 		raw_hwp->page = page;
 		llist_add(&raw_hwp->node, head);
-		/* the first error event will be counted in action_result(). */
-		if (ret)
-			num_poisoned_pages_inc(page_to_pfn(page));
 	} else {
 		/*
 		 * Failed to save raw error info.  We no longer trace all
@@ -1966,7 +1966,7 @@ void folio_clear_hugetlb_hwpoison(struct folio *folio)
  *   -EHWPOISON    - the hugepage is already hwpoisoned
  */
 int __get_huge_page_for_hwpoison(unsigned long pfn, int flags,
-				 bool *migratable_cleared)
+				 bool *migratable_cleared, bool *samepg)
 {
 	struct page *page = pfn_to_page(pfn);
 	struct folio *folio = page_folio(page);
@@ -1991,7 +1991,7 @@ int __get_huge_page_for_hwpoison(unsigned long pfn, int flags,
 			goto out;
 	}
 
-	if (folio_set_hugetlb_hwpoison(folio, page)) {
+	if (folio_set_hugetlb_hwpoison(folio, page, samepg)) {
 		ret = -EHWPOISON;
 		goto out;
 	}
@@ -2024,11 +2024,12 @@ static int try_memory_failure_hugetlb(unsigned long pfn, int flags, int *hugetlb
 	struct page *p = pfn_to_page(pfn);
 	struct folio *folio;
 	unsigned long page_flags;
+	bool samepg = false;
 	bool migratable_cleared = false;
 
 	*hugetlb = 1;
 retry:
-	res = get_huge_page_for_hwpoison(pfn, flags, &migratable_cleared);
+	res = get_huge_page_for_hwpoison(pfn, flags, &migratable_cleared, &samepg);
 	if (res == 2) { /* fallback to normal page handling */
 		*hugetlb = 0;
 		return 0;
@@ -2037,7 +2038,10 @@ retry:
 			folio = page_folio(p);
 			res = kill_accessing_process(current, folio_pfn(folio), flags);
 		}
-		action_result(pfn, MF_MSG_ALREADY_POISONED, MF_FAILED);
+		if (samepg)
+			action_result(pfn, MF_MSG_ALREADY_POISONED, MF_FAILED);
+		else
+			action_result(pfn, MF_MSG_HUGE, MF_FAILED);
 		return res;
 	} else if (res == -EBUSY) {
 		if (!(flags & MF_NO_RETRY)) {

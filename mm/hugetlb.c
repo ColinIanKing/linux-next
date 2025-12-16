@@ -7132,12 +7132,12 @@ int get_hwpoison_hugetlb_folio(struct folio *folio, bool *hugetlb, bool unpoison
 }
 
 int get_huge_page_for_hwpoison(unsigned long pfn, int flags,
-				bool *migratable_cleared)
+				bool *migratable_cleared, bool *samepg)
 {
 	int ret;
 
 	spin_lock_irq(&hugetlb_lock);
-	ret = __get_huge_page_for_hwpoison(pfn, flags, migratable_cleared);
+	ret = __get_huge_page_for_hwpoison(pfn, flags, migratable_cleared, samepg);
 	spin_unlock_irq(&hugetlb_lock);
 	return ret;
 }
