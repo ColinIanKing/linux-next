@@ -511,7 +511,7 @@ int amdgpu_gfx_disable_kcq(struct amdgpu_device *adev, int xcc_id)
 			j = i + xcc_id * adev->gfx.num_compute_rings;
 			amdgpu_mes_unmap_legacy_queue(adev,
 						   &adev->gfx.compute_ring[j],
-						   RESET_QUEUES, 0, 0);
+						   RESET_QUEUES, 0, 0, xcc_id);
 		}
 		return 0;
 	}
@@ -562,7 +562,7 @@ int amdgpu_gfx_disable_kgq(struct amdgpu_device *adev, int xcc_id)
 				j = i + xcc_id * adev->gfx.num_gfx_rings;
 				amdgpu_mes_unmap_legacy_queue(adev,
 						      &adev->gfx.gfx_ring[j],
-						      PREEMPT_QUEUES, 0, 0);
+						      PREEMPT_QUEUES, 0, 0, xcc_id);
 			}
 		}
 		return 0;
@@ -644,7 +644,8 @@ static int amdgpu_gfx_mes_enable_kcq(struct amdgpu_device *adev, int xcc_id)
 	for (i = 0; i < adev->gfx.num_compute_rings; i++) {
 		j = i + xcc_id * adev->gfx.num_compute_rings;
 		r = amdgpu_mes_map_legacy_queue(adev,
-						&adev->gfx.compute_ring[j]);
+						&adev->gfx.compute_ring[j],
+						xcc_id);
 		if (r) {
 			dev_err(adev->dev, "failed to map compute queue\n");
 			return r;
@@ -733,7 +734,8 @@ int amdgpu_gfx_enable_kgq(struct amdgpu_device *adev, int xcc_id)
 		for (i = 0; i < adev->gfx.num_gfx_rings; i++) {
 			j = i + xcc_id * adev->gfx.num_gfx_rings;
 			r = amdgpu_mes_map_legacy_queue(adev,
-							&adev->gfx.gfx_ring[j]);
+							&adev->gfx.gfx_ring[j],
+							xcc_id);
 			if (r) {
 				dev_err(adev->dev, "failed to map gfx queue\n");
 				return r;
@@ -1067,7 +1069,7 @@ uint32_t amdgpu_kiq_rreg(struct amdgpu_device *adev, uint32_t reg, uint32_t xcc_
 		return 0;
 
 	if (adev->mes.ring[0].sched.ready)
-		return amdgpu_mes_rreg(adev, reg);
+		return amdgpu_mes_rreg(adev, reg, xcc_id);
 
 	BUG_ON(!ring->funcs->emit_rreg);
 
@@ -1143,7 +1145,7 @@ void amdgpu_kiq_wreg(struct amdgpu_device *adev, uint32_t reg, uint32_t v, uint3
 		return;
 
 	if (adev->mes.ring[0].sched.ready) {
-		amdgpu_mes_wreg(adev, reg, v);
+		amdgpu_mes_wreg(adev, reg, v, xcc_id);
 		return;
 	}
 
@@ -1193,6 +1195,40 @@ failed_unlock:
 	spin_unlock_irqrestore(&kiq->ring_lock, flags);
 failed_kiq_write:
 	dev_err(adev->dev, "failed to write reg:%x\n", reg);
+}
+
+void amdgpu_gfx_get_hdp_flush_mask(struct amdgpu_ring *ring,
+		uint32_t *hdp_flush_mask, uint32_t *reg_mem_engine)
+{
+
+	if (!ring || !hdp_flush_mask || !reg_mem_engine) {
+		DRM_INFO("%s:invalid params\n", __func__);
+		return;
+	}
+
+	const struct nbio_hdp_flush_reg *nbio_hf_reg = ring->adev->nbio.hdp_flush_reg;
+
+	switch (ring->funcs->type) {
+	case AMDGPU_RING_TYPE_GFX:
+		*hdp_flush_mask = nbio_hf_reg->ref_and_mask_cp0 << ring->pipe;
+		*reg_mem_engine = 1; /* pfp */
+		break;
+	case AMDGPU_RING_TYPE_COMPUTE:
+		*hdp_flush_mask = nbio_hf_reg->ref_and_mask_cp2 << ring->pipe;
+		*reg_mem_engine = 0;
+		break;
+	case AMDGPU_RING_TYPE_MES:
+		*hdp_flush_mask = nbio_hf_reg->ref_and_mask_cp8;
+		*reg_mem_engine = 0;
+		break;
+	case AMDGPU_RING_TYPE_KIQ:
+		*hdp_flush_mask = nbio_hf_reg->ref_and_mask_cp9;
+		*reg_mem_engine = 0;
+		break;
+	default:
+		DRM_ERROR("%s:unsupported ring type %d\n", __func__, ring->funcs->type);
+		return;
+	}
 }
 
 int amdgpu_kiq_hdp_flush(struct amdgpu_device *adev)

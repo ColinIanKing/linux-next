@@ -37,6 +37,7 @@
 #include "vi.h"
 #include "soc15.h"
 #include "nv.h"
+#include "amdgpu_virt_ras_cmd.h"
 
 #define POPULATE_UCODE_INFO(vf2pf_info, ucode, ver) \
 	do { \
@@ -1533,6 +1534,9 @@ bool amdgpu_virt_get_ras_capability(struct amdgpu_device *adev)
 	if (adev->virt.ras_en_caps.bits.poison_propogation_mode)
 		con->poison_supported = true; /* Poison is handled by host */
 
+	if (adev->virt.ras_en_caps.bits.uniras_supported)
+		amdgpu_virt_ras_set_remote_uniras(adev, true);
+
 	return true;
 }
 
@@ -1844,4 +1848,29 @@ int amdgpu_virt_check_vf_critical_region(struct amdgpu_device *adev, u64 addr, b
 	}
 
 	return r;
+}
+
+static int req_remote_ras_cmd(struct amdgpu_device *adev,
+			u32 param1, u32 param2, u32 param3)
+{
+	struct amdgpu_virt *virt = &adev->virt;
+
+	if (virt->ops && virt->ops->req_remote_ras_cmd)
+		return virt->ops->req_remote_ras_cmd(adev, param1, param2, param3);
+	return -ENOENT;
+}
+
+int amdgpu_virt_send_remote_ras_cmd(struct amdgpu_device *adev,
+		uint64_t buf, uint32_t buf_len)
+{
+	uint64_t gpa = buf;
+	int ret = -EIO;
+
+	if (down_read_trylock(&adev->reset_domain->sem)) {
+		ret = req_remote_ras_cmd(adev,
+			lower_32_bits(gpa), upper_32_bits(gpa), buf_len);
+		up_read(&adev->reset_domain->sem);
+	}
+
+	return ret;
 }
