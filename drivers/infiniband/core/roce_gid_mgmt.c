@@ -438,6 +438,18 @@ static void del_netdev_ips(struct ib_device *ib_dev, u32 port,
 	ib_cache_gid_del_all_netdev_gids(ib_dev, port, cookie);
 }
 
+static void del_netdev_ips0(struct ib_device *ib_dev, u32 port,
+			    struct net_device *rdma_ndev, void *cookie)
+{
+	if (IS_ENABLED(CONFIG_NET_DEV_REFCNT_TRACKER))
+		pr_info("netdevice_event(NETDEV_UNREGISTER) for %p on %p start\n",
+			rdma_ndev, ib_dev);
+	ib_cache_gid_del_all_netdev_gids(ib_dev, port, cookie);
+	if (IS_ENABLED(CONFIG_NET_DEV_REFCNT_TRACKER))
+		pr_info("netdevice_event(NETDEV_UNREGISTER) for %p on %p end\n",
+			rdma_ndev, ib_dev);
+}
+
 /**
  * del_default_gids - Delete default GIDs of the event/cookie netdevice
  * @ib_dev:	RDMA device pointer
@@ -661,10 +673,7 @@ static int netdevice_queue_work(struct netdev_event_work_cmd *cmds,
 {
 	unsigned int i;
 	struct netdev_event_work *ndev_work =
-		kmalloc(sizeof(*ndev_work), GFP_KERNEL);
-
-	if (!ndev_work)
-		return NOTIFY_DONE;
+		kmalloc(sizeof(*ndev_work), GFP_KERNEL | __GFP_NOFAIL);
 
 	memcpy(ndev_work->cmds, cmds, sizeof(ndev_work->cmds));
 	for (i = 0; i < ARRAY_SIZE(ndev_work->cmds) && ndev_work->cmds[i].cb; i++) {
@@ -760,7 +769,7 @@ static int netdevice_event(struct notifier_block *this, unsigned long event,
 			   void *ptr)
 {
 	static const struct netdev_event_work_cmd del_cmd = {
-		.cb = del_netdev_ips, .filter = pass_all_filter};
+		.cb = del_netdev_ips0, .filter = pass_all_filter};
 	static const struct netdev_event_work_cmd
 			bonding_default_del_cmd_join = {
 				.cb	= del_netdev_default_ips_join,
@@ -775,6 +784,9 @@ static int netdevice_event(struct notifier_block *this, unsigned long event,
 		.cb = del_netdev_upper_ips, .filter = upper_device_filter};
 	struct net_device *ndev = netdev_notifier_info_to_dev(ptr);
 	struct netdev_event_work_cmd cmds[ROCE_NETDEV_CALLBACK_SZ] = { {NULL} };
+
+	if (event == NETDEV_DEBUG_UNREGISTER)
+		dump_ib_gid_table_entry_trace_buffer(ndev);
 
 	if (ndev->type != ARPHRD_ETHER)
 		return NOTIFY_DONE;
@@ -947,4 +959,9 @@ void __exit roce_gid_mgmt_cleanup(void)
 	 * so no issue with remaining hardware contexts.
 	 */
 	destroy_workqueue(gid_cache_wq);
+}
+
+void roce_flush_gid_cache_wq(void)
+{
+	flush_workqueue(gid_cache_wq);
 }
