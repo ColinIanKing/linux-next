@@ -223,6 +223,32 @@ static inline void debug_show_blocker(struct task_struct *task, unsigned long ti
 }
 #endif
 
+/**
+ * hung_task_diagnostics - Print structured diagnostic info for a hung task.
+ * @t: Pointer to the detected hung task.
+ *
+ * This function consolidates the printing of core diagnostic information
+ * for a task found to be blocked.
+ */
+static inline void hung_task_diagnostics(struct task_struct *t)
+{
+	unsigned long blocked_secs = (jiffies - t->last_switch_time) / HZ;
+	const char *coredump_msg = "      Blocked by coredump.";
+	const char *disable_msg =
+		"\"echo 0 > /proc/sys/kernel/hung_task_timeout_secs\""
+		" disables this message.";
+
+	pr_err("INFO: task %s:%d blocked for more than %ld seconds.\n",
+	       t->comm, t->pid, blocked_secs);
+	pr_err("      %s %s %.*s\n",
+	       print_tainted(), init_utsname()->release,
+	       (int)strcspn(init_utsname()->version, " "),
+	       init_utsname()->version);
+	if (t->flags & PF_POSTCOREDUMP)
+		pr_err("%s\n", coredump_msg);
+	pr_err("%s\n", disable_msg);
+}
+
 static void check_hung_task(struct task_struct *t, unsigned long timeout,
 		unsigned long prev_detect_count)
 {
@@ -252,16 +278,7 @@ static void check_hung_task(struct task_struct *t, unsigned long timeout,
 	if (sysctl_hung_task_warnings || hung_task_call_panic) {
 		if (sysctl_hung_task_warnings > 0)
 			sysctl_hung_task_warnings--;
-		pr_err("INFO: task %s:%d blocked for more than %ld seconds.\n",
-		       t->comm, t->pid, (jiffies - t->last_switch_time) / HZ);
-		pr_err("      %s %s %.*s\n",
-			print_tainted(), init_utsname()->release,
-			(int)strcspn(init_utsname()->version, " "),
-			init_utsname()->version);
-		if (t->flags & PF_POSTCOREDUMP)
-			pr_err("      Blocked by coredump.\n");
-		pr_err("\"echo 0 > /proc/sys/kernel/hung_task_timeout_secs\""
-			" disables this message.\n");
+		hung_task_diagnostics(t);
 		sched_show_task(t);
 		debug_show_blocker(t, timeout);
 
@@ -358,6 +375,31 @@ static long hung_timeout_jiffies(unsigned long last_checked,
 }
 
 #ifdef CONFIG_SYSCTL
+
+/**
+ * proc_dohung_task_detect_count - proc handler for hung_task_detect_count
+ * @table: Pointer to the struct ctl_table definition for this proc entry
+ * @write: Flag indicating the operation
+ * @buffer: User space buffer for data transfer
+ * @lenp: Pointer to the length of the data being transferred
+ * @ppos: Pointer to the current file offset
+ *
+ * This handler is used for reading the current hung task detection count
+ * and for resetting it to zero when a write operation is performed.
+ * Returns 0 on success or a negative error code on failure.
+ */
+static int proc_dohung_task_detect_count(const struct ctl_table *table, int write,
+					 void *buffer, size_t *lenp, loff_t *ppos)
+{
+	if (!write)
+		return proc_doulongvec_minmax(table, write, buffer, lenp, ppos);
+
+	WRITE_ONCE(sysctl_hung_task_detect_count, 0);
+	*ppos += *lenp;
+
+	return 0;
+}
+
 /*
  * Process updating of timeout sysctl
  */
@@ -440,8 +482,8 @@ static const struct ctl_table hung_task_sysctls[] = {
 		.procname	= "hung_task_detect_count",
 		.data		= &sysctl_hung_task_detect_count,
 		.maxlen		= sizeof(unsigned long),
-		.mode		= 0444,
-		.proc_handler	= proc_doulongvec_minmax,
+		.mode		= 0644,
+		.proc_handler	= proc_dohung_task_detect_count,
 	},
 	{
 		.procname	= "hung_task_sys_info",
