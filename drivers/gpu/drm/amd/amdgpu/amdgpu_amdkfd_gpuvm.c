@@ -1397,8 +1397,10 @@ static int init_kfd_vm(struct amdgpu_vm *vm, void **process_info,
 		       struct dma_fence **ef)
 {
 	struct amdkfd_process_info *info = NULL;
+	struct kfd_process *process = NULL;
 	int ret;
 
+	process = container_of(process_info, struct kfd_process, kgd_process_info);
 	if (!*process_info) {
 		info = kzalloc(sizeof(*info), GFP_KERNEL);
 		if (!info)
@@ -1414,7 +1416,7 @@ static int init_kfd_vm(struct amdgpu_vm *vm, void **process_info,
 		info->eviction_fence =
 			amdgpu_amdkfd_fence_create(dma_fence_context_alloc(1),
 						   current->mm,
-						   NULL);
+						   NULL, process->context_id);
 		if (!info->eviction_fence) {
 			pr_err("Failed to create eviction fence\n");
 			ret = -ENOMEM;
@@ -1424,6 +1426,8 @@ static int init_kfd_vm(struct amdgpu_vm *vm, void **process_info,
 		info->pid = get_task_pid(current->group_leader, PIDTYPE_PID);
 		INIT_DELAYED_WORK(&info->restore_userptr_work,
 				  amdgpu_amdkfd_restore_userptr_worker);
+
+		info->context_id = process->context_id;
 
 		*process_info = info;
 	}
@@ -3066,7 +3070,7 @@ int amdgpu_amdkfd_gpuvm_restore_process_bos(void *info, struct dma_fence __rcu *
 			amdgpu_amdkfd_fence_create(
 				process_info->eviction_fence->base.context,
 				process_info->eviction_fence->mm,
-				NULL);
+				NULL, process_info->context_id);
 
 		if (!new_fence) {
 			pr_err("Failed to create eviction fence\n");
