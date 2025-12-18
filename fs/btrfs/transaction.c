@@ -520,13 +520,14 @@ static inline int is_transaction_blocked(struct btrfs_transaction *trans)
  * when this is done, it is safe to start a new transaction, but the current
  * transaction might not be fully on disk.
  */
-static void wait_current_trans(struct btrfs_fs_info *fs_info)
+static void wait_current_trans(struct btrfs_fs_info *fs_info, unsigned int type)
 {
 	struct btrfs_transaction *cur_trans;
 
 	spin_lock(&fs_info->trans_lock);
 	cur_trans = fs_info->running_transaction;
-	if (cur_trans && is_transaction_blocked(cur_trans)) {
+	if (cur_trans && is_transaction_blocked(cur_trans) &&
+	    (btrfs_blocked_trans_types[cur_trans->state] & type)) {
 		refcount_inc(&cur_trans->use_count);
 		spin_unlock(&fs_info->trans_lock);
 
@@ -701,12 +702,12 @@ again:
 		sb_start_intwrite(fs_info->sb);
 
 	if (may_wait_transaction(fs_info, type))
-		wait_current_trans(fs_info);
+		wait_current_trans(fs_info, type);
 
 	do {
 		ret = join_transaction(fs_info, type);
 		if (ret == -EBUSY) {
-			wait_current_trans(fs_info);
+			wait_current_trans(fs_info, type);
 			if (unlikely(type == TRANS_ATTACH ||
 				     type == TRANS_JOIN_NOSTART))
 				ret = -ENOENT;
@@ -1003,7 +1004,7 @@ out:
 
 void btrfs_throttle(struct btrfs_fs_info *fs_info)
 {
-	wait_current_trans(fs_info);
+	wait_current_trans(fs_info, TRANS_START);
 }
 
 bool btrfs_should_end_transaction(struct btrfs_trans_handle *trans)
@@ -1620,9 +1621,9 @@ static int qgroup_account_snapshot(struct btrfs_trans_handle *trans,
 		goto out;
 	switch_commit_roots(trans);
 	ret = btrfs_write_and_wait_transaction(trans);
-	if (ret)
-		btrfs_handle_fs_error(fs_info, ret,
-			"Error while writing out transaction for qgroup");
+	if (unlikely(ret))
+		btrfs_err(fs_info,
+"error while writing out transaction duing qgroup snapshot accounting: %d", ret);
 
 out:
 	/*
@@ -2549,9 +2550,8 @@ int btrfs_commit_transaction(struct btrfs_trans_handle *trans)
 		wake_up_process(fs_info->cleaner_kthread);
 
 	ret = btrfs_write_and_wait_transaction(trans);
-	if (ret) {
-		btrfs_handle_fs_error(fs_info, ret,
-				      "Error while writing out transaction");
+	if (unlikely(ret)) {
+		btrfs_err(fs_info, "error while writing out transaction: %d", ret);
 		mutex_unlock(&fs_info->tree_log_mutex);
 		goto scrub_continue;
 	}
