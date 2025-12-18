@@ -180,7 +180,7 @@ struct pid *alloc_pid(struct pid_namespace *ns, pid_t *arg_set_tid,
 	 * for a process in all nested PID namespaces but arg_set_tid_size must
 	 * never be greater than the current ns->level + 1.
 	 */
-	if (unlikely(arg_set_tid_size > ns->level + 1))
+	if (arg_set_tid_size > ns->level + 1)
 		return ERR_PTR(-EINVAL);
 
 	/*
@@ -189,7 +189,7 @@ struct pid *alloc_pid(struct pid_namespace *ns, pid_t *arg_set_tid,
 	 * 1. allocate and fill in pid struct
 	 */
 	pid = kmem_cache_alloc(ns->pid_cachep, GFP_KERNEL);
-	if (unlikely(!pid))
+	if (!pid)
 		return ERR_PTR(retval);
 
 	get_pid_ns(ns);
@@ -207,7 +207,7 @@ struct pid *alloc_pid(struct pid_namespace *ns, pid_t *arg_set_tid,
 	 * This stores found pid_max to make sure the used value is the same should
 	 * later code need it.
 	 */
-	for (tmp = ns, i = ns->level; i >= 0;) {
+	for (tmp = ns, i = ns->level; i >= 0; i--) {
 		pid_max[ns->level - i] = READ_ONCE(tmp->pid_max);
 
 		if (arg_set_tid_size) {
@@ -229,7 +229,6 @@ struct pid *alloc_pid(struct pid_namespace *ns, pid_t *arg_set_tid,
 		}
 
 		tmp = tmp->parent;
-		i--;
 	}
 
 	/*
@@ -246,9 +245,10 @@ struct pid *alloc_pid(struct pid_namespace *ns, pid_t *arg_set_tid,
 				       tid + 1, GFP_ATOMIC);
 			/*
 			 * If ENOSPC is returned it means that the PID is
-			 * already in use. Return EEXIST in that case.
+			 * alreay in use. Return EEXIST in that case.
 			 */
 			if (nr == -ENOSPC)
+
 				nr = -EEXIST;
 		} else {
 			int pid_min = 1;
@@ -274,11 +274,12 @@ struct pid *alloc_pid(struct pid_namespace *ns, pid_t *arg_set_tid,
 			 * Preload more memory if idr_alloc{,cyclic} failed with -ENOMEM.
 			 *
 			 * The IDR API only allows us to preload memory for one call, while we may end
-			 * up doing several with GFP_ATOMIC. It may be the situation is salvageable with
-			 * GFP_KERNEL. But make sure to not loop indefinitely if preload did not help
-			 * (the routine unfortunately returns void, so we have no idea if it got anywhere).
+			 * up doing several under pidmap_lock with GFP_ATOMIC. The situation may be
+			 * salvageable with GFP_KERNEL. But make sure to not loop indefinitely if preload
+			 * did not help (the routine unfortunately returns void, so we have no idea
+			 * if it got anywhere).
 			 *
-			 * The pidmap lock can be safely dropped and picked up as historically pid allocation
+			 * The lock can be safely dropped and picked up as historically pid allocation
 			 * for different namespaces was *not* atomic -- we try to hold on to it the
 			 * entire time only for performance reasons.
 			 */
