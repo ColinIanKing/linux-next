@@ -121,7 +121,7 @@ int xe_exec_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 	u64 addresses[XE_HW_ENGINE_MAX_INSTANCE];
 	struct drm_gpuvm_exec vm_exec = {.extra.fn = xe_exec_fn};
 	struct drm_exec *exec = &vm_exec.exec;
-	u32 i, num_syncs, num_ufence = 0;
+	u32 i, num_syncs, num_in_sync = 0, num_ufence = 0;
 	struct xe_validation_ctx ctx;
 	struct xe_sched_job *job;
 	struct xe_vm *vm;
@@ -132,7 +132,8 @@ int xe_exec_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 
 	if (XE_IOCTL_DBG(xe, args->extensions) ||
 	    XE_IOCTL_DBG(xe, args->pad[0] || args->pad[1] || args->pad[2]) ||
-	    XE_IOCTL_DBG(xe, args->reserved[0] || args->reserved[1]))
+	    XE_IOCTL_DBG(xe, args->reserved[0] || args->reserved[1]) ||
+	    XE_IOCTL_DBG(xe, args->num_syncs > DRM_XE_MAX_SYNCS))
 		return -EINVAL;
 
 	q = xe_exec_queue_lookup(xef, args->exec_queue_id);
@@ -182,6 +183,9 @@ int xe_exec_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 
 		if (xe_sync_is_ufence(&syncs[num_syncs]))
 			num_ufence++;
+
+		if (!num_in_sync && xe_sync_needs_wait(&syncs[num_syncs]))
+			num_in_sync++;
 	}
 
 	if (XE_IOCTL_DBG(xe, num_ufence > 1)) {
@@ -202,7 +206,9 @@ int xe_exec_ioctl(struct drm_device *dev, void *data, struct drm_file *file)
 	mode = xe_hw_engine_group_find_exec_mode(q);
 
 	if (mode == EXEC_MODE_DMA_FENCE) {
-		err = xe_hw_engine_group_get_mode(group, mode, &previous_mode);
+		err = xe_hw_engine_group_get_mode(group, mode, &previous_mode,
+						  syncs, num_in_sync ?
+						  num_syncs : 0);
 		if (err)
 			goto err_syncs;
 	}
