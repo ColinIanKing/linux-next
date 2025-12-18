@@ -27,6 +27,8 @@ obj-$(CONFIG_PL320_MBOX)	+= pl320-ipc.o
 
 obj-$(CONFIG_OMAP2PLUS_MBOX)	+= omap-mailbox.o
 
+obj-$(CONFIG_RCAR_MFIS_MBOX)	+= rcar-mfis-mailbox.o
+
 obj-$(CONFIG_ROCKCHIP_MBOX)	+= rockchip-mailbox.o
 
 obj-$(CONFIG_PCC)		+= pcc.o
@@ -64,6 +66,8 @@ obj-$(CONFIG_MTK_ADSP_MBOX)	+= mtk-adsp-mailbox.o
 obj-$(CONFIG_MTK_CMDQ_MBOX)	+= mtk-cmdq-mailbox.o
 
 obj-$(CONFIG_MTK_GPUEB_MBOX)	+= mtk-gpueb-mailbox.o
+
+obj-$(CONFIG_MTK_VCP_MBOX)	+= mtk-vcp-mailbox.o
 
 obj-$(CONFIG_ZYNQMP_IPI_MBOX)	+= zynqmp-ipi-mailbox.o
 
