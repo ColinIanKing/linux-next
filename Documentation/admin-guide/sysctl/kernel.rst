@@ -418,7 +418,7 @@ hung_task_detect_count
 ======================
 
 Indicates the total number of tasks that have been detected as hung since
-the system boot.
+the system boot. The counter can be reset to zero when written to.
 
 This file shows up if ``CONFIG_DETECT_HUNG_TASK`` is enabled.
 
