@@ -45,6 +45,7 @@ int dw_mci_pltfm_register(struct platform_device *pdev,
 	host->dev = &pdev->dev;
 	host->irq_flags = 0;
 	host->pdata = pdev->dev.platform_data;
+	host->pdev = pdev;
 
 	host->regs = devm_platform_get_and_ioremap_resource(pdev, 0, &regs);
 	if (IS_ERR(host->regs))
@@ -53,7 +54,6 @@ int dw_mci_pltfm_register(struct platform_device *pdev,
 	/* Get registers' physical base address */
 	host->phy_regs = regs->start;
 
-	platform_set_drvdata(pdev, host);
 	return dw_mci_probe(host);
 }
 EXPORT_SYMBOL_GPL(dw_mci_pltfm_register);
