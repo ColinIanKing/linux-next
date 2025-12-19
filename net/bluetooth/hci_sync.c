@@ -4427,6 +4427,17 @@ static int hci_le_set_event_mask_sync(struct hci_dev *hdev)
 		events[4] |= 0x02;	/* LE BIG Info Advertising Report */
 	}
 
+	if (le_cs_capable(hdev)) {
+		/* Channel Sounding events */
+		events[5] |= 0x08;	/* LE CS Read Remote Supported Cap Complete event */
+		events[5] |= 0x10;	/* LE CS Read Remote FAE Table Complete event */
+		events[5] |= 0x20;	/* LE CS Security Enable Complete event */
+		events[5] |= 0x40;	/* LE CS Config Complete event */
+		events[5] |= 0x80;	/* LE CS Procedure Enable Complete event */
+		events[6] |= 0x01;	/* LE CS Subevent Result event */
+		events[6] |= 0x02;	/* LE CS Subevent Result Continue event */
+		events[6] |= 0x04;	/* LE CS Test End Complete event */
+	}
 	return __hci_cmd_sync_status(hdev, HCI_OP_LE_SET_EVENT_MASK,
 				     sizeof(events), events, HCI_CMD_TIMEOUT);
 }
@@ -4571,6 +4582,10 @@ static int hci_le_set_host_feature_sync(struct hci_dev *hdev)
 	/* Connected Isochronous Channels (Host Support) */
 	cp.bit_number = 32;
 	cp.bit_value = iso_enabled(hdev) ? 0x01 : 0x00;
+
+	/* Channel Sounding (Host Support) */
+	cp.bit_number = 47;
+	cp.bit_value = le_cs_capable(hdev) ? 0x01 : 0x00;
 
 	return __hci_cmd_sync_status(hdev, HCI_OP_LE_SET_HOST_FEATURE,
 				     sizeof(cp), &cp, HCI_CMD_TIMEOUT);
@@ -6896,8 +6911,6 @@ static int hci_acl_create_conn_sync(struct hci_dev *hdev, void *data)
 
 	conn->attempt++;
 
-	conn->link_policy = hdev->link_policy;
-
 	memset(&cp, 0, sizeof(cp));
 	bacpy(&cp.bdaddr, &conn->dst);
 	cp.pscan_rep_mode = 0x02;
@@ -7417,4 +7430,76 @@ int hci_le_read_remote_features(struct hci_conn *conn)
 		err = -EOPNOTSUPP;
 
 	return err;
+}
+
+static void pkt_type_changed(struct hci_dev *hdev, void *data, int err)
+{
+	struct hci_cp_change_conn_ptype *cp = data;
+
+	bt_dev_dbg(hdev, "err %d", err);
+
+	kfree(cp);
+}
+
+static int hci_change_conn_ptype_sync(struct hci_dev *hdev, void *data)
+{
+	struct hci_cp_change_conn_ptype *cp = data;
+
+	return __hci_cmd_sync_status_sk(hdev, HCI_OP_CHANGE_CONN_PTYPE,
+					sizeof(*cp), cp,
+					HCI_EV_PKT_TYPE_CHANGE,
+					HCI_CMD_TIMEOUT, NULL);
+}
+
+int hci_acl_change_pkt_type(struct hci_conn *conn, u16 pkt_type)
+{
+	struct hci_dev *hdev = conn->hdev;
+	struct hci_cp_change_conn_ptype *cp;
+
+	cp = kmalloc(sizeof(*cp), GFP_KERNEL);
+	if (!cp)
+		return -ENOMEM;
+
+	cp->handle = cpu_to_le16(conn->handle);
+	cp->pkt_type = cpu_to_le16(pkt_type);
+
+	return hci_cmd_sync_queue_once(hdev, hci_change_conn_ptype_sync, cp,
+				       pkt_type_changed);
+}
+
+static void le_phy_update_complete(struct hci_dev *hdev, void *data, int err)
+{
+	struct hci_cp_le_set_phy *cp = data;
+
+	bt_dev_dbg(hdev, "err %d", err);
+
+	kfree(cp);
+}
+
+static int hci_le_set_phy_sync(struct hci_dev *hdev, void *data)
+{
+	struct hci_cp_le_set_phy *cp = data;
+
+	return __hci_cmd_sync_status_sk(hdev, HCI_OP_LE_SET_PHY,
+					sizeof(*cp), cp,
+					HCI_EV_LE_PHY_UPDATE_COMPLETE,
+					HCI_CMD_TIMEOUT, NULL);
+}
+
+int hci_le_set_phy(struct hci_conn *conn, u8 tx_phys, u8 rx_phys)
+{
+	struct hci_dev *hdev = conn->hdev;
+	struct hci_cp_le_set_phy *cp;
+
+	cp = kmalloc(sizeof(*cp), GFP_KERNEL);
+	if (!cp)
+		return -ENOMEM;
+
+	memset(cp, 0, sizeof(*cp));
+	cp->handle = cpu_to_le16(conn->handle);
+	cp->tx_phys = tx_phys;
+	cp->rx_phys = rx_phys;
+
+	return hci_cmd_sync_queue_once(hdev, hci_le_set_phy_sync, cp,
+				       le_phy_update_complete);
 }
