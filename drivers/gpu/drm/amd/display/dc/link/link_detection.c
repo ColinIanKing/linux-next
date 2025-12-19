@@ -171,6 +171,7 @@ static enum signal_type link_detect_sink_signal_type(struct dc_link *link,
 					 enum dc_detect_reason reason)
 {
 	enum signal_type result;
+	struct audio_support *aud_support;
 	struct graphics_object_id enc_id;
 
 	if (link->is_dig_mapping_flexible)
@@ -183,53 +184,51 @@ static enum signal_type link_detect_sink_signal_type(struct dc_link *link,
 	if (link->ep_type != DISPLAY_ENDPOINT_PHY)
 		return result;
 
-	/* Internal digital encoder will detect only dongles
+	/*
+	 * Internal digital encoder will detect only dongles
 	 * that require digital signal
 	 */
 
-	/* Detection mechanism is different
+	/*
+	 * Detection mechanism is different
 	 * for different native connectors.
 	 * LVDS connector supports only LVDS signal;
 	 * PCIE is a bus slot, the actual connector needs to be detected first;
 	 * eDP connector supports only eDP signal;
 	 * HDMI should check straps for audio
 	 */
-
-	/* PCIE detects the actual connector on add-on board */
-	if (link->link_id.id == CONNECTOR_ID_PCIE) {
-		/* ZAZTODO implement PCIE add-on card detection */
-	}
-
 	switch (link->link_id.id) {
-	case CONNECTOR_ID_HDMI_TYPE_A: {
-		/* check audio support:
+	case CONNECTOR_ID_HDMI_TYPE_A:
+		/*
+		 * check audio support:
 		 * if native HDMI is not supported, switch to DVI
 		 */
-		struct audio_support *aud_support =
-					&link->dc->res_pool->audio_support;
+		aud_support = &link->dc->res_pool->audio_support;
 
 		if (!aud_support->hdmi_audio_native)
-			if (link->link_id.id == CONNECTOR_ID_HDMI_TYPE_A)
-				result = SIGNAL_TYPE_DVI_SINGLE_LINK;
-	}
-	break;
+			result = SIGNAL_TYPE_DVI_SINGLE_LINK;
+		break;
 	case CONNECTOR_ID_DISPLAY_PORT:
-	case CONNECTOR_ID_USBC: {
-		/* DP HPD short pulse. Passive DP dongle will not
+	case CONNECTOR_ID_USBC:
+		/*
+		 * DP HPD short pulse. Passive DP dongle will not
 		 * have short pulse
 		 */
 		if (reason != DETECT_REASON_HPDRX) {
-			/* Check whether DP signal detected: if not -
+			/*
+			 * Check whether DP signal detected: if not -
 			 * we assume signal is DVI; it could be corrected
 			 * to HDMI after dongle detection
 			 */
 			if (!dm_helpers_is_dp_sink_present(link))
 				result = SIGNAL_TYPE_DVI_SINGLE_LINK;
 		}
-	}
-	break;
+		break;
+	case CONNECTOR_ID_PCIE:
+		/* ZAZTODO implement PCIE add-on card detection */
+		break;
 	default:
-	break;
+		break;
 	}
 
 	return result;
@@ -989,7 +988,7 @@ static bool detect_link_and_local_sink(struct dc_link *link,
 			(link->dpcd_sink_ext_caps.bits.oled == 1)) {
 			dpcd_set_source_specific_data(link);
 			msleep(post_oui_delay);
-			set_default_brightness_aux(link);
+			set_default_brightness(link);
 		}
 
 		return true;
@@ -1401,8 +1400,6 @@ static bool link_detect_analog(struct dc_link *link, enum dc_connection_type *ty
  */
 bool link_detect_connection_type(struct dc_link *link, enum dc_connection_type *type)
 {
-	uint32_t is_hpd_high = 0;
-
 	if (link->connector_signal == SIGNAL_TYPE_LVDS) {
 		*type = dc_connection_single;
 		return true;
@@ -1437,10 +1434,7 @@ bool link_detect_connection_type(struct dc_link *link, enum dc_connection_type *
 	}
 
 
-	if (!query_hpd_status(link, &is_hpd_high))
-		goto hpd_gpio_failure;
-
-	if (is_hpd_high) {
+	if (link_get_hpd_state(link)) {
 		*type = dc_connection_single;
 		/* TODO: need to do the actual detection */
 	} else {
@@ -1453,9 +1447,6 @@ bool link_detect_connection_type(struct dc_link *link, enum dc_connection_type *
 	}
 
 	return true;
-
-hpd_gpio_failure:
-	return false;
 }
 
 bool link_detect(struct dc_link *link, enum dc_detect_reason reason)

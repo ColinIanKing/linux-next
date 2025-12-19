@@ -2028,6 +2028,10 @@ static void kfd_topology_set_capabilities(struct kfd_topology_device *dev)
 		if (KFD_GC_VERSION(dev->gpu) >= IP_VERSION(12, 0, 0))
 			dev->node_props.capability |=
 				HSA_CAP_TRAP_DEBUG_PRECISE_ALU_OPERATIONS_SUPPORTED;
+
+		if (KFD_GC_VERSION(dev->gpu) >= IP_VERSION(12, 1, 0))
+			dev->node_props.capability2 |=
+				HSA_CAP2_TRAP_DEBUG_LDS_OUT_OF_ADDR_RANGE_SUPPORTED;
 	}
 
 	kfd_topology_set_dbg_firmware_support(dev);
@@ -2408,3 +2412,26 @@ int kfd_debugfs_rls_by_device(struct seq_file *m, void *data)
 }
 
 #endif
+
+void kfd_update_svm_support_properties(struct amdgpu_device *adev)
+{
+	struct kfd_topology_device *dev;
+	int ret;
+
+	down_write(&topology_lock);
+	list_for_each_entry(dev, &topology_device_list, list) {
+		if (!dev->gpu || dev->gpu->adev != adev)
+			continue;
+
+		if (KFD_IS_SVM_API_SUPPORTED(adev)) {
+			dev->node_props.capability |= HSA_CAP_SVMAPI_SUPPORTED;
+			ret = kfd_topology_update_sysfs();
+			if (!ret)
+				sys_props.generation_count++;
+			else
+				dev_err(adev->dev, "Failed to update SVM support properties. ret=%d\n", ret);
+		} else
+			dev->node_props.capability &= ~HSA_CAP_SVMAPI_SUPPORTED;
+	}
+	up_write(&topology_lock);
+}
