@@ -34,8 +34,6 @@ static void _kexec_image_info(const char *func, int line,
 {
 	kexec_dprintk("%s:%d:\n", func, line);
 	kexec_dprintk("  kexec kimage info:\n");
-	kexec_dprintk("    type:        %d\n", kimage->type);
-	kexec_dprintk("    head:        %lx\n", kimage->head);
 	kexec_dprintk("    kern_reloc: %pa\n", &kimage->arch.kern_reloc);
 	kexec_dprintk("    el2_vectors: %pa\n", &kimage->arch.el2_vectors);
 }
