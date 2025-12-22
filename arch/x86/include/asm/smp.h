@@ -49,6 +49,9 @@ void native_send_call_func_single_ipi(int cpu);
 DECLARE_STATIC_CALL(x86_send_call_func_single_ipi,
 		    native_send_call_func_single_ipi);
 
+void native_send_call_func_ipi(const struct cpumask *mask);
+DECLARE_STATIC_CALL(x86_send_call_func_ipi, native_send_call_func_ipi);
+
 void native_smp_send_reschedule(int cpu);
 DECLARE_STATIC_CALL(x86_smp_send_reschedule,
 		    native_smp_send_reschedule);
@@ -108,7 +111,7 @@ static inline void arch_send_call_function_single_ipi(int cpu)
 
 static inline void arch_send_call_function_ipi_mask(const struct cpumask *mask)
 {
-	smp_ops.send_call_func_ipi(mask);
+	static_call(x86_send_call_func_ipi)(mask);
 }
 
 void cpu_disable_common(void);
@@ -131,7 +134,6 @@ void wbnoinvd_on_cpus_mask(struct cpumask *cpus);
 void smp_kick_mwait_play_dead(void);
 void __noreturn mwait_play_dead(unsigned int eax_hint);
 
-void native_send_call_func_ipi(const struct cpumask *mask);
 
 asmlinkage __visible void smp_reboot_interrupt(void);
 __visible void smp_reschedule_interrupt(struct pt_regs *regs);
