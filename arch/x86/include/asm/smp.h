@@ -4,6 +4,7 @@
 #ifndef __ASSEMBLER__
 #include <linux/cpumask.h>
 #include <linux/thread_info.h>
+#include <linux/static_call_types.h>
 
 #include <asm/cpumask.h>
 
@@ -41,6 +42,12 @@ struct smp_ops {
 	void (*send_call_func_ipi)(const struct cpumask *mask);
 	void (*send_call_func_single_ipi)(int cpu);
 };
+
+void x86_smp_ops_static_call_update(void);
+
+void native_send_call_func_single_ipi(int cpu);
+DECLARE_STATIC_CALL(x86_send_call_func_single_ipi,
+		    native_send_call_func_single_ipi);
 
 /* Globals due to paravirt */
 extern void set_cpu_sibling_map(int cpu);
@@ -92,7 +99,7 @@ static inline void arch_smp_send_reschedule(int cpu)
 
 static inline void arch_send_call_function_single_ipi(int cpu)
 {
-	smp_ops.send_call_func_single_ipi(cpu);
+	static_call(x86_send_call_func_single_ipi)(cpu);
 }
 
 static inline void arch_send_call_function_ipi_mask(const struct cpumask *mask)
@@ -122,7 +129,6 @@ void __noreturn mwait_play_dead(unsigned int eax_hint);
 
 void native_smp_send_reschedule(int cpu);
 void native_send_call_func_ipi(const struct cpumask *mask);
-void native_send_call_func_single_ipi(int cpu);
 
 asmlinkage __visible void smp_reboot_interrupt(void);
 __visible void smp_reschedule_interrupt(struct pt_regs *regs);
