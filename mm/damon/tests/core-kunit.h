@@ -318,9 +318,8 @@ static void damon_test_split_regions_of(struct kunit *test)
 	}
 	damon_split_regions_of(t, 4, 5);
 	KUNIT_EXPECT_LE(test, damon_nr_regions(t), 12u);
-	damon_for_each_region(r, t) {
+	damon_for_each_region(r, t)
 		KUNIT_EXPECT_GE(test, damon_sz_region(r) % 5ul, 0ul);
-	}
 	damon_free_target(t);
 }
 
