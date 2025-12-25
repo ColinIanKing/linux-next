@@ -462,8 +462,8 @@ void tlb_gather_mmu_fullmm(struct mmu_gather *tlb, struct mm_struct *mm)
 }
 
 /**
- * tlb_gather_mmu - initialize an mmu_gather structure for operating on a single
- *		    VMA
+ * tlb_gather_mmu_vma - initialize an mmu_gather structure for operating on a
+ *			single VMA
  * @tlb: the mmu_gather structure to initialize
  * @vma: the vm_area_struct
  *
