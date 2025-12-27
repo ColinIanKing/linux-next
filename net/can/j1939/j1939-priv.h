@@ -91,6 +91,7 @@ struct j1939_priv {
 
 	struct kref rx_kref;
 	u32 rx_tskey;
+	atomic_t trace_seq;
 };
 
 void j1939_ecu_put(struct j1939_ecu *ecu);

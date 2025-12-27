@@ -448,11 +448,12 @@ module_exit(j1939_module_exit);
 
 #ifdef CONFIG_NET_DEV_REFCNT_TRACKER
 
-#define PRIV_TRACE_BUFFER_SIZE 1024
+#define PRIV_TRACE_BUFFER_SIZE 4096
 static struct priv_trace_buffer {
 	struct j1939_priv *priv; // no-ref
 	struct net_device *ndev; // no-ref
-	atomic_t count;
+	int seq;
+	int delta;
 	int nr_entries;
 	unsigned long entries[20];
 } priv_trace_buffer[PRIV_TRACE_BUFFER_SIZE];
@@ -468,9 +469,10 @@ static void dump_priv_trace_buffer(const struct net_device *ndev)
 		ptr = &priv_trace_buffer[i];
 		if (!ptr->priv || ptr->ndev != ndev)
 			continue;
-		count = atomic_read(&ptr->count);
+		count = ptr->delta;
 		balance += count;
-		pr_info("Call trace for %s@%p %+d at\n", ndev->name, ptr->priv, count);
+		pr_info("Call trace for %s@%p[%d] %+d at\n", ndev->name, ptr->priv, ptr->seq,
+			count);
 		stack_trace_print(ptr->entries, ptr->nr_entries, 4);
 	}
 	if (!priv_trace_buffer_exhausted)
@@ -495,23 +497,14 @@ void save_priv_trace_buffer(struct j1939_priv *priv, int delta)
 	unsigned long nr_entries;
 	int i;
 
-	if (in_nmi())
-		return;
 	nr_entries = stack_trace_save(entries, ARRAY_SIZE(ptr->entries), 1);
 	nr_entries = trim_netdev_trace(entries, nr_entries);
 	for (i = 0; i < PRIV_TRACE_BUFFER_SIZE; i++) {
 		ptr = &priv_trace_buffer[i];
-		if (ptr->priv == priv && ptr->nr_entries == nr_entries &&
-		    !memcmp(ptr->entries, entries, nr_entries * sizeof(unsigned long))) {
-			atomic_add(delta, &ptr->count);
-			return;
-		}
-	}
-	for (i = 0; i < PRIV_TRACE_BUFFER_SIZE; i++) {
-		ptr = &priv_trace_buffer[i];
 		if (!ptr->priv && !cmpxchg(&ptr->priv, NULL, priv)) {
 			ptr->ndev = priv->ndev;
-			atomic_set(&ptr->count, delta);
+			ptr->seq = atomic_inc_return(&priv->trace_seq) - 1;
+			ptr->delta = delta;
 			ptr->nr_entries = nr_entries;
 			memmove(ptr->entries, entries, nr_entries * sizeof(unsigned long));
 			return;
