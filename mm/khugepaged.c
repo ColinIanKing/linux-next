@@ -2448,6 +2448,7 @@ static unsigned int khugepaged_scan_mm_slot(unsigned int pages, int *result,
 		hstart = round_up(vma->vm_start, HPAGE_PMD_SIZE);
 		hend = round_down(vma->vm_end, HPAGE_PMD_SIZE);
 		if (khugepaged_scan.address > hend || hend <= hstart) {
+			/* VMA already scanned or too small/unaligned for hugepage. */
 			progress++;
 			continue;
 		}
