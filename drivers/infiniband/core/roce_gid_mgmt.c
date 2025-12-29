@@ -452,6 +452,7 @@ static void del_netdev_ips0(struct ib_device *ib_dev, u32 port,
 			rdma_ndev ? rdma_ndev->name : "",
 			ndev, ndev ? netdev_refcnt_read(ndev) : 0, ndev ? ndev->name : "");
 	ib_cache_gid_del_all_netdev_gids(ib_dev, port, ndev);
+	if (IS_ENABLED(CONFIG_NET_DEV_REFCNT_TRACKER))
 		pr_info("netdevice_event(NETDEV_UNREGISTER) ib_dev=%p (%d)(%s) rdma_ndev=%p (%d)(%s) cookie=%p (%d)(%s) end\n",
 			ib_dev, ib_dev ? refcount_read(&ib_dev->refcount) : 0,
 			ib_dev ? ib_dev->name : "",
