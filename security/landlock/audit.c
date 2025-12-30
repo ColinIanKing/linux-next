@@ -75,6 +75,10 @@ get_blocker(const enum landlock_request_type type,
 		WARN_ON_ONCE(access_bit != -1);
 		return "scope.abstract_unix_socket";
 
+	case LANDLOCK_REQUEST_SCOPE_PATHNAME_UNIX_SOCKET:
+		WARN_ON_ONCE(access_bit != -1);
+		return "scope.pathname_unix_socket";
+
 	case LANDLOCK_REQUEST_SCOPE_SIGNAL:
 		WARN_ON_ONCE(access_bit != -1);
 		return "scope.signal";
