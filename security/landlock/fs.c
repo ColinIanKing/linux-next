@@ -399,6 +399,15 @@ static const struct access_masks any_fs = {
 };
 
 /*
+ * Returns true iff a has a subset of the bits of b.
+ * It helps readability and gets inlined.
+ */
+static bool access_mask_subset(access_mask_t a, access_mask_t b)
+{
+	return (a | b) == b;
+}
+
+/*
  * Check that a destination file hierarchy has more restrictions than a source
  * file hierarchy.  This is only used for link and rename actions.
  *
@@ -1704,7 +1713,7 @@ static int hook_file_open(struct file *const file)
 		ARRAY_SIZE(layer_masks));
 #endif /* CONFIG_AUDIT */
 
-	if ((open_access_request & allowed_access) == open_access_request)
+	if (access_mask_subset(open_access_request, allowed_access))
 		return 0;
 
 	/* Sets access to reflect the actual request. */
