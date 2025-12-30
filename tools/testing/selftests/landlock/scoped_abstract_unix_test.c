@@ -58,8 +58,8 @@ FIXTURE_SETUP(scoped_domains)
 
 	memset(&self->stream_address, 0, sizeof(self->stream_address));
 	memset(&self->dgram_address, 0, sizeof(self->dgram_address));
-	set_unix_address(&self->stream_address, 0);
-	set_unix_address(&self->dgram_address, 1);
+	set_unix_address(&self->stream_address, 0, true);
+	set_unix_address(&self->dgram_address, 1, true);
 }
 
 FIXTURE_TEARDOWN(scoped_domains)
@@ -280,7 +280,7 @@ FIXTURE_SETUP(scoped_audit)
 	disable_caps(_metadata);
 
 	memset(&self->dgram_address, 0, sizeof(self->dgram_address));
-	set_unix_address(&self->dgram_address, 1);
+	set_unix_address(&self->dgram_address, 1, true);
 
 	set_cap(_metadata, CAP_AUDIT_CONTROL);
 	self->audit_fd = audit_init_with_exe_filter(&self->audit_filter);
@@ -392,16 +392,16 @@ FIXTURE_SETUP(scoped_vs_unscoped)
 
 	memset(&self->parent_stream_address, 0,
 	       sizeof(self->parent_stream_address));
-	set_unix_address(&self->parent_stream_address, 0);
+	set_unix_address(&self->parent_stream_address, 0, true);
 	memset(&self->parent_dgram_address, 0,
 	       sizeof(self->parent_dgram_address));
-	set_unix_address(&self->parent_dgram_address, 1);
+	set_unix_address(&self->parent_dgram_address, 1, true);
 	memset(&self->child_stream_address, 0,
 	       sizeof(self->child_stream_address));
-	set_unix_address(&self->child_stream_address, 2);
+	set_unix_address(&self->child_stream_address, 2, true);
 	memset(&self->child_dgram_address, 0,
 	       sizeof(self->child_dgram_address));
-	set_unix_address(&self->child_dgram_address, 3);
+	set_unix_address(&self->child_dgram_address, 3, true);
 }
 
 FIXTURE_TEARDOWN(scoped_vs_unscoped)
@@ -622,9 +622,9 @@ FIXTURE_SETUP(outside_socket)
 	drop_caps(_metadata);
 
 	memset(&self->transit_address, 0, sizeof(self->transit_address));
-	set_unix_address(&self->transit_address, 0);
+	set_unix_address(&self->transit_address, 0, true);
 	memset(&self->address, 0, sizeof(self->address));
-	set_unix_address(&self->address, 1);
+	set_unix_address(&self->address, 1, true);
 }
 
 FIXTURE_TEARDOWN(outside_socket)
@@ -802,9 +802,9 @@ TEST_F(various_address_sockets, scoped_pathname_sockets)
 
 	/* Abstract address. */
 	memset(&stream_abstract_addr, 0, sizeof(stream_abstract_addr));
-	set_unix_address(&stream_abstract_addr, 0);
+	set_unix_address(&stream_abstract_addr, 0, true);
 	memset(&dgram_abstract_addr, 0, sizeof(dgram_abstract_addr));
-	set_unix_address(&dgram_abstract_addr, 1);
+	set_unix_address(&dgram_abstract_addr, 1, true);
 
 	/* Unnamed address for datagram socket. */
 	ASSERT_EQ(0, socketpair(AF_UNIX, SOCK_DGRAM, 0, unnamed_sockets));
@@ -990,9 +990,9 @@ TEST(datagram_sockets)
 
 	drop_caps(_metadata);
 	memset(&connected_addr, 0, sizeof(connected_addr));
-	set_unix_address(&connected_addr, 0);
+	set_unix_address(&connected_addr, 0, true);
 	memset(&non_connected_addr, 0, sizeof(non_connected_addr));
-	set_unix_address(&non_connected_addr, 1);
+	set_unix_address(&non_connected_addr, 1, true);
 
 	ASSERT_EQ(0, pipe2(pipe_parent, O_CLOEXEC));
 	ASSERT_EQ(0, pipe2(pipe_child, O_CLOEXEC));
@@ -1090,9 +1090,9 @@ TEST(self_connect)
 
 	drop_caps(_metadata);
 	memset(&connected_addr, 0, sizeof(connected_addr));
-	set_unix_address(&connected_addr, 0);
+	set_unix_address(&connected_addr, 0, true);
 	memset(&non_connected_addr, 0, sizeof(non_connected_addr));
-	set_unix_address(&non_connected_addr, 1);
+	set_unix_address(&non_connected_addr, 1, true);
 
 	connected_socket = socket(AF_UNIX, SOCK_DGRAM, 0);
 	non_connected_socket = socket(AF_UNIX, SOCK_DGRAM, 0);
