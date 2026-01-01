@@ -3767,6 +3767,10 @@ static void rcu_barrier_entrain(struct rcu_data *rdp)
 		debug_rcu_head_unqueue(&rdp->barrier_head);
 		rcu_barrier_trace(TPS("IRQNQ"), -1, rcu_state.barrier_sequence);
 	}
+#ifdef CONFIG_RCU_NOCB_CPU
+	if (wake_nocb)
+		rdp->nocb_gp_wake_attempt = true;
+#endif
 	rcu_nocb_unlock(rdp);
 	if (wake_nocb)
 		wake_nocb_gp(rdp, false);
