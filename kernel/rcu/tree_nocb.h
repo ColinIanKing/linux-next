@@ -571,8 +571,20 @@ static void __call_rcu_nocb_wake(struct rcu_data *rdp, bool was_alldone,
 		if (j != rdp->nocb_gp_adv_time &&
 		    rcu_segcblist_nextgp(&rdp->cblist, &cur_gp_seq) &&
 		    rcu_seq_done(&rdp->mynode->gp_seq, cur_gp_seq)) {
+			long done_before = rcu_segcblist_get_seglen(&rdp->cblist, RCU_DONE_TAIL);
+
 			rcu_advance_cbs_nowake(rdp->mynode, rdp);
 			rdp->nocb_gp_adv_time = j;
+
+			/*
+			 * The advance_cbs call above is not useful. Under an
+			 * overload condition, nocb_gp_wait() is always waiting
+			 * for GP completion, due to this nothing can be moved
+			 * from WAIT to DONE, in the list. WARN if an
+			 * advancement happened (next step is deletion of advance).
+			 */
+			WARN_ON_ONCE(rcu_segcblist_get_seglen(&rdp->cblist,
+				     RCU_DONE_TAIL) > done_before);
 		}
 	}
 
