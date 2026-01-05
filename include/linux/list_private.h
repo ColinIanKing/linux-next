@@ -81,7 +81,7 @@
 	list_private_entry(ACCESS_PRIVATE(pos, member).prev, typeof(*(pos)), member)
 
 /**
- * list_prev_entry_circular - get the prev element in list
+ * list_private_prev_entry_circular - get the prev element in list
  * @pos:	the type * to cursor.
  * @head:	the list head to take the element from.
  * @member:	the name of the list_head within the struct.
