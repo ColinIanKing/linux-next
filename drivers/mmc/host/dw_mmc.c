@@ -31,6 +31,7 @@
 #include <linux/regulator/consumer.h>
 
 #include "dw_mmc.h"
+#include "mmc_hsq.h"
 
 /* Common flag combinations */
 #define DW_MCI_DATA_ERROR_FLAGS	(SDMMC_INT_DRTO | SDMMC_INT_DCRC | \
@@ -1318,6 +1319,14 @@ static void dw_mci_queue_request(struct dw_mci *host, struct mmc_request *mrq)
 	}
 }
 
+static void dw_mci_request_done(struct mmc_host *mmc, struct mmc_request *mrq)
+{
+	if (mmc_hsq_finalize_request(mmc, mrq))
+		return;
+
+	mmc_request_done(mmc, mrq);
+}
+
 static void dw_mci_request(struct mmc_host *mmc, struct mmc_request *mrq)
 {
 	struct dw_mci *host = mmc_priv(mmc);
@@ -1332,7 +1341,7 @@ static void dw_mci_request(struct mmc_host *mmc, struct mmc_request *mrq)
 
 	if (!dw_mci_get_cd(mmc)) {
 		mrq->cmd->error = -ENOMEDIUM;
-		mmc_request_done(mmc, mrq);
+		dw_mci_request_done(mmc, mrq);
 		return;
 	}
 
@@ -1780,7 +1789,7 @@ static void dw_mci_request_end(struct dw_mci *host, struct mmc_request *mrq)
 		host->state = STATE_IDLE;
 
 	spin_unlock(&host->lock);
-	mmc_request_done(prev_mmc, mrq);
+	dw_mci_request_done(prev_mmc, mrq);
 	spin_lock(&host->lock);
 }
 
@@ -3208,8 +3217,13 @@ EXPORT_SYMBOL(dw_mci_alloc_host);
 int dw_mci_probe(struct dw_mci *host)
 {
 	const struct dw_mci_drv_data *drv_data = host->drv_data;
+	struct mmc_hsq *hsq;
 	int width, i, ret = 0;
 	u32 fifo_size;
+
+	hsq = devm_kzalloc(host->dev, sizeof(*hsq), GFP_KERNEL);
+	if (!hsq)
+		return dev_err_probe(host->dev, -ENOMEM, "hsq allocation failed\n");
 
 	ret = dw_mci_parse_dt(host);
 	if (ret)
@@ -3395,6 +3409,10 @@ int dw_mci_probe(struct dw_mci *host)
 		goto err_dmaunmap;
 	}
 
+	ret = mmc_hsq_init(hsq, host->mmc);
+	if (ret)
+		goto err_dmaunmap;
+
 	/* Now that host is setup, we can enable card detect */
 	dw_mci_enable_cd(host);
 
@@ -3441,6 +3459,8 @@ EXPORT_SYMBOL(dw_mci_remove);
 int dw_mci_runtime_suspend(struct device *dev)
 {
 	struct dw_mci *host = dev_get_drvdata(dev);
+
+	mmc_hsq_suspend(host->mmc);
 
 	if (host->use_dma && host->dma_ops->exit)
 		host->dma_ops->exit(host);
@@ -3509,6 +3529,8 @@ int dw_mci_runtime_resume(struct device *dev)
 	/* Re-enable SDIO interrupts. */
 	if (sdio_irq_claimed(host->mmc))
 		__dw_mci_enable_sdio_irq(host, 1);
+
+	mmc_hsq_resume(host->mmc);
 
 	/* Now that host is setup, we can enable card detect */
 	dw_mci_enable_cd(host);
