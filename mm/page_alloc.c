@@ -177,19 +177,21 @@ static inline void __pcp_trylock_noop(unsigned long *flags) { }
  */
 #if defined(CONFIG_SMP) || defined(CONFIG_PREEMPT_RT)
 static inline void __flags_noop(unsigned long *flags) { }
-#define spin_lock_maybe_irqsave(lock, flags)		\
+#define pcp_spin_lock_maybe_irqsave(ptr, flags)		\
 ({							\
 	 __flags_noop(&(flags));			\
-	 spin_lock(lock);				\
+	 spin_lock(&(ptr)->lock);			\
 })
-#define spin_unlock_maybe_irqrestore(lock, flags)	\
+#define pcp_spin_unlock_maybe_irqrestore(ptr, flags)	\
 ({							\
-	 spin_unlock(lock);				\
+	 spin_unlock(&(ptr)->lock);			\
 	 __flags_noop(&(flags));			\
 })
 #else
-#define spin_lock_maybe_irqsave(lock, flags)		spin_lock_irqsave(lock, flags)
-#define spin_unlock_maybe_irqrestore(lock, flags)	spin_unlock_irqrestore(lock, flags)
+#define pcp_spin_lock_maybe_irqsave(ptr, flags)		\
+		spin_lock_irqsave(&(ptr)->lock, flags)
+#define pcp_spin_unlock_maybe_irqrestore(ptr, flags)	\
+		spin_unlock_irqrestore(&(ptr)->lock, flags)
 #endif
 
 #ifdef CONFIG_USE_PERCPU_NUMA_NODE_ID
@@ -2601,9 +2603,9 @@ bool decay_pcp_high(struct zone *zone, struct per_cpu_pages *pcp)
 	to_drain = pcp->count - pcp->high;
 	while (to_drain > 0) {
 		to_drain_batched = min(to_drain, batch);
-		spin_lock_maybe_irqsave(&pcp->lock, UP_flags);
+		pcp_spin_lock_maybe_irqsave(pcp, UP_flags);
 		free_pcppages_bulk(zone, to_drain_batched, pcp, 0);
-		spin_unlock_maybe_irqrestore(&pcp->lock, UP_flags);
+		pcp_spin_unlock_maybe_irqrestore(pcp, UP_flags);
 		todo = true;
 
 		to_drain -= to_drain_batched;
@@ -2626,9 +2628,9 @@ void drain_zone_pages(struct zone *zone, struct per_cpu_pages *pcp)
 	batch = READ_ONCE(pcp->batch);
 	to_drain = min(pcp->count, batch);
 	if (to_drain > 0) {
-		spin_lock_maybe_irqsave(&pcp->lock, UP_flags);
+		pcp_spin_lock_maybe_irqsave(pcp, UP_flags);
 		free_pcppages_bulk(zone, to_drain, pcp, 0);
-		spin_unlock_maybe_irqrestore(&pcp->lock, UP_flags);
+		pcp_spin_unlock_maybe_irqrestore(pcp, UP_flags);
 	}
 }
 #endif
@@ -2643,7 +2645,7 @@ static void drain_pages_zone(unsigned int cpu, struct zone *zone)
 	int count;
 
 	do {
-		spin_lock_maybe_irqsave(&pcp->lock, UP_flags);
+		pcp_spin_lock_maybe_irqsave(pcp, UP_flags);
 		count = pcp->count;
 		if (count) {
 			int to_drain = min(count,
@@ -2652,7 +2654,7 @@ static void drain_pages_zone(unsigned int cpu, struct zone *zone)
 			free_pcppages_bulk(zone, to_drain, pcp, 0);
 			count -= to_drain;
 		}
-		spin_unlock_maybe_irqrestore(&pcp->lock, UP_flags);
+		pcp_spin_unlock_maybe_irqrestore(pcp, UP_flags);
 	} while (count);
 }
 
@@ -6148,12 +6150,12 @@ static void zone_pcp_update_cacheinfo(struct zone *zone, unsigned int cpu)
 	 * This can reduce zone lock contention without hurting
 	 * cache-hot pages sharing.
 	 */
-	spin_lock_maybe_irqsave(&pcp->lock, UP_flags);
+	pcp_spin_lock_maybe_irqsave(pcp, UP_flags);
 	if ((cci->per_cpu_data_slice_size >> PAGE_SHIFT) > 3 * pcp->batch)
 		pcp->flags |= PCPF_FREE_HIGH_BATCH;
 	else
 		pcp->flags &= ~PCPF_FREE_HIGH_BATCH;
-	spin_unlock_maybe_irqrestore(&pcp->lock, UP_flags);
+	pcp_spin_unlock_maybe_irqrestore(pcp, UP_flags);
 }
 
 void setup_pcp_cacheinfo(unsigned int cpu)
