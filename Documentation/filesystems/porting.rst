@@ -1339,6 +1339,6 @@ in-tree filesystems have done).
 
 **mandatory**
 
-do_{link,renameat2}() are gone; filename_{link,renameat2}() replaces those.
-The difference is that the former used to consume filename references;
-the latter do not.
+do_{link,symlink,renameat2}() are gone; filename_...() counterparts
+replace those.  The difference is that the former used to consume
+filename references; the latter do not.
