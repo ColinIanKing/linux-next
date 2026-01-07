@@ -54,6 +54,12 @@ static inline unsigned int pshift(void)
 	return __page_shift;
 }
 
+static inline void force_read_pages_in_range(char *addr, size_t len)
+{
+	for (size_t i = 0; i < len; i += psize())
+		FORCE_READ(addr[i]);
+}
+
 bool detect_huge_zeropage(void);
 
 /*
