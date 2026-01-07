@@ -475,14 +475,15 @@ static void gfs2_jhead_process_page(struct gfs2_jdesc *jd, unsigned long index,
 	folio_put_refs(folio, 2);
 }
 
-static struct bio *gfs2_chain_bio(struct bio *prev, unsigned int nr_iovecs,
-				  blk_opf_t opf)
+static struct bio *gfs2_chain_bio(struct gfs2_sbd *sdp,
+				  struct bio *prev, unsigned int nr_iovecs,
+				  u64 blkno, blk_opf_t opf)
 {
 	struct bio *new;
 
 	new = bio_alloc(prev->bi_bdev, nr_iovecs, opf, GFP_NOIO);
 	bio_clone_blkg_association(new, prev);
-	new->bi_iter.bi_sector = bio_end_sector(prev);
+	new->bi_iter.bi_sector = blkno << sdp->sd_fsb2bb_shift;
 	bio_chain(prev, new);
 	submit_bio(prev);
 	return new;
@@ -509,12 +510,12 @@ int gfs2_find_jhead(struct gfs2_jdesc *jd, struct gfs2_log_header_host *head)
 	struct gfs2_sbd *sdp = GFS2_SB(jd->jd_inode);
 	struct address_space *mapping = jd->jd_inode->i_mapping;
 	unsigned int block = 0, blocks_submitted = 0, blocks_read = 0;
-	unsigned int bsize = sdp->sd_sb.sb_bsize, off;
+	unsigned int off;
 	unsigned int bsize_shift = sdp->sd_sb.sb_bsize_shift;
 	unsigned int shift = PAGE_SHIFT - bsize_shift;
 	unsigned int max_blocks = 2 * 1024 * 1024 >> bsize_shift;
 	struct gfs2_journal_extent *je;
-	int ret = 0;
+	int sz, ret = 0;
 	struct bio *bio = NULL;
 	struct folio *folio = NULL;
 	bool done = false;
@@ -526,9 +527,11 @@ int gfs2_find_jhead(struct gfs2_jdesc *jd, struct gfs2_log_header_host *head)
 
 	since = filemap_sample_wb_err(mapping);
 	list_for_each_entry(je, &jd->extent_list, list) {
+		unsigned int je_end = je->lblock + je->blocks;
+		unsigned int blocks;
 		u64 dblock = je->dblock;
 
-		for (; block < je->lblock + je->blocks; block++, dblock++) {
+		for (; block < je_end; block += blocks, dblock += blocks) {
 			if (!folio) {
 				folio = filemap_grab_folio(mapping,
 						block >> shift);
@@ -540,44 +543,51 @@ int gfs2_find_jhead(struct gfs2_jdesc *jd, struct gfs2_log_header_host *head)
 				off = 0;
 			}
 
-			if (bio && (off || block < blocks_submitted + max_blocks)) {
-				sector_t sector = dblock << sdp->sd_fsb2bb_shift;
-
-				if (bio_end_sector(bio) == sector) {
-					if (bio_add_folio(bio, folio, bsize, off))
-						goto block_added;
-				}
-				if (off) {
-					unsigned int blocks =
-						(PAGE_SIZE - off) >> bsize_shift;
-
-					bio = gfs2_chain_bio(bio, blocks,
-							     REQ_OP_READ);
-					goto add_block_to_new_bio;
-				}
+			sz = folio_size(folio) - off;
+			blocks = sz >> bsize_shift;
+			if (blocks > je_end - block) {
+				blocks = je_end - block;
+				sz = blocks << bsize_shift;
 			}
 
 			if (bio) {
-				blocks_submitted = block;
+				sector_t sector = dblock << sdp->sd_fsb2bb_shift;
+
+				if (off) {
+					bio = gfs2_chain_bio(sdp, bio, blocks, dblock, REQ_OP_READ);
+					bio_add_folio_nofail(bio, folio, sz, off);
+					if (off + sz == folio_size(folio)) {
+						blocks_submitted = block + blocks - 1;
+						gfs2_log_submit_read(bio);
+						bio = NULL;
+					}
+					goto blocks_added;
+				}
+
+				if (sz == folio_size(folio) &&
+				    bio_end_sector(bio) == sector &&
+				    block - blocks_submitted + blocks <= max_blocks) {
+					if (bio_add_folio(bio, folio, sz, off))
+						goto blocks_added;
+				}
+
+				blocks_submitted = block + blocks - 1;
 				gfs2_log_submit_read(bio);
 			}
 
 			bio = gfs2_log_alloc_bio(sdp, dblock, REQ_OP_READ);
-add_block_to_new_bio:
-			bio_add_folio_nofail(bio, folio, bsize, off);
-block_added:
-			off += bsize;
+			bio_add_folio_nofail(bio, folio, sz, off);
+blocks_added:
+			off += sz;
 			if (off == folio_size(folio))
 				folio = NULL;
-			if (blocks_submitted <= blocks_read + max_blocks) {
-				/* Keep at least one bio in flight */
-				continue;
-			}
 
-			gfs2_jhead_process_page(jd, blocks_read >> shift, head, &done);
-			blocks_read += PAGE_SIZE >> bsize_shift;
-			if (done)
-				goto out;  /* found */
+			while (blocks_submitted - blocks_read > max_blocks) {
+				gfs2_jhead_process_page(jd, blocks_read >> shift, head, &done);
+				blocks_read += PAGE_SIZE >> bsize_shift;
+				if (done)
+					goto out;  /* found */
+			}
 		}
 	}
 
