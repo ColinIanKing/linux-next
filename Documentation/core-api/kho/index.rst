@@ -1,5 +1,7 @@
 .. SPDX-License-Identifier: GPL-2.0-or-later
 
+.. _kho-concepts:
+
 ========================
 Kexec Handover Subsystem
 ========================
@@ -59,6 +61,8 @@ us to recursively execute any amount of KHO kexecs. Because we used this region
 for boot memory allocations and as target memory for kexec blobs, some parts
 of that memory region may be reserved. These reservations are irrelevant for
 the next KHO, because kexec can overwrite even the original kernel.
+
+.. _kho-finalization-phase:
 
 KHO finalization phase
 ======================
