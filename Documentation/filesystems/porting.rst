@@ -1334,3 +1334,11 @@ end_creating() and the parent will be unlocked precisely when necessary.
 
 kill_litter_super() is gone; convert to DCACHE_PERSISTENT use (as all
 in-tree filesystems have done).
+
+---
+
+**mandatory**
+
+do_renameat2() is gone; filename_renameat2() replaces it.  The difference
+is that the former used to consume filename references; the latter does
+not.
