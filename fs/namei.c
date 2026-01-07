@@ -5038,7 +5038,7 @@ static int may_mknod(umode_t mode)
 	}
 }
 
-static int do_mknodat(int dfd, struct filename *__name, umode_t mode,
+int do_mknodat(int dfd, struct filename *__name, umode_t mode,
 		unsigned int dev)
 {
 	CLASS(filename_consume, name)(__name);
