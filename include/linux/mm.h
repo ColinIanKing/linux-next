@@ -4238,7 +4238,7 @@ static inline void clear_pages(void *addr, unsigned int npages)
  * (See comment above clear_pages() for why preemption latency is a concern
  * here.)
  */
-#define PROCESS_PAGES_NON_PREEMPT_BATCH		(32 << (20 - PAGE_SHIFT))
+#define PROCESS_PAGES_NON_PREEMPT_BATCH		(SZ_32M >> PAGE_SHIFT)
 #else /* !clear_pages */
 /*
  * The architecture does not provide a clear_pages() implementation. Assume
