@@ -1778,8 +1778,6 @@ __setup_irq(unsigned int irq, struct irq_desc *desc, struct irqaction *new)
 	chip_bus_sync_unlock(desc);
 	mutex_unlock(&desc->request_mutex);
 
-	irq_setup_timings(desc, new);
-
 	wake_up_and_wait_for_irq_thread_ready(desc, new);
 	wake_up_and_wait_for_irq_thread_ready(desc, new->secondary);
 
@@ -1950,7 +1948,6 @@ static struct irqaction *__free_irq(struct irq_desc *desc, void *dev_id)
 
 		irq_release_resources(desc);
 		chip_bus_sync_unlock(desc);
-		irq_remove_timings(desc);
 	}
 
 	mutex_unlock(&desc->request_mutex);
@@ -2451,36 +2448,6 @@ void free_percpu_nmi(unsigned int irq, void __percpu *dev_id)
 	kfree(__free_percpu_irq(irq, dev_id));
 }
 
-/**
- * setup_percpu_irq - setup a per-cpu interrupt
- * @irq:	Interrupt line to setup
- * @act:	irqaction for the interrupt
- *
- * Used to statically setup per-cpu interrupts in the early boot process.
- */
-int setup_percpu_irq(unsigned int irq, struct irqaction *act)
-{
-	struct irq_desc *desc = irq_to_desc(irq);
-	int retval;
-
-	if (!desc || !irq_settings_is_per_cpu_devid(desc))
-		return -EINVAL;
-
-	retval = irq_chip_pm_get(&desc->irq_data);
-	if (retval < 0)
-		return retval;
-
-	if (!act->affinity)
-		act->affinity = cpu_online_mask;
-
-	retval = __setup_irq(irq, desc, act);
-
-	if (retval)
-		irq_chip_pm_put(&desc->irq_data);
-
-	return retval;
-}
-
 static
 struct irqaction *create_percpu_irqaction(irq_handler_t handler, unsigned long flags,
 					  const char *devname, const cpumask_t *affinity,
@@ -2513,10 +2480,9 @@ struct irqaction *create_percpu_irqaction(irq_handler_t handler, unsigned long f
 }
 
 /**
- * __request_percpu_irq - allocate a percpu interrupt line
+ * request_percpu_irq_affinity - allocate a percpu interrupt line
  * @irq:	Interrupt line to allocate
  * @handler:	Function to be called when the IRQ occurs.
- * @flags:	Interrupt type flags (IRQF_TIMER only)
  * @devname:	An ascii name for the claiming device
  * @affinity:	A cpumask describing the target CPUs for this interrupt
  * @dev_id:	A percpu cookie passed back to the handler function
@@ -2529,9 +2495,8 @@ struct irqaction *create_percpu_irqaction(irq_handler_t handler, unsigned long f
  * the handler gets called with the interrupted CPU's instance of
  * that variable.
  */
-int __request_percpu_irq(unsigned int irq, irq_handler_t handler,
-			 unsigned long flags, const char *devname,
-			 const cpumask_t *affinity, void __percpu *dev_id)
+int request_percpu_irq_affinity(unsigned int irq, irq_handler_t handler, const char *devname,
+				const cpumask_t *affinity, void __percpu *dev_id)
 {
 	struct irqaction *action;
 	struct irq_desc *desc;
@@ -2545,10 +2510,7 @@ int __request_percpu_irq(unsigned int irq, irq_handler_t handler,
 	    !irq_settings_is_per_cpu_devid(desc))
 		return -EINVAL;
 
-	if (flags && flags != IRQF_TIMER)
-		return -EINVAL;
-
-	action = create_percpu_irqaction(handler, flags, devname, affinity, dev_id);
+	action = create_percpu_irqaction(handler, 0, devname, affinity, dev_id);
 	if (!action)
 		return -ENOMEM;
 
@@ -2567,7 +2529,7 @@ int __request_percpu_irq(unsigned int irq, irq_handler_t handler,
 
 	return retval;
 }
-EXPORT_SYMBOL_GPL(__request_percpu_irq);
+EXPORT_SYMBOL_GPL(request_percpu_irq_affinity);
 
 /**
  * request_percpu_nmi - allocate a percpu interrupt line for NMI delivery
