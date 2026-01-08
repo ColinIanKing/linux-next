@@ -297,8 +297,10 @@ int anon_vma_clone(struct vm_area_struct *dst, struct vm_area_struct *src)
 	 * are not updating the anon_vma rbtree nor are we changing
 	 * anon_vma statistics.
 	 *
-	 * We hold the exclusive mmap write lock so there's no possibliity of
-	 * the unlinked AVC's being observed yet.
+	* Either src, dst have the same mm for which we hold an exclusive mmap
+	* write lock, or we are forking and we hold it on src->vm_mm and dst is
+	* not yet accessible to other threads so there's no possibliity of the
+	* unlinked AVC's being observed yet.
 	 */
 	list_for_each_entry(pavc, &src->anon_vma_chain, same_vma) {
 		avc = anon_vma_chain_alloc(GFP_KERNEL);
