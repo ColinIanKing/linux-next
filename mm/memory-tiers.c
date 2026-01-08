@@ -320,13 +320,14 @@ void node_get_allowed_targets(pg_data_t *pgdat, nodemask_t *targets)
 /**
  * next_demotion_node() - Get the next node in the demotion path
  * @node: The starting node to lookup the next node
+ * @preferred_nodes: The pointer to nodemask of all preferred nodes to return
  *
  * Return: node id for next memory node in the demotion path hierarchy
- * from @node; NUMA_NO_NODE if @node is terminal.  This does not keep
- * @node online or guarantee that it *continues* to be the next demotion
- * target.
+ * from @node; NUMA_NO_NODE if @node is terminal. Also returns all preferred
+ * nodes in @preferred_nodes. This does not keep @node online or guarantee
+ * that it *continues* to be the next demotion target.
  */
-int next_demotion_node(int node)
+int next_demotion_node(int node, nodemask_t *preferred_nodes)
 {
 	struct demotion_nodes *nd;
 	int target;
@@ -357,6 +358,8 @@ int next_demotion_node(int node)
 	 * target node randomly seems better until now.
 	 */
 	target = node_random(&nd->preferred);
+	if (preferred_nodes)
+		nodes_copy(*preferred_nodes, nd->preferred);
 	rcu_read_unlock();
 
 	return target;

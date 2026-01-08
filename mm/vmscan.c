@@ -1023,9 +1023,10 @@ static unsigned int demote_folio_list(struct list_head *demote_folios,
 				      struct pglist_data *pgdat,
 				      struct mem_cgroup *memcg)
 {
-	int target_nid = next_demotion_node(pgdat->node_id);
+	int target_nid;
 	unsigned int nr_succeeded;
 	nodemask_t allowed_mask;
+	nodemask_t preferred;
 
 	struct migration_target_control mtc = {
 		/*
@@ -1051,8 +1052,26 @@ static unsigned int demote_folio_list(struct list_head *demote_folios,
 	if (nodes_empty(allowed_mask))
 		return 0;
 
-	if (!node_isset(target_nid, allowed_mask))
-		target_nid = node_random(&allowed_mask);
+	target_nid = next_demotion_node(pgdat->node_id, &preferred);
+	while (target_nid != NUMA_NO_NODE &&
+	       !node_isset(target_nid, allowed_mask)) {
+		/* Filter out preferred nodes that are not in allowed. */
+		nodes_and(preferred, preferred, allowed_mask);
+		if (!nodes_empty(preferred)) {
+			/* Randomly select one node from preferred. */
+			target_nid = node_random(&preferred);
+			break;
+		}
+		/*
+		 * Preferred nodes in the lower tier are not set in allowed.
+		 * Recursively get preferred from the next lower tier.
+		 */
+		target_nid = next_demotion_node(target_nid, &preferred);
+	}
+
+	if (target_nid == NUMA_NO_NODE)
+		/* Nodes are gone (e.g., hot-unplugged). */
+		return 0;
 	mtc.nid = target_nid;
 
 	/* Demotion ignores all cpuset and mempolicy settings */
