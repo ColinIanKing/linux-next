@@ -267,8 +267,8 @@ static void check_anon_vma_clone(struct vm_area_struct *dst,
 #endif
 }
 
-static void try_to_reuse_anon_vma(struct vm_area_struct *dst,
-				  struct anon_vma *anon_vma)
+static void maybe_reuse_anon_vma(struct vm_area_struct *dst,
+		struct anon_vma *anon_vma)
 {
 	/* If already populated, nothing to do.*/
 	if (dst->anon_vma)
@@ -356,7 +356,7 @@ int anon_vma_clone(struct vm_area_struct *dst, struct vm_area_struct *src,
 
 		anon_vma_interval_tree_insert(avc, &anon_vma->rb_root);
 		if (operation == VMA_OP_FORK)
-			try_to_reuse_anon_vma(dst, anon_vma);
+			maybe_reuse_anon_vma(dst, anon_vma);
 	}
 
 	if (operation != VMA_OP_FORK)
