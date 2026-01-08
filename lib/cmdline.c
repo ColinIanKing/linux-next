@@ -191,6 +191,32 @@ unsigned long long memparse(const char *ptr, char **retptr)
 EXPORT_SYMBOL(memparse);
 
 /**
+ *	memvalue -  Wrap memparse() with simple error detection
+ *	@ptr: Where parse begins
+ *	@valptr: Where to store result
+ *
+ *	Unconditionally returns -EINVAL for a presumably negative value.
+ *	Otherwise uses memparse() to parse a string into a number stored
+ *	at @valptr and returns 0 or -EINVAL if an unrecognized character
+ *	was encountered. For a non-zero return value, memory at @valptr
+ *	is left untouched.
+ */
+int __must_check memvalue(const char *ptr, unsigned long long *valptr)
+{
+	unsigned long long ret;
+	char *end;
+
+	if (*ptr == '-')
+		return -EINVAL;
+	ret = memparse(ptr, &end);
+	if (*end)
+		return -EINVAL;
+	*valptr = ret;
+	return 0;
+}
+EXPORT_SYMBOL(memvalue);
+
+/**
  *	parse_option_str - Parse a string and check an option is set or not
  *	@str: String to be parsed
  *	@option: option name
