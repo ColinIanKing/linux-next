@@ -1081,7 +1081,7 @@ int fat_remove_entries(struct inode *dir, struct fat_slot_info *sinfo)
 		}
 	}
 
-	fat_truncate_time(dir, NULL, S_ATIME|S_MTIME);
+	fat_truncate_time(dir, NULL, FAT_UPDATE_ATIME | FAT_UPDATE_CMTIME);
 	if (IS_DIRSYNC(dir))
 		(void)fat_sync_inode(dir);
 	else
@@ -1354,7 +1354,7 @@ found:
 
 		/* Fill the long name slots. */
 		for (i = 0; i < long_bhs; i++) {
-			int copy = min_t(int, sb->s_blocksize - offset, size);
+			int copy = umin(sb->s_blocksize - offset, size);
 			memcpy(bhs[i]->b_data + offset, slots, copy);
 			mark_buffer_dirty_inode(bhs[i], dir);
 			offset = 0;
@@ -1365,7 +1365,7 @@ found:
 			err = fat_sync_bhs(bhs, long_bhs);
 		if (!err && i < nr_bhs) {
 			/* Fill the short name slot. */
-			int copy = min_t(int, sb->s_blocksize - offset, size);
+			int copy = umin(sb->s_blocksize - offset, size);
 			memcpy(bhs[i]->b_data + offset, slots, copy);
 			mark_buffer_dirty_inode(bhs[i], dir);
 			if (IS_DIRSYNC(dir))
