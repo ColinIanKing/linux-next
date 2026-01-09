@@ -255,6 +255,7 @@ static struct page *kho_restore_page(phys_addr_t phys, bool is_folio)
 	if (is_folio && info.order)
 		prep_compound_page(page, info.order);
 
+	clear_page_tag_ref(page);
 	adjust_managed_page_count(page, nr_pages);
 	return page;
 }
