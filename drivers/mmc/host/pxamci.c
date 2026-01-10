@@ -551,7 +551,9 @@ static void pxamci_dma_irq(void *param)
 		pr_err("%s: DMA error on %s channel\n", mmc_hostname(host->mmc),
 			host->data->flags & MMC_DATA_READ ? "rx" : "tx");
 		host->data->error = -EIO;
+		spin_unlock_irqrestore(&host->lock, flags);
 		pxamci_data_done(host, 0);
+		return;
 	}
 
 out_unlock:
