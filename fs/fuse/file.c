@@ -673,6 +673,18 @@ static void fuse_aio_complete(struct fuse_io_priv *io, int err, ssize_t pos)
 			struct inode *inode = file_inode(io->iocb->ki_filp);
 			struct fuse_conn *fc = get_fuse_conn(inode);
 			struct fuse_inode *fi = get_fuse_inode(inode);
+			struct address_space *mapping = io->iocb->ki_filp->f_mapping;
+
+			/*
+			 * As in generic_file_direct_write(), invalidate after the
+			 * write, to invalidate read-ahead cache that may have competed
+			 * with the write.
+			 */
+			if (io->write && res && mapping->nrpages) {
+				invalidate_inode_pages2_range(mapping,
+						io->offset >> PAGE_SHIFT,
+						(io->offset + res - 1) >> PAGE_SHIFT);
+			}
 
 			spin_lock(&fi->lock);
 			fi->attr_version = atomic64_inc_return(&fc->attr_version);
@@ -1150,9 +1162,11 @@ static ssize_t fuse_send_write(struct fuse_io_args *ia, loff_t pos,
 {
 	struct kiocb *iocb = ia->io->iocb;
 	struct file *file = iocb->ki_filp;
+	struct address_space *mapping = file->f_mapping;
 	struct fuse_file *ff = file->private_data;
 	struct fuse_mount *fm = ff->fm;
 	struct fuse_write_in *inarg = &ia->write.in;
+	ssize_t written;
 	ssize_t err;
 
 	fuse_write_args_fill(ia, ff, pos, count);
@@ -1166,10 +1180,26 @@ static ssize_t fuse_send_write(struct fuse_io_args *ia, loff_t pos,
 		return fuse_async_req_send(fm, ia, count);
 
 	err = fuse_simple_request(fm, &ia->ap.args);
-	if (!err && ia->write.out.size > count)
+	written = ia->write.out.size;
+	if (!err && written > count)
 		err = -EIO;
 
-	return err ?: ia->write.out.size;
+	/*
+	 * Without FOPEN_DIRECT_IO, generic_file_direct_write() does the
+	 * invalidation for us.
+	 */
+	if (!err && written && mapping->nrpages &&
+	    (ff->open_flags & FOPEN_DIRECT_IO)) {
+		/*
+		 * As in generic_file_direct_write(), invalidate after the
+		 * write, to invalidate read-ahead cache that may have competed
+		 * with the write.
+		 */
+		invalidate_inode_pages2_range(mapping, pos >> PAGE_SHIFT,
+					(pos + written - 1) >> PAGE_SHIFT);
+	}
+
+	return err ?: written;
 }
 
 bool fuse_write_update_attr(struct inode *inode, loff_t pos, ssize_t written)
@@ -1743,15 +1773,6 @@ ssize_t fuse_direct_io(struct fuse_io_priv *io, struct iov_iter *iter,
 		fuse_io_free(ia);
 	if (res > 0)
 		*ppos = pos;
-
-	if (res > 0 && write && fopen_direct_io) {
-		/*
-		 * As in generic_file_direct_write(), invalidate after the
-		 * write, to invalidate read-ahead cache that may have competed
-		 * with the write.
-		 */
-		invalidate_inode_pages2_range(mapping, idx_from, idx_to);
-	}
 
 	return res > 0 ? res : err;
 }
