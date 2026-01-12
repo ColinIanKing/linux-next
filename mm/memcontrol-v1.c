@@ -592,6 +592,7 @@ void memcg1_swapout(struct folio *folio, swp_entry_t entry)
 {
 	struct mem_cgroup *memcg, *swap_memcg;
 	unsigned int nr_entries;
+	unsigned short oldid;
 
 	VM_BUG_ON_FOLIO(folio_test_lru(folio), folio);
 	VM_BUG_ON_FOLIO(folio_ref_count(folio), folio);
@@ -607,6 +608,16 @@ void memcg1_swapout(struct folio *folio, swp_entry_t entry)
 	VM_WARN_ON_ONCE_FOLIO(!memcg, folio);
 	if (!memcg)
 		return;
+
+	/*
+	 * Check if this swap entry is already recorded. This can happen
+	 * when MADV_PAGEOUT is called multiple times on pages that remain
+	 * in swapcache, reusing the same swap entries.
+	 */
+	oldid = lookup_swap_cgroup_id(entry);
+	if (oldid == mem_cgroup_id(memcg))
+		return;
+	VM_WARN_ON_ONCE(oldid != 0);
 
 	/*
 	 * In case the memcg owning these pages has been offlined and doesn't
