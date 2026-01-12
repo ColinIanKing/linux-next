@@ -3621,7 +3621,7 @@ struct mem_cgroup *mem_cgroup_get_from_id(u64 id)
 	struct cgroup_subsys_state *css;
 	struct mem_cgroup *memcg = NULL;
 
-	cgrp = cgroup_get_from_id(ino);
+	cgrp = cgroup_get_from_id(id);
 	if (IS_ERR(cgrp))
 		return NULL;
 
