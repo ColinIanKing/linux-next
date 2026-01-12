@@ -194,7 +194,7 @@ void recalc_intercepts(struct vcpu_svm *svm)
  * Hardcode the capacity of the array based on the maximum number of _offsets_.
  * MSRs are batched together, so there are fewer offsets than MSRs.
  */
-static int nested_svm_msrpm_merge_offsets[7] __ro_after_init;
+static int nested_svm_msrpm_merge_offsets[10] __ro_after_init;
 static int nested_svm_nr_msrpm_merge_offsets __ro_after_init;
 typedef unsigned long nsvm_msrpm_merge_t;
 
@@ -222,6 +222,22 @@ int __init nested_svm_init_msrpm_merge_offsets(void)
 		MSR_IA32_LASTBRANCHTOIP,
 		MSR_IA32_LASTINTFROMIP,
 		MSR_IA32_LASTINTTOIP,
+
+		MSR_K7_PERFCTR0,
+		MSR_K7_PERFCTR1,
+		MSR_K7_PERFCTR2,
+		MSR_K7_PERFCTR3,
+		MSR_F15H_PERF_CTR0,
+		MSR_F15H_PERF_CTR1,
+		MSR_F15H_PERF_CTR2,
+		MSR_F15H_PERF_CTR3,
+		MSR_F15H_PERF_CTR4,
+		MSR_F15H_PERF_CTR5,
+
+		MSR_AMD64_PERF_CNTR_GLOBAL_CTL,
+		MSR_AMD64_PERF_CNTR_GLOBAL_STATUS,
+		MSR_AMD64_PERF_CNTR_GLOBAL_STATUS_CLR,
+		MSR_AMD64_PERF_CNTR_GLOBAL_STATUS_SET,
 	};
 	int i, j;
 
@@ -403,6 +419,19 @@ static bool nested_vmcb_check_controls(struct kvm_vcpu *vcpu)
 	return __nested_vmcb_check_controls(vcpu, ctl);
 }
 
+/*
+ * If a feature is not advertised to L1, clear the corresponding vmcb12
+ * intercept.
+ */
+#define __nested_svm_sanitize_intercept(__vcpu, __control, fname, iname)	\
+do {										\
+	if (!guest_cpu_cap_has(__vcpu, X86_FEATURE_##fname))			\
+		vmcb12_clr_intercept(__control, INTERCEPT_##iname);		\
+} while (0)
+
+#define nested_svm_sanitize_intercept(__vcpu, __control, name)			\
+	__nested_svm_sanitize_intercept(__vcpu, __control, name, name)
+
 static
 void __nested_copy_vmcb_control_to_cache(struct kvm_vcpu *vcpu,
 					 struct vmcb_ctrl_area_cached *to,
@@ -413,10 +442,17 @@ void __nested_copy_vmcb_control_to_cache(struct kvm_vcpu *vcpu,
 	for (i = 0; i < MAX_INTERCEPT; i++)
 		to->intercepts[i] = from->intercepts[i];
 
+	__nested_svm_sanitize_intercept(vcpu, to, XSAVE, XSETBV);
+	nested_svm_sanitize_intercept(vcpu, to, INVPCID);
+	nested_svm_sanitize_intercept(vcpu, to, RDTSCP);
+	nested_svm_sanitize_intercept(vcpu, to, SKINIT);
+	nested_svm_sanitize_intercept(vcpu, to, RDPRU);
+
 	to->iopm_base_pa        = from->iopm_base_pa;
 	to->msrpm_base_pa       = from->msrpm_base_pa;
 	to->tsc_offset          = from->tsc_offset;
 	to->tlb_ctl             = from->tlb_ctl;
+	to->erap_ctl            = from->erap_ctl;
 	to->int_ctl             = from->int_ctl;
 	to->int_vector          = from->int_vector;
 	to->int_state           = from->int_state;
@@ -867,6 +903,19 @@ static void nested_vmcb02_prepare_control(struct vcpu_svm *svm,
 	}
 
 	/*
+	 * Take ALLOW_LARGER_RAP from vmcb12 even though it should be safe to
+	 * let L2 use a larger RAP since KVM will emulate the necessary clears,
+	 * as it's possible L1 deliberately wants to restrict L2 to the legacy
+	 * RAP size.  Unconditionally clear the RAP on nested VMRUN, as KVM is
+	 * responsible for emulating the host vs. guest tags (L1 is the "host",
+	 * L2 is the "guest").
+	 */
+	if (guest_cpu_cap_has(vcpu, X86_FEATURE_ERAPS))
+		vmcb02->control.erap_ctl = (svm->nested.ctl.erap_ctl &
+					    ERAP_CONTROL_ALLOW_LARGER_RAP) |
+					   ERAP_CONTROL_CLEAR_RAP;
+
+	/*
 	 * Merge guest and host intercepts - must be called with vcpu in
 	 * guest-mode to take effect.
 	 */
@@ -1161,6 +1210,9 @@ int nested_svm_vmexit(struct vcpu_svm *svm)
 
 	kvm_nested_vmexit_handle_ibrs(vcpu);
 
+	if (guest_cpu_cap_has(vcpu, X86_FEATURE_ERAPS))
+		vmcb01->control.erap_ctl |= ERAP_CONTROL_CLEAR_RAP;
+
 	svm_switch_vmcb(svm, &svm->vmcb01);
 
 	/*
@@ -1362,6 +1414,8 @@ void svm_leave_nested(struct kvm_vcpu *vcpu)
 
 		nested_svm_uninit_mmu_context(vcpu);
 		vmcb_mark_all_dirty(svm->vmcb);
+
+		svm_set_gif(svm, true);
 
 		if (kvm_apicv_activated(vcpu->kvm))
 			kvm_make_request(KVM_REQ_APICV_UPDATE, vcpu);
@@ -1667,6 +1721,7 @@ static void nested_copy_vmcb_cache_to_control(struct vmcb_control_area *dst,
 	dst->tsc_offset           = from->tsc_offset;
 	dst->asid                 = from->asid;
 	dst->tlb_ctl              = from->tlb_ctl;
+	dst->erap_ctl             = from->erap_ctl;
 	dst->int_ctl              = from->int_ctl;
 	dst->int_vector           = from->int_vector;
 	dst->int_state            = from->int_state;
@@ -1782,12 +1837,12 @@ static int svm_set_nested_state(struct kvm_vcpu *vcpu,
 	/*
 	 * If in guest mode, vcpu->arch.efer actually refers to the L2 guest's
 	 * EFER.SVME, but EFER.SVME still has to be 1 for VMRUN to succeed.
+	 * If SVME is disabled, the only valid states are "none" and GIF=1
+	 * (clearing SVME does NOT set GIF, i.e. GIF=0 is allowed).
 	 */
-	if (!(vcpu->arch.efer & EFER_SVME)) {
-		/* GIF=1 and no guest mode are required if SVME=0.  */
-		if (kvm_state->flags != KVM_STATE_NESTED_GIF_SET)
-			return -EINVAL;
-	}
+	if (!(vcpu->arch.efer & EFER_SVME) && kvm_state->flags &&
+	    kvm_state->flags != KVM_STATE_NESTED_GIF_SET)
+		return -EINVAL;
 
 	/* SMM temporarily disables SVM, so we cannot be in guest mode.  */
 	if (is_smm(vcpu) && (kvm_state->flags & KVM_STATE_NESTED_GUEST_MODE))
@@ -1870,10 +1925,9 @@ static int svm_set_nested_state(struct kvm_vcpu *vcpu,
 	 * thus MMU might not be initialized correctly.
 	 * Set it again to fix this.
 	 */
-
 	ret = nested_svm_load_cr3(&svm->vcpu, vcpu->arch.cr3,
 				  nested_npt_enabled(svm), false);
-	if (WARN_ON_ONCE(ret))
+	if (ret)
 		goto out_free;
 
 	svm->nested.force_msr_bitmap_recalc = true;
