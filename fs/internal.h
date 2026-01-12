@@ -59,6 +59,7 @@ int may_linkat(struct mnt_idmap *idmap, const struct path *link);
 int do_renameat2(int olddfd, struct filename *oldname, int newdfd,
 		 struct filename *newname, unsigned int flags);
 int do_mkdirat(int dfd, struct filename *name, umode_t mode);
+int do_mknodat(int dfd, struct filename *name, umode_t mode, unsigned int dev);
 int do_symlinkat(struct filename *from, int newdfd, struct filename *to);
 int do_linkat(int olddfd, struct filename *old, int newdfd,
 			struct filename *new, int flags);
@@ -69,6 +70,8 @@ struct dentry *d_hash_and_lookup(struct dentry *, struct qstr *);
 struct dentry *start_dirop(struct dentry *parent, struct qstr *name,
 			   unsigned int lookup_flags);
 int lookup_noperm_common(struct qstr *qname, struct dentry *base);
+
+void __init filename_init(void);
 
 /*
  * namespace.c
@@ -187,7 +190,7 @@ struct open_flags {
 	int intent;
 	int lookup_flags;
 };
-extern struct file *do_filp_open(int dfd, struct filename *pathname,
+extern struct file *do_file_open(int dfd, struct filename *pathname,
 		const struct open_flags *op);
 extern struct file *do_file_open_root(const struct path *,
 		const char *, const struct open_flags *);
