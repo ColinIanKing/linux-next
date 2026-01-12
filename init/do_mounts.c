@@ -483,6 +483,20 @@ void __init prepare_namespace(void)
 		wait_for_root(saved_root_name);
 	mount_root(saved_root_name);
 	devtmpfs_mount();
+
+	if (nullfs_rootfs) {
+		if (init_pivot_root(".", ".")) {
+			pr_err("VFS: Failed to pivot into new rootfs\n");
+			return;
+		}
+		if (init_umount(".", MNT_DETACH)) {
+			pr_err("VFS: Failed to unmount old rootfs\n");
+			return;
+		}
+		pr_info("VFS: Pivoted into new rootfs\n");
+		return;
+	}
+
 	init_mount(".", "/", NULL, MS_MOVE, NULL);
 	init_chroot(".");
 }
