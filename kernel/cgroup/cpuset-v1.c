@@ -368,9 +368,42 @@ int cpuset1_validate_change(struct cpuset *cur, struct cpuset *trial)
 	if (par && !is_cpuset_subset(trial, par))
 		goto out;
 
+	/*
+	 * Cpusets with tasks - existing or newly being attached - can't
+	 * be changed to have empty cpus_allowed or mems_allowed.
+	 */
+	ret = -ENOSPC;
+	if (cpuset_is_populated(cur)) {
+		if (!cpumask_empty(cur->cpus_allowed) &&
+		    cpumask_empty(trial->cpus_allowed))
+			goto out;
+		if (!nodes_empty(cur->mems_allowed) &&
+		    nodes_empty(trial->mems_allowed))
+			goto out;
+	}
+
 	ret = 0;
 out:
 	return ret;
+}
+
+/*
+ * cpuset1_cpus_excl_conflict() - Check if two cpusets have exclusive CPU conflicts
+ *                                to legacy (v1)
+ * @cs1: first cpuset to check
+ * @cs2: second cpuset to check
+ *
+ * Returns: true if CPU exclusivity conflict exists, false otherwise
+ *
+ * If either cpuset is CPU exclusive, their allowed CPUs cannot intersect.
+ */
+bool cpuset1_cpus_excl_conflict(struct cpuset *cs1, struct cpuset *cs2)
+{
+	if (is_cpu_exclusive(cs1) || is_cpu_exclusive(cs2))
+		return cpumask_intersects(cs1->cpus_allowed,
+					  cs2->cpus_allowed);
+
+	return false;
 }
 
 #ifdef CONFIG_PROC_PID_CPUSET
