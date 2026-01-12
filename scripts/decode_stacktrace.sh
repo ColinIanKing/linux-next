@@ -6,7 +6,7 @@
 usage() {
 	echo "Usage:"
 	echo "	$0 -r <release>"
-	echo "	$0 [<vmlinux> [<base_path>|auto [<modules_path>]]]"
+	echo "	$0 <vmlinux> [<base_path>|auto [<modules_path>]]"
 	echo "	$0 -h"
 }
 
