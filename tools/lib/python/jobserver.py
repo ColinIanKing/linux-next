@@ -58,15 +58,27 @@ class JobserverExec:
 
         if self.is_open:
             return
-
+        self.claim = None
+        self.is_open = True  # We only try once
+        #
+        # See what they have told us to do here.
+        #
         try:
-            # Fetch the make environment options.
-            flags = os.environ["MAKEFLAGS"]
-            # Look for "--jobserver=R,W"
-            # Note that GNU Make has used --jobserver-fds and --jobserver-auth
-            # so this handles all of them.
-            opts = [x for x in flags.split(" ") if x.startswith("--jobserver")]
-
+            flags = os.environ['MAKEFLAGS']
+        except KeyError:
+            return
+        #
+        # Look for "--jobserver=R,W"
+        # Note that GNU Make has used --jobserver-fds and --jobserver-auth
+        # so this handles all of them.
+        #
+        opts = [x for x in flags.split(" ") if x.startswith("--jobserver")]
+        if not opts:
+            return
+        #
+        # OK, parse the result.
+        #
+        try:
             # Parse out R,W file descriptor numbers and set them nonblocking.
             # If the MAKEFLAGS variable contains multiple instances of the
             # --jobserver-auth= option, the last one is relevant.
