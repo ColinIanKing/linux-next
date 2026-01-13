@@ -136,6 +136,15 @@ config SPI_AR934X
 	  This enables support for the SPI controller present on the
 	  Qualcomm Atheros AR934X/QCA95XX SoCs.
 
+config SPI_ATCSPI200
+	tristate "Andes ATCSPI200 SPI controller"
+	depends on ARCH_ANDES
+	help
+	  SPI driver for Andes ATCSPI200 SPI controller.
+	  ATCSPI200 controller supports DMA and PIO modes. When DMA
+	  is not available, the driver automatically falls back to
+	  PIO mode.
+
 config SPI_ATH79
 	tristate "Atheros AR71XX/AR724X/AR913X SPI controller driver"
 	depends on ATH79 || COMPILE_TEST
@@ -478,6 +487,16 @@ config SPI_NXP_FLEXSPI
 	  This enables support for the Flex SPI controller in master mode.
 	  Up to four slave devices can be connected on two buses with two
 	  chipselects each.
+	  This controller does not support generic SPI messages and only
+	  supports the high-level SPI memory interface.
+
+config SPI_NXP_XSPI
+        tristate "NXP xSPI controller"
+	depends on ARCH_MXC || COMPILE_TEST
+	depends on HAS_IOMEM
+	help
+	  This enables support for the xSPI controller. Up to two devices
+	  can be connected to one host.
 	  This controller does not support generic SPI messages and only
 	  supports the high-level SPI memory interface.
 
