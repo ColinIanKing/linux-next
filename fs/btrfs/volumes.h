@@ -99,6 +99,7 @@ enum btrfs_raid_types {
 #define BTRFS_DEV_STATE_REPLACE_TGT	(3)
 #define BTRFS_DEV_STATE_FLUSH_SENT	(4)
 #define BTRFS_DEV_STATE_NO_READA	(5)
+#define BTRFS_DEV_STATE_FLUSH_FAILED	(6)
 
 /* Special value encoding failure to write primary super block. */
 #define BTRFS_SUPER_PRIMARY_WRITE_ERROR		(INT_MAX / 2)
@@ -122,13 +123,7 @@ struct btrfs_device {
 
 	struct btrfs_zoned_device_info *zone_info;
 
-	/*
-	 * Device's major-minor number. Must be set even if the device is not
-	 * opened (bdev == NULL), unless the device is missing.
-	 */
-	dev_t devt;
 	unsigned long dev_state;
-	blk_status_t last_flush_error;
 
 #ifdef __BTRFS_NEED_DEVICE_DATA_ORDERED
 	seqcount_t data_seqcount;
@@ -191,6 +186,12 @@ struct btrfs_device {
 	/* Counter to record the change of device stats */
 	atomic_t dev_stats_ccnt;
 	atomic_t dev_stat_values[BTRFS_DEV_STAT_VALUES_MAX];
+
+	/*
+	 * Device's major-minor number. Must be set even if the device is not
+	 * opened (bdev == NULL), unless the device is missing.
+	 */
+	dev_t devt;
 
 	struct extent_io_tree alloc_state;
 
@@ -318,25 +319,6 @@ enum btrfs_read_policy {
 	BTRFS_NR_READ_POLICY,
 };
 
-#ifdef CONFIG_BTRFS_EXPERIMENTAL
-/*
- * Checksum mode - offload it to workqueues or do it synchronously in
- * btrfs_submit_chunk().
- */
-enum btrfs_offload_csum_mode {
-	/*
-	 * Choose offloading checksum or do it synchronously automatically.
-	 * Do it synchronously if the checksum is fast, or offload to workqueues
-	 * otherwise.
-	 */
-	BTRFS_OFFLOAD_CSUM_AUTO,
-	/* Always offload checksum to workqueues. */
-	BTRFS_OFFLOAD_CSUM_FORCE_ON,
-	/* Never offload checksum to workqueues. */
-	BTRFS_OFFLOAD_CSUM_FORCE_OFF,
-};
-#endif
-
 struct btrfs_fs_devices {
 	u8 fsid[BTRFS_FSID_SIZE]; /* FS specific uuid */
 
@@ -463,9 +445,6 @@ struct btrfs_fs_devices {
 
 	/* Device to be used for reading in case of RAID1. */
 	u64 read_devid;
-
-	/* Checksum mode - offload it or do it synchronously. */
-	enum btrfs_offload_csum_mode offload_csum_mode;
 #endif
 };
 
