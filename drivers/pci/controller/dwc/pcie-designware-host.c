@@ -367,10 +367,20 @@ int dw_pcie_msi_host_init(struct dw_pcie_rp *pp)
 	 * order not to miss MSI TLPs from those devices the MSI target
 	 * address has to be within the lowest 4GB.
 	 *
-	 * Note until there is a better alternative found the reservation is
-	 * done by allocating from the artificially limited DMA-coherent
-	 * memory.
+	 * Per DWC databook r6.21a, section 3.10.2.3, the incoming MWr TLP
+	 * targeting the MSI_CTRL_ADDR is terminated by the iMSI-RX and never
+	 * appears on the AXI bus. So MSI_CTRL_ADDR address doesn't need to be
+	 * mapped and can be any memory that doesn't get allocated for the BAR
+	 * memory. Since most of the platforms provide 32-bit address for
+	 * 'config' region, try cfg0_base as the first option for the MSI target
+	 * address if it's a 32-bit address. Otherwise, try 32-bit and 64-bit
+	 * coherent memory allocation one by one.
 	 */
+	if (!(pp->cfg0_base & GENMASK_ULL(63, 32))) {
+		pp->msi_data = pp->cfg0_base;
+		return 0;
+	}
+
 	ret = dma_set_coherent_mask(dev, DMA_BIT_MASK(32));
 	if (!ret)
 		msi_vaddr = dmam_alloc_coherent(dev, sizeof(u64), &pp->msi_data,
@@ -665,14 +675,8 @@ int dw_pcie_host_init(struct dw_pcie_rp *pp)
 			goto err_remove_edma;
 	}
 
-	/*
-	 * Note: Skip the link up delay only when a Link Up IRQ is present.
-	 * If there is no Link Up IRQ, we should not bypass the delay
-	 * because that would require users to manually rescan for devices.
-	 */
-	if (!pp->use_linkup_irq)
-		/* Ignore errors, the link may come up later */
-		dw_pcie_wait_for_link(pci);
+	/* Ignore errors, the link may come up later */
+	dw_pcie_wait_for_link(pci);
 
 	ret = pci_host_probe(bridge);
 	if (ret)
@@ -1115,6 +1119,17 @@ int dw_pcie_setup_rc(struct dw_pcie_rp *pp)
 
 	dw_pcie_dbi_ro_wr_dis(pci);
 
+	/*
+	 * The iMSI-RX module does not support receiving MSI or MSI-X generated
+	 * by the Root Port. If iMSI-RX is used as the MSI controller, remove
+	 * the MSI and MSI-X capabilities of the Root Port to allow the drivers
+	 * to fall back to INTx instead.
+	 */
+	if (pp->has_msi_ctrl) {
+		dw_pcie_remove_capability(pci, PCI_CAP_ID_MSI);
+		dw_pcie_remove_capability(pci, PCI_CAP_ID_MSIX);
+	}
+
 	return 0;
 }
 EXPORT_SYMBOL_GPL(dw_pcie_setup_rc);
@@ -1158,8 +1173,11 @@ static int dw_pcie_pme_turn_off(struct dw_pcie *pci)
 int dw_pcie_suspend_noirq(struct dw_pcie *pci)
 {
 	u8 offset = dw_pcie_find_capability(pci, PCI_CAP_ID_EXP);
+	int ret = 0;
 	u32 val;
-	int ret;
+
+	if (!dw_pcie_link_up(pci))
+		goto stop_link;
 
 	/*
 	 * If L1SS is supported, then do not put the link into L2 as some
@@ -1194,6 +1212,7 @@ int dw_pcie_suspend_noirq(struct dw_pcie *pci)
 	 */
 	udelay(1);
 
+stop_link:
 	dw_pcie_stop_link(pci);
 	if (pci->pp.ops->deinit)
 		pci->pp.ops->deinit(&pci->pp);
