@@ -57,14 +57,14 @@ struct dw_mci_dma_slave {
 };
 
 /**
- * struct dw_mci - MMC controller state shared between all slots
+ * struct dw_mci - MMC controller state
  * @lock: Spinlock protecting the queue and associated data.
  * @irq_lock: Spinlock protecting the INTMASK setting.
  * @regs: Pointer to MMIO registers.
  * @fifo_reg: Pointer to MMIO registers for data FIFO
  * @sg: Scatterlist entry currently being processed by PIO code, if any.
  * @sg_miter: PIO mapping scatterlist iterator.
- * @mrq: The request currently being processed on @slot,
+ * @mrq: The request currently being processed on @host,
  *	or NULL if the controller is idle.
  * @cmd: The command currently being sent to the card, or NULL.
  * @data: The data currently being transferred, or NULL if no data
@@ -96,7 +96,6 @@ struct dw_mci_dma_slave {
  * @completed_events: Bitmask of events which the state machine has
  *	processed.
  * @state: BH work state.
- * @queue: List of slots waiting for access to the controller.
  * @bus_hz: The rate of @mck in Hz. This forms the basis for MMC bus
  *	rate and timeout calculations.
  * @current_speed: Configured rate of the controller.
@@ -109,7 +108,6 @@ struct dw_mci_dma_slave {
  * @priv: Implementation defined private data.
  * @biu_clk: Pointer to bus interface unit clock instance.
  * @ciu_clk: Pointer to card interface unit clock instance.
- * @slot: Slots sharing this MMC controller.
  * @fifo_depth: depth of FIFO.
  * @data_addr_override: override fifo reg offset with this value.
  * @wm_aligned: force fifo watermark equal with data length in PIO mode.
@@ -121,23 +119,24 @@ struct dw_mci_dma_slave {
  * @push_data: Pointer to FIFO push function.
  * @pull_data: Pointer to FIFO pull function.
  * @quirks: Set of quirks that apply to specific versions of the IP.
- * @vqmmc_enabled: Status of vqmmc, should be true or false.
  * @irq_flags: The flags to be passed to request_irq.
  * @irq: The irq value to be passed to request_irq.
- * @sdio_id0: Number of slot0 in the SDIO interrupt registers.
+ * @sdio_irq: SDIO interrupt bit in interrupt registers.
  * @cmd11_timer: Timer for SD3.0 voltage switch over scheme.
  * @cto_timer: Timer for broken command transfer over scheme.
  * @dto_timer: Timer for broken data transfer over scheme.
+ * @mmc: The mmc_host representing this dw_mci.
+ * @flags: Random state bits associated with the host.
+ * @ctype: Card type for this host.
+ * @clock: Clock rate configured by set_ios(). Protected by host->lock.
+ * @clk_old: The last clock value that was requested from core.
  *
  * Locking
  * =======
  *
- * @lock is a softirq-safe spinlock protecting @queue as well as
- * @slot, @mrq and @state. These must always be updated
+ * @lock is a softirq-safe spinlock protecting as well as
+ * @mrq and @state. These must always be updated
  * at the same time while holding @lock.
- * The @mrq field of struct dw_mci_slot is also protected by @lock,
- * and must always be written at the same time as the slot is added to
- * @queue.
  *
  * @irq_lock is an irq-safe spinlock protecting the INTMASK register
  * to allow the interrupt handler to modify it directly.  Held for only long
@@ -199,7 +198,6 @@ struct dw_mci {
 	unsigned long		pending_events;
 	unsigned long		completed_events;
 	enum dw_mci_state	state;
-	struct list_head	queue;
 
 	u32			bus_hz;
 	u32			current_speed;
@@ -228,11 +226,10 @@ struct dw_mci {
 	void (*pull_data)(struct dw_mci *host, void *buf, int cnt);
 
 	u32			quirks;
-	bool			vqmmc_enabled;
 	unsigned long		irq_flags; /* IRQ flags */
 	int			irq;
 
-	int			sdio_id0;
+	int			sdio_irq;
 
 	struct timer_list       cmd11_timer;
 	struct timer_list       cto_timer;
@@ -242,6 +239,16 @@ struct dw_mci {
 	struct fault_attr	fail_data_crc;
 	struct hrtimer		fault_timer;
 #endif
+	struct mmc_host		*mmc;
+	unsigned long		flags;
+#define DW_MMC_CARD_PRESENT	0
+#define DW_MMC_CARD_NEED_INIT	1
+#define DW_MMC_CARD_NO_LOW_PWR	2
+#define DW_MMC_CARD_NO_USE_HOLD 3
+#define DW_MMC_CARD_NEEDS_POLL	4
+	u32			ctype;
+	unsigned int		clock;
+	unsigned int		clk_old;
 };
 
 /* DMA ops for Internal/External DMAC interface */
@@ -254,8 +261,6 @@ struct dw_mci_dma_ops {
 	void (*cleanup)(struct dw_mci *host);
 	void (*exit)(struct dw_mci *host);
 };
-
-struct dma_pdata;
 
 /* Board platform data */
 struct dw_mci_board {
@@ -276,7 +281,6 @@ struct dw_mci_board {
 
 	struct reset_control *rstc;
 	struct dw_mci_dma_ops *dma_ops;
-	struct dma_pdata *data;
 };
 
 /* Support for longer data read timeout */
@@ -536,6 +540,7 @@ static inline void mci_fifo_l_writeq(void __iomem *addr, u64 value)
 #define __raw_readq(__reg) (*(volatile u64 __force *)(__reg))
 #endif
 
+extern struct dw_mci *dw_mci_alloc_host(struct device *device);
 extern int dw_mci_probe(struct dw_mci *host);
 extern void dw_mci_remove(struct dw_mci *host);
 #ifdef CONFIG_PM
@@ -545,44 +550,6 @@ extern int dw_mci_runtime_resume(struct device *device);
 static inline int dw_mci_runtime_suspend(struct device *device) { return -EOPNOTSUPP; }
 static inline int dw_mci_runtime_resume(struct device *device) { return -EOPNOTSUPP; }
 #endif
-
-/**
- * struct dw_mci_slot - MMC slot state
- * @mmc: The mmc_host representing this slot.
- * @host: The MMC controller this slot is using.
- * @ctype: Card type for this slot.
- * @mrq: mmc_request currently being processed or waiting to be
- *	processed, or NULL when the slot is idle.
- * @queue_node: List node for placing this node in the @queue list of
- *	&struct dw_mci.
- * @clock: Clock rate configured by set_ios(). Protected by host->lock.
- * @__clk_old: The last clock value that was requested from core.
- *	Keeping track of this helps us to avoid spamming the console.
- * @flags: Random state bits associated with the slot.
- * @id: Number of this slot.
- * @sdio_id: Number of this slot in the SDIO interrupt registers.
- */
-struct dw_mci_slot {
-	struct mmc_host		*mmc;
-	struct dw_mci		*host;
-
-	u32			ctype;
-
-	struct mmc_request	*mrq;
-	struct list_head	queue_node;
-
-	unsigned int		clock;
-	unsigned int		__clk_old;
-
-	unsigned long		flags;
-#define DW_MMC_CARD_PRESENT	0
-#define DW_MMC_CARD_NEED_INIT	1
-#define DW_MMC_CARD_NO_LOW_PWR	2
-#define DW_MMC_CARD_NO_USE_HOLD 3
-#define DW_MMC_CARD_NEEDS_POLL	4
-	int			id;
-	int			sdio_id;
-};
 
 /**
  * dw_mci driver data - dw-mshc implementation specific driver data.
@@ -609,10 +576,10 @@ struct dw_mci_drv_data {
 	int		(*init)(struct dw_mci *host);
 	void		(*set_ios)(struct dw_mci *host, struct mmc_ios *ios);
 	int		(*parse_dt)(struct dw_mci *host);
-	int		(*execute_tuning)(struct dw_mci_slot *slot, u32 opcode);
+	int		(*execute_tuning)(struct dw_mci *host, u32 opcode);
 	int		(*prepare_hs400_tuning)(struct dw_mci *host,
 						struct mmc_ios *ios);
-	int		(*switch_voltage)(struct mmc_host *mmc,
+	int		(*switch_voltage)(struct dw_mci *host,
 					  struct mmc_ios *ios);
 	void		(*set_data_timeout)(struct dw_mci *host,
 					  unsigned int timeout_ns);
