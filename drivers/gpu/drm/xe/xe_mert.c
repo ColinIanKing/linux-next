@@ -12,22 +12,34 @@
 #include "xe_tile.h"
 
 /**
- * xe_mert_invalidate_lmtt - Invalidate MERT LMTT
- * @tile: the &xe_tile
+ * xe_mert_init_early() - Initialize MERT data
+ * @xe: the &xe_device with MERT to init
+ */
+void xe_mert_init_early(struct xe_device *xe)
+{
+	struct xe_tile *tile = xe_device_get_root_tile(xe);
+	struct xe_mert *mert = &tile->mert;
+
+	spin_lock_init(&mert->lock);
+	init_completion(&mert->tlb_inv_done);
+}
+
+/**
+ * xe_mert_invalidate_lmtt() - Invalidate MERT LMTT
+ * @xe: the &xe_device with MERT
  *
  * Trigger invalidation of the MERT LMTT and wait for completion.
  *
  * Return: 0 on success or -ETIMEDOUT in case of a timeout.
  */
-int xe_mert_invalidate_lmtt(struct xe_tile *tile)
+int xe_mert_invalidate_lmtt(struct xe_device *xe)
 {
-	struct xe_device *xe = tile_to_xe(tile);
+	struct xe_tile *tile = xe_device_get_root_tile(xe);
 	struct xe_mert *mert = &tile->mert;
 	const long timeout = HZ / 4;
 	unsigned long flags;
 
 	xe_assert(xe, xe_device_has_mert(xe));
-	xe_assert(xe, xe_tile_is_root(tile));
 
 	spin_lock_irqsave(&mert->lock, flags);
 	if (!mert->tlb_inv_triggered) {
@@ -53,6 +65,7 @@ int xe_mert_invalidate_lmtt(struct xe_tile *tile)
 void xe_mert_irq_handler(struct xe_device *xe, u32 master_ctl)
 {
 	struct xe_tile *tile = xe_device_get_root_tile(xe);
+	struct xe_mert *mert = &tile->mert;
 	unsigned long flags;
 	u32 reg_val;
 	u8 err;
@@ -70,13 +83,13 @@ void xe_mert_irq_handler(struct xe_device *xe, u32 master_ctl)
 	else if (err)
 		drm_dbg(&xe->drm, "MERT catastrophic error: Unexpected fault (0x%x)\n", err);
 
-	spin_lock_irqsave(&tile->mert.lock, flags);
-	if (tile->mert.tlb_inv_triggered) {
+	spin_lock_irqsave(&mert->lock, flags);
+	if (mert->tlb_inv_triggered) {
 		reg_val = xe_mmio_read32(&tile->mmio, MERT_TLB_INV_DESC_A);
 		if (!(reg_val & MERT_TLB_INV_DESC_A_VALID)) {
-			tile->mert.tlb_inv_triggered = false;
-			complete_all(&tile->mert.tlb_inv_done);
+			mert->tlb_inv_triggered = false;
+			complete_all(&mert->tlb_inv_done);
 		}
 	}
-	spin_unlock_irqrestore(&tile->mert.lock, flags);
+	spin_unlock_irqrestore(&mert->lock, flags);
 }
