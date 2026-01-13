@@ -526,14 +526,13 @@ struct fw_iso_packet {
 struct fw_iso_buffer {
 	enum dma_data_direction direction;
 	struct page **pages;
+	dma_addr_t *dma_addrs;
 	int page_count;
-	int page_count_mapped;
 };
 
 int fw_iso_buffer_init(struct fw_iso_buffer *buffer, struct fw_card *card,
 		       int page_count, enum dma_data_direction direction);
 void fw_iso_buffer_destroy(struct fw_iso_buffer *buffer, struct fw_card *card);
-size_t fw_iso_buffer_lookup(struct fw_iso_buffer *buffer, dma_addr_t completed);
 
 struct fw_iso_context;
 typedef void (*fw_iso_callback_t)(struct fw_iso_context *context,
