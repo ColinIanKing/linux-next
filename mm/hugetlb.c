@@ -2810,6 +2810,7 @@ int replace_free_hugepage_folios(unsigned long start_pfn, unsigned long end_pfn)
 	struct page *page;
 	struct hstate *h;
 	LIST_HEAD(list);
+	int ret = 0;
 
 	/* Avoid pfn iterations if no free non-gigantic huge pages */
 	for_each_hstate(h) {
@@ -2835,8 +2836,12 @@ int replace_free_hugepage_folios(unsigned long start_pfn, unsigned long end_pfn)
 
 			/* Not to disrupt normal path by vainly holding hugetlb_lock */
 			if (folio_test_hugetlb(folio) && !folio_ref_count(folio)) {
-				if (isolate_or_dissolve_huge_folio(folio, &list))
+				if (order_is_gigantic(folio_order(folio)))
 					return -ENOMEM;
+
+				ret = alloc_and_dissolve_hugetlb_folio(folio, &list);
+				if (ret)
+					break;
 
 				putback_movable_pages(&list);
 			}
@@ -2851,11 +2856,10 @@ int replace_free_hugepage_folios(unsigned long start_pfn, unsigned long end_pfn)
 			if (order <= MAX_PAGE_ORDER)
 				nr = 1UL << order;
 		}
-
 		start_pfn += nr;
 	}
 
-	return 0;
+	return ret;
 }
 
 void wait_for_freed_hugetlb_folios(void)
