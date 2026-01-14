@@ -1761,35 +1761,39 @@ static int run_one_delayed_ref(struct btrfs_trans_handle *trans,
 			       struct btrfs_delayed_extent_op *extent_op,
 			       bool insert_reserved)
 {
+	struct btrfs_fs_info *fs_info = trans->fs_info;
 	int ret = 0;
 
 	if (TRANS_ABORTED(trans)) {
 		if (insert_reserved) {
 			btrfs_pin_extent(trans, node->bytenr, node->num_bytes);
-			free_head_ref_squota_rsv(trans->fs_info, href);
+			free_head_ref_squota_rsv(fs_info, href);
 		}
 		return 0;
 	}
 
 	if (node->type == BTRFS_TREE_BLOCK_REF_KEY ||
-	    node->type == BTRFS_SHARED_BLOCK_REF_KEY)
+	    node->type == BTRFS_SHARED_BLOCK_REF_KEY) {
 		ret = run_delayed_tree_ref(trans, href, node, extent_op,
 					   insert_reserved);
-	else if (node->type == BTRFS_EXTENT_DATA_REF_KEY ||
-		 node->type == BTRFS_SHARED_DATA_REF_KEY)
+	} else if (node->type == BTRFS_EXTENT_DATA_REF_KEY ||
+		 node->type == BTRFS_SHARED_DATA_REF_KEY) {
 		ret = run_delayed_data_ref(trans, href, node, extent_op,
 					   insert_reserved);
-	else if (node->type == BTRFS_EXTENT_OWNER_REF_KEY)
-		ret = 0;
-	else
-		BUG();
-	if (ret && insert_reserved)
-		btrfs_pin_extent(trans, node->bytenr, node->num_bytes);
-	if (ret < 0)
-		btrfs_err(trans->fs_info,
+	} else if (node->type != BTRFS_EXTENT_OWNER_REF_KEY) {
+		ret = -EUCLEAN;
+		btrfs_err(fs_info, "unexpected delayed ref node type: %u", node->type);
+	}
+
+	if (unlikely(ret)) {
+		if (insert_reserved)
+			btrfs_pin_extent(trans, node->bytenr, node->num_bytes);
+		btrfs_err(fs_info,
 "failed to run delayed ref for logical %llu num_bytes %llu type %u action %u ref_mod %d: %d",
 			  node->bytenr, node->num_bytes, node->type,
 			  node->action, node->ref_mod, ret);
+	}
+
 	return ret;
 }
 
@@ -2559,7 +2563,6 @@ static u64 get_alloc_profile_by_root(struct btrfs_root *root, int data)
 {
 	struct btrfs_fs_info *fs_info = root->fs_info;
 	u64 flags;
-	u64 ret;
 
 	if (data)
 		flags = BTRFS_BLOCK_GROUP_DATA;
@@ -2568,8 +2571,7 @@ static u64 get_alloc_profile_by_root(struct btrfs_root *root, int data)
 	else
 		flags = BTRFS_BLOCK_GROUP_METADATA;
 
-	ret = btrfs_get_alloc_profile(fs_info, flags);
-	return ret;
+	return btrfs_get_alloc_profile(fs_info, flags);
 }
 
 static u64 first_logical_byte(struct btrfs_fs_info *fs_info)
@@ -4191,10 +4193,8 @@ static int find_free_extent_update_loop(struct btrfs_fs_info *fs_info,
 			else
 				trans = btrfs_join_transaction(root);
 
-			if (IS_ERR(trans)) {
-				ret = PTR_ERR(trans);
-				return ret;
-			}
+			if (IS_ERR(trans))
+				return PTR_ERR(trans);
 
 			ret = btrfs_chunk_alloc(trans, space_info, ffe_ctl->flags,
 						CHUNK_ALLOC_FORCE_FOR_EXTENT);
@@ -4288,36 +4288,43 @@ static int prepare_allocation_zoned(struct btrfs_fs_info *fs_info,
 				    struct find_free_extent_ctl *ffe_ctl,
 				    struct btrfs_space_info *space_info)
 {
+	struct btrfs_block_group *block_group;
+
 	if (ffe_ctl->for_treelog) {
 		spin_lock(&fs_info->treelog_bg_lock);
 		if (fs_info->treelog_bg)
 			ffe_ctl->hint_byte = fs_info->treelog_bg;
 		spin_unlock(&fs_info->treelog_bg_lock);
-	} else if (ffe_ctl->for_data_reloc) {
+		return 0;
+	}
+
+	if (ffe_ctl->for_data_reloc) {
 		spin_lock(&fs_info->relocation_bg_lock);
 		if (fs_info->data_reloc_bg)
 			ffe_ctl->hint_byte = fs_info->data_reloc_bg;
 		spin_unlock(&fs_info->relocation_bg_lock);
-	} else if (ffe_ctl->flags & BTRFS_BLOCK_GROUP_DATA) {
-		struct btrfs_block_group *block_group;
-
-		spin_lock(&fs_info->zone_active_bgs_lock);
-		list_for_each_entry(block_group, &fs_info->zone_active_bgs, active_bg_list) {
-			/*
-			 * No lock is OK here because avail is monotonically
-			 * decreasing, and this is just a hint.
-			 */
-			u64 avail = block_group->zone_capacity - block_group->alloc_offset;
-
-			if (block_group_bits(block_group, ffe_ctl->flags) &&
-			    block_group->space_info == space_info &&
-			    avail >= ffe_ctl->num_bytes) {
-				ffe_ctl->hint_byte = block_group->start;
-				break;
-			}
-		}
-		spin_unlock(&fs_info->zone_active_bgs_lock);
+		return 0;
 	}
+
+	if (!(ffe_ctl->flags & BTRFS_BLOCK_GROUP_DATA))
+		return 0;
+
+	spin_lock(&fs_info->zone_active_bgs_lock);
+	list_for_each_entry(block_group, &fs_info->zone_active_bgs, active_bg_list) {
+		/*
+		 * No lock is OK here because avail is monotonically
+		 * decreasing, and this is just a hint.
+		 */
+		u64 avail = block_group->zone_capacity - block_group->alloc_offset;
+
+		if (block_group_bits(block_group, ffe_ctl->flags) &&
+		    block_group->space_info == space_info &&
+		    avail >= ffe_ctl->num_bytes) {
+			ffe_ctl->hint_byte = block_group->start;
+			break;
+		}
+	}
+	spin_unlock(&fs_info->zone_active_bgs_lock);
 
 	return 0;
 }
@@ -5263,7 +5270,6 @@ struct walk_control {
  * @root:	the root we are currently deleting
  * @wc:		the walk control for this deletion
  * @eb:		the parent eb that we're currently visiting
- * @refs:	the number of refs for wc->level - 1
  * @flags:	the flags for wc->level - 1
  * @slot:	the slot in the eb that we're currently checking
  *
@@ -5458,12 +5464,12 @@ static noinline int walk_down_proc(struct btrfs_trans_handle *trans,
 	/* wc->stage == UPDATE_BACKREF */
 	if (!(wc->flags[level] & flag)) {
 		ASSERT(path->locks[level]);
-		ret = btrfs_inc_ref(trans, root, eb, 1);
+		ret = btrfs_inc_ref(trans, root, eb, true);
 		if (unlikely(ret)) {
 			btrfs_abort_transaction(trans, ret);
 			return ret;
 		}
-		ret = btrfs_dec_ref(trans, root, eb, 0);
+		ret = btrfs_dec_ref(trans, root, eb, false);
 		if (unlikely(ret)) {
 			btrfs_abort_transaction(trans, ret);
 			return ret;
@@ -5864,18 +5870,12 @@ static noinline int walk_up_proc(struct btrfs_trans_handle *trans,
 
 	if (wc->refs[level] == 1) {
 		if (level == 0) {
-			if (wc->flags[level] & BTRFS_BLOCK_FLAG_FULL_BACKREF) {
-				ret = btrfs_dec_ref(trans, root, eb, 1);
-				if (ret) {
-					btrfs_abort_transaction(trans, ret);
-					return ret;
-				}
-			} else {
-				ret = btrfs_dec_ref(trans, root, eb, 0);
-				if (unlikely(ret)) {
-					btrfs_abort_transaction(trans, ret);
-					return ret;
-				}
+			const bool full_backref = (wc->flags[level] & BTRFS_BLOCK_FLAG_FULL_BACKREF);
+
+			ret = btrfs_dec_ref(trans, root, eb, full_backref);
+			if (unlikely(ret)) {
+				btrfs_abort_transaction(trans, ret);
+				return ret;
 			}
 			if (btrfs_is_fstree(btrfs_root_id(root))) {
 				ret = btrfs_qgroup_trace_leaf_items(trans, eb);
