@@ -160,7 +160,7 @@ void damon_destroy_region(struct damon_region *r, struct damon_target *t)
 static bool damon_is_last_region(struct damon_region *r,
 		struct damon_target *t)
 {
-	return list_is_last(&t->regions_list, &r->list);
+	return list_is_last(&r->list, &t->regions_list);
 }
 
 /*
