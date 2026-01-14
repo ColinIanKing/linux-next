@@ -432,7 +432,7 @@ int anon_vma_fork(struct vm_area_struct *vma, struct vm_area_struct *pvma)
 static void cleanup_partial_anon_vmas(struct vm_area_struct *vma)
 {
 	struct anon_vma_chain *avc, *next;
-	bool locked = false;
+	struct anon_vma *root = NULL;
 
 	/*
 	 * We exclude everybody else from being able to modify anon_vma's
@@ -444,15 +444,18 @@ static void cleanup_partial_anon_vmas(struct vm_area_struct *vma)
 		struct anon_vma *anon_vma = avc->anon_vma;
 
 		/* All anon_vma's share the same root. */
-		if (!locked) {
-			anon_vma_lock_write(anon_vma);
-			locked = true;
+		if (!root) {
+			root = anon_vma->root;
+			anon_vma_lock_write(root);
 		}
 
 		anon_vma_interval_tree_remove(avc, &anon_vma->rb_root);
 		list_del(&avc->same_vma);
 		anon_vma_chain_free(avc);
 	}
+
+	if (root)
+		anon_vma_unlock_write(root);
 }
 
 /**
