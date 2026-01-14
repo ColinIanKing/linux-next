@@ -238,7 +238,7 @@ static int damon_lru_sort_add_quota_goals(struct damos *hot_scheme,
 			10000 - active_mem_bp + 2);
 	if (!goal)
 		return -ENOMEM;
-	damos_add_quota_goal(&hot_scheme->quota, goal);
+	damos_add_quota_goal(&cold_scheme->quota, goal);
 	return 0;
 }
 
