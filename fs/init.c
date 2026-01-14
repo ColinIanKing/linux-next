@@ -13,6 +13,23 @@
 #include <linux/security.h>
 #include "internal.h"
 
+int __init init_pivot_root(const char *new_root, const char *put_old)
+{
+	struct path new_path __free(path_put) = {};
+	struct path old_path __free(path_put) = {};
+	int ret;
+
+	ret = kern_path(new_root, LOOKUP_FOLLOW | LOOKUP_DIRECTORY, &new_path);
+	if (ret)
+		return ret;
+
+	ret = kern_path(put_old, LOOKUP_FOLLOW | LOOKUP_DIRECTORY, &old_path);
+	if (ret)
+		return ret;
+
+	return path_pivot_root(&new_path, &old_path);
+}
+
 int __init init_mount(const char *dev_name, const char *dir_name,
 		const char *type_page, unsigned long flags, void *data_page)
 {
@@ -140,78 +157,19 @@ int __init init_stat(const char *filename, struct kstat *stat, int flags)
 
 int __init init_mknod(const char *filename, umode_t mode, unsigned int dev)
 {
-	struct dentry *dentry;
-	struct path path;
-	int error;
-
-	if (S_ISFIFO(mode) || S_ISSOCK(mode))
-		dev = 0;
-	else if (!(S_ISBLK(mode) || S_ISCHR(mode)))
-		return -EINVAL;
-
-	dentry = start_creating_path(AT_FDCWD, filename, &path, 0);
-	if (IS_ERR(dentry))
-		return PTR_ERR(dentry);
-
-	mode = mode_strip_umask(d_inode(path.dentry), mode);
-	error = security_path_mknod(&path, dentry, mode, dev);
-	if (!error)
-		error = vfs_mknod(mnt_idmap(path.mnt), path.dentry->d_inode,
-				  dentry, mode, new_decode_dev(dev), NULL);
-	end_creating_path(&path, dentry);
-	return error;
+	return do_mknodat(AT_FDCWD, getname_kernel(filename), mode, dev);
 }
 
 int __init init_link(const char *oldname, const char *newname)
 {
-	struct dentry *new_dentry;
-	struct path old_path, new_path;
-	struct mnt_idmap *idmap;
-	int error;
-
-	error = kern_path(oldname, 0, &old_path);
-	if (error)
-		return error;
-
-	new_dentry = start_creating_path(AT_FDCWD, newname, &new_path, 0);
-	error = PTR_ERR(new_dentry);
-	if (IS_ERR(new_dentry))
-		goto out;
-
-	error = -EXDEV;
-	if (old_path.mnt != new_path.mnt)
-		goto out_dput;
-	idmap = mnt_idmap(new_path.mnt);
-	error = may_linkat(idmap, &old_path);
-	if (unlikely(error))
-		goto out_dput;
-	error = security_path_link(old_path.dentry, &new_path, new_dentry);
-	if (error)
-		goto out_dput;
-	error = vfs_link(old_path.dentry, idmap, new_path.dentry->d_inode,
-			 new_dentry, NULL);
-out_dput:
-	end_creating_path(&new_path, new_dentry);
-out:
-	path_put(&old_path);
-	return error;
+	return do_linkat(AT_FDCWD, getname_kernel(oldname),
+			 AT_FDCWD, getname_kernel(newname), 0);
 }
 
 int __init init_symlink(const char *oldname, const char *newname)
 {
-	struct dentry *dentry;
-	struct path path;
-	int error;
-
-	dentry = start_creating_path(AT_FDCWD, newname, &path, 0);
-	if (IS_ERR(dentry))
-		return PTR_ERR(dentry);
-	error = security_path_symlink(&path, dentry, oldname);
-	if (!error)
-		error = vfs_symlink(mnt_idmap(path.mnt), path.dentry->d_inode,
-				    dentry, oldname, NULL);
-	end_creating_path(&path, dentry);
-	return error;
+	return do_symlinkat(getname_kernel(oldname), AT_FDCWD,
+			    getname_kernel(newname));
 }
 
 int __init init_unlink(const char *pathname)
@@ -221,24 +179,7 @@ int __init init_unlink(const char *pathname)
 
 int __init init_mkdir(const char *pathname, umode_t mode)
 {
-	struct dentry *dentry;
-	struct path path;
-	int error;
-
-	dentry = start_creating_path(AT_FDCWD, pathname, &path,
-				     LOOKUP_DIRECTORY);
-	if (IS_ERR(dentry))
-		return PTR_ERR(dentry);
-	mode = mode_strip_umask(d_inode(path.dentry), mode);
-	error = security_path_mkdir(&path, dentry, mode);
-	if (!error) {
-		dentry = vfs_mkdir(mnt_idmap(path.mnt), path.dentry->d_inode,
-				  dentry, mode, NULL);
-		if (IS_ERR(dentry))
-			error = PTR_ERR(dentry);
-	}
-	end_creating_path(&path, dentry);
-	return error;
+	return do_mkdirat(AT_FDCWD, getname_kernel(pathname), mode);
 }
 
 int __init init_rmdir(const char *pathname)
