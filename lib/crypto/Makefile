@@ -126,6 +126,22 @@ endif # CONFIG_CRYPTO_LIB_MD5_ARCH
 
 ################################################################################
 
+obj-$(CONFIG_CRYPTO_LIB_MLDSA) += libmldsa.o
+libmldsa-y := mldsa.o
+
+################################################################################
+
+obj-$(CONFIG_CRYPTO_LIB_NH) += libnh.o
+libnh-y := nh.o
+ifeq ($(CONFIG_CRYPTO_LIB_NH_ARCH),y)
+CFLAGS_nh.o += -I$(src)/$(SRCARCH)
+libnh-$(CONFIG_ARM) += arm/nh-neon-core.o
+libnh-$(CONFIG_ARM64) += arm64/nh-neon-core.o
+libnh-$(CONFIG_X86) += x86/nh-sse2.o x86/nh-avx2.o
+endif
+
+################################################################################
+
 obj-$(CONFIG_CRYPTO_LIB_POLY1305) += libpoly1305.o
 libpoly1305-y := poly1305.o
 ifeq ($(CONFIG_ARCH_SUPPORTS_INT128),y)
