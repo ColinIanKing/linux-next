@@ -2947,7 +2947,7 @@ static bool free_frozen_page_commit(struct zone *zone,
 		 */
 		if (atomic_read(&pgdat->kswapd_failures) >= MAX_RECLAIM_RETRIES &&
 		    next_memory_node(pgdat->node_id) < MAX_NUMNODES)
-			atomic_set(&pgdat->kswapd_failures, 0);
+			pgdat_reset_kswapd_failures(pgdat, RESET_KSWAPD_FAILURES_PCP);
 	}
 	return ret;
 }
