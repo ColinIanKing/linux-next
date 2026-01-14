@@ -1340,3 +1340,11 @@ The ->setlease() file_operation must now be explicitly set in order to provide
 support for leases. When set to NULL, the kernel will now return -EINVAL to
 attempts to set a lease. Filesystems that wish to use the kernel-internal lease
 implementation should set it to generic_setlease().
+
+---
+
+**mandatory**
+
+do_{mkdir,mknod,link,symlink,renameat2,rmdir,unlink}() are gone; filename_...()
+counterparts replace those.  The difference is that the former used to consume
+filename references; the latter do not.
