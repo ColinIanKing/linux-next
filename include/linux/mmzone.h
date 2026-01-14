@@ -1531,6 +1531,15 @@ static inline unsigned long pgdat_end_pfn(pg_data_t *pgdat)
 	return pgdat->node_start_pfn + pgdat->node_spanned_pages;
 }
 
+enum reset_kswapd_failures_reason {
+	RESET_KSWAPD_FAILURES_OTHER = 0,
+	RESET_KSWAPD_FAILURES_KSWAPD,
+	RESET_KSWAPD_FAILURES_DIRECT,
+	RESET_KSWAPD_FAILURES_PCP,
+};
+
+void pgdat_reset_kswapd_failures(pg_data_t *pgdat, enum reset_kswapd_failures_reason reason);
+
 #include <linux/memory_hotplug.h>
 
 void build_all_zonelists(pg_data_t *pgdat);
