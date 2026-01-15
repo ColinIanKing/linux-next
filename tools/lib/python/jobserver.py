@@ -58,15 +58,27 @@ class JobserverExec:
 
         if self.is_open:
             return
-
+        self.claim = None
+        self.is_open = True  # We only try once
+        #
+        # See what they have told us to do here.
+        #
         try:
-            # Fetch the make environment options.
-            flags = os.environ["MAKEFLAGS"]
-            # Look for "--jobserver=R,W"
-            # Note that GNU Make has used --jobserver-fds and --jobserver-auth
-            # so this handles all of them.
-            opts = [x for x in flags.split(" ") if x.startswith("--jobserver")]
-
+            flags = os.environ['MAKEFLAGS']
+        except KeyError:
+            return
+        #
+        # Look for "--jobserver=R,W"
+        # Note that GNU Make has used --jobserver-fds and --jobserver-auth
+        # so this handles all of them.
+        #
+        opts = [x for x in flags.split(" ") if x.startswith("--jobserver")]
+        if not opts:
+            return
+        #
+        # OK, parse the result.
+        #
+        try:
             # Parse out R,W file descriptor numbers and set them nonblocking.
             # If the MAKEFLAGS variable contains multiple instances of the
             # --jobserver-auth= option, the last one is relevant.
@@ -91,6 +103,10 @@ class JobserverExec:
             while True:
                 try:
                     slot = os.read(self.reader, 8)
+                    if not slot:
+                        # Clear self.jobs to prevent us from probably writing incorrect file.
+                        self.jobs = b""
+                        raise ValueError("unexpected empty token from jobserver fd, invalid '--jobserver-auth=' setting?")
                     self.jobs += slot
                 except (OSError, IOError) as e:
                     if e.errno == errno.EWOULDBLOCK:
@@ -105,7 +121,8 @@ class JobserverExec:
             # to sit here blocked on our child.
             self.claim = len(self.jobs) + 1
 
-        except (KeyError, IndexError, ValueError, OSError, IOError):
+        except (KeyError, IndexError, ValueError, OSError, IOError) as e:
+            print(f"jobserver: warning: {repr(e)}", file=sys.stderr)
             # Any missing environment strings or bad fds should result in just
             # not being parallel.
             self.claim = None
