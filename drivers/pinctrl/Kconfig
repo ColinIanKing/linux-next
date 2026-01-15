@@ -512,7 +512,6 @@ config PINCTRL_POLARFIRE_SOC
 	depends on ARCH_MICROCHIP || COMPILE_TEST
 	depends on OF
 	select GENERIC_PINCONF
-	default y
 	help
 	  This selects the pinctrl driver for Microchip Polarfire SoC.
 
