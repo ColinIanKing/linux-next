@@ -380,9 +380,8 @@ static bool panic_try_force_cpu(char *buf, int buf_size, const char *fmt, va_lis
 		return false;
 
 	/* Another panic already in progress */
-	if (panic_in_progress()) {
+	if (panic_in_progress())
 		return false;
-	}
 
 	/*
 	 * Only one CPU can do the redirect. Use atomic cmpxchg to ensure
