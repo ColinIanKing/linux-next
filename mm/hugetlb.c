@@ -2834,10 +2834,15 @@ int replace_free_hugepage_folios(unsigned long start_pfn, unsigned long end_pfn)
 
 			nr = folio_nr_pages(folio) - folio_page_idx(folio, page);
 
-			/* Not to disrupt normal path by vainly holding hugetlb_lock */
+			/*
+			 * Don't disrupt normal path by vainly holding
+			 * hugetlb_lock
+			 */
 			if (folio_test_hugetlb(folio) && !folio_ref_count(folio)) {
-				if (order_is_gigantic(folio_order(folio)))
-					return -ENOMEM;
+				if (order_is_gigantic(folio_order(folio))) {
+					ret = -ENOMEM;
+					break;
+				}
 
 				ret = alloc_and_dissolve_hugetlb_folio(folio, &list);
 				if (ret)
