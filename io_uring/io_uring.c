@@ -40,37 +40,25 @@
  * Copyright (c) 2018-2019 Christoph Hellwig
  */
 #include <linux/kernel.h>
-#include <linux/init.h>
 #include <linux/errno.h>
 #include <linux/syscalls.h>
-#include <net/compat.h>
 #include <linux/refcount.h>
-#include <linux/uio.h>
 #include <linux/bits.h>
 
 #include <linux/sched/signal.h>
 #include <linux/fs.h>
-#include <linux/file.h>
 #include <linux/mm.h>
-#include <linux/mman.h>
 #include <linux/percpu.h>
 #include <linux/slab.h>
-#include <linux/bvec.h>
-#include <linux/net.h>
-#include <net/sock.h>
 #include <linux/anon_inodes.h>
-#include <linux/sched/mm.h>
 #include <linux/uaccess.h>
 #include <linux/nospec.h>
-#include <linux/fsnotify.h>
-#include <linux/fadvise.h>
 #include <linux/task_work.h>
 #include <linux/io_uring.h>
 #include <linux/io_uring/cmd.h>
 #include <linux/audit.h>
 #include <linux/security.h>
 #include <linux/jump_label.h>
-#include <asm/shmparam.h>
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/io_uring.h>
@@ -334,7 +322,7 @@ static __cold struct io_ring_ctx *io_ring_ctx_alloc(struct io_uring_params *p)
 	init_waitqueue_head(&ctx->poll_wq);
 	spin_lock_init(&ctx->completion_lock);
 	raw_spin_lock_init(&ctx->timeout_lock);
-	INIT_WQ_LIST(&ctx->iopoll_list);
+	INIT_LIST_HEAD(&ctx->iopoll_list);
 	INIT_LIST_HEAD(&ctx->defer_list);
 	INIT_LIST_HEAD(&ctx->timeout_list);
 	INIT_LIST_HEAD(&ctx->ltimeout_list);
@@ -1562,7 +1550,7 @@ __cold void io_iopoll_try_reap_events(struct io_ring_ctx *ctx)
 		return;
 
 	mutex_lock(&ctx->uring_lock);
-	while (!wq_list_empty(&ctx->iopoll_list)) {
+	while (!list_empty(&ctx->iopoll_list)) {
 		/* let it sleep and repeat later if can't complete a request */
 		if (io_do_iopoll(ctx, true) == 0)
 			break;
@@ -1627,21 +1615,18 @@ static int io_iopoll_check(struct io_ring_ctx *ctx, unsigned int min_events)
 		 * forever, while the workqueue is stuck trying to acquire the
 		 * very same mutex.
 		 */
-		if (wq_list_empty(&ctx->iopoll_list) ||
-		    io_task_work_pending(ctx)) {
+		if (list_empty(&ctx->iopoll_list) || io_task_work_pending(ctx)) {
 			u32 tail = ctx->cached_cq_tail;
 
 			(void) io_run_local_work_locked(ctx, min_events);
 
-			if (task_work_pending(current) ||
-			    wq_list_empty(&ctx->iopoll_list)) {
+			if (task_work_pending(current) || list_empty(&ctx->iopoll_list)) {
 				mutex_unlock(&ctx->uring_lock);
 				io_run_task_work();
 				mutex_lock(&ctx->uring_lock);
 			}
 			/* some requests don't go through iopoll_list */
-			if (tail != ctx->cached_cq_tail ||
-			    wq_list_empty(&ctx->iopoll_list))
+			if (tail != ctx->cached_cq_tail || list_empty(&ctx->iopoll_list))
 				break;
 		}
 		ret = io_do_iopoll(ctx, !min_events);
@@ -1684,25 +1669,17 @@ static void io_iopoll_req_issued(struct io_kiocb *req, unsigned int issue_flags)
 	 * how we do polling eventually, not spinning if we're on potentially
 	 * different devices.
 	 */
-	if (wq_list_empty(&ctx->iopoll_list)) {
+	if (list_empty(&ctx->iopoll_list)) {
 		ctx->poll_multi_queue = false;
 	} else if (!ctx->poll_multi_queue) {
 		struct io_kiocb *list_req;
 
-		list_req = container_of(ctx->iopoll_list.first, struct io_kiocb,
-					comp_list);
+		list_req = list_first_entry(&ctx->iopoll_list, struct io_kiocb, iopoll_node);
 		if (list_req->file != req->file)
 			ctx->poll_multi_queue = true;
 	}
 
-	/*
-	 * For fast devices, IO may have already completed. If it has, add
-	 * it to the front so we find it first.
-	 */
-	if (READ_ONCE(req->iopoll_completed))
-		wq_list_add_head(&req->comp_list, &ctx->iopoll_list);
-	else
-		wq_list_add_tail(&req->comp_list, &ctx->iopoll_list);
+	list_add_tail(&req->iopoll_node, &ctx->iopoll_list);
 
 	if (unlikely(needs_lock)) {
 		/*
@@ -2080,6 +2057,8 @@ static inline bool io_check_restriction(struct io_ring_ctx *ctx,
 					struct io_kiocb *req,
 					unsigned int sqe_flags)
 {
+	if (!ctx->op_restricted)
+		return true;
 	if (!test_bit(req->opcode, ctx->restrictions.sqe_op))
 		return false;
 
@@ -2181,8 +2160,8 @@ static int io_init_req(struct io_ring_ctx *ctx, struct io_kiocb *req,
 			io_init_drain(ctx);
 		}
 	}
-	if (unlikely(ctx->restricted || ctx->drain_active || ctx->drain_next)) {
-		if (ctx->restricted && !io_check_restriction(ctx, req, sqe_flags))
+	if (unlikely(ctx->op_restricted || ctx->drain_active || ctx->drain_next)) {
+		if (!io_check_restriction(ctx, req, sqe_flags))
 			return io_init_fail_req(req, -EACCES);
 		/* knock it to the slow queue path, will be drained there */
 		if (ctx->drain_active)
@@ -3003,12 +2982,12 @@ static __cold void io_ring_exit_work(struct work_struct *work)
 			mutex_unlock(&ctx->uring_lock);
 		}
 
-		if (ctx->flags & IORING_SETUP_DEFER_TASKRUN)
-			io_move_task_work_from_local(ctx);
-
 		/* The SQPOLL thread never reaches this path */
-		while (io_uring_try_cancel_requests(ctx, NULL, true, false))
+		do {
+			if (ctx->flags & IORING_SETUP_DEFER_TASKRUN)
+				io_move_task_work_from_local(ctx);
 			cond_resched();
+		} while (io_uring_try_cancel_requests(ctx, NULL, true, false));
 
 		if (ctx->sq_data) {
 			struct io_sq_data *sqd = ctx->sq_data;
@@ -3256,7 +3235,11 @@ SYSCALL_DEFINE6(io_uring_enter, unsigned int, fd, u32, to_submit,
 
 	ctx = file->private_data;
 	ret = -EBADFD;
-	if (unlikely(ctx->flags & IORING_SETUP_R_DISABLED))
+	/*
+	 * Keep IORING_SETUP_R_DISABLED check before submitter_task load
+	 * in io_uring_add_tctx_node() -> __io_uring_add_tctx_node_from_submit()
+	 */
+	if (unlikely(smp_load_acquire(&ctx->flags) & IORING_SETUP_R_DISABLED))
 		goto out;
 
 	/*
@@ -3661,13 +3644,8 @@ static __cold int io_uring_create(struct io_ctx_config *config)
 	}
 
 	if (ctx->flags & IORING_SETUP_SINGLE_ISSUER
-	    && !(ctx->flags & IORING_SETUP_R_DISABLED)) {
-		/*
-		 * Unlike io_register_enable_rings(), don't need WRITE_ONCE()
-		 * since ctx isn't yet accessible from other tasks
-		 */
+	    && !(ctx->flags & IORING_SETUP_R_DISABLED))
 		ctx->submitter_task = get_task_struct(current);
-	}
 
 	file = io_uring_get_file(ctx);
 	if (IS_ERR(file)) {
