@@ -16456,8 +16456,9 @@ F:	tools/mm/
 
 MEMORY MANAGEMENT - BALLOON
 M:	Andrew Morton <akpm@linux-foundation.org>
-M:	David Hildenbrand <david@redhat.com>
+M:	David Hildenbrand <david@kernel.org>
 L:	linux-mm@kvack.org
+L:	virtualization@lists.linux.dev
 S:	Maintained
 W:	http://www.linux-mm.org
 T:	git git://git.kernel.org/pub/scm/linux/kernel/git/akpm/mm
