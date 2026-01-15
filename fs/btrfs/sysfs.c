@@ -11,7 +11,6 @@
 #include <linux/bug.h>
 #include <linux/list.h>
 #include <linux/string_choices.h>
-#include <crypto/hash.h>
 #include "messages.h"
 #include "ctree.h"
 #include "discard.h"
@@ -1253,10 +1252,9 @@ static ssize_t btrfs_checksum_show(struct kobject *kobj,
 {
 	struct btrfs_fs_info *fs_info = to_fs_info(kobj);
 	u16 csum_type = btrfs_super_csum_type(fs_info->super_copy);
+	const char *csum_name = btrfs_super_csum_name(csum_type);
 
-	return sysfs_emit(buf, "%s (%s)\n",
-			  btrfs_super_csum_name(csum_type),
-			  crypto_shash_driver_name(fs_info->csum_shash));
+	return sysfs_emit(buf, "%s (%s-lib)\n", csum_name, csum_name);
 }
 
 BTRFS_ATTR(, checksum, btrfs_checksum_show);
@@ -1540,47 +1538,6 @@ static ssize_t btrfs_bg_reclaim_threshold_store(struct kobject *kobj,
 BTRFS_ATTR_RW(, bg_reclaim_threshold, btrfs_bg_reclaim_threshold_show,
 	      btrfs_bg_reclaim_threshold_store);
 
-#ifdef CONFIG_BTRFS_EXPERIMENTAL
-static ssize_t btrfs_offload_csum_show(struct kobject *kobj,
-				       struct kobj_attribute *a, char *buf)
-{
-	struct btrfs_fs_devices *fs_devices = to_fs_devs(kobj);
-
-	switch (READ_ONCE(fs_devices->offload_csum_mode)) {
-	case BTRFS_OFFLOAD_CSUM_AUTO:
-		return sysfs_emit(buf, "auto\n");
-	case BTRFS_OFFLOAD_CSUM_FORCE_ON:
-		return sysfs_emit(buf, "1\n");
-	case BTRFS_OFFLOAD_CSUM_FORCE_OFF:
-		return sysfs_emit(buf, "0\n");
-	default:
-		WARN_ON(1);
-		return -EINVAL;
-	}
-}
-
-static ssize_t btrfs_offload_csum_store(struct kobject *kobj,
-					struct kobj_attribute *a, const char *buf,
-					size_t len)
-{
-	struct btrfs_fs_devices *fs_devices = to_fs_devs(kobj);
-	int ret;
-	bool val;
-
-	ret = kstrtobool(buf, &val);
-	if (ret == 0)
-		WRITE_ONCE(fs_devices->offload_csum_mode,
-			   val ? BTRFS_OFFLOAD_CSUM_FORCE_ON : BTRFS_OFFLOAD_CSUM_FORCE_OFF);
-	else if (ret == -EINVAL && sysfs_streq(buf, "auto"))
-		WRITE_ONCE(fs_devices->offload_csum_mode, BTRFS_OFFLOAD_CSUM_AUTO);
-	else
-		return -EINVAL;
-
-	return len;
-}
-BTRFS_ATTR_RW(, offload_csum, btrfs_offload_csum_show, btrfs_offload_csum_store);
-#endif
-
 /*
  * Per-filesystem information and stats.
  *
@@ -1600,9 +1557,6 @@ static const struct attribute *btrfs_attrs[] = {
 	BTRFS_ATTR_PTR(, bg_reclaim_threshold),
 	BTRFS_ATTR_PTR(, commit_stats),
 	BTRFS_ATTR_PTR(, temp_fsid),
-#ifdef CONFIG_BTRFS_EXPERIMENTAL
-	BTRFS_ATTR_PTR(, offload_csum),
-#endif
 	NULL,
 };
 
