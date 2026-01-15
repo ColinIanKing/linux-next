@@ -45,7 +45,7 @@
 
 /*
  * Balloon device information descriptor.
- * This struct is used to allow the common balloon compaction interface
+ * This struct is used to allow the common balloon page migration interface
  * procedures to find the proper balloon device holding memory pages they'll
  * have to cope for page compaction / migration, as well as it serves the
  * balloon driver as a page book-keeper for its registered balloon devices.
