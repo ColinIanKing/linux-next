@@ -61,6 +61,17 @@ enum panthor_device_pm_state {
 	PANTHOR_DEVICE_PM_STATE_SUSPENDING,
 };
 
+enum panthor_irq_state {
+	/** @PANTHOR_IRQ_STATE_ACTIVE: IRQ is active and ready to process events. */
+	PANTHOR_IRQ_STATE_ACTIVE = 0,
+	/** @PANTHOR_IRQ_STATE_PROCESSING: IRQ is currently processing events. */
+	PANTHOR_IRQ_STATE_PROCESSING,
+	/** @PANTHOR_IRQ_STATE_SUSPENDED: IRQ is suspended. */
+	PANTHOR_IRQ_STATE_SUSPENDED,
+	/** @PANTHOR_IRQ_STATE_SUSPENDING: IRQ is being suspended. */
+	PANTHOR_IRQ_STATE_SUSPENDING,
+};
+
 /**
  * struct panthor_irq - IRQ data
  *
@@ -76,8 +87,8 @@ struct panthor_irq {
 	/** @mask: Current mask being applied to xxx_INT_MASK. */
 	u32 mask;
 
-	/** @suspended: Set to true when the IRQ is suspended. */
-	atomic_t suspended;
+	/** @state: one of &enum panthor_irq_state reflecting the current state. */
+	atomic_t state;
 };
 
 /**
@@ -409,10 +420,15 @@ static irqreturn_t panthor_ ## __name ## _irq_raw_handler(int irq, void *data)		
 {												\
 	struct panthor_irq *pirq = data;							\
 	struct panthor_device *ptdev = pirq->ptdev;						\
+	enum panthor_irq_state old_state;							\
 												\
-	if (atomic_read(&pirq->suspended))							\
-		return IRQ_NONE;								\
 	if (!gpu_read(ptdev, __reg_prefix ## _INT_STAT))					\
+		return IRQ_NONE;								\
+												\
+	old_state = atomic_cmpxchg(&pirq->state,						\
+				   PANTHOR_IRQ_STATE_ACTIVE,					\
+				   PANTHOR_IRQ_STATE_PROCESSING);				\
+	if (old_state != PANTHOR_IRQ_STATE_ACTIVE)						\
 		return IRQ_NONE;								\
 												\
 	gpu_write(ptdev, __reg_prefix ## _INT_MASK, 0);						\
@@ -423,6 +439,7 @@ static irqreturn_t panthor_ ## __name ## _irq_threaded_handler(int irq, void *da
 {												\
 	struct panthor_irq *pirq = data;							\
 	struct panthor_device *ptdev = pirq->ptdev;						\
+	enum panthor_irq_state old_state;							\
 	irqreturn_t ret = IRQ_NONE;								\
 												\
 	while (true) {										\
@@ -435,7 +452,10 @@ static irqreturn_t panthor_ ## __name ## _irq_threaded_handler(int irq, void *da
 		ret = IRQ_HANDLED;								\
 	}											\
 												\
-	if (!atomic_read(&pirq->suspended))							\
+	old_state = atomic_cmpxchg(&pirq->state,						\
+				   PANTHOR_IRQ_STATE_PROCESSING,				\
+				   PANTHOR_IRQ_STATE_ACTIVE);					\
+	if (old_state == PANTHOR_IRQ_STATE_PROCESSING)						\
 		gpu_write(ptdev, __reg_prefix ## _INT_MASK, pirq->mask);			\
 												\
 	return ret;										\
@@ -445,14 +465,15 @@ static inline void panthor_ ## __name ## _irq_suspend(struct panthor_irq *pirq)	
 {												\
 	pirq->mask = 0;										\
 	gpu_write(pirq->ptdev, __reg_prefix ## _INT_MASK, 0);					\
+	atomic_set(&pirq->state, PANTHOR_IRQ_STATE_SUSPENDING);					\
 	synchronize_irq(pirq->irq);								\
-	atomic_set(&pirq->suspended, true);							\
+	atomic_set(&pirq->state, PANTHOR_IRQ_STATE_SUSPENDED);					\
 }												\
 												\
 static inline void panthor_ ## __name ## _irq_resume(struct panthor_irq *pirq, u32 mask)	\
 {												\
-	atomic_set(&pirq->suspended, false);							\
 	pirq->mask = mask;									\
+	atomic_set(&pirq->state, PANTHOR_IRQ_STATE_ACTIVE);					\
 	gpu_write(pirq->ptdev, __reg_prefix ## _INT_CLEAR, mask);				\
 	gpu_write(pirq->ptdev, __reg_prefix ## _INT_MASK, mask);				\
 }												\
