@@ -48,6 +48,34 @@ TRACE_EVENT_FN(gpu_power_status,
 	panthor_hw_power_status_register, panthor_hw_power_status_unregister
 );
 
+/**
+ * gpu_job_irq - called after a job interrupt from firmware completes
+ * @dev: pointer to the &struct device, for printing the device name
+ * @events: bitmask of BIT(CSG id) | BIT(31) for a global event
+ * @duration_ns: Nanoseconds between job IRQ handler entry and exit
+ *
+ * The panthor_job_irq_handler() function instrumented by this tracepoint exits
+ * once it has queued the firmware interrupts for processing, not when the
+ * firmware interrupts are fully processed. This tracepoint allows for debugging
+ * issues with delays in the workqueue's processing of events.
+ */
+TRACE_EVENT(gpu_job_irq,
+	TP_PROTO(const struct device *dev, u32 events, u32 duration_ns),
+	TP_ARGS(dev, events, duration_ns),
+	TP_STRUCT__entry(
+		__string(dev_name, dev_name(dev))
+		__field(u32, events)
+		__field(u32, duration_ns)
+	),
+	TP_fast_assign(
+		__assign_str(dev_name);
+		__entry->events		= events;
+		__entry->duration_ns	= duration_ns;
+	),
+	TP_printk("%s: events=0x%x duration_ns=%d", __get_str(dev_name),
+		  __entry->events, __entry->duration_ns)
+);
+
 #endif /* __PANTHOR_TRACE_H__ */
 
 #undef TRACE_INCLUDE_PATH
