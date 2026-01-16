@@ -28,6 +28,16 @@ static void io_uring_populate_bpf_ctx(struct io_uring_bpf_ctx *bctx,
 	bctx->opcode = req->opcode;
 	bctx->sqe_flags = (__force int) req->flags & SQE_VALID_FLAGS;
 	bctx->user_data = req->cqe.user_data;
+
+	/*
+	 * Opcodes can provide a handler fo populating more data into bctx,
+	 * for filters to use.
+	 */
+	switch (req->opcode) {
+	case IORING_OP_SOCKET:
+		io_socket_bpf_populate(bctx, req);
+		break;
+	}
 }
 
 /*

@@ -12,7 +12,14 @@ struct io_uring_bpf_ctx {
 	__u8	sqe_flags;
 	__u8	pad[6];
 	__u64	user_data;
-	__u64	resv[6];
+	union {
+		__u64	resv[6];
+		struct {
+			__u32	family;
+			__u32	type;
+			__u32	protocol;
+		} socket;
+	};
 };
 
 enum {
