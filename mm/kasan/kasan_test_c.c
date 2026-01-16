@@ -1881,7 +1881,7 @@ static void vmalloc_oob(struct kunit *test)
 
 	vmalloc_oob_helper(test, v_ptr, size);
 
-	size--;
+	size -= KASAN_GRANULE_SIZE + 1;
 	v_ptr = vrealloc(v_ptr, size, GFP_KERNEL);
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, v_ptr);
 
@@ -1889,7 +1889,7 @@ static void vmalloc_oob(struct kunit *test)
 
 	vmalloc_oob_helper(test, v_ptr, size);
 
-	size += 2;
+	size += 2 * KASAN_GRANULE_SIZE + 2;
 	v_ptr = vrealloc(v_ptr, size, GFP_KERNEL);
 	KUNIT_ASSERT_NOT_ERR_OR_NULL(test, v_ptr);
 
