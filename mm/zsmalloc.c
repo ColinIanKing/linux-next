@@ -1142,8 +1142,8 @@ void zs_obj_read_end(struct zs_pool *pool, unsigned long handle,
 }
 EXPORT_SYMBOL_GPL(zs_obj_read_end);
 
-int zs_obj_read_sg_begin(struct zs_pool *pool, unsigned long handle,
-			 struct scatterlist *sg, size_t mem_len)
+void zs_obj_read_sg_begin(struct zs_pool *pool, unsigned long handle,
+			  struct scatterlist *sg, size_t mem_len)
 {
 	struct zspage *zspage;
 	struct zpdesc *zpdesc;
@@ -1186,8 +1186,6 @@ int zs_obj_read_sg_begin(struct zs_pool *pool, unsigned long handle,
 
 		sg_set_page(sg, zpdesc_page(zpdesc), sizes[1], 0);
 	}
-
-	return 0;
 }
 EXPORT_SYMBOL_GPL(zs_obj_read_sg_begin);
 
