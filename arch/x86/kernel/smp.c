@@ -300,6 +300,25 @@ struct smp_ops smp_ops = {
 };
 EXPORT_SYMBOL_GPL(smp_ops);
 
+DEFINE_STATIC_CALL(x86_send_call_func_single_ipi,
+		   native_send_call_func_single_ipi);
+DEFINE_STATIC_CALL(x86_send_call_func_ipi,
+		   native_send_call_func_ipi);
+DEFINE_STATIC_CALL(x86_smp_send_reschedule,
+		   native_smp_send_reschedule);
+EXPORT_STATIC_CALL(x86_smp_send_reschedule);
+
+void x86_smp_ops_static_call_update(void)
+{
+	static_call_update(x86_send_call_func_single_ipi,
+			   smp_ops.send_call_func_single_ipi);
+	static_call_update(x86_send_call_func_ipi,
+			   smp_ops.send_call_func_ipi);
+	static_call_update(x86_smp_send_reschedule,
+			   smp_ops.smp_send_reschedule);
+}
+EXPORT_SYMBOL_GPL(x86_smp_ops_static_call_update);
+
 int arch_cpu_rescan_dead_smt_siblings(void)
 {
 	enum cpuhp_smt_control old = cpu_smt_control;
