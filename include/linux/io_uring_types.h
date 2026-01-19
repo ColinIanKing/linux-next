@@ -224,7 +224,10 @@ struct io_restriction {
 	DECLARE_BITMAP(sqe_op, IORING_OP_LAST);
 	u8 sqe_flags_allowed;
 	u8 sqe_flags_required;
-	bool registered;
+	/* IORING_OP_* restrictions exist */
+	bool op_registered;
+	/* IORING_REGISTER_* restrictions exist */
+	bool reg_registered;
 };
 
 struct io_submit_link {
@@ -259,7 +262,8 @@ struct io_ring_ctx {
 	struct {
 		unsigned int		flags;
 		unsigned int		drain_next: 1;
-		unsigned int		restricted: 1;
+		unsigned int		op_restricted: 1;
+		unsigned int		reg_restricted: 1;
 		unsigned int		off_timeout_used: 1;
 		unsigned int		drain_active: 1;
 		unsigned int		has_evfd: 1;
@@ -316,7 +320,7 @@ struct io_ring_ctx {
 		 * manipulate the list, hence no extra locking is needed there.
 		 */
 		bool			poll_multi_queue;
-		struct io_wq_work_list	iopoll_list;
+		struct list_head	iopoll_list;
 
 		struct io_file_table	file_table;
 		struct io_rsrc_data	buf_table;
@@ -714,15 +718,21 @@ struct io_kiocb {
 
 	atomic_t			refs;
 	bool				cancel_seq_set;
-	struct io_task_work		io_task_work;
+
+	union {
+		struct io_task_work	io_task_work;
+		/* For IOPOLL setup queues, with hybrid polling */
+		u64                     iopoll_start;
+	};
+
 	union {
 		/*
 		 * for polled requests, i.e. IORING_OP_POLL_ADD and async armed
 		 * poll
 		 */
 		struct hlist_node	hash_node;
-		/* For IOPOLL setup queues, with hybrid polling */
-		u64                     iopoll_start;
+		/* IOPOLL completion handling */
+		struct list_head	iopoll_node;
 		/* for private io_kiocb freeing */
 		struct rcu_head		rcu_head;
 	};
