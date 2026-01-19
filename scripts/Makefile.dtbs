@@ -24,6 +24,7 @@ multi-dtb-y     := $(addprefix $(obj)/, $(multi-dtb-y))
 real-dtb-y      := $(addprefix $(obj)/, $(real-dtb-y))
 
 always-y        += $(dtb-y)
+
 targets         += $(real-dtb-y)
 
 # dtbs-list
