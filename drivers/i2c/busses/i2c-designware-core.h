@@ -42,6 +42,19 @@
 #define DW_IC_DATA_CMD_FIRST_DATA_BYTE		BIT(11)
 
 /*
+ * Register access parameters
+ */
+#define DW_IC_REG_STEP_BYTES			2
+#define DW_IC_REG_WORD_SHIFT			16
+
+/*
+ * FIFO depth configuration
+ */
+#define DW_IC_FIFO_TX_FIELD			GENMASK(23, 16)
+#define DW_IC_FIFO_RX_FIELD			GENMASK(15, 8)
+#define DW_IC_FIFO_MIN_DEPTH			2
+
+/*
  * Registers offset
  */
 #define DW_IC_CON				0x00
@@ -314,7 +327,6 @@ struct dw_i2c_dev {
 #define ACCESS_POLLING				BIT(3)
 
 #define MODEL_MSCC_OCELOT			BIT(8)
-#define MODEL_BAIKAL_BT1			BIT(9)
 #define MODEL_AMD_NAVI_GPU			BIT(10)
 #define MODEL_WANGXUN_SP			BIT(11)
 #define MODEL_MASK				GENMASK(11, 8)
@@ -386,7 +398,7 @@ void i2c_dw_disable(struct dw_i2c_dev *dev);
 extern void i2c_dw_configure_master(struct dw_i2c_dev *dev);
 extern int i2c_dw_probe_master(struct dw_i2c_dev *dev);
 
-#if IS_ENABLED(CONFIG_I2C_DESIGNWARE_SLAVE)
+#if IS_ENABLED(CONFIG_I2C_SLAVE)
 extern void i2c_dw_configure_slave(struct dw_i2c_dev *dev);
 extern int i2c_dw_probe_slave(struct dw_i2c_dev *dev);
 #else
