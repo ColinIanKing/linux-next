@@ -1,0 +1,33 @@
+soc/arm
+
+soc/dt
+	broadcom/dt
+		https://github.com/Broadcom/stblinux tags/arm-soc/for-6.19/devicetree-arm64
+	aspeed/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/bmc/linux tags/aspeed-6.20-devicetree-0
+	renesas/dt
+		git://git.kernel.org/pub/scm/linux/kernel/git/geert/renesas-devel tags/renesas-dts-for-v6.20-tag1
+
+soc/drivers
+
+soc/defconfig
+
+soc/late
+
+arm/fixes
+	patch
+		ARM: dts: ixp4xx: Fix up Actiontec MI424WR DTS files
+	ti/fixes
+		https://git.kernel.org/pub/scm/linux/kernel/git/ti/linux tags/ti-k3-dt-fixes-for-v6.19
+	patch
+		MAINTAINERS: Fix a linusw mail address
+	<no branch> (9a96cc8bbeefbc64654ac9c3da619443c22f6d32)
+		https://github.com/Broadcom/stblinux tags/arm-soc/for-6.19/devicetree-arm64-fixes
+	patch
+		Documentation/process: maintainer-soc: Be more explicit about defconfig
+		Documentation/process: maintainer-soc: Mark 'make' as commands
+	imx/fixes
+		https://git.kernel.org/pub/scm/linux/kernel/git/shawnguo/linux tags/imx-fixes-6.19
+	patch
+		arm64: dts: hisilicon: hikey960: Drop "snps,gctl-reset-quirk" and "snps,tx_de_emphasis*" properties
+
