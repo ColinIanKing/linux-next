@@ -34,7 +34,7 @@
  *
  * And the following kfunc:
  *
- *	BTF_ID_FLAGS(func, bpf_task_acquire, KF_ACQUIRE | KF_TRUSTED_ARGS)
+ *	BTF_ID_FLAGS(func, bpf_task_acquire, KF_ACQUIRE)
  *
  * All invocations to the kfunc must pass the unmodified, unwalked task:
  *
@@ -66,7 +66,6 @@
  *	return 0;
  * }
  */
-#define KF_TRUSTED_ARGS (1 << 4) /* kfunc only takes trusted pointer arguments */
 #define KF_SLEEPABLE    (1 << 5) /* kfunc may sleep */
 #define KF_DESTRUCTIVE  (1 << 6) /* kfunc performs destructive actions */
 #define KF_RCU          (1 << 7) /* kfunc takes either rcu or trusted pointer arguments */
@@ -220,6 +219,7 @@ bool btf_is_module(const struct btf *btf);
 bool btf_is_vmlinux(const struct btf *btf);
 struct module *btf_try_get_module(const struct btf *btf);
 u32 btf_nr_types(const struct btf *btf);
+u32 btf_named_start_id(const struct btf *btf, bool own);
 struct btf *btf_base_btf(const struct btf *btf);
 bool btf_type_is_i32(const struct btf_type *t);
 bool btf_type_is_i64(const struct btf_type *t);
