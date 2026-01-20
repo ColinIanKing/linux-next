@@ -8,7 +8,10 @@ use hal::FalconHal;
 
 use kernel::{
     device,
-    dma::DmaAddress,
+    dma::{
+        DmaAddress,
+        DmaMask, //
+    },
     io::poll::read_poll_timeout,
     prelude::*,
     sync::aref::ARef,
@@ -466,10 +469,16 @@ impl<E: FalconEngine + 'static> Falcon<E> {
         if dma_start % DmaAddress::from(DMA_LEN) > 0 {
             dev_err!(
                 self.dev,
-                "DMA transfer start addresses must be a multiple of {}",
+                "DMA transfer start addresses must be a multiple of {}\n",
                 DMA_LEN
             );
             return Err(EINVAL);
+        }
+
+        // The DMATRFBASE/1 register pair only supports a 49-bit address.
+        if dma_start > DmaMask::new::<49>().value() {
+            dev_err!(self.dev, "DMA address {:#x} exceeds 49 bits\n", dma_start);
+            return Err(ERANGE);
         }
 
         // DMA transfers can only be done in units of 256 bytes. Compute how many such transfers we
@@ -483,11 +492,11 @@ impl<E: FalconEngine + 'static> Falcon<E> {
             .and_then(|size| size.checked_add(load_offsets.src_start))
         {
             None => {
-                dev_err!(self.dev, "DMA transfer length overflow");
+                dev_err!(self.dev, "DMA transfer length overflow\n");
                 return Err(EOVERFLOW);
             }
             Some(upper_bound) if usize::from_safe_cast(upper_bound) > fw.size() => {
-                dev_err!(self.dev, "DMA transfer goes beyond range of DMA object");
+                dev_err!(self.dev, "DMA transfer goes beyond range of DMA object\n");
                 return Err(EINVAL);
             }
             Some(_) => (),
