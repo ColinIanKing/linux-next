@@ -761,7 +761,7 @@ next:
 	nritems = btrfs_header_nritems(leaf);
 
 	while (1) {
-		if (btrfs_fs_closing(fs_info) > 1) {
+		if (btrfs_fs_closing_done(fs_info)) {
 			last = (u64)-1;
 			break;
 		}
@@ -1057,8 +1057,7 @@ static int remove_block_group_item(struct btrfs_trans_handle *trans,
 	if (ret < 0)
 		return ret;
 
-	ret = btrfs_del_item(trans, root, path);
-	return ret;
+	return btrfs_del_item(trans, root, path);
 }
 
 int btrfs_remove_block_group(struct btrfs_trans_handle *trans,
@@ -1377,8 +1376,7 @@ static int inc_block_group_ro(struct btrfs_block_group *cache, bool force)
 		goto out;
 	}
 
-	num_bytes = cache->length - cache->reserved - cache->pinned -
-		    cache->bytes_super - cache->zone_unusable - cache->used;
+	num_bytes = btrfs_block_group_available_space(cache);
 
 	/*
 	 * Data never overcommits, even in mixed mode, so do just the straight
@@ -2266,7 +2264,7 @@ static int exclude_super_stripes(struct btrfs_block_group *cache)
 	return 0;
 }
 
-static struct btrfs_block_group *btrfs_create_block_group_cache(
+static struct btrfs_block_group *btrfs_create_block_group(
 		struct btrfs_fs_info *fs_info, u64 start)
 {
 	struct btrfs_block_group *cache;
@@ -2370,7 +2368,7 @@ static int read_one_block_group(struct btrfs_fs_info *info,
 
 	ASSERT(key->type == BTRFS_BLOCK_GROUP_ITEM_KEY);
 
-	cache = btrfs_create_block_group_cache(info, key->objectid);
+	cache = btrfs_create_block_group(info, key->objectid);
 	if (!cache)
 		return -ENOMEM;
 
@@ -2491,7 +2489,7 @@ static int fill_dummy_bgs(struct btrfs_fs_info *fs_info)
 		struct btrfs_block_group *bg;
 
 		map = rb_entry(node, struct btrfs_chunk_map, rb_node);
-		bg = btrfs_create_block_group_cache(fs_info, map->start);
+		bg = btrfs_create_block_group(fs_info, map->start);
 		if (!bg) {
 			ret = -ENOMEM;
 			break;
@@ -2886,7 +2884,7 @@ struct btrfs_block_group *btrfs_make_block_group(struct btrfs_trans_handle *tran
 
 	btrfs_set_log_full_commit(trans);
 
-	cache = btrfs_create_block_group_cache(fs_info, chunk_offset);
+	cache = btrfs_create_block_group(fs_info, chunk_offset);
 	if (!cache)
 		return ERR_PTR(-ENOMEM);
 
@@ -3090,7 +3088,6 @@ unlock_out:
 void btrfs_dec_block_group_ro(struct btrfs_block_group *cache)
 {
 	struct btrfs_space_info *sinfo = cache->space_info;
-	u64 num_bytes;
 
 	BUG_ON(!cache->ro);
 
@@ -3106,10 +3103,7 @@ void btrfs_dec_block_group_ro(struct btrfs_block_group *cache)
 			btrfs_space_info_update_bytes_zone_unusable(sinfo, cache->zone_unusable);
 			sinfo->bytes_readonly -= cache->zone_unusable;
 		}
-		num_bytes = cache->length - cache->reserved -
-			    cache->pinned - cache->bytes_super -
-			    cache->zone_unusable - cache->used;
-		sinfo->bytes_readonly -= num_bytes;
+		sinfo->bytes_readonly -= btrfs_block_group_available_space(cache);
 		list_del_init(&cache->ro_list);
 	}
 	spin_unlock(&cache->lock);

@@ -59,10 +59,6 @@ enum {
 struct erofs_mount_opts {
 	/* current strategy of how to use managed cache */
 	unsigned char cache_strategy;
-	/* strategy of sync decompression (0 - auto, 1 - force on, 2 - force off) */
-	unsigned int sync_decompress;
-	/* threshold for decompression synchronously */
-	unsigned int max_sync_decompress_pages;
 	unsigned int mount_opt;
 };
 
@@ -116,6 +112,7 @@ struct erofs_sb_info {
 	/* managed XArray arranged in physical block number */
 	struct xarray managed_pslots;
 
+	unsigned int sync_decompress;	/* strategy for sync decompression */
 	unsigned int shrinker_run_no;
 	u16 available_compr_algs;
 
@@ -540,7 +537,5 @@ static inline void erofs_fscache_submit_bio(struct bio *bio) {}
 long erofs_ioctl(struct file *filp, unsigned int cmd, unsigned long arg);
 long erofs_compat_ioctl(struct file *filp, unsigned int cmd,
 			unsigned long arg);
-
-#define EFSCORRUPTED    EUCLEAN         /* Filesystem is corrupted */
 
 #endif	/* __EROFS_INTERNAL_H */
