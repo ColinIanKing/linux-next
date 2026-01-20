@@ -2,10 +2,8 @@
 #include <linux/kernel.h>
 #include <linux/errno.h>
 #include <linux/fs.h>
-#include <linux/file.h>
 #include <linux/mm.h>
 #include <linux/slab.h>
-#include <linux/namei.h>
 #include <linux/nospec.h>
 #include <linux/io_uring.h>
 
@@ -539,7 +537,7 @@ __cold bool io_uring_try_cancel_requests(struct io_ring_ctx *ctx,
 	/* SQPOLL thread does its own polling */
 	if ((!(ctx->flags & IORING_SETUP_SQPOLL) && cancel_all) ||
 	    is_sqpoll_thread) {
-		while (!wq_list_empty(&ctx->iopoll_list)) {
+		while (!list_empty(&ctx->iopoll_list)) {
 			io_iopoll_try_reap_events(ctx);
 			ret = true;
 			cond_resched();
