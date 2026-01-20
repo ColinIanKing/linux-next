@@ -85,4 +85,5 @@ void __init xen_hvm_smp_init(void)
 	smp_ops.smp_send_reschedule = xen_smp_send_reschedule;
 	smp_ops.send_call_func_ipi = xen_smp_send_call_function_ipi;
 	smp_ops.send_call_func_single_ipi = xen_smp_send_call_function_single_ipi;
+	x86_smp_ops_static_call_update();
 }
