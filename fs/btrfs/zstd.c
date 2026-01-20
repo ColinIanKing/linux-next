@@ -589,7 +589,7 @@ int zstd_decompress_bio(struct list_head *ws, struct compressed_bio *cb)
 {
 	struct btrfs_fs_info *fs_info = cb_to_fs_info(cb);
 	struct workspace *workspace = list_entry(ws, struct workspace, list);
-	struct folio **folios_in = cb->compressed_folios;
+	struct folio_iter fi;
 	size_t srclen = cb->compressed_len;
 	zstd_dstream *stream;
 	int ret = 0;
@@ -612,7 +612,11 @@ int zstd_decompress_bio(struct list_head *ws, struct compressed_bio *cb)
 		goto done;
 	}
 
-	workspace->in_buf.src = kmap_local_folio(folios_in[folio_in_index], 0);
+	bio_first_folio(&fi, &cb->bbio.bio, 0);
+	ASSERT(fi.folio);
+	ASSERT(folio_size(fi.folio) == blocksize);
+
+	workspace->in_buf.src = kmap_local_folio(fi.folio, 0);
 	workspace->in_buf.pos = 0;
 	workspace->in_buf.size = min_t(size_t, srclen, min_folio_size);
 
@@ -660,8 +664,9 @@ int zstd_decompress_bio(struct list_head *ws, struct compressed_bio *cb)
 				goto done;
 			}
 			srclen -= min_folio_size;
-			workspace->in_buf.src =
-				kmap_local_folio(folios_in[folio_in_index], 0);
+			bio_next_folio(&fi, &cb->bbio.bio);
+			ASSERT(fi.folio);
+			workspace->in_buf.src = kmap_local_folio(fi.folio, 0);
 			workspace->in_buf.pos = 0;
 			workspace->in_buf.size = min_t(size_t, srclen, min_folio_size);
 		}
