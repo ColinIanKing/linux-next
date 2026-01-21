@@ -29,6 +29,7 @@
 #include "file-item.h"
 #include "file.h"
 #include "super.h"
+#include "relocation.h"
 
 #define BITS_PER_BITMAP		(PAGE_SIZE * 8UL)
 #define MAX_CACHE_BYTES_PER_GIG	SZ_64K
@@ -1079,7 +1080,7 @@ int write_cache_extent_entries(struct btrfs_io_ctl *io_ctl,
 	struct btrfs_trim_range *trim_entry;
 
 	/* Get the cluster for this block_group if it exists */
-	if (block_group && !list_empty(&block_group->cluster_list)) {
+	if (!list_empty(&block_group->cluster_list)) {
 		cluster = list_first_entry(&block_group->cluster_list,
 					   struct btrfs_free_cluster, block_group_list);
 	}
@@ -1200,11 +1201,9 @@ static noinline_for_stack int write_pinned_extent_entries(
 			    int *entries)
 {
 	u64 start, extent_start, extent_end, len;
+	const u64 block_group_end = btrfs_block_group_end(block_group);
 	struct extent_io_tree *unpin = NULL;
 	int ret;
-
-	if (!block_group)
-		return 0;
 
 	/*
 	 * We want to add any pinned extents to our free space cache
@@ -1217,19 +1216,18 @@ static noinline_for_stack int write_pinned_extent_entries(
 
 	start = block_group->start;
 
-	while (start < block_group->start + block_group->length) {
+	while (start < block_group_end) {
 		if (!btrfs_find_first_extent_bit(unpin, start,
 						 &extent_start, &extent_end,
 						 EXTENT_DIRTY, NULL))
 			return 0;
 
 		/* This pinned extent is out of our range */
-		if (extent_start >= block_group->start + block_group->length)
+		if (extent_start >= block_group_end)
 			return 0;
 
 		extent_start = max(extent_start, start);
-		extent_end = min(block_group->start + block_group->length,
-				 extent_end + 1);
+		extent_end = min(block_group_end, extent_end + 1);
 		len = extent_end - extent_start;
 
 		*entries += 1;
@@ -1374,9 +1372,9 @@ int btrfs_wait_cache_io(struct btrfs_trans_handle *trans,
 static int __btrfs_write_out_cache(struct inode *inode,
 				   struct btrfs_free_space_ctl *ctl,
 				   struct btrfs_block_group *block_group,
-				   struct btrfs_io_ctl *io_ctl,
 				   struct btrfs_trans_handle *trans)
 {
+	struct btrfs_io_ctl *io_ctl = &block_group->io_ctl;
 	struct extent_state *cached_state = NULL;
 	LIST_HEAD(bitmap_list);
 	int entries = 0;
@@ -1393,7 +1391,7 @@ static int __btrfs_write_out_cache(struct inode *inode,
 	if (ret)
 		return ret;
 
-	if (block_group && (block_group->flags & BTRFS_BLOCK_GROUP_DATA)) {
+	if (block_group->flags & BTRFS_BLOCK_GROUP_DATA) {
 		down_write(&block_group->data_rwsem);
 		spin_lock(&block_group->lock);
 		if (block_group->delalloc_bytes) {
@@ -1465,7 +1463,7 @@ static int __btrfs_write_out_cache(struct inode *inode,
 			goto out_nospc;
 	}
 
-	if (block_group && (block_group->flags & BTRFS_BLOCK_GROUP_DATA))
+	if (block_group->flags & BTRFS_BLOCK_GROUP_DATA)
 		up_write(&block_group->data_rwsem);
 	/*
 	 * Release the pages and unlock the extent, we will flush
@@ -1500,7 +1498,7 @@ out_nospc:
 	cleanup_write_cache_enospc(inode, io_ctl, &cached_state);
 
 out_unlock:
-	if (block_group && (block_group->flags & BTRFS_BLOCK_GROUP_DATA))
+	if (block_group->flags & BTRFS_BLOCK_GROUP_DATA)
 		up_write(&block_group->data_rwsem);
 
 out:
@@ -1536,8 +1534,7 @@ int btrfs_write_out_cache(struct btrfs_trans_handle *trans,
 	if (IS_ERR(inode))
 		return 0;
 
-	ret = __btrfs_write_out_cache(inode, ctl, block_group,
-				      &block_group->io_ctl, trans);
+	ret = __btrfs_write_out_cache(inode, ctl, block_group, trans);
 	if (ret) {
 		btrfs_debug(fs_info,
 	  "failed to write free space cache for block group %llu error %d",
@@ -2756,6 +2753,9 @@ int btrfs_add_free_space(struct btrfs_block_group *block_group,
 {
 	enum btrfs_trim_state trim_state = BTRFS_TRIM_STATE_UNTRIMMED;
 
+	if (block_group->flags & BTRFS_BLOCK_GROUP_REMAPPED)
+		return 0;
+
 	if (btrfs_is_zoned(block_group->fs_info))
 		return __btrfs_add_free_space_zoned(block_group, bytenr, size,
 						    true);
@@ -3062,6 +3062,12 @@ bool btrfs_is_free_space_trimmed(struct btrfs_block_group *block_group)
 	struct btrfs_free_space *info;
 	struct rb_node *node;
 	bool ret = true;
+
+	if (block_group->flags & BTRFS_BLOCK_GROUP_REMAPPED &&
+	    !test_bit(BLOCK_GROUP_FLAG_STRIPE_REMOVAL_PENDING, &block_group->runtime_flags) &&
+	    block_group->identity_remap_count == 0) {
+		return true;
+	}
 
 	spin_lock(&ctl->tree_lock);
 	node = rb_first(&ctl->free_space_offset);
@@ -3674,7 +3680,7 @@ static int do_trimming(struct btrfs_block_group *block_group,
 	}
 	spin_unlock(&space_info->lock);
 
-	ret = btrfs_discard_extent(fs_info, start, bytes, &trimmed);
+	ret = btrfs_discard_extent(fs_info, start, bytes, &trimmed, false);
 	if (!ret) {
 		*total_trimmed += trimmed;
 		trim_state = BTRFS_TRIM_STATE_TRIMMED;
@@ -3829,6 +3835,51 @@ out_unlock:
 	mutex_unlock(&ctl->cache_writeout_mutex);
 
 	return ret;
+}
+
+void btrfs_trim_fully_remapped_block_group(struct btrfs_block_group *bg)
+{
+	struct btrfs_fs_info *fs_info = bg->fs_info;
+	struct btrfs_discard_ctl *discard_ctl = &fs_info->discard_ctl;
+	int ret = 0;
+	u64 bytes, trimmed;
+	const u64 max_discard_size = READ_ONCE(discard_ctl->max_discard_size);
+	u64 end = btrfs_block_group_end(bg);
+
+	if (!test_bit(BLOCK_GROUP_FLAG_STRIPE_REMOVAL_PENDING, &bg->runtime_flags)) {
+		bg->discard_cursor = end;
+
+		if (bg->used == 0) {
+			spin_lock(&fs_info->unused_bgs_lock);
+			if (!list_empty(&bg->bg_list)) {
+				list_del_init(&bg->bg_list);
+				btrfs_put_block_group(bg);
+			}
+			spin_unlock(&fs_info->unused_bgs_lock);
+
+			btrfs_mark_bg_unused(bg);
+		}
+
+		return;
+	}
+
+	bytes = end - bg->discard_cursor;
+
+	if (max_discard_size &&
+	    bytes >= (max_discard_size + BTRFS_ASYNC_DISCARD_MIN_FILTER)) {
+		bytes = max_discard_size;
+	}
+
+	ret = btrfs_discard_extent(fs_info, bg->discard_cursor, bytes, &trimmed, false);
+	if (ret)
+		return;
+
+	bg->discard_cursor += trimmed;
+
+	if (bg->discard_cursor < end)
+		return;
+
+	btrfs_complete_bg_remapping(bg);
 }
 
 /*
