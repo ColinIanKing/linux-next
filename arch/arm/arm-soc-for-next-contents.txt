@@ -1,0 +1,34 @@
+soc/arm
+
+soc/dt
+	broadcom/dt
+		https://github.com/Broadcom/stblinux tags/arm-soc/for-6.19/devicetree-arm64
+	aspeed/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/bmc/linux tags/aspeed-6.20-devicetree-0
+	renesas/dt
+		git://git.kernel.org/pub/scm/linux/kernel/git/geert/renesas-devel tags/renesas-dts-for-v6.20-tag1
+
+soc/drivers
+
+soc/defconfig
+	patch
+		ARM: defconfig: move entries
+		ARM: defconfig: turn off CONFIG_EXPERT
+
+soc/late
+
+arm/fixes
+	patch
+		Revert "arm64: tegra: Add interconnect properties for Tegra210"
+		MAINTAINERS: update email address for Yixun Lan
+	<no branch> (94ad504e67cd3be94fa1b2fed0cb87da0d8f9396)
+		https://git.kernel.org/pub/scm/linux/kernel/git/at91/linux tags/at91-fixes-6.19
+	rockchip/fixes
+		git://git.kernel.org/pub/scm/linux/kernel/git/mmind/linux-rockchip tags/v6.19-rockchip-dtsfixes1
+	patch
+		MAINTAINERS: Add Andrew as M: to ARM/NUVOTON NPCM ARCHITECTURE
+	<no branch> (70b8c45d8621c4d77b5659270e9a26ce7b1123cf)
+		https://git.kernel.org/pub/scm/linux/kernel/git/bmc/linux tags/nuvoton-arm-6.19-fixes-0
+	<no branch> (1f6ca557088eb96c8c554f853eb7c60862f8a0a8)
+		https://git.kernel.org/pub/scm/linux/kernel/git/qcom/linux tags/qcom-arm64-fixes-for-6.19
+
