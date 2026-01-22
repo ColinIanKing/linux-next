@@ -45,6 +45,7 @@ struct pt_regs;
 struct folio_batch;
 
 void arch_mm_preinit(void);
+void mm_core_init_early(void);
 void mm_core_init(void);
 void init_mm_internals(void);
 
@@ -2627,10 +2628,6 @@ static inline void zap_vma_pages(struct vm_area_struct *vma)
 	zap_page_range_single(vma, vma->vm_start,
 			      vma->vm_end - vma->vm_start, NULL);
 }
-void unmap_vmas(struct mmu_gather *tlb, struct ma_state *mas,
-		struct vm_area_struct *start_vma, unsigned long start,
-		unsigned long end, unsigned long tree_end);
-
 struct mmu_notifier_range;
 
 void free_pgd_range(struct mmu_gather *tlb, unsigned long addr,
@@ -2903,6 +2900,13 @@ static inline unsigned long get_mm_rss(struct mm_struct *mm)
 	return get_mm_counter(mm, MM_FILEPAGES) +
 		get_mm_counter(mm, MM_ANONPAGES) +
 		get_mm_counter(mm, MM_SHMEMPAGES);
+}
+
+static inline unsigned long get_mm_rss_sum(struct mm_struct *mm)
+{
+	return get_mm_counter_sum(mm, MM_FILEPAGES) +
+		get_mm_counter_sum(mm, MM_ANONPAGES) +
+		get_mm_counter_sum(mm, MM_SHMEMPAGES);
 }
 
 static inline unsigned long get_mm_hiwater_rss(struct mm_struct *mm)
@@ -3540,7 +3544,7 @@ static inline unsigned long get_num_physpages(void)
 }
 
 /*
- * Using memblock node mappings, an architecture may initialise its
+ * FIXME: Using memblock node mappings, an architecture may initialise its
  * zones, allocate the backing mem_map and account for memory holes in an
  * architecture independent manner.
  *
@@ -3555,7 +3559,7 @@ static inline unsigned long get_num_physpages(void)
  *	memblock_add_node(base, size, nid, MEMBLOCK_NONE)
  * free_area_init(max_zone_pfns);
  */
-void free_area_init(unsigned long *max_zone_pfn);
+void arch_zone_limits_init(unsigned long *max_zone_pfn);
 unsigned long node_map_pfn_alignment(void);
 extern unsigned long absent_pages_in_range(unsigned long start_pfn,
 						unsigned long end_pfn);
@@ -4293,13 +4297,6 @@ unsigned long section_map_size(void);
 struct page * __populate_section_memmap(unsigned long pfn,
 		unsigned long nr_pages, int nid, struct vmem_altmap *altmap,
 		struct dev_pagemap *pgmap);
-pgd_t *vmemmap_pgd_populate(unsigned long addr, int node);
-p4d_t *vmemmap_p4d_populate(pgd_t *pgd, unsigned long addr, int node);
-pud_t *vmemmap_pud_populate(p4d_t *p4d, unsigned long addr, int node);
-pmd_t *vmemmap_pmd_populate(pud_t *pud, unsigned long addr, int node);
-pte_t *vmemmap_pte_populate(pmd_t *pmd, unsigned long addr, int node,
-			    struct vmem_altmap *altmap, unsigned long ptpfn,
-			    unsigned long flags);
 void *vmemmap_alloc_block(unsigned long size, int node);
 struct vmem_altmap;
 void *vmemmap_alloc_block_buf(unsigned long size, int node,

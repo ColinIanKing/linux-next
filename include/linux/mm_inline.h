@@ -568,7 +568,7 @@ static inline pte_marker copy_pte_marker(
  */
 static inline bool
 pte_install_uffd_wp_if_needed(struct vm_area_struct *vma, unsigned long addr,
-			      pte_t *pte, pte_t pteval)
+			      pte_t *pte, pte_t pteval, unsigned int nr_pages)
 {
 	bool arm_uffd_pte = false;
 
@@ -599,8 +599,9 @@ pte_install_uffd_wp_if_needed(struct vm_area_struct *vma, unsigned long addr,
 		arm_uffd_pte = true;
 
 	if (unlikely(arm_uffd_pte)) {
-		set_pte_at(vma->vm_mm, addr, pte,
-			   make_pte_marker(PTE_MARKER_UFFD_WP));
+		for (int i = 0; i < nr_pages; ++i, ++pte, addr += PAGE_SIZE)
+			set_pte_at(vma->vm_mm, addr, pte,
+				make_pte_marker(PTE_MARKER_UFFD_WP));
 		return true;
 	}
 

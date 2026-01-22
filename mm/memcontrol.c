@@ -644,7 +644,7 @@ static void flush_memcg_stats_dwork(struct work_struct *w)
 	 * in latency-sensitive paths is as cheap as possible.
 	 */
 	__mem_cgroup_flush_stats(root_mem_cgroup, true);
-	queue_delayed_work(system_unbound_wq, &stats_flush_dwork, FLUSH_TIME);
+	queue_delayed_work(system_dfl_wq, &stats_flush_dwork, FLUSH_TIME);
 }
 
 unsigned long memcg_page_state(struct mem_cgroup *memcg, int idx)
@@ -3554,38 +3554,38 @@ static void memcg_wb_domain_size_changed(struct mem_cgroup *memcg)
  */
 
 #define MEM_CGROUP_ID_MAX	((1UL << MEM_CGROUP_ID_SHIFT) - 1)
-static DEFINE_XARRAY_ALLOC1(mem_cgroup_ids);
+static DEFINE_XARRAY_ALLOC1(mem_cgroup_private_ids);
 
-static void mem_cgroup_id_remove(struct mem_cgroup *memcg)
+static void mem_cgroup_private_id_remove(struct mem_cgroup *memcg)
 {
 	if (memcg->id.id > 0) {
-		xa_erase(&mem_cgroup_ids, memcg->id.id);
+		xa_erase(&mem_cgroup_private_ids, memcg->id.id);
 		memcg->id.id = 0;
 	}
 }
 
-void __maybe_unused mem_cgroup_id_get_many(struct mem_cgroup *memcg,
+void __maybe_unused mem_cgroup_private_id_get_many(struct mem_cgroup *memcg,
 					   unsigned int n)
 {
 	refcount_add(n, &memcg->id.ref);
 }
 
-static void mem_cgroup_id_put_many(struct mem_cgroup *memcg, unsigned int n)
+static void mem_cgroup_private_id_put_many(struct mem_cgroup *memcg, unsigned int n)
 {
 	if (refcount_sub_and_test(n, &memcg->id.ref)) {
-		mem_cgroup_id_remove(memcg);
+		mem_cgroup_private_id_remove(memcg);
 
 		/* Memcg ID pins CSS */
 		css_put(&memcg->css);
 	}
 }
 
-static inline void mem_cgroup_id_put(struct mem_cgroup *memcg)
+static inline void mem_cgroup_private_id_put(struct mem_cgroup *memcg)
 {
-	mem_cgroup_id_put_many(memcg, 1);
+	mem_cgroup_private_id_put_many(memcg, 1);
 }
 
-struct mem_cgroup *mem_cgroup_id_get_online(struct mem_cgroup *memcg)
+struct mem_cgroup *mem_cgroup_private_id_get_online(struct mem_cgroup *memcg)
 {
 	while (!refcount_inc_not_zero(&memcg->id.ref)) {
 		/*
@@ -3604,39 +3604,35 @@ struct mem_cgroup *mem_cgroup_id_get_online(struct mem_cgroup *memcg)
 }
 
 /**
- * mem_cgroup_from_id - look up a memcg from a memcg id
+ * mem_cgroup_from_private_id - look up a memcg from a memcg id
  * @id: the memcg id to look up
  *
  * Caller must hold rcu_read_lock().
  */
-struct mem_cgroup *mem_cgroup_from_id(unsigned short id)
+struct mem_cgroup *mem_cgroup_from_private_id(unsigned short id)
 {
 	WARN_ON_ONCE(!rcu_read_lock_held());
-	return xa_load(&mem_cgroup_ids, id);
+	return xa_load(&mem_cgroup_private_ids, id);
 }
 
-#ifdef CONFIG_SHRINKER_DEBUG
-struct mem_cgroup *mem_cgroup_get_from_ino(unsigned long ino)
+struct mem_cgroup *mem_cgroup_get_from_id(u64 id)
 {
 	struct cgroup *cgrp;
 	struct cgroup_subsys_state *css;
-	struct mem_cgroup *memcg;
+	struct mem_cgroup *memcg = NULL;
 
-	cgrp = cgroup_get_from_id(ino);
+	cgrp = cgroup_get_from_id(id);
 	if (IS_ERR(cgrp))
-		return ERR_CAST(cgrp);
+		return NULL;
 
 	css = cgroup_get_e_css(cgrp, &memory_cgrp_subsys);
 	if (css)
 		memcg = container_of(css, struct mem_cgroup, css);
-	else
-		memcg = ERR_PTR(-ENOENT);
 
 	cgroup_put(cgrp);
 
 	return memcg;
 }
-#endif
 
 static void free_mem_cgroup_per_node_info(struct mem_cgroup_per_node *pn)
 {
@@ -3711,7 +3707,7 @@ static struct mem_cgroup *mem_cgroup_alloc(struct mem_cgroup *parent)
 	if (!memcg)
 		return ERR_PTR(-ENOMEM);
 
-	error = xa_alloc(&mem_cgroup_ids, &memcg->id.id, NULL,
+	error = xa_alloc(&mem_cgroup_private_ids, &memcg->id.id, NULL,
 			 XA_LIMIT(1, MEM_CGROUP_ID_MAX), GFP_KERNEL);
 	if (error)
 		goto fail;
@@ -3771,7 +3767,7 @@ static struct mem_cgroup *mem_cgroup_alloc(struct mem_cgroup *parent)
 	lru_gen_init_memcg(memcg);
 	return memcg;
 fail:
-	mem_cgroup_id_remove(memcg);
+	mem_cgroup_private_id_remove(memcg);
 	__mem_cgroup_free(memcg);
 	return ERR_PTR(error);
 }
@@ -3845,7 +3841,7 @@ static int mem_cgroup_css_online(struct cgroup_subsys_state *css)
 		goto offline_kmem;
 
 	if (unlikely(mem_cgroup_is_root(memcg)) && !mem_cgroup_disabled())
-		queue_delayed_work(system_unbound_wq, &stats_flush_dwork,
+		queue_delayed_work(system_dfl_wq, &stats_flush_dwork,
 				   FLUSH_TIME);
 	lru_gen_online_memcg(memcg);
 
@@ -3854,7 +3850,7 @@ static int mem_cgroup_css_online(struct cgroup_subsys_state *css)
 	css_get(css);
 
 	/*
-	 * Ensure mem_cgroup_from_id() works once we're fully online.
+	 * Ensure mem_cgroup_from_private_id() works once we're fully online.
 	 *
 	 * We could do this earlier and require callers to filter with
 	 * css_tryget_online(). But right now there are no users that
@@ -3863,13 +3859,13 @@ static int mem_cgroup_css_online(struct cgroup_subsys_state *css)
 	 * publish it here at the end of onlining. This matches the
 	 * regular ID destruction during offlining.
 	 */
-	xa_store(&mem_cgroup_ids, memcg->id.id, memcg, GFP_KERNEL);
+	xa_store(&mem_cgroup_private_ids, memcg->id.id, memcg, GFP_KERNEL);
 
 	return 0;
 offline_kmem:
 	memcg_offline_kmem(memcg);
 remove_id:
-	mem_cgroup_id_remove(memcg);
+	mem_cgroup_private_id_remove(memcg);
 	return -ENOMEM;
 }
 
@@ -3892,7 +3888,7 @@ static void mem_cgroup_css_offline(struct cgroup_subsys_state *css)
 
 	drain_all_stock(memcg);
 
-	mem_cgroup_id_put(memcg);
+	mem_cgroup_private_id_put(memcg);
 }
 
 static void mem_cgroup_css_released(struct cgroup_subsys_state *css)
@@ -4779,7 +4775,7 @@ int mem_cgroup_swapin_charge_folio(struct folio *folio, struct mm_struct *mm,
 
 	id = lookup_swap_cgroup_id(entry);
 	rcu_read_lock();
-	memcg = mem_cgroup_from_id(id);
+	memcg = mem_cgroup_from_private_id(id);
 	if (!memcg || !css_tryget_online(&memcg->css))
 		memcg = get_mem_cgroup_from_mm(mm);
 	rcu_read_unlock();
@@ -5174,22 +5170,22 @@ int __mem_cgroup_try_charge_swap(struct folio *folio, swp_entry_t entry)
 		return 0;
 	}
 
-	memcg = mem_cgroup_id_get_online(memcg);
+	memcg = mem_cgroup_private_id_get_online(memcg);
 
 	if (!mem_cgroup_is_root(memcg) &&
 	    !page_counter_try_charge(&memcg->swap, nr_pages, &counter)) {
 		memcg_memory_event(memcg, MEMCG_SWAP_MAX);
 		memcg_memory_event(memcg, MEMCG_SWAP_FAIL);
-		mem_cgroup_id_put(memcg);
+		mem_cgroup_private_id_put(memcg);
 		return -ENOMEM;
 	}
 
 	/* Get references for the tail pages, too */
 	if (nr_pages > 1)
-		mem_cgroup_id_get_many(memcg, nr_pages - 1);
+		mem_cgroup_private_id_get_many(memcg, nr_pages - 1);
 	mod_memcg_state(memcg, MEMCG_SWAP, nr_pages);
 
-	swap_cgroup_record(folio, mem_cgroup_id(memcg), entry);
+	swap_cgroup_record(folio, mem_cgroup_private_id(memcg), entry);
 
 	return 0;
 }
@@ -5206,7 +5202,7 @@ void __mem_cgroup_uncharge_swap(swp_entry_t entry, unsigned int nr_pages)
 
 	id = swap_cgroup_clear(entry, nr_pages);
 	rcu_read_lock();
-	memcg = mem_cgroup_from_id(id);
+	memcg = mem_cgroup_from_private_id(id);
 	if (memcg) {
 		if (!mem_cgroup_is_root(memcg)) {
 			if (do_memsw_account())
@@ -5215,7 +5211,7 @@ void __mem_cgroup_uncharge_swap(swp_entry_t entry, unsigned int nr_pages)
 				page_counter_uncharge(&memcg->swap, nr_pages);
 		}
 		mod_memcg_state(memcg, MEMCG_SWAP, -nr_pages);
-		mem_cgroup_id_put_many(memcg, nr_pages);
+		mem_cgroup_private_id_put_many(memcg, nr_pages);
 	}
 	rcu_read_unlock();
 }
@@ -5597,9 +5593,21 @@ subsys_initcall(mem_cgroup_swap_init);
 
 #endif /* CONFIG_SWAP */
 
-bool mem_cgroup_node_allowed(struct mem_cgroup *memcg, int nid)
+void mem_cgroup_node_filter_allowed(struct mem_cgroup *memcg, nodemask_t *mask)
 {
-	return memcg ? cpuset_node_allowed(memcg->css.cgroup, nid) : true;
+	nodemask_t allowed;
+
+	if (!memcg)
+		return;
+
+	/*
+	 * Since this interface is intended for use by migration paths, and
+	 * reclaim and migration are subject to race conditions such as changes
+	 * in effective_mems and hot-unpluging of nodes, inaccurate allowed
+	 * mask is acceptable.
+	 */
+	cpuset_nodes_allowed(memcg->css.cgroup, &allowed);
+	nodes_and(*mask, *mask, allowed);
 }
 
 void mem_cgroup_show_protected_memory(struct mem_cgroup *memcg)
