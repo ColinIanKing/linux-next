@@ -51,6 +51,9 @@ else:
     dyn_exclude_patterns.append("devicetree/bindings/**.yaml")
     dyn_exclude_patterns.append("core-api/kho/bindings/**.yaml")
 
+# Link to man pages
+manpages_url = 'https://man7.org/linux/man-pages/man{section}/{page}.{section}.html'
+
 # Properly handle directory patterns and LaTeX docs
 # -------------------------------------------------
 
@@ -579,10 +582,6 @@ pdf_documents = [
     ("kernel-documentation", "Kernel", "Kernel", "J. Random Bozo"),
 ]
 
-# kernel-doc extension configuration for running Sphinx directly (e.g. by Read
-# the Docs). In a normal build, these are supplied from the Makefile via command
-# line arguments.
-kerneldoc_bin = "../scripts/kernel-doc.py"
 kerneldoc_srctree = ".."
 
 def setup(app):
