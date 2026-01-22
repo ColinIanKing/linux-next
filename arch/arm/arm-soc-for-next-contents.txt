@@ -7,6 +7,12 @@ soc/dt
 		https://git.kernel.org/pub/scm/linux/kernel/git/bmc/linux tags/aspeed-6.20-devicetree-0
 	renesas/dt
 		git://git.kernel.org/pub/scm/linux/kernel/git/geert/renesas-devel tags/renesas-dts-for-v6.20-tag1
+	juno/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/sudeep.holla/linux tags/juno-updates-7.0
+	rockchip/dt32
+		https://git.kernel.org/pub/scm/linux/kernel/git/mmind/linux-rockchip tags/v6.20-rockchip-dts32-1
+	rockchip/dt64
+		https://git.kernel.org/pub/scm/linux/kernel/git/mmind/linux-rockchip tags/v6.20-rockchip-dts64
 
 soc/drivers
 	renesas/drivers
