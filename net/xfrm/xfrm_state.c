@@ -958,7 +958,7 @@ out:
 }
 EXPORT_SYMBOL(xfrm_state_flush);
 
-int xfrm_dev_state_flush(struct net *net, struct net_device *dev, bool task_valid)
+int xfrm_dev_state_flush(struct net *net, struct net_device *dev, bool task_valid, bool forced)
 {
 	struct xfrm_state *x;
 	struct hlist_node *tmp;
@@ -966,7 +966,7 @@ int xfrm_dev_state_flush(struct net *net, struct net_device *dev, bool task_vali
 	int i, err = 0, cnt = 0;
 
 	spin_lock_bh(&net->xfrm.xfrm_state_lock);
-	err = xfrm_dev_state_flush_secctx_check(net, dev, task_valid);
+	err = forced ? 0 : xfrm_dev_state_flush_secctx_check(net, dev, task_valid);
 	if (err)
 		goto out;
 
@@ -999,6 +999,9 @@ restart:
 
 out:
 	spin_unlock_bh(&net->xfrm.xfrm_state_lock);
+
+	if (forced)
+		pr_info("***** Releasing %d refcount on %p\n", cnt, x);
 
 	spin_lock_bh(&xfrm_state_dev_gc_lock);
 restart_gc:

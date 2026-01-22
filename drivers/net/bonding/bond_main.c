@@ -3853,7 +3853,7 @@ static int bond_master_netdev_event(unsigned long event,
 	case NETDEV_UNREGISTER:
 		bond_remove_proc_entry(event_bond);
 #ifdef CONFIG_XFRM_OFFLOAD
-		xfrm_dev_state_flush(dev_net(bond_dev), bond_dev, true);
+		xfrm_dev_state_flush(dev_net(bond_dev), bond_dev, true, true);
 #endif /* CONFIG_XFRM_OFFLOAD */
 		break;
 	case NETDEV_REGISTER:
