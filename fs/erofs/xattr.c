@@ -25,6 +25,8 @@ struct erofs_xattr_iter {
 	struct dentry *dentry;
 };
 
+static const char *erofs_xattr_prefix(unsigned int idx, struct dentry *dentry);
+
 static int erofs_init_inode_xattrs(struct inode *inode)
 {
 	struct erofs_inode *const vi = EROFS_I(inode);
@@ -125,74 +127,20 @@ out_unlock:
 	return ret;
 }
 
-static bool erofs_xattr_user_list(struct dentry *dentry)
-{
-	return test_opt(&EROFS_SB(dentry->d_sb)->opt, XATTR_USER);
-}
-
-static bool erofs_xattr_trusted_list(struct dentry *dentry)
-{
-	return capable(CAP_SYS_ADMIN);
-}
-
-static int erofs_xattr_generic_get(const struct xattr_handler *handler,
-				   struct dentry *unused, struct inode *inode,
-				   const char *name, void *buffer, size_t size)
-{
-	if (handler->flags == EROFS_XATTR_INDEX_USER &&
-	    !test_opt(&EROFS_I_SB(inode)->opt, XATTR_USER))
-		return -EOPNOTSUPP;
-
-	return erofs_getxattr(inode, handler->flags, name, buffer, size);
-}
-
-const struct xattr_handler erofs_xattr_user_handler = {
-	.prefix	= XATTR_USER_PREFIX,
-	.flags	= EROFS_XATTR_INDEX_USER,
-	.list	= erofs_xattr_user_list,
-	.get	= erofs_xattr_generic_get,
-};
-
-const struct xattr_handler erofs_xattr_trusted_handler = {
-	.prefix	= XATTR_TRUSTED_PREFIX,
-	.flags	= EROFS_XATTR_INDEX_TRUSTED,
-	.list	= erofs_xattr_trusted_list,
-	.get	= erofs_xattr_generic_get,
-};
-
-#ifdef CONFIG_EROFS_FS_SECURITY
-const struct xattr_handler __maybe_unused erofs_xattr_security_handler = {
-	.prefix	= XATTR_SECURITY_PREFIX,
-	.flags	= EROFS_XATTR_INDEX_SECURITY,
-	.get	= erofs_xattr_generic_get,
-};
-#endif
-
-const struct xattr_handler * const erofs_xattr_handlers[] = {
-	&erofs_xattr_user_handler,
-	&erofs_xattr_trusted_handler,
-#ifdef CONFIG_EROFS_FS_SECURITY
-	&erofs_xattr_security_handler,
-#endif
-	NULL,
-};
-
 static int erofs_xattr_copy_to_buffer(struct erofs_xattr_iter *it,
 				      unsigned int len)
 {
 	unsigned int slice, processed;
 	struct super_block *sb = it->sb;
-	void *src;
 
 	for (processed = 0; processed < len; processed += slice) {
 		it->kaddr = erofs_bread(&it->buf, it->pos, true);
 		if (IS_ERR(it->kaddr))
 			return PTR_ERR(it->kaddr);
 
-		src = it->kaddr;
 		slice = min_t(unsigned int, sb->s_blocksize -
 				erofs_blkoff(sb, it->pos), len - processed);
-		memcpy(it->buffer + it->buffer_ofs, src, slice);
+		memcpy(it->buffer + it->buffer_ofs, it->kaddr, slice);
 		it->buffer_ofs += slice;
 		it->pos += slice;
 	}
@@ -391,8 +339,8 @@ static int erofs_xattr_iter_shared(struct erofs_xattr_iter *it,
 	return i ? ret : -ENODATA;
 }
 
-int erofs_getxattr(struct inode *inode, int index, const char *name,
-		   void *buffer, size_t buffer_size)
+static int erofs_getxattr(struct inode *inode, int index, const char *name,
+			  void *buffer, size_t buffer_size)
 {
 	int ret;
 	unsigned int hashbit;
@@ -460,6 +408,81 @@ ssize_t erofs_listxattr(struct dentry *dentry, char *buffer, size_t buffer_size)
 		ret = 0;
 	erofs_put_metabuf(&it.buf);
 	return ret ? ret : it.buffer_ofs;
+}
+
+static bool erofs_xattr_user_list(struct dentry *dentry)
+{
+	return test_opt(&EROFS_SB(dentry->d_sb)->opt, XATTR_USER);
+}
+
+static bool erofs_xattr_trusted_list(struct dentry *dentry)
+{
+	return capable(CAP_SYS_ADMIN);
+}
+
+static int erofs_xattr_generic_get(const struct xattr_handler *handler,
+				   struct dentry *unused, struct inode *inode,
+				   const char *name, void *buffer, size_t size)
+{
+	if (handler->flags == EROFS_XATTR_INDEX_USER &&
+	    !test_opt(&EROFS_I_SB(inode)->opt, XATTR_USER))
+		return -EOPNOTSUPP;
+
+	return erofs_getxattr(inode, handler->flags, name, buffer, size);
+}
+
+static const struct xattr_handler erofs_xattr_user_handler = {
+	.prefix	= XATTR_USER_PREFIX,
+	.flags	= EROFS_XATTR_INDEX_USER,
+	.list	= erofs_xattr_user_list,
+	.get	= erofs_xattr_generic_get,
+};
+
+static const struct xattr_handler erofs_xattr_trusted_handler = {
+	.prefix	= XATTR_TRUSTED_PREFIX,
+	.flags	= EROFS_XATTR_INDEX_TRUSTED,
+	.list	= erofs_xattr_trusted_list,
+	.get	= erofs_xattr_generic_get,
+};
+
+#ifdef CONFIG_EROFS_FS_SECURITY
+static const struct xattr_handler erofs_xattr_security_handler = {
+	.prefix	= XATTR_SECURITY_PREFIX,
+	.flags	= EROFS_XATTR_INDEX_SECURITY,
+	.get	= erofs_xattr_generic_get,
+};
+#endif
+
+const struct xattr_handler * const erofs_xattr_handlers[] = {
+	&erofs_xattr_user_handler,
+	&erofs_xattr_trusted_handler,
+#ifdef CONFIG_EROFS_FS_SECURITY
+	&erofs_xattr_security_handler,
+#endif
+	NULL,
+};
+
+static const char *erofs_xattr_prefix(unsigned int idx, struct dentry *dentry)
+{
+	static const struct xattr_handler * const xattr_handler_map[] = {
+		[EROFS_XATTR_INDEX_USER] = &erofs_xattr_user_handler,
+#ifdef CONFIG_EROFS_FS_POSIX_ACL
+		[EROFS_XATTR_INDEX_POSIX_ACL_ACCESS] = &nop_posix_acl_access,
+		[EROFS_XATTR_INDEX_POSIX_ACL_DEFAULT] = &nop_posix_acl_default,
+#endif
+		[EROFS_XATTR_INDEX_TRUSTED] = &erofs_xattr_trusted_handler,
+#ifdef CONFIG_EROFS_FS_SECURITY
+		[EROFS_XATTR_INDEX_SECURITY] = &erofs_xattr_security_handler,
+#endif
+	};
+	const struct xattr_handler *handler = NULL;
+
+	if (idx && idx < ARRAY_SIZE(xattr_handler_map)) {
+		handler = xattr_handler_map[idx];
+		if (xattr_handler_can_list(handler, dentry))
+			return xattr_prefix(handler);
+	}
+	return NULL;
 }
 
 void erofs_xattr_prefixes_cleanup(struct super_block *sb)
