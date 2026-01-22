@@ -3152,7 +3152,7 @@ static inline void cp_dst_to_slots(struct maple_copy *cp, unsigned long min,
 		 * read-side operations that can view them until they are
 		 * inserted into the tree after an rcu_assign_pointer() call.
 		 */
-		RCU_INIT_POINTER(cp->slot[d], mt_mk_node(mn, mt));
+		RCU_INIT_POINTER(cp->slot[d], (void *)mt_mk_node(mn, mt));
 		cp->pivot[d] = slot_max;
 		if (mt_is_alloc(mas->tree)) {
 			if (ma_is_leaf(mt)) {
@@ -3375,7 +3375,8 @@ static bool spanning_ascend(struct maple_copy *cp, struct ma_state *mas,
 			 * the tree after an rcu_assign_pointer() call.
 			 */
 			RCU_INIT_POINTER(cp->slot[0],
-					 mt_mk_node(cp->dst[0].node, mt));
+					 (void *)mt_mk_node(
+						 cp->dst[0].node, mt));
 			cp->height++;
 		}
 		WARN_ON_ONCE(cp->dst[0].node != mte_to_node(
