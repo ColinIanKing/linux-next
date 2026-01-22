@@ -4,7 +4,6 @@
 #include <linux/errno.h>
 #include <linux/lockdep.h>
 #include <linux/resume_user_mode.h>
-#include <linux/kasan.h>
 #include <linux/poll.h>
 #include <linux/io_uring_types.h>
 #include <uapi/linux/eventpoll.h>
@@ -88,6 +87,12 @@ struct io_ctx_config {
 			IOSQE_ASYNC |\
 			IOSQE_BUFFER_SELECT |\
 			IOSQE_CQE_SKIP_SUCCESS)
+
+/*
+ * Complaint timeout for io_uring cancelation exits, and for io-wq exit
+ * worker waiting.
+ */
+#define IO_URING_EXIT_WAIT_MAX	(HZ * 60 * 5)
 
 enum {
 	IOU_COMPLETE		= 0,
@@ -196,6 +201,7 @@ void io_task_refs_refill(struct io_uring_task *tctx);
 bool __io_alloc_req_refill(struct io_ring_ctx *ctx);
 
 void io_activate_pollwq(struct io_ring_ctx *ctx);
+void io_restriction_clone(struct io_restriction *dst, struct io_restriction *src);
 
 static inline void io_lockdep_assert_cq_locked(struct io_ring_ctx *ctx)
 {

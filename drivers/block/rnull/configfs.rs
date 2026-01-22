@@ -3,7 +3,6 @@
 use super::{NullBlkDevice, THIS_MODULE};
 use kernel::{
     block::mq::gen_disk::{GenDisk, GenDiskBuilder},
-    c_str,
     configfs::{self, AttributeOperations},
     configfs_attrs,
     fmt::{self, Write as _},
@@ -25,7 +24,7 @@ pub(crate) fn subsystem() -> impl PinInit<kernel::configfs::Subsystem<Config>, E
         ],
     };
 
-    kernel::configfs::Subsystem::new(c_str!("rnull"), item_type, try_pin_init!(Config {}))
+    kernel::configfs::Subsystem::new(c"rnull", item_type, try_pin_init!(Config {}))
 }
 
 #[pin_data]
