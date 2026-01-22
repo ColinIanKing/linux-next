@@ -675,7 +675,7 @@ static int ntfs_read_folio(struct file *file, struct folio *folio)
 		return err;
 	}
 
-	iomap_read_folio(&ntfs_iomap_ops, &ctx);
+	iomap_read_folio(&ntfs_iomap_ops, &ctx, NULL);
 	return 0;
 }
 
@@ -699,7 +699,7 @@ static void ntfs_readahead(struct readahead_control *rac)
 		return;
 	}
 
-	iomap_readahead(&ntfs_iomap_ops, &ctx);
+	iomap_readahead(&ntfs_iomap_ops, &ctx, NULL);
 }
 
 int ntfs_set_size(struct inode *inode, u64 new_size)
