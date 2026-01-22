@@ -361,10 +361,14 @@ struct landlock_net_port_attr {
  *   related Landlock domain (e.g., a parent domain or a non-sandboxed process).
  * - %LANDLOCK_SCOPE_SIGNAL: Restrict a sandboxed process from sending a signal
  *   to another process outside the domain.
+ * - %LANDLOCK_SCOPE_PATHNAME_UNIX_SOCKET: Restrict a sandboxed process from
+ *   connecting to a pathname UNIX socket created by a process outside the
+ *   related Landlock domain.
  */
 /* clang-format off */
 #define LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET		(1ULL << 0)
-#define LANDLOCK_SCOPE_SIGNAL		                (1ULL << 1)
-/* clang-format on*/
+#define LANDLOCK_SCOPE_SIGNAL				(1ULL << 1)
+#define LANDLOCK_SCOPE_PATHNAME_UNIX_SOCKET		(1ULL << 2)
+/* clang-format on */
 
 #endif /* _UAPI_LINUX_LANDLOCK_H */

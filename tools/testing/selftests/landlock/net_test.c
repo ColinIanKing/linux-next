@@ -69,7 +69,7 @@ static int set_service(struct service_fixture *const srv,
 		return 0;
 
 	case AF_UNIX:
-		set_unix_address(srv, index);
+		set_unix_address(srv, index, true);
 		return 0;
 	}
 	return 1;
