@@ -69,7 +69,7 @@ static int create_udmabuf_list(int devfd, int memfd, off64_t memfd_size)
 	for (i = 0; i < NUM_ENTRIES; i++) {
 		list->list[i].memfd  = memfd;
 		list->list[i].offset = i * (memfd_size / NUM_ENTRIES);
-		list->list[i].size   = getpagesize() * NUM_PAGES;
+		list->list[i].size   = page_size * NUM_PAGES;
 	}
 
 	list->count = NUM_ENTRIES;
@@ -115,8 +115,8 @@ static int compare_chunks(void *addr1, void *addr2, off64_t memfd_size)
 	while (i < NUM_ENTRIES) {
 		off = i * (memfd_size / NUM_ENTRIES);
 		for (j = 0; j < NUM_PAGES; j++, k++) {
-			char1 = *((char *)addr1 + off + (j * getpagesize()));
-			char2 = *((char *)addr2 + (k * getpagesize()));
+			char1 = *((char *)addr1 + off + (j * page_size));
+			char2 = *((char *)addr2 + (k * page_size));
 			if (char1 != char2) {
 				ret = -1;
 				goto err;
@@ -126,7 +126,7 @@ static int compare_chunks(void *addr1, void *addr2, off64_t memfd_size)
 	}
 err:
 	munmap(addr1, memfd_size);
-	munmap(addr2, NUM_ENTRIES * NUM_PAGES * getpagesize());
+	munmap(addr2, NUM_ENTRIES * NUM_PAGES * page_size);
 	return ret;
 }
 
@@ -240,7 +240,7 @@ int main(int argc, char *argv[])
 	addr1 = mmap_fd(memfd, size);
 	write_to_memfd(addr1, size, 'a');
 	buf = create_udmabuf_list(devfd, memfd, size);
-	addr2 = mmap_fd(buf, NUM_PAGES * NUM_ENTRIES * getpagesize());
+	addr2 = mmap_fd(buf, NUM_PAGES * NUM_ENTRIES * page_size);
 	write_to_memfd(addr1, size, 'b');
 	ret = compare_chunks(addr1, addr2, size);
 	if (ret < 0)
@@ -256,7 +256,7 @@ int main(int argc, char *argv[])
 	size = MEMFD_SIZE * page_size;
 	memfd = create_memfd_with_seals(size, true);
 	buf = create_udmabuf_list(devfd, memfd, size);
-	addr2 = mmap_fd(buf, NUM_PAGES * NUM_ENTRIES * getpagesize());
+	addr2 = mmap_fd(buf, NUM_PAGES * NUM_ENTRIES * page_size);
 	addr1 = mmap_fd(memfd, size);
 	write_to_memfd(addr1, size, 'a');
 	write_to_memfd(addr1, size, 'b');

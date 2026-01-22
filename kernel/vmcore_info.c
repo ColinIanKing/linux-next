@@ -36,7 +36,8 @@ struct hwerr_info {
 	time64_t timestamp;
 };
 
-static struct hwerr_info hwerr_data[HWERR_RECOV_MAX];
+/* hwerr_data[] has global scope to make it available in vmcoreinfo under LTO */
+struct hwerr_info hwerr_data[HWERR_RECOV_MAX];
 
 Elf_Word *append_elf_note(Elf_Word *buf, char *name, unsigned int type,
 			  void *data, size_t data_len)
