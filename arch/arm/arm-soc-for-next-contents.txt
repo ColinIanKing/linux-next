@@ -13,6 +13,14 @@ soc/dt
 		https://git.kernel.org/pub/scm/linux/kernel/git/mmind/linux-rockchip tags/v6.20-rockchip-dts32-1
 	rockchip/dt64
 		https://git.kernel.org/pub/scm/linux/kernel/git/mmind/linux-rockchip tags/v6.20-rockchip-dts64
+	nuvoton/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/bmc/linux tags/nuvoton-arm64-6.20-devicetree-0
+	aspeed/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/bmc/linux tags/aspeed-6.20-devicetree-1
+	nxp-lpc/dt
+		https://github.com/vzapolskiy/linux-lpc32xx tags/lpc32xx-dt-for-6.20
+	apple/dt
+		https://git.kernel.org/pub/scm/linux/kernel/git/sven/linux tags/apple-soc-dt-6.20
 
 soc/drivers
 	renesas/drivers
