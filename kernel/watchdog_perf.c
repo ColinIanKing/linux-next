@@ -264,18 +264,38 @@ bool __weak __init arch_perf_nmi_is_available(void)
 int __init watchdog_hardlockup_probe(void)
 {
 	int ret;
+	struct perf_event_attr *wd_attr = &wd_hw_attr;
+	struct perf_event *evt;
+	unsigned int cpu;
 
 	if (!arch_perf_nmi_is_available())
 		return -ENODEV;
 
-	ret = hardlockup_detector_event_create();
+	/*
+	 * Test hardware PMU availability. Avoid using
+	 * hardlockup_detector_event_create() to prevent migration-related
+	 * stale pointers in the per-cpu watchdog_ev during early probe.
+	 */
+	wd_attr->sample_period = hw_nmi_get_sample_period(watchdog_thresh);
+	if (!wd_attr->sample_period)
+		return -EINVAL;
 
-	if (ret) {
+	/*
+	 * Use raw_smp_processor_id() for probing in preemptible init code.
+	 * Migration after reading ID is acceptable as counter creation on
+	 * the old CPU is sufficient for the probe.
+	 */
+	cpu = raw_smp_processor_id();
+	evt = perf_event_create_kernel_counter(wd_attr, cpu, NULL,
+					       watchdog_overflow_callback, NULL);
+	if (IS_ERR(evt)) {
 		pr_info("Perf NMI watchdog permanently disabled\n");
+		ret = PTR_ERR(evt);
 	} else {
-		perf_event_release_kernel(this_cpu_read(watchdog_ev));
-		this_cpu_write(watchdog_ev, NULL);
+		perf_event_release_kernel(evt);
+		ret = 0;
 	}
+
 	return ret;
 }
 
