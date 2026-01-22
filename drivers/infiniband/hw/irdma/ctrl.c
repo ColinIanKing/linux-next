@@ -3887,8 +3887,6 @@ void irdma_sc_ccq_arm(struct irdma_sc_cq *ccq)
 	set_64bit_val(ccq->cq_uk.shadow_area, 32, temp_val);
 	spin_unlock_irqrestore(&ccq->dev->cqp_lock, flags);
 
-	dma_wmb(); /* make sure shadow area is updated before arming */
-
 	writel(ccq->cq_uk.cq_id, ccq->dev->cq_arm_db);
 }
 
@@ -5788,8 +5786,7 @@ static int cfg_fpm_value_gen_3(struct irdma_sc_dev *dev,
 	bool is_mrte_loc_mem;
 
 	loc_mem_pages = hmc_fpm_misc->loc_mem_pages;
-	is_mrte_loc_mem = hmc_fpm_misc->loc_mem_pages == hmc_fpm_misc->max_sds ?
-			true : false;
+	is_mrte_loc_mem = hmc_fpm_misc->loc_mem_pages == hmc_fpm_misc->max_sds;
 
 	irdma_get_rsrc_mem_config(dev, is_mrte_loc_mem);
 	mrte_loc = hmc_info->hmc_obj[IRDMA_HMC_IW_MR].mem_loc;
