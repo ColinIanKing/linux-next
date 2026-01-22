@@ -76,7 +76,6 @@ properties:
     type: object
 
   pinctrl:
-    $ref: /schemas/pinctrl/xlnx,zynqmp-pinctrl.yaml#
     description: The pinctrl node provides access to pinconfig and pincontrol
       functionality available in firmware.
     type: object
@@ -105,6 +104,21 @@ properties:
       vector.
     type: object
 
+allOf:
+  - if:
+      properties:
+        compatible:
+          contains:
+            const: xlnx,zynqmp-firmware
+    then:
+      properties:
+        pinctrl:
+          $ref: /schemas/pinctrl/xlnx,zynqmp-pinctrl.yaml#
+    else:
+      properties:
+        pinctrl:
+          $ref: /schemas/pinctrl/xlnx,versal-pinctrl.yaml#
+
 required:
   - compatible
 
@@ -115,6 +129,7 @@ examples:
     #include <dt-bindings/power/xlnx-zynqmp-power.h>
     firmware {
       zynqmp_firmware: zynqmp-firmware {
+        compatible = "xlnx,zynqmp-firmware";
         #power-domain-cells = <1>;
         soc-nvmem {
           compatible = "xlnx,zynqmp-nvmem-fw";
@@ -160,6 +175,10 @@ examples:
 
       versal_fpga: versal-fpga {
         compatible = "xlnx,versal-fpga";
+      };
+
+      pinctrl {
+        compatible = "xlnx,versal-pinctrl";
       };
 
       xlnx_aes: zynqmp-aes {
