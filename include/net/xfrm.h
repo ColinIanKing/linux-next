@@ -1765,9 +1765,8 @@ struct xfrmk_spdinfo {
 struct xfrm_state *xfrm_find_acq_byseq(struct net *net, u32 mark, u32 seq, u32 pcpu_num);
 int xfrm_state_delete(struct xfrm_state *x);
 int xfrm_state_flush(struct net *net, u8 proto, bool task_valid);
-int xfrm_dev_state_flush(struct net *net, struct net_device *dev, bool task_valid);
-int xfrm_dev_policy_flush(struct net *net, struct net_device *dev,
-			  bool task_valid);
+int xfrm_dev_state_flush(struct net *net, struct net_device *dev, bool task_valid, bool forced);
+int xfrm_dev_policy_flush(struct net *net, struct net_device *dev, bool task_valid, bool forced);
 void xfrm_sad_getinfo(struct net *net, struct xfrmk_sadinfo *si);
 void xfrm_spd_getinfo(struct net *net, struct xfrmk_spdinfo *si);
 u32 xfrm_replay_seqhi(struct xfrm_state *x, __be32 net_seq);
