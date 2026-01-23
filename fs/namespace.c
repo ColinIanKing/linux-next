@@ -2950,10 +2950,9 @@ static inline bool may_copy_tree(const struct path *path)
 }
 
 static struct mount *__do_loopback(const struct path *old_path,
-				   unsigned int flags, unsigned int copy_flags)
+				   bool recurse, unsigned int copy_flags)
 {
 	struct mount *old = real_mount(old_path->mnt);
-	bool recurse = flags & AT_RECURSIVE;
 
 	if (IS_MNT_UNBINDABLE(old))
 		return ERR_PTR(-EINVAL);
@@ -2963,18 +2962,6 @@ static struct mount *__do_loopback(const struct path *old_path,
 
 	if (!recurse && __has_locked_children(old, old_path->dentry))
 		return ERR_PTR(-EINVAL);
-
-	/*
-	 * When creating a new mount namespace we don't want to copy over
-	 * mounts of mount namespaces to avoid the risk of cycles and also to
-	 * minimize the default complex interdependencies between mount
-	 * namespaces.
-	 *
-	 * We could ofc just check whether all mount namespace files aren't
-	 * creating cycles but really let's keep this simple.
-	 */
-	if (!(flags & OPEN_TREE_NAMESPACE))
-		copy_flags |= CL_COPY_MNT_NS_FILE;
 
 	if (recurse)
 		return copy_tree(old, old_path->dentry, copy_flags);
@@ -2990,7 +2977,6 @@ static int do_loopback(const struct path *path, const char *old_name,
 {
 	struct path old_path __free(path_put) = {};
 	struct mount *mnt = NULL;
-	unsigned int flags = recurse ? AT_RECURSIVE : 0;
 	int err;
 
 	if (!old_name || !*old_name)
@@ -3009,7 +2995,7 @@ static int do_loopback(const struct path *path, const char *old_name,
 	if (!check_mnt(mp.parent))
 		return -EINVAL;
 
-	mnt = __do_loopback(&old_path, flags, 0);
+	mnt = __do_loopback(&old_path, recurse, CL_COPY_MNT_NS_FILE);
 	if (IS_ERR(mnt))
 		return PTR_ERR(mnt);
 
@@ -3047,7 +3033,7 @@ static struct mnt_namespace *get_detached_copy(const struct path *path, unsigned
 			ns->seq_origin = src_mnt_ns->ns.ns_id;
 	}
 
-	mnt = __do_loopback(path, flags, 0);
+	mnt = __do_loopback(path, (flags & AT_RECURSIVE), CL_COPY_MNT_NS_FILE);
 	if (IS_ERR(mnt)) {
 		emptied_ns = ns;
 		return ERR_CAST(mnt);
@@ -3082,7 +3068,13 @@ static struct file *open_detached_copy(struct path *path, unsigned int flags)
 DEFINE_FREE(put_empty_mnt_ns, struct mnt_namespace *,
 	    if (!IS_ERR_OR_NULL(_T)) free_mnt_ns(_T))
 
-static struct mnt_namespace *create_new_namespace(struct path *path, unsigned int flags)
+enum open_newns_flags_t {
+	OPEN_NEWNS_RECURSIVE	= BIT(0),
+	OPEN_NEWNS_CLONE	= BIT(1),
+};
+
+static struct mnt_namespace *create_new_namespace(struct path *path,
+						  enum open_newns_flags_t flags)
 {
 	struct mnt_namespace *new_ns __free(put_empty_mnt_ns) = NULL;
 	struct path to_path __free(path_put) = {};
@@ -3092,6 +3084,9 @@ static struct mnt_namespace *create_new_namespace(struct path *path, unsigned in
 	struct mount *mnt;
 	unsigned int copy_flags = 0;
 	bool locked = false;
+
+	if ((flags & (OPEN_NEWNS_RECURSIVE | OPEN_NEWNS_CLONE)) == OPEN_NEWNS_RECURSIVE)
+		return ERR_PTR(-EINVAL);
 
 	if (user_ns != ns->user_ns)
 		copy_flags |= CL_SLAVE;
@@ -3135,14 +3130,18 @@ static struct mnt_namespace *create_new_namespace(struct path *path, unsigned in
 	if (unlikely(IS_ERR(mp.parent)))
 		return ERR_CAST(mp.parent);
 
-	/*
-	 * We don't emulate unshare()ing a mount namespace. We stick to the
-	 * restrictions of creating detached bind-mounts. It has a lot
-	 * saner and simpler semantics.
-	 */
-	mnt = __do_loopback(path, flags, copy_flags);
-	if (IS_ERR(mnt))
-		return ERR_CAST(mnt);
+	if (flags & OPEN_NEWNS_CLONE) {
+		/*
+		 * We don't emulate unshare()ing a mount namespace. We stick to
+		 * the restrictions of creating detached bind-mounts. It has a
+		 * lot saner and simpler semantics.
+		 */
+		mnt = __do_loopback(path, flags & OPEN_NEWNS_RECURSIVE, copy_flags);
+		if (IS_ERR(mnt))
+			return ERR_CAST(mnt);
+	} else {
+		mnt = real_mount(mntget(path->mnt));
+	}
 
 	scoped_guard(mount_writer) {
 		if (locked)
@@ -3167,7 +3166,8 @@ static struct mnt_namespace *create_new_namespace(struct path *path, unsigned in
 	return no_free_ptr(new_ns);
 }
 
-static struct file *open_new_namespace(struct path *path, unsigned int flags)
+static struct file *open_new_namespace(struct path *path,
+				       enum open_newns_flags_t flags)
 {
 	struct mnt_namespace *new_ns;
 
@@ -3221,7 +3221,9 @@ static struct file *vfs_open_tree(int dfd, const char __user *filename, unsigned
 		return ERR_PTR(ret);
 
 	if (flags & OPEN_TREE_NAMESPACE)
-		return open_new_namespace(&path, flags);
+		return open_new_namespace(&path,
+				((flags & AT_RECURSIVE) ? OPEN_NEWNS_RECURSIVE : 0) |
+				OPEN_NEWNS_CLONE);
 
 	if (flags & OPEN_TREE_CLONE)
 		return open_detached_copy(&path, flags);
@@ -4408,11 +4410,15 @@ SYSCALL_DEFINE3(fsmount, int, fs_fd, unsigned int, flags,
 	unsigned int mnt_flags = 0;
 	long ret;
 
-	if (!may_mount())
+	if ((flags & ~(FSMOUNT_CLOEXEC | FSMOUNT_NAMESPACE)) != 0)
+		return -EINVAL;
+
+	if ((flags & FSMOUNT_NAMESPACE) &&
+	    !ns_capable(current_user_ns(), CAP_SYS_ADMIN))
 		return -EPERM;
 
-	if ((flags & ~(FSMOUNT_CLOEXEC)) != 0)
-		return -EINVAL;
+	if (!(flags & FSMOUNT_NAMESPACE) && !may_mount())
+		return -EPERM;
 
 	if (attr_flags & ~FSMOUNT_VALID_FLAGS)
 		return -EINVAL;
@@ -4478,6 +4484,10 @@ SYSCALL_DEFINE3(fsmount, int, fs_fd, unsigned int, flags,
 	 * don't want to have to handle any errors incurred.
 	 */
 	vfs_clean_context(fc);
+
+	if (flags & FSMOUNT_NAMESPACE)
+		return FD_ADD((flags & FSMOUNT_CLOEXEC) ? O_CLOEXEC : 0,
+			      open_new_namespace(&new_path, 0));
 
 	ns = alloc_mnt_ns(current->nsproxy->mnt_ns->user_ns, true);
 	if (IS_ERR(ns))
@@ -5645,14 +5655,14 @@ static int grab_requested_root(struct mnt_namespace *ns, struct path *root)
 	if (mnt_ns_empty(ns))
 		return -ENOENT;
 
-	first = child = ns->root;
-	for (;;) {
-		child = listmnt_next(child, false);
-		if (!child)
-			return -ENOENT;
-		if (child->mnt_parent == first)
+	first = ns->root;
+	for (child = node_to_mount(ns->mnt_first_node); child;
+	     child = listmnt_next(child, false)) {
+		if (child != first && child->mnt_parent == first)
 			break;
 	}
+	if (!child)
+		return -ENOENT;
 
 	root->mnt = mntget(&child->mnt);
 	root->dentry = dget(root->mnt->mnt_root);
