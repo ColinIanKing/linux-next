@@ -1079,6 +1079,14 @@ struct damos_sysfs_qgoal_metric_name damos_sysfs_qgoal_metric_names[] = {
 		.metric = DAMOS_QUOTA_NODE_MEMCG_FREE_BP,
 		.name = "node_memcg_free_bp",
 	},
+	{
+		.metric = DAMOS_QUOTA_ACTIVE_MEM_BP,
+		.name = "active_mem_bp",
+	},
+	{
+		.metric = DAMOS_QUOTA_INACTIVE_MEM_BP,
+		.name = "inactive_mem_bp",
+	},
 };
 
 static ssize_t target_metric_show(struct kobject *kobj,
@@ -2494,7 +2502,7 @@ static bool damon_sysfs_memcg_path_eq(struct mem_cgroup *memcg,
 	return false;
 }
 
-static int damon_sysfs_memcg_path_to_id(char *memcg_path, unsigned short *id)
+static int damon_sysfs_memcg_path_to_id(char *memcg_path, u64 *id)
 {
 	struct mem_cgroup *memcg;
 	char *path;
@@ -2509,8 +2517,8 @@ static int damon_sysfs_memcg_path_to_id(char *memcg_path, unsigned short *id)
 
 	for (memcg = mem_cgroup_iter(NULL, NULL, NULL); memcg;
 			memcg = mem_cgroup_iter(NULL, memcg, NULL)) {
-		/* skip removed memcg */
-		if (!mem_cgroup_id(memcg))
+		/* skip offlined memcg */
+		if (!mem_cgroup_online(memcg))
 			continue;
 		if (damon_sysfs_memcg_path_eq(memcg, path, memcg_path)) {
 			*id = mem_cgroup_id(memcg);
