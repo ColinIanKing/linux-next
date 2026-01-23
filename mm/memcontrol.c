@@ -42,6 +42,7 @@
 #include <linux/bit_spinlock.h>
 #include <linux/rcupdate.h>
 #include <linux/limits.h>
+#include <linux/sprintf.h>
 #include <linux/export.h>
 #include <linux/list.h>
 #include <linux/mutex.h>
@@ -1478,6 +1479,53 @@ static bool memcg_accounts_hugetlb(void)
 }
 #endif /* CONFIG_HUGETLB_PAGE */
 
+/* Max 2^64 - 1 = 18446744073709551615 (20 digits) */
+#define MEMCG_DEC_U64_MAX_LEN 20
+
+/**
+ * memcg_seq_buf_print_stat - Write a name-value pair to a seq_buf with newline
+ * @s: The seq_buf to write to
+ * @prefix: Optional prefix string (can be NULL or "")
+ * @name: The name string to write
+ * @sep: Separator character between name and value (typically ' ' or '=')
+ * @val: The u64 value to write
+ *
+ * This helper efficiently formats and writes "<prefix><name><sep><value>\n"
+ * to a seq_buf. It manually converts the value to a string using num_to_str
+ * and embeds the separator and newline in the buffer to minimize function
+ * calls for better performance.
+ *
+ * The function checks for overflow at each step and returns early if any
+ * operation would cause the buffer to overflow.
+ *
+ * Example: memcg_seq_buf_print_stat(s, "total_", "cache", ' ', 1048576)
+ *          Output: "total_cache 1048576\n"
+ */
+void memcg_seq_buf_print_stat(struct seq_buf *s, const char *prefix,
+			      const char *name, char sep, u64 val)
+{
+	char num_buf[MEMCG_DEC_U64_MAX_LEN + 2];  /* +2 for separator and newline */
+	int num_len;
+
+	/* Embed separator at the beginning */
+	num_buf[0] = sep;
+
+	/* Convert number starting at offset 1 */
+	num_len = num_to_str(num_buf + 1, sizeof(num_buf) - 2, val, 0);
+	if (num_len <= 0)
+		return;
+
+	/* Embed newline at the end */
+	num_buf[num_len + 1] = '\n';
+
+	if (prefix && *prefix && seq_buf_puts(s, prefix))
+		return;
+	if (seq_buf_puts(s, name))
+		return;
+	/* Output separator, value, and newline in one call */
+	seq_buf_putmem(s, num_buf, num_len + 2);
+}
+
 static void memcg_stat_format(struct mem_cgroup *memcg, struct seq_buf *s)
 {
 	int i;
@@ -1503,26 +1551,26 @@ static void memcg_stat_format(struct mem_cgroup *memcg, struct seq_buf *s)
 			continue;
 #endif
 		size = memcg_page_state_output(memcg, memory_stats[i].idx);
-		seq_buf_printf(s, "%s %llu\n", memory_stats[i].name, size);
+		memcg_seq_buf_print_stat(s, NULL, memory_stats[i].name, ' ', size);
 
 		if (unlikely(memory_stats[i].idx == NR_SLAB_UNRECLAIMABLE_B)) {
 			size += memcg_page_state_output(memcg,
 							NR_SLAB_RECLAIMABLE_B);
-			seq_buf_printf(s, "slab %llu\n", size);
+			memcg_seq_buf_print_stat(s, NULL, "slab", ' ', size);
 		}
 	}
 
 	/* Accumulated memory events */
-	seq_buf_printf(s, "pgscan %lu\n",
-		       memcg_events(memcg, PGSCAN_KSWAPD) +
-		       memcg_events(memcg, PGSCAN_DIRECT) +
-		       memcg_events(memcg, PGSCAN_PROACTIVE) +
-		       memcg_events(memcg, PGSCAN_KHUGEPAGED));
-	seq_buf_printf(s, "pgsteal %lu\n",
-		       memcg_events(memcg, PGSTEAL_KSWAPD) +
-		       memcg_events(memcg, PGSTEAL_DIRECT) +
-		       memcg_events(memcg, PGSTEAL_PROACTIVE) +
-		       memcg_events(memcg, PGSTEAL_KHUGEPAGED));
+	memcg_seq_buf_print_stat(s, NULL, "pgscan", ' ',
+				 memcg_events(memcg, PGSCAN_KSWAPD) +
+				 memcg_events(memcg, PGSCAN_DIRECT) +
+				 memcg_events(memcg, PGSCAN_PROACTIVE) +
+				 memcg_events(memcg, PGSCAN_KHUGEPAGED));
+	memcg_seq_buf_print_stat(s, NULL, "pgsteal", ' ',
+				 memcg_events(memcg, PGSTEAL_KSWAPD) +
+				 memcg_events(memcg, PGSTEAL_DIRECT) +
+				 memcg_events(memcg, PGSTEAL_PROACTIVE) +
+				 memcg_events(memcg, PGSTEAL_KHUGEPAGED));
 
 	for (i = 0; i < ARRAY_SIZE(memcg_vm_event_stat); i++) {
 #ifdef CONFIG_MEMCG_V1
@@ -1530,9 +1578,9 @@ static void memcg_stat_format(struct mem_cgroup *memcg, struct seq_buf *s)
 		    memcg_vm_event_stat[i] == PGPGOUT)
 			continue;
 #endif
-		seq_buf_printf(s, "%s %lu\n",
-			       vm_event_name(memcg_vm_event_stat[i]),
-			       memcg_events(memcg, memcg_vm_event_stat[i]));
+		memcg_seq_buf_print_stat(s, NULL,
+					 vm_event_name(memcg_vm_event_stat[i]), ' ',
+					 memcg_events(memcg, memcg_vm_event_stat[i]));
 	}
 }
 
@@ -4560,7 +4608,12 @@ static int memory_numa_stat_show(struct seq_file *m, void *v)
 		if (memory_stats[i].idx >= NR_VM_NODE_STAT_ITEMS)
 			continue;
 
-		seq_printf(m, "%s", memory_stats[i].name);
+		/*
+		 * Output format: "stat_name N0=value0 N1=value1 ...\n"
+		 * Use seq_puts and seq_put_decimal_ull to avoid printf
+		 * format parsing overhead in this hot path.
+		 */
+		seq_puts(m, memory_stats[i].name);
 		for_each_node_state(nid, N_MEMORY) {
 			u64 size;
 			struct lruvec *lruvec;
@@ -4568,7 +4621,8 @@ static int memory_numa_stat_show(struct seq_file *m, void *v)
 			lruvec = mem_cgroup_lruvec(memcg, NODE_DATA(nid));
 			size = lruvec_page_state_output(lruvec,
 							memory_stats[i].idx);
-			seq_printf(m, " N%d=%llu", nid, size);
+			seq_put_decimal_ull(m, " N", nid);
+			seq_put_decimal_ull(m, "=", size);
 		}
 		seq_putc(m, '\n');
 	}
