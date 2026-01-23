@@ -138,15 +138,13 @@ static int dw_mci_hi6220_parse_dt(struct dw_mci *host)
 	return 0;
 }
 
-static int dw_mci_hi6220_switch_voltage(struct mmc_host *mmc, struct mmc_ios *ios)
+static int dw_mci_hi6220_switch_voltage(struct dw_mci *host, struct mmc_ios *ios)
 {
-	struct dw_mci_slot *slot = mmc_priv(mmc);
 	struct k3_priv *priv;
-	struct dw_mci *host;
+	struct mmc_host *mmc = host->mmc;
 	int min_uv, max_uv;
 	int ret;
 
-	host = slot->host;
 	priv = host->priv;
 
 	if (!priv || !priv->reg)
@@ -199,7 +197,7 @@ static void dw_mci_hi6220_set_ios(struct dw_mci *host, struct mmc_ios *ios)
 	host->bus_hz = clk_get_rate(host->biu_clk);
 }
 
-static int dw_mci_hi6220_execute_tuning(struct dw_mci_slot *slot, u32 opcode)
+static int dw_mci_hi6220_execute_tuning(struct dw_mci *host, u32 opcode)
 {
 	return 0;
 }
@@ -364,11 +362,10 @@ static int dw_mci_get_best_clksmpl(unsigned int sample_flag)
 	return middle_range;
 }
 
-static int dw_mci_hi3660_execute_tuning(struct dw_mci_slot *slot, u32 opcode)
+static int dw_mci_hi3660_execute_tuning(struct dw_mci *host, u32 opcode)
 {
 	int i = 0;
-	struct dw_mci *host = slot->host;
-	struct mmc_host *mmc = slot->mmc;
+	struct mmc_host *mmc = host->mmc;
 	int smpl_phase = 0;
 	u32 tuning_sample_flag = 0;
 	int best_clksmpl = 0;
@@ -398,15 +395,13 @@ static int dw_mci_hi3660_execute_tuning(struct dw_mci_slot *slot, u32 opcode)
 	return 0;
 }
 
-static int dw_mci_hi3660_switch_voltage(struct mmc_host *mmc,
+static int dw_mci_hi3660_switch_voltage(struct dw_mci *host,
 					struct mmc_ios *ios)
 {
-	int ret = 0;
-	struct dw_mci_slot *slot = mmc_priv(mmc);
 	struct k3_priv *priv;
-	struct dw_mci *host;
+	struct mmc_host *mmc = host->mmc;
+	int ret = 0;
 
-	host = slot->host;
 	priv = host->priv;
 
 	if (!priv || !priv->reg)
@@ -422,12 +417,10 @@ static int dw_mci_hi3660_switch_voltage(struct mmc_host *mmc,
 	if (ret)
 		return ret;
 
-	if (!IS_ERR(mmc->supply.vqmmc)) {
-		ret = mmc_regulator_set_vqmmc(mmc, ios);
-		if (ret < 0) {
-			dev_err(host->dev, "Regulator set error %d\n", ret);
-			return ret;
-		}
+	ret = mmc_regulator_set_vqmmc(mmc, ios);
+	if (ret < 0) {
+		dev_err(host->dev, "Regulator set error %d\n", ret);
+		return ret;
 	}
 
 	return 0;
@@ -460,11 +453,6 @@ static int dw_mci_k3_probe(struct platform_device *pdev)
 	return dw_mci_pltfm_register(pdev, drv_data);
 }
 
-static const struct dev_pm_ops dw_mci_k3_dev_pm_ops = {
-	SYSTEM_SLEEP_PM_OPS(pm_runtime_force_suspend, pm_runtime_force_resume)
-	RUNTIME_PM_OPS(dw_mci_runtime_suspend, dw_mci_runtime_resume, NULL)
-};
-
 static struct platform_driver dw_mci_k3_pltfm_driver = {
 	.probe		= dw_mci_k3_probe,
 	.remove		= dw_mci_pltfm_remove,
@@ -472,7 +460,7 @@ static struct platform_driver dw_mci_k3_pltfm_driver = {
 		.name		= "dwmmc_k3",
 		.probe_type	= PROBE_PREFER_ASYNCHRONOUS,
 		.of_match_table	= dw_mci_k3_match,
-		.pm		= pm_ptr(&dw_mci_k3_dev_pm_ops),
+		.pm		= pm_ptr(&dw_mci_pltfm_pmops),
 	},
 };
 
