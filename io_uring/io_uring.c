@@ -2341,6 +2341,9 @@ static __cold void io_ring_exit_work(struct work_struct *work)
 		if (WARN_ON_ONCE(time_after(jiffies, timeout))) {
 			/* there is little hope left, don't run it too often */
 			interval = HZ * 60;
+			mutex_lock(&ctx->uring_lock);
+			io_uring_dump_reqs(ctx, "io_uring exit timeout");
+			mutex_unlock(&ctx->uring_lock);
 		}
 		/*
 		 * This is really an uninterruptible wait, as it has to be
