@@ -97,4 +97,10 @@ landlock_upgrade_handled_access_masks(struct access_masks access_masks)
 	return access_masks;
 }
 
+/** access_mask_subset - true iff a has a subset of the bits of b. */
+static inline bool access_mask_subset(access_mask_t a, access_mask_t b)
+{
+	return (a | b) == b;
+}
+
 #endif /* _SECURITY_LANDLOCK_ACCESS_H */
