@@ -417,6 +417,13 @@ struct amdgpu_display_manager {
 	uint32_t dmcub_fw_version;
 
 	/**
+	 * @fw_inst_size:
+	 *
+	 * Size of the firmware instruction buffer.
+	 */
+	uint32_t fw_inst_size;
+
+	/**
 	 * @cgs_device:
 	 *
 	 * The Common Graphics Services device. It provides an interface for
@@ -811,6 +818,7 @@ struct amdgpu_dm_connector {
 
 	int sr_skip_count;
 	bool disallow_edp_enter_psr;
+	bool disallow_edp_enter_replay;
 
 	/* Record progress status of mst*/
 	uint8_t mst_status;
