@@ -231,24 +231,33 @@ int zpci_fmb_disable_device(struct zpci_dev *zdev)
 static int zpci_cfg_load(struct zpci_dev *zdev, int offset, u32 *val, u8 len)
 {
 	u64 req = ZPCI_CREATE_REQ(zdev->fh, ZPCI_PCIAS_CFGSPC, len);
+	int rc = -ENODEV;
 	u64 data;
-	int rc;
+
+	if (!zdev_enabled(zdev))
+		goto out_err;
 
 	rc = __zpci_load(&data, req, offset);
-	if (!rc) {
-		data = le64_to_cpu((__force __le64) data);
-		data >>= (8 - len) * 8;
-		*val = (u32) data;
-	} else
-		*val = 0xffffffff;
+	if (rc)
+		goto out_err;
+	data = le64_to_cpu((__force __le64)data);
+	data >>= (8 - len) * 8;
+	*val = (u32)data;
+	return 0;
+
+out_err:
+	PCI_SET_ERROR_RESPONSE(val);
 	return rc;
 }
 
 static int zpci_cfg_store(struct zpci_dev *zdev, int offset, u32 val, u8 len)
 {
 	u64 req = ZPCI_CREATE_REQ(zdev->fh, ZPCI_PCIAS_CFGSPC, len);
+	int rc = -ENODEV;
 	u64 data = val;
-	int rc;
+
+	if (!zdev_enabled(zdev))
+		return rc;
 
 	data <<= (8 - len) * 8;
 	data = (__force u64) cpu_to_le64(data);
@@ -397,7 +406,9 @@ static int pci_read(struct pci_bus *bus, unsigned int devfn, int where,
 {
 	struct zpci_dev *zdev = zdev_from_bus(bus, devfn);
 
-	return (zdev) ? zpci_cfg_load(zdev, where, val, size) : -ENODEV;
+	if (!zdev || zpci_cfg_load(zdev, where, val, size))
+		return PCIBIOS_DEVICE_NOT_FOUND;
+	return PCIBIOS_SUCCESSFUL;
 }
 
 static int pci_write(struct pci_bus *bus, unsigned int devfn, int where,
@@ -405,7 +416,9 @@ static int pci_write(struct pci_bus *bus, unsigned int devfn, int where,
 {
 	struct zpci_dev *zdev = zdev_from_bus(bus, devfn);
 
-	return (zdev) ? zpci_cfg_store(zdev, where, val, size) : -ENODEV;
+	if (!zdev || zpci_cfg_store(zdev, where, val, size))
+		return PCIBIOS_DEVICE_NOT_FOUND;
+	return PCIBIOS_SUCCESSFUL;
 }
 
 static struct pci_ops pci_root_ops = {
