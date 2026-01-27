@@ -247,15 +247,6 @@ struct drm_pagemap_devmem_ops {
 
 struct drm_pagemap *drm_pagemap_page_to_dpagemap(struct page *page);
 
-#else
-
-static inline struct drm_pagemap *drm_pagemap_page_to_dpagemap(struct page *page)
-{
-	return NULL;
-}
-
-#endif /* IS_ENABLED(CONFIG_ZONE_DEVICE) */
-
 int drm_pagemap_init(struct drm_pagemap *dpagemap,
 		     struct dev_pagemap *pagemap,
 		     struct drm_device *drm,
@@ -265,17 +256,22 @@ struct drm_pagemap *drm_pagemap_create(struct drm_device *drm,
 				       struct dev_pagemap *pagemap,
 				       const struct drm_pagemap_ops *ops);
 
-#if IS_ENABLED(CONFIG_DRM_GPUSVM)
+struct drm_pagemap *drm_pagemap_page_to_dpagemap(struct page *page);
 
 void drm_pagemap_put(struct drm_pagemap *dpagemap);
 
 #else
 
+static inline struct drm_pagemap *drm_pagemap_page_to_dpagemap(struct page *page)
+{
+	return NULL;
+}
+
 static inline void drm_pagemap_put(struct drm_pagemap *dpagemap)
 {
 }
 
-#endif /* IS_ENABLED(CONFIG_DRM_GPUSVM) */
+#endif /* IS_ENABLED(CONFIG_ZONE_DEVICE) */
 
 /**
  * drm_pagemap_get() - Obtain a reference on a struct drm_pagemap
