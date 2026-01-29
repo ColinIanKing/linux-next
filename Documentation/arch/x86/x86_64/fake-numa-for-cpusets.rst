@@ -76,3 +76,53 @@ This allows for coarse memory management for the tasks you assign to particular
 cpusets.  Since cpusets can form a hierarchy, you can create some pretty
 interesting combinations of use-cases for various classes of tasks for your
 memory management needs.
+
+Hotpluggable Fake NUMA Nodes
+============================
+
+Fake NUMA nodes can be marked as hotpluggable to simulate memory hotplug
+scenarios or to create dedicated ZONE_MOVABLE regions without real
+hotpluggable hardware.
+
+To create hotpluggable fake nodes, use the ``hotplug=`` parameter::
+
+	numa=fake=4:hotplug=2,3
+
+This creates 4 fake nodes, with nodes 2 and 3 marked as hotpluggable.
+
+When combined with the ``movable_node`` boot parameter, these nodes will
+use ZONE_MOVABLE for all their memory, which means:
+
+- Only movable allocations (user pages, page cache) can use this memory
+- The memory can be offlined if all pages are successfully migrated
+- Kernel allocations will not use this memory
+
+Example boot parameters::
+
+	numa=fake=4:hotplug=2,3 movable_node
+
+This is useful for:
+
+- Testing memory hotplug code paths without real hotpluggable hardware
+- Creating dedicated pools of movable memory for containers or VMs
+- Simulating NUMA configurations with mixed hotpluggable/non-hotpluggable nodes
+- Memory overcommit scenarios where certain memory can be reclaimed
+
+**Important considerations:**
+
+1. The kernel clears the hotplug flag for any node containing kernel memory.
+   Typically this includes node 0 which receives early boot allocations,
+   and possibly other nodes depending on memory layout.
+
+2. The hotplug specification can be combined with distance tables (hotplug must
+   come last)::
+
+	numa=fake=4:10,20,20,10:hotplug=2,3
+
+3. Verification can be done via::
+
+	# Check zone layout per node
+	cat /sys/devices/system/node/node*/meminfo
+
+	# Check for ZONE_MOVABLE presence
+	cat /proc/zoneinfo | grep -A5 "Node.*zone.*Movable"

@@ -4657,6 +4657,26 @@ Kernel parameters
 			If given as an integer followed by 'U', it will
 			divide each physical node into N emulated nodes.
 
+	numa=fake=<spec>:hotplug=<nodes>
+			[KNL, ARM64, RISCV, X86, EARLY]
+			Mark specified fake nodes as hotpluggable. When combined
+			with the movable_node boot option, memory on these nodes
+			will use ZONE_MOVABLE exclusively.
+			<nodes> uses standard bitmap list format (same as cpulist):
+			  - Single node: hotplug=2
+			  - Comma-separated list: hotplug=2,3,5
+			  - Range: hotplug=2-5
+			  - Combination: hotplug=1,3-5,7
+			Note: The kernel clears the hotplug flag for nodes containing
+			kernel memory; typically this includes node 0, and possibly
+			other nodes depending on memory layout.
+			Example: numa=fake=4:hotplug=2,3 creates 4 fake nodes
+			where nodes 2 and 3 are marked hotpluggable.
+			Can be combined with distance specification:
+			numa=fake=4:10,20,20,10:hotplug=2,3
+			The hotplug= option must appear at the end, after any
+			distance table specification.
+
 	numa=noacpi	[X86] Don't parse the SRAT table for NUMA setup
 
 	numa=nohmat	[X86] Don't parse the HMAT table for NUMA setup, or
