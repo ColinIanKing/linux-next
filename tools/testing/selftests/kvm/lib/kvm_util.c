@@ -359,17 +359,17 @@ struct kvm_vm *____vm_create(struct vm_shape shape)
 	case VM_MODE_P56V57_4K:
 	case VM_MODE_P50V57_4K:
 	case VM_MODE_P41V57_4K:
-		vm->pgtable_levels = 5;
+		vm->mmu.pgtable_levels = 5;
 		break;
 	case VM_MODE_P56V48_4K:
 	case VM_MODE_P50V48_4K:
 	case VM_MODE_P41V48_4K:
-		vm->pgtable_levels = 4;
+		vm->mmu.pgtable_levels = 4;
 		break;
 	case VM_MODE_P56V39_4K:
 	case VM_MODE_P50V39_4K:
 	case VM_MODE_P41V39_4K:
-		vm->pgtable_levels = 3;
+		vm->mmu.pgtable_levels = 3;
 		break;
 	default:
 		TEST_FAIL("Unknown guest mode: 0x%x", vm->mode);
