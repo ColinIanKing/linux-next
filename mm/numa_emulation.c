@@ -401,6 +401,8 @@ void __init numa_emulation(struct numa_meminfo *numa_meminfo, int numa_dist_cnt)
 		int nid = 0;
 
 		n = simple_strtoul(emu_cmdline, &emu_cmdline, 0);
+		if (*emu_cmdline == 'U')
+			emu_cmdline++;
 		ret = -1;
 		for_each_node_mask(i, physnode_mask) {
 			/*
