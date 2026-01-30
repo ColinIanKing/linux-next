@@ -315,8 +315,8 @@ out:
 	return ret;
 }
 
-/*
- * Parse build ID of ELF file mapped to vma
+/**
+ * build_id_parse_nofault() - Parse build ID of ELF file mapped to vma
  * @vma:      vma object
  * @build_id: buffer to store build id, at least BUILD_ID_SIZE long
  * @size:     returns actual build id size in case of success
@@ -334,8 +334,8 @@ int build_id_parse_nofault(struct vm_area_struct *vma, unsigned char *build_id, 
 	return __build_id_parse(vma->vm_file, build_id, size, false /* !may_fault */);
 }
 
-/*
- * Parse build ID of ELF file mapped to VMA
+/**
+ * build_id_parse() - Parse build ID of ELF file mapped to VMA
  * @vma:      vma object
  * @build_id: buffer to store build id, at least BUILD_ID_SIZE long
  * @size:     returns actual build id size in case of success
@@ -354,7 +354,7 @@ int build_id_parse(struct vm_area_struct *vma, unsigned char *build_id, __u32 *s
 }
 
 /**
- * Parse build ID of ELF file
+ * build_id_parse_file() - Parse build ID of ELF file
  * @file:      file object
  * @build_id: buffer to store build id, at least BUILD_ID_SIZE long
  * @size:     returns actual build id size in case of success
