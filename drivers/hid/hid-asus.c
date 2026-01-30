@@ -1026,8 +1026,8 @@ static int asus_input_configured(struct hid_device *hdev, struct hid_input *hi)
 		hid_warn(hdev, "Failed to initialize backlight.\n");
 
 	if (drvdata->quirks & QUIRK_HID_FN_LOCK) {
-		drvdata->fn_lock = true;
 		INIT_WORK(&drvdata->fn_lock_sync_work, asus_sync_fn_lock);
+		drvdata->fn_lock = true;
 		asus_kbd_set_fn_lock(hdev, true);
 	}
 
@@ -1362,7 +1362,7 @@ static void asus_remove(struct hid_device *hdev)
 		cancel_work_sync(&drvdata->kbd_backlight->work);
 	}
 
-	if (drvdata->quirks & QUIRK_HID_FN_LOCK)
+	if ((drvdata->quirks & QUIRK_HID_FN_LOCK) && drvdata->fn_lock)
 		cancel_work_sync(&drvdata->fn_lock_sync_work);
 
 	hid_hw_stop(hdev);
