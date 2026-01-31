@@ -1,6 +1,11 @@
 #!/bin/bash
 # SPDX-License-Identifier: GPL-2.0
 
+# Derive TID from script name: test_<type>_<num>.sh -> <type>_<num>
+# Can be overridden in test script after sourcing this file
+TID=$(basename "$0" .sh)
+TID=${TID#test_}
+
 UBLK_SKIP_CODE=4
 
 _have_program() {
@@ -43,7 +48,7 @@ _create_backfile() {
 	old_file="${UBLK_BACKFILES[$index]}"
 	[ -f "$old_file" ] && rm -f "$old_file"
 
-	new_file=$(mktemp ublk_file_"${new_size}"_XXXXX)
+	new_file=$(mktemp ${UBLK_TEST_DIR}/ublk_file_"${new_size}"_XXXXX)
 	truncate -s "${new_size}" "${new_file}"
 	UBLK_BACKFILES["$index"]="$new_file"
 }
@@ -60,7 +65,7 @@ _remove_files() {
 _create_tmp_dir() {
 	local my_file;
 
-	my_file=$(mktemp -d ublk_dir_XXXXX)
+	my_file=$(mktemp -d ${UBLK_TEST_DIR}/ublk_dir_XXXXX)
 	echo "$my_file"
 }
 
@@ -119,8 +124,11 @@ _prep_test() {
 	local type=$1
 	shift 1
 	modprobe ublk_drv > /dev/null 2>&1
-	UBLK_TMP=$(mktemp ublk_test_XXXXX)
+	TDIR=$(mktemp -d ${TMPDIR:-.}/ublktest-dir.XXXXXX)
+	export UBLK_TEST_DIR=${TDIR}
+	UBLK_TMP=$(mktemp ${UBLK_TEST_DIR}/ublk_test_XXXXX)
 	[ "$UBLK_TEST_QUIET" -eq 0 ] && echo "ublk $type: $*"
+	echo "ublk selftest: $TID starting at $(date '+%F %T')" | tee /dev/kmsg
 }
 
 _remove_test_files()
@@ -165,6 +173,8 @@ _cleanup_test() {
 	"${UBLK_PROG}" del -a
 
 	_remove_files
+	rmdir ${UBLK_TEST_DIR}
+	echo "ublk selftest: $TID done at $(date '+%F %T')" | tee /dev/kmsg
 }
 
 _have_feature()
@@ -398,6 +408,8 @@ UBLK_PROG=$(_ublk_test_top_dir)/kublk
 UBLK_TEST_QUIET=1
 UBLK_TEST_SHOW_RESULT=1
 UBLK_BACKFILES=()
+UBLK_TEST_DIR=${TMPDIR:-.}
 export UBLK_PROG
 export UBLK_TEST_QUIET
 export UBLK_TEST_SHOW_RESULT
+export UBLK_TEST_DIR
