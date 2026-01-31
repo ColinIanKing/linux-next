@@ -3164,8 +3164,8 @@ static inline void cp_dst_to_slots(struct maple_copy *cp, unsigned long min,
 		if (mt_is_alloc(mas->tree)) {
 			if (ma_is_leaf(mt)) {
 				cp->gap[d] = ma_leaf_max_gap(mn, mt, slot_min,
-					         slot_max, ma_pivots(mn, mt),
-					         ma_slots(mn, mt));
+						 slot_max, ma_pivots(mn, mt),
+						 ma_slots(mn, mt));
 			} else {
 				unsigned long *gaps = ma_gaps(mn, mt);
 
