@@ -15,6 +15,16 @@ _have_program() {
 	return 1
 }
 
+# Sleep with awareness of parallel execution.
+# Usage: _ublk_sleep <normal_secs> <parallel_secs>
+_ublk_sleep() {
+	if [ "${JOBS:-1}" -gt 1 ]; then
+		sleep "$2"
+	else
+		sleep "$1"
+	fi
+}
+
 _get_disk_dev_t() {
 	local dev_id=$1
 	local dev
@@ -106,11 +116,6 @@ _check_root() {
 	fi
 }
 
-_remove_ublk_devices() {
-	${UBLK_PROG} del -a
-	modprobe -r ublk_drv > /dev/null 2>&1
-}
-
 _get_ublk_dev_state() {
 	${UBLK_PROG} list -n "$1" | grep "state" | awk '{print $11}'
 }
@@ -124,8 +129,7 @@ _prep_test() {
 	local type=$1
 	shift 1
 	modprobe ublk_drv > /dev/null 2>&1
-	TDIR=$(mktemp -d ${TMPDIR:-.}/ublktest-dir.XXXXXX)
-	export UBLK_TEST_DIR=${TDIR}
+	UBLK_TEST_DIR=$(mktemp -d ${TMPDIR:-.}/ublktest-dir.XXXXXX)
 	UBLK_TMP=$(mktemp ${UBLK_TEST_DIR}/ublk_test_XXXXX)
 	[ "$UBLK_TEST_QUIET" -eq 0 ] && echo "ublk $type: $*"
 	echo "ublk selftest: $TID starting at $(date '+%F %T')" | tee /dev/kmsg
@@ -170,7 +174,12 @@ _check_add_dev()
 }
 
 _cleanup_test() {
-	"${UBLK_PROG}" del -a
+	if [ -f "${UBLK_TEST_DIR}/.ublk_devs" ]; then
+		while read -r dev_id; do
+			${UBLK_PROG} del -n "${dev_id}"
+		done < "${UBLK_TEST_DIR}/.ublk_devs"
+		rm -f "${UBLK_TEST_DIR}/.ublk_devs"
+	fi
 
 	_remove_files
 	rmdir ${UBLK_TEST_DIR}
@@ -207,10 +216,11 @@ _create_ublk_dev() {
 	fi
 
 	if [ "$settle" = "yes" ]; then
-		udevadm settle
+		udevadm settle --timeout=20
 	fi
 
 	if [[ "$dev_id" =~ ^[0-9]+$ ]]; then
+		echo "$dev_id" >> "${UBLK_TEST_DIR}/.ublk_devs"
 		echo "${dev_id}"
 	else
 		return 255
@@ -230,7 +240,7 @@ _recover_ublk_dev() {
 	local state
 
 	dev_id=$(_create_ublk_dev "recover" "yes" "$@")
-	for ((j=0;j<20;j++)); do
+	for ((j=0;j<100;j++)); do
 		state=$(_get_ublk_dev_state "${dev_id}")
 		[ "$state" == "LIVE" ] && break
 		sleep 1
@@ -250,7 +260,7 @@ __ublk_quiesce_dev()
 		return "$state"
 	fi
 
-	for ((j=0;j<50;j++)); do
+	for ((j=0;j<100;j++)); do
 		state=$(_get_ublk_dev_state "${dev_id}")
 		[ "$state" == "$exp_state" ] && break
 		sleep 1
@@ -269,7 +279,7 @@ __ublk_kill_daemon()
 	daemon_pid=$(_get_ublk_daemon_pid "${dev_id}")
 	state=$(_get_ublk_dev_state "${dev_id}")
 
-	for ((j=0;j<50;j++)); do
+	for ((j=0;j<100;j++)); do
 		[ "$state" == "$exp_state" ] && break
 		kill -9 "$daemon_pid" > /dev/null 2>&1
 		sleep 1
@@ -278,12 +288,23 @@ __ublk_kill_daemon()
 	echo "$state"
 }
 
-__remove_ublk_dev_return() {
+_ublk_del_dev() {
 	local dev_id=$1
 
 	${UBLK_PROG} del -n "${dev_id}"
+
+	# Remove from tracking file
+	if [ -f "${UBLK_TEST_DIR}/.ublk_devs" ]; then
+		sed -i "/^${dev_id}$/d" "${UBLK_TEST_DIR}/.ublk_devs"
+	fi
+}
+
+__remove_ublk_dev_return() {
+	local dev_id=$1
+
+	_ublk_del_dev "${dev_id}"
 	local res=$?
-	udevadm settle
+	udevadm settle --timeout=20
 	return ${res}
 }
 
@@ -408,8 +429,6 @@ UBLK_PROG=$(_ublk_test_top_dir)/kublk
 UBLK_TEST_QUIET=1
 UBLK_TEST_SHOW_RESULT=1
 UBLK_BACKFILES=()
-UBLK_TEST_DIR=${TMPDIR:-.}
 export UBLK_PROG
 export UBLK_TEST_QUIET
 export UBLK_TEST_SHOW_RESULT
-export UBLK_TEST_DIR
