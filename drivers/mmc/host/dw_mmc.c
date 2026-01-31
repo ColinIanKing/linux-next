@@ -3529,19 +3529,6 @@ const struct dev_pm_ops dw_mci_pltfm_pmops = {
 };
 EXPORT_SYMBOL_GPL(dw_mci_pltfm_pmops);
 
-static int __init dw_mci_init(void)
-{
-	pr_info("Synopsys Designware Multimedia Card Interface Driver\n");
-	return 0;
-}
-
-static void __exit dw_mci_exit(void)
-{
-}
-
-module_init(dw_mci_init);
-module_exit(dw_mci_exit);
-
 MODULE_DESCRIPTION("DW Multimedia Card Interface driver");
 MODULE_AUTHOR("NXP Semiconductor VietNam");
 MODULE_AUTHOR("Imagination Technologies Ltd");
