@@ -314,7 +314,7 @@ fail_and_free:
 	}
 
 	extlen = (skb_transport_header(skb)[1] + 1) << 3;
-	if (extlen > net->ipv6.sysctl.max_dst_opts_len)
+	if (extlen > READ_ONCE(net->ipv6.sysctl.max_dst_opts_len))
 		goto fail_and_free;
 
 	opt->lastopt = opt->dst1 = skb_network_header_len(skb);
@@ -322,7 +322,8 @@ fail_and_free:
 	dstbuf = opt->dst1;
 #endif
 
-	if (ip6_parse_tlv(false, skb, net->ipv6.sysctl.max_dst_opts_cnt)) {
+	if (ip6_parse_tlv(false, skb,
+			  READ_ONCE(net->ipv6.sysctl.max_dst_opts_cnt))) {
 		skb->transport_header += extlen;
 		opt = IP6CB(skb);
 #if IS_ENABLED(CONFIG_IPV6_MIP6)
@@ -1049,11 +1050,12 @@ fail_and_free:
 	}
 
 	extlen = (skb_transport_header(skb)[1] + 1) << 3;
-	if (extlen > net->ipv6.sysctl.max_hbh_opts_len)
+	if (extlen > READ_ONCE(net->ipv6.sysctl.max_hbh_opts_len))
 		goto fail_and_free;
 
 	opt->flags |= IP6SKB_HOPBYHOP;
-	if (ip6_parse_tlv(true, skb, net->ipv6.sysctl.max_hbh_opts_cnt)) {
+	if (ip6_parse_tlv(true, skb,
+			  READ_ONCE(net->ipv6.sysctl.max_hbh_opts_cnt))) {
 		skb->transport_header += extlen;
 		opt = IP6CB(skb);
 		opt->nhoff = sizeof(struct ipv6hdr);
@@ -1334,21 +1336,21 @@ struct ipv6_txoptions *__ipv6_fixup_options(struct ipv6_txoptions *opt_space,
 EXPORT_SYMBOL_GPL(__ipv6_fixup_options);
 
 /**
- * fl6_update_dst - update flowi destination address with info given
+ * __fl6_update_dst - update flowi destination address with info given
  *                  by srcrt option, if any.
  *
  * @fl6: flowi6 for which daddr is to be updated
  * @opt: struct ipv6_txoptions in which to look for srcrt opt
  * @orig: copy of original daddr address if modified
  *
- * Returns NULL if no txoptions or no srcrt, otherwise returns orig
+ * Return: NULL if no srcrt or invalid srcrt type, otherwise returns orig
  * and initial value of fl6->daddr set in orig
  */
-struct in6_addr *fl6_update_dst(struct flowi6 *fl6,
-				const struct ipv6_txoptions *opt,
-				struct in6_addr *orig)
+struct in6_addr *__fl6_update_dst(struct flowi6 *fl6,
+				  const struct ipv6_txoptions *opt,
+				  struct in6_addr *orig)
 {
-	if (!opt || !opt->srcrt)
+	if (!opt->srcrt)
 		return NULL;
 
 	*orig = fl6->daddr;
@@ -1372,4 +1374,4 @@ struct in6_addr *fl6_update_dst(struct flowi6 *fl6,
 
 	return orig;
 }
-EXPORT_SYMBOL_GPL(fl6_update_dst);
+EXPORT_SYMBOL_GPL(__fl6_update_dst);

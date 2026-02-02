@@ -1085,7 +1085,8 @@ static void tcp_v6_send_reset(const struct sock *sk, struct sk_buff *skb,
 			txhash = inet_twsk(sk)->tw_txhash;
 		}
 	} else {
-		if (net->ipv6.sysctl.flowlabel_reflect & FLOWLABEL_REFLECT_TCP_RESET)
+		if (READ_ONCE(net->ipv6.sysctl.flowlabel_reflect) &
+		    FLOWLABEL_REFLECT_TCP_RESET)
 			label = ip6_flowlabel(ipv6h);
 	}
 
@@ -2331,6 +2332,8 @@ struct proto tcpv6_prot = {
 	.sysctl_rmem_offset	= offsetof(struct net, ipv4.sysctl_tcp_rmem),
 	.max_header		= MAX_TCP_HEADER,
 	.obj_size		= sizeof(struct tcp6_sock),
+	.freeptr_offset		= offsetof(struct tcp6_sock,
+					   tcp.inet_conn.icsk_inet.sk.sk_freeptr),
 	.ipv6_pinfo_offset = offsetof(struct tcp6_sock, inet6),
 	.slab_flags		= SLAB_TYPESAFE_BY_RCU,
 	.twsk_prot		= &tcp6_timewait_sock_ops,

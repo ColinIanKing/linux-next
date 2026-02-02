@@ -3418,20 +3418,6 @@ void tcp4_proc_exit(void)
 }
 #endif /* CONFIG_PROC_FS */
 
-/* @wake is one when sk_stream_write_space() calls us.
- * This sends EPOLLOUT only if notsent_bytes is half the limit.
- * This mimics the strategy used in sock_def_write_space().
- */
-bool tcp_stream_memory_free(const struct sock *sk, int wake)
-{
-	const struct tcp_sock *tp = tcp_sk(sk);
-	u32 notsent_bytes = READ_ONCE(tp->write_seq) -
-			    READ_ONCE(tp->snd_nxt);
-
-	return (notsent_bytes << wake) < tcp_notsent_lowat(tp);
-}
-EXPORT_SYMBOL(tcp_stream_memory_free);
-
 struct proto tcp_prot = {
 	.name			= "TCP",
 	.owner			= THIS_MODULE,
@@ -3474,6 +3460,8 @@ struct proto tcp_prot = {
 	.sysctl_rmem_offset	= offsetof(struct net, ipv4.sysctl_tcp_rmem),
 	.max_header		= MAX_TCP_HEADER,
 	.obj_size		= sizeof(struct tcp_sock),
+	.freeptr_offset		= offsetof(struct tcp_sock,
+					   inet_conn.icsk_inet.sk.sk_freeptr),
 	.slab_flags		= SLAB_TYPESAFE_BY_RCU,
 	.twsk_prot		= &tcp_timewait_sock_ops,
 	.rsk_prot		= &tcp_request_sock_ops,

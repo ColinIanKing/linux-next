@@ -127,6 +127,22 @@ static unsigned int chain_mode;
 module_param(chain_mode, int, 0444);
 MODULE_PARM_DESC(chain_mode, "To use chain instead of ring mode");
 
+static const char *stmmac_dwmac_actphyif[8] = {
+	[PHY_INTF_SEL_GMII_MII]	= "GMII/MII",
+	[PHY_INTF_SEL_RGMII]	= "RGMII",
+	[PHY_INTF_SEL_SGMII]	= "SGMII",
+	[PHY_INTF_SEL_TBI]	= "TBI",
+	[PHY_INTF_SEL_RMII]	= "RMII",
+	[PHY_INTF_SEL_RTBI]	= "RTBI",
+	[PHY_INTF_SEL_SMII]	= "SMII",
+	[PHY_INTF_SEL_REVMII]	= "REVMII",
+};
+
+static const char *stmmac_dwxgmac_phyif[4] = {
+	[PHY_INTF_GMII]		= "GMII",
+	[PHY_INTF_RGMII]	= "RGMII",
+};
+
 static irqreturn_t stmmac_interrupt(int irq, void *dev_id);
 /* For MSI interrupts handling */
 static irqreturn_t stmmac_mac_interrupt(int irq, void *dev_id);
@@ -1114,7 +1130,7 @@ static int stmmac_mac_enable_tx_lpi(struct phylink_config *config, u32 timer,
 	stmmac_set_eee_timer(priv, priv->hw, STMMAC_DEFAULT_LIT_LS,
 			     STMMAC_DEFAULT_TWT_LS);
 
-	/* Try to cnfigure the hardware timer. */
+	/* Try to configure the hardware timer. */
 	ret = stmmac_set_lpi_mode(priv, priv->hw, STMMAC_LPI_TIMER,
 				  priv->tx_lpi_clk_stop, priv->tx_lpi_timer);
 
@@ -1206,6 +1222,7 @@ static int stmmac_init_phy(struct net_device *dev)
 	struct fwnode_handle *phy_fwnode;
 	struct fwnode_handle *fwnode;
 	struct ethtool_keee eee;
+	u32 dev_flags = 0;
 	int ret;
 
 	if (!phylink_expects_phy(priv->phylink))
@@ -1223,6 +1240,9 @@ static int stmmac_init_phy(struct net_device *dev)
 		phy_fwnode = fwnode_get_phy_node(fwnode);
 	else
 		phy_fwnode = NULL;
+
+	if (priv->plat->flags & STMMAC_FLAG_KEEP_PREAMBLE_BEFORE_SFD)
+		dev_flags |= PHY_F_KEEP_PREAMBLE_BEFORE_SFD;
 
 	/* Some DT bindings do not set-up the PHY handle. Let's try to
 	 * manually parse it
@@ -1242,10 +1262,12 @@ static int stmmac_init_phy(struct net_device *dev)
 			return -ENODEV;
 		}
 
+		phydev->dev_flags |= dev_flags;
+
 		ret = phylink_connect_phy(priv->phylink, phydev);
 	} else {
 		fwnode_handle_put(phy_fwnode);
-		ret = phylink_fwnode_phy_connect(priv->phylink, fwnode, 0);
+		ret = phylink_fwnode_phy_connect(priv->phylink, fwnode, dev_flags);
 	}
 
 	if (ret) {
@@ -3489,7 +3511,7 @@ static void stmmac_mac_config_rss(struct stmmac_priv *priv)
 /**
  *  stmmac_mtl_configuration - Configure MTL
  *  @priv: driver private structure
- *  Description: It is used for configurring MTL
+ *  Description: It is used for configuring MTL
  */
 static void stmmac_mtl_configuration(struct stmmac_priv *priv)
 {
@@ -4367,7 +4389,7 @@ static netdev_tx_t stmmac_tso_xmit(struct sk_buff *skb, struct net_device *dev)
 
 	/* Always insert VLAN tag to SKB payload for TSO frames.
 	 *
-	 * Never insert VLAN tag by HW, since segments splited by
+	 * Never insert VLAN tag by HW, since segments split by
 	 * TSO engine will be un-tagged by mistake.
 	 */
 	if (skb_vlan_tag_present(skb)) {
@@ -5940,7 +5962,7 @@ static int stmmac_napi_poll_rxtx(struct napi_struct *napi, int budget)
 		unsigned long flags;
 
 		spin_lock_irqsave(&ch->lock, flags);
-		/* Both RX and TX work done are compelte,
+		/* Both RX and TX work done are complete,
 		 * so enable both RX & TX IRQs.
 		 */
 		stmmac_enable_dma_irq(priv, priv->ioaddr, chan, 1, 1);
@@ -6143,7 +6165,7 @@ static void stmmac_common_interrupt(struct stmmac_priv *priv)
 
 	/* To handle GMAC own interrupts */
 	if (priv->plat->core_type == DWMAC_CORE_GMAC || xmac) {
-		int status = stmmac_host_irq_status(priv, priv->hw, &priv->xstats);
+		int status = stmmac_host_irq_status(priv, &priv->xstats);
 
 		if (unlikely(status)) {
 			/* For LPI we need to save the tx status */
@@ -6272,7 +6294,7 @@ static irqreturn_t stmmac_msi_intr_rx(int irq, void *data)
 /**
  *  stmmac_ioctl - Entry point for the Ioctl
  *  @dev: Device pointer.
- *  @rq: An IOCTL specefic structure, that can contain a pointer to
+ *  @rq: An IOCTL specific structure, that can contain a pointer to
  *  a proprietary structure used to pass information to the driver.
  *  @cmd: IOCTL command
  *  Description:
@@ -7264,6 +7286,40 @@ static void stmmac_service_task(struct work_struct *work)
 	clear_bit(STMMAC_SERVICE_SCHED, &priv->state);
 }
 
+static void stmmac_print_actphyif(struct stmmac_priv *priv)
+{
+	const char **phyif_table;
+	const char *actphyif_str;
+	size_t phyif_table_size;
+
+	switch (priv->plat->core_type) {
+	case DWMAC_CORE_MAC100:
+		return;
+
+	case DWMAC_CORE_GMAC:
+	case DWMAC_CORE_GMAC4:
+		phyif_table = stmmac_dwmac_actphyif;
+		phyif_table_size = ARRAY_SIZE(stmmac_dwmac_actphyif);
+		break;
+
+	case DWMAC_CORE_XGMAC:
+		phyif_table = stmmac_dwxgmac_phyif;
+		phyif_table_size = ARRAY_SIZE(stmmac_dwxgmac_phyif);
+		break;
+	}
+
+	if (priv->dma_cap.actphyif < phyif_table_size)
+		actphyif_str = phyif_table[priv->dma_cap.actphyif];
+	else
+		actphyif_str = NULL;
+
+	if (!actphyif_str)
+		actphyif_str = "unknown";
+
+	dev_info(priv->device, "Active PHY interface: %s (%u)\n",
+		 actphyif_str, priv->dma_cap.actphyif);
+}
+
 /**
  *  stmmac_hw_init - Init the MAC device
  *  @priv: driver private structure
@@ -7320,6 +7376,7 @@ static int stmmac_hw_init(struct stmmac_priv *priv)
 		else if (priv->dma_cap.rx_coe_type1)
 			priv->plat->rx_coe = STMMAC_RX_COE_TYPE1;
 
+		stmmac_print_actphyif(priv);
 	} else {
 		dev_info(priv->device, "No HW DMA feature register supported\n");
 	}
