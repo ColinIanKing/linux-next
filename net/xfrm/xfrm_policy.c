@@ -1792,8 +1792,10 @@ static inline int xfrm_dev_policy_flush_secctx_check(struct net *net,
 		    pol->xdo.dev != dev)
 			continue;
 
-		err = security_xfrm_policy_delete(pol->security);
+		err = -EPERM;
 		if (err) {
+			pr_info("%s: LSM policy is rejecting this operation.\n", __func__);
+			dump_stack();
 			xfrm_audit_policy_delete(pol, 0, task_valid);
 			return err;
 		}
