@@ -1665,9 +1665,18 @@ EXPORT_SYMBOL_GPL(tracing_off);
 void disable_trace_on_warning(void)
 {
 	if (__disable_trace_on_warning) {
+		struct trace_array *tr = READ_ONCE(printk_trace);
+
 		trace_array_printk_buf(global_trace.array_buffer.buffer, _THIS_IP_,
 			"Disabling tracing due to warning\n");
 		tracing_off();
+
+		/* Disable trace_printk() buffer too */
+		if (tr != &global_trace) {
+			trace_array_printk_buf(tr->array_buffer.buffer, _THIS_IP_,
+					       "Disabling tracing due to warning\n");
+			tracer_tracing_off(tr);
+		}
 	}
 }
 
@@ -3308,9 +3317,10 @@ void trace_printk_init_buffers(void)
 	pr_warn("**********************************************************\n");
 
 	/* Expand the buffers to set size */
-	tracing_update_buffers(&global_trace);
-
-	buffers_allocated = 1;
+	if (tracing_update_buffers(&global_trace) < 0)
+		pr_err("Failed to expand tracing buffers for trace_printk() calls\n");
+	else
+		buffers_allocated = 1;
 
 	/*
 	 * trace_printk_init_buffers() can be called by modules.
