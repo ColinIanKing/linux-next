@@ -2302,6 +2302,7 @@ static __cold void io_ring_exit_work(struct work_struct *work)
 	unsigned long interval = HZ / 20;
 	struct io_tctx_exit exit;
 	struct io_tctx_node *node;
+	bool timed_out = false;
 	int ret;
 
 	/*
@@ -2338,12 +2339,13 @@ static __cold void io_ring_exit_work(struct work_struct *work)
 
 		io_req_caches_free(ctx);
 
-		if (WARN_ON_ONCE(time_after(jiffies, timeout))) {
+		if (!timed_out && time_after(jiffies, timeout)) {
 			/* there is little hope left, don't run it too often */
 			interval = HZ * 60;
 			mutex_lock(&ctx->uring_lock);
 			io_uring_dump_reqs(ctx, "io_uring exit timeout");
 			mutex_unlock(&ctx->uring_lock);
+			timed_out = true;
 		}
 		/*
 		 * This is really an uninterruptible wait, as it has to be
