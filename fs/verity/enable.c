@@ -274,8 +274,10 @@ static int enable_verity(struct file *filp,
 	 * method.
 	 */
 	err = fsverity_set_info(vi);
-	if (err)
+	if (err) {
+		fsverity_free_info(vi);
 		goto rollback;
+	}
 
 	/*
 	 * Tell the filesystem to finish enabling verity on the file.

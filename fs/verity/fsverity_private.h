@@ -130,6 +130,7 @@ struct fsverity_info *fsverity_create_info(struct inode *inode,
 					   struct fsverity_descriptor *desc);
 
 int fsverity_set_info(struct fsverity_info *vi);
+void fsverity_free_info(struct fsverity_info *vi);
 void fsverity_remove_info(struct fsverity_info *vi);
 
 int fsverity_get_descriptor(struct inode *inode,
