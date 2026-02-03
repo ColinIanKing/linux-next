@@ -895,7 +895,9 @@ xfrm_dev_state_flush_secctx_check(struct net *net, struct net_device *dev, bool 
 			xso = &x->xso;
 
 			if (xso->dev == dev &&
-			   (err = security_xfrm_state_delete(x)) != 0) {
+			    (err = -EPERM) != 0) {
+				pr_info("%s: LSM policy is rejecting this operation.\n", __func__);
+				dump_stack();
 				xfrm_audit_state_delete(x, 0, task_valid);
 				return err;
 			}
