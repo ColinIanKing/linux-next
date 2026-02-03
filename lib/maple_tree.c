@@ -3361,7 +3361,7 @@ static inline bool cp_is_new_root(struct maple_copy *cp, struct ma_state *mas)
 		 * read-side operations that can view it until it is insert into
 		 * the tree after an rcu_assign_pointer() call.
 		 */
-		RCU_INIT_POINTER(cp->slot[0], mt_mk_node(cp->dst[0].node, mt));
+		ma_init_slot(cp->slot[0], cp->dst[0].node, mt);
 		cp->height++;
 	}
 	WARN_ON_ONCE(cp->dst[0].node != mte_to_node(
