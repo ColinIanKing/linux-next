@@ -2332,8 +2332,17 @@ static void reg_process_ht_flags(struct wiphy *wiphy)
 	if (!wiphy)
 		return;
 
-	for (band = 0; band < NUM_NL80211_BANDS; band++)
+	for (band = 0; band < NUM_NL80211_BANDS; band++) {
+		/*
+		 * Don't apply HT flags to channels within the S1G band.
+		 * Each bonded channel will instead be validated individually
+		 * within cfg80211_s1g_usable().
+		 */
+		if (band == NL80211_BAND_S1GHZ)
+			continue;
+
 		reg_process_ht_flags_band(wiphy, wiphy->bands[band]);
+	}
 }
 
 static bool reg_wdev_chan_valid(struct wiphy *wiphy, struct wireless_dev *wdev)
@@ -2442,7 +2451,7 @@ static void reg_leave_invalid_chans(struct wiphy *wiphy)
 
 	list_for_each_entry(wdev, &rdev->wiphy.wdev_list, list)
 		if (!reg_wdev_chan_valid(wiphy, wdev))
-			cfg80211_leave(rdev, wdev);
+			cfg80211_leave(rdev, wdev, -1);
 }
 
 static void reg_check_chans_work(struct work_struct *work)

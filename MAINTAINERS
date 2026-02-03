@@ -9429,9 +9429,11 @@ R:	Russell King <linux@armlinux.org.uk>
 L:	netdev@vger.kernel.org
 S:	Maintained
 F:	Documentation/ABI/testing/sysfs-class-net-phydev
+F:	Documentation/devicetree/bindings/net/ethernet-connector.yaml
 F:	Documentation/devicetree/bindings/net/ethernet-phy.yaml
 F:	Documentation/devicetree/bindings/net/mdio*
 F:	Documentation/devicetree/bindings/net/qca,ar803x.yaml
+F:	Documentation/networking/phy-port.rst
 F:	Documentation/networking/phy.rst
 F:	drivers/net/mdio/
 F:	drivers/net/mdio/acpi_mdio.c
@@ -9451,6 +9453,7 @@ F:	include/linux/phy_link_topology.h
 F:	include/linux/phylib_stubs.h
 F:	include/linux/platform_data/mdio-bcm-unimac.h
 F:	include/linux/platform_data/mdio-gpio.h
+F:	include/net/phy/
 F:	include/trace/events/mdio.h
 F:	include/uapi/linux/mdio.h
 F:	include/uapi/linux/mii.h
@@ -11346,14 +11349,6 @@ L:	linux-input@vger.kernel.org
 S:	Maintained
 F:	Documentation/devicetree/bindings/input/touchscreen/himax,hx852es.yaml
 F:	drivers/input/touchscreen/himax_hx852x.c
-
-HIPPI
-M:	Jes Sorensen <jes@trained-monkey.org>
-S:	Maintained
-F:	drivers/net/hippi/
-F:	include/linux/hippidevice.h
-F:	include/uapi/linux/if_hippi.h
-F:	net/802/hippi.c
 
 HIRSCHMANN HELLCREEK ETHERNET SWITCH DRIVER
 M:	Kurt Kanzenbach <kurt@linutronix.de>
@@ -17730,6 +17725,12 @@ F:	drivers/most/
 F:	drivers/staging/most/
 F:	include/linux/most.h
 
+MOTORCOMM DWMAC GLUE DRIVER
+M:	Yao Zi <me@ziyao.cc>
+L:	netdev@vger.kernel.org
+S:	Maintained
+F:	drivers/net/ethernet/stmicro/stmmac/dwmac-motorcomm.c
+
 MOTORCOMM PHY DRIVER
 M:	Frank <Frank.Sae@motor-comm.com>
 L:	netdev@vger.kernel.org
@@ -18088,7 +18089,7 @@ S:	Maintained
 F:	Documentation/networking/netconsole.rst
 F:	drivers/net/netconsole.c
 F:	tools/testing/selftests/drivers/net/lib/sh/lib_netcons.sh
-F:	tools/testing/selftests/drivers/net/netcons\*
+F:	tools/testing/selftests/drivers/net/netconsole/
 
 NETDEVSIM
 M:	Jakub Kicinski <kuba@kernel.org>
@@ -18101,13 +18102,6 @@ M:	Stephen Hemminger <stephen@networkplumber.org>
 L:	netdev@vger.kernel.org
 S:	Maintained
 F:	net/sched/sch_netem.c
-
-NETERION 10GbE DRIVERS (s2io)
-M:	Jon Mason <jdmason@kudzu.us>
-L:	netdev@vger.kernel.org
-S:	Maintained
-F:	Documentation/networking/device_drivers/ethernet/neterion/s2io.rst
-F:	drivers/net/ethernet/neterion/
 
 NETFILTER
 M:	Pablo Neira Ayuso <pablo@netfilter.org>
@@ -18200,7 +18194,6 @@ F:	include/linux/etherdevice.h
 F:	include/linux/ethtool_netlink.h
 F:	include/linux/fcdevice.h
 F:	include/linux/fddidevice.h
-F:	include/linux/hippidevice.h
 F:	include/linux/if_*
 F:	include/linux/inetdevice.h
 F:	include/linux/netdev*
@@ -18287,6 +18280,14 @@ F:	Documentation/networking/phy-link-topology.rst
 F:	drivers/net/phy/phy_link_topology.c
 F:	include/linux/phy_link_topology.h
 F:	net/ethtool/phy.c
+
+NETWORKING [ETHTOOL PHY PORT]
+M:	Maxime Chevallier <maxime.chevallier@bootlin.com>
+F:	Documentation/devicetree/bindings/net/ethernet-connector.yaml
+F:	Documentation/networking/phy-port.rst
+F:	drivers/net/phy/phy_port.c
+F:	include/linux/phy_port.h
+K:	struct\s+phy_port|phy_port_
 
 NETWORKING [GENERAL]
 M:	"David S. Miller" <davem@davemloft.net>
@@ -20607,6 +20608,16 @@ L:	linux-mtd@lists.infradead.org
 S:	Maintained
 F:	drivers/mtd/devices/phram.c
 
+PHY COMMON PROPERTIES
+M:	Vladimir Oltean <vladimir.oltean@nxp.com>
+L:	netdev@vger.kernel.org
+S:	Maintained
+Q:	https://patchwork.kernel.org/project/netdevbpf/list/
+F:	Documentation/devicetree/bindings/phy/phy-common-props.yaml
+F:	drivers/phy/phy-common-props-test.c
+F:	drivers/phy/phy-common-props.c
+F:	include/linux/phy/phy-common-props.h
+
 PICOLCD HID DRIVER
 M:	Bruno Prémont <bonbons@linux-vserver.org>
 L:	linux-input@vger.kernel.org
@@ -21115,6 +21126,7 @@ PTP VMCLOCK SUPPORT
 M:	David Woodhouse <dwmw2@infradead.org>
 L:	netdev@vger.kernel.org
 S:	Maintained
+F:	Documentation/devicetree/bindings/ptp/amazon,vmclock.yaml
 F:	drivers/ptp/ptp_vmclock.c
 F:	include/uapi/linux/vmclock-abi.h
 
@@ -21457,6 +21469,7 @@ QUALCOMM BLUETOOTH DRIVER
 M:	Bartosz Golaszewski <brgl@kernel.org>
 L:	linux-arm-msm@vger.kernel.org
 S:	Maintained
+F:	Documentation/devicetree/bindings/net/bluetooth/qcom,*
 F:	drivers/bluetooth/btqca.[ch]
 F:	drivers/bluetooth/btqcomsmd.c
 F:	drivers/bluetooth/hci_qca.c
@@ -25591,6 +25604,7 @@ L:	netdev@vger.kernel.org
 S:	Maintained
 F:	include/net/pkt_cls.h
 F:	include/net/pkt_sched.h
+F:	include/net/sch_priv.h
 F:	include/net/tc_act/
 F:	include/uapi/linux/pkt_cls.h
 F:	include/uapi/linux/pkt_sched.h
@@ -27667,6 +27681,7 @@ L:	netdev@vger.kernel.org
 S:	Maintained
 F:	drivers/vhost/vsock.c
 F:	include/linux/virtio_vsock.h
+F:	include/net/netns/vsock.h
 F:	include/uapi/linux/virtio_vsock.h
 F:	net/vmw_vsock/virtio_transport.c
 F:	net/vmw_vsock/virtio_transport_common.c
