@@ -2522,7 +2522,7 @@ got_it:
 			}
 		} else {
 			folio_zero_range(folio, offset << PAGE_SHIFT, PAGE_SIZE);
-			if (f2fs_need_verity(inode, index) &&
+			if (vi &&
 			    !fsverity_verify_page(vi, folio_file_page(folio,
 								index))) {
 				ret = -EIO;
