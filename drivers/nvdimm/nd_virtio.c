@@ -45,7 +45,7 @@ static int virtio_pmem_flush(struct nd_region *nd_region)
 	int err, err1;
 
 	might_sleep();
-	mutex_lock(&vpmem->flush_lock);
+	guard(mutex)(&vpmem->flush_lock);
 
 	/*
 	 * Don't bother to submit the request to the device if the device is
@@ -53,15 +53,12 @@ static int virtio_pmem_flush(struct nd_region *nd_region)
 	 */
 	if (vdev->config->get_status(vdev) & VIRTIO_CONFIG_S_NEEDS_RESET) {
 		dev_info(&vdev->dev, "virtio pmem device needs a reset\n");
-		err = -EIO;
-		goto out_unlock;
+		return -EIO;
 	}
 
 	req_data = kmalloc(sizeof(*req_data), GFP_KERNEL);
-	if (!req_data) {
-		err = -ENOMEM;
-		goto out_unlock;
-	}
+	if (!req_data)
+		return -ENOMEM;
 
 	req_data->done = false;
 	init_waitqueue_head(&req_data->host_acked);
@@ -108,8 +105,6 @@ static int virtio_pmem_flush(struct nd_region *nd_region)
 	}
 
 	kfree(req_data);
-out_unlock:
-	mutex_unlock(&vpmem->flush_lock);
 	return err;
 };
 
