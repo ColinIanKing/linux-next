@@ -821,13 +821,35 @@ static int ocfs2_acquire_dquot(struct dquot *dquot)
 	trace_ocfs2_acquire_dquot(from_kqid(&init_user_ns, dquot->dq_id),
 				  type);
 	mutex_lock(&dquot->dq_lock);
+
+	/*
+	 * Speculatively extend quota file before acquiring any locks or
+	 * starting transaction to avoid lock inversion. sb_start_intwrite
+	 * (via ocfs2_start_trans) ranks above quota file locks.
+	 */
+	if (need_alloc) {
+		WARN_ON(journal_current_handle());
+		status = ocfs2_extend_no_holes(gqinode, NULL,
+			i_size_read(gqinode) + (need_alloc << sb->s_blocksize_bits),
+			i_size_read(gqinode));
+		if (status < 0)
+			goto out;
+	}
+
+	handle = ocfs2_start_trans(osb,
+				   ocfs2_calc_global_qinit_credits(sb, type));
+	if (IS_ERR(handle)) {
+		status = PTR_ERR(handle);
+		goto out;
+	}
+
 	/*
 	 * We need an exclusive lock, because we're going to update use count
 	 * and instantiate possibly new dquot structure
 	 */
 	status = ocfs2_lock_global_qf(info, 1);
 	if (status < 0)
-		goto out;
+		goto out_trans;
 	status = ocfs2_qinfo_lock(info, 0);
 	if (status < 0)
 		goto out_dq;
@@ -843,29 +865,12 @@ static int ocfs2_acquire_dquot(struct dquot *dquot)
 	OCFS2_DQUOT(dquot)->dq_use_count++;
 	OCFS2_DQUOT(dquot)->dq_origspace = dquot->dq_dqb.dqb_curspace;
 	OCFS2_DQUOT(dquot)->dq_originodes = dquot->dq_dqb.dqb_curinodes;
-	if (!dquot->dq_off) {	/* No real quota entry? */
+	if (!dquot->dq_off)	/* No real quota entry? */
 		ex = 1;
-		/*
-		 * Add blocks to quota file before we start a transaction since
-		 * locking allocators ranks above a transaction start
-		 */
-		WARN_ON(journal_current_handle());
-		status = ocfs2_extend_no_holes(gqinode, NULL,
-			i_size_read(gqinode) + (need_alloc << sb->s_blocksize_bits),
-			i_size_read(gqinode));
-		if (status < 0)
-			goto out_dq;
-	}
 
-	handle = ocfs2_start_trans(osb,
-				   ocfs2_calc_global_qinit_credits(sb, type));
-	if (IS_ERR(handle)) {
-		status = PTR_ERR(handle);
-		goto out_dq;
-	}
 	status = ocfs2_qinfo_lock(info, ex);
 	if (status < 0)
-		goto out_trans;
+		goto out_dq;
 	status = qtree_write_dquot(&info->dqi_gi, dquot);
 	if (ex && info_dirty(sb_dqinfo(sb, type))) {
 		err = __ocfs2_global_write_info(sb, type);
@@ -873,10 +878,10 @@ static int ocfs2_acquire_dquot(struct dquot *dquot)
 			status = err;
 	}
 	ocfs2_qinfo_unlock(info, ex);
-out_trans:
-	ocfs2_commit_trans(osb, handle);
 out_dq:
 	ocfs2_unlock_global_qf(info, 1);
+out_trans:
+	ocfs2_commit_trans(osb, handle);
 	if (status < 0)
 		goto out;
 
