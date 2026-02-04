@@ -345,6 +345,61 @@ static int __init setup_emu2phys_nid(int *dfl_phys_nid)
 }
 
 /**
+ * emu_mark_hotplug_nodes - Parse and mark fake nodes as hotpluggable
+ * @str: String to parse (should point to "hotplug=<nodelist>")
+ * @mi: The emulated numa_meminfo
+ * @max_nid: Maximum node ID in the emulated configuration
+ *
+ * Parses the hotplug= option using nodelist_parse(), which supports
+ * standard bitmap list format (see bitmap_parselist() in lib/bitmap.c):
+ *   hotplug=2,3      - nodes 2 and 3
+ *   hotplug=1-3      - nodes 1, 2, and 3
+ *   hotplug=0,2-4,6  - nodes 0, 2, 3, 4, and 6
+ *
+ * Sets MEMBLOCK_HOTPLUG flag on memory regions belonging to the
+ * specified nodes. This should be called when hotplug= is at the
+ * end of the command line (after any distance table specification).
+ */
+static void __init emu_mark_hotplug_nodes(const char *str,
+					  struct numa_meminfo *mi, int max_nid)
+{
+	nodemask_t hotplug_mask;
+	int i, ret;
+
+	if (strncmp(str, "hotplug=", 8) != 0)
+		return;
+
+	str += 8;
+
+	ret = nodelist_parse(str, hotplug_mask);
+	if (ret) {
+		pr_warn("numa=fake: failed to parse hotplug list, ignoring\n");
+		return;
+	}
+
+	/* Mark memblocks belonging to hotpluggable nodes */
+	for (i = 0; i < mi->nr_blks; i++) {
+		struct numa_memblk *mb = &mi->blk[i];
+
+		if (node_isset(mb->nid, hotplug_mask)) {
+			ret = memblock_mark_hotplug(mb->start,
+						    mb->end - mb->start);
+			if (ret)
+				pr_warn("numa=fake: failed to mark node %d [mem %#018Lx-%#018Lx] hotpluggable\n",
+					mb->nid, mb->start, mb->end - 1);
+			else
+				pr_info("numa=fake: marking node %d [mem %#018Lx-%#018Lx] as hotpluggable\n",
+					mb->nid, mb->start, mb->end - 1);
+			node_clear(mb->nid, hotplug_mask);
+		}
+	}
+
+	/* Warn about any requested nodes that don't exist */
+	for_each_node_mask(i, hotplug_mask)
+		pr_warn("numa=fake: hotplug node %d does not exist, ignoring\n", i);
+}
+
+/**
  * numa_emulation - Emulate NUMA nodes
  * @numa_meminfo: NUMA configuration to massage
  * @numa_dist_cnt: The size of the physical NUMA distance table
@@ -401,6 +456,8 @@ void __init numa_emulation(struct numa_meminfo *numa_meminfo, int numa_dist_cnt)
 		int nid = 0;
 
 		n = simple_strtoul(emu_cmdline, &emu_cmdline, 0);
+		if (*emu_cmdline == 'U')
+			emu_cmdline++;
 		ret = -1;
 		for_each_node_mask(i, physnode_mask) {
 			/*
@@ -531,6 +588,11 @@ void __init numa_emulation(struct numa_meminfo *numa_meminfo, int numa_dist_cnt)
 			numa_set_distance(i, j, dist);
 		}
 	}
+
+	/* Parse and mark hotpluggable nodes (hotplug= comes after distance table) */
+	if (*emu_cmdline == ':')
+		emu_cmdline++;
+	emu_mark_hotplug_nodes(emu_cmdline, numa_meminfo, max_emu_nid);
 
 	/* free the copied physical distance table */
 	memblock_free(phys_dist, phys_size);
