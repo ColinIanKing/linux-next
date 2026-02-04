@@ -61,14 +61,14 @@ union access_masks_all {
 static_assert(sizeof(typeof_member(union access_masks_all, masks)) ==
 	      sizeof(typeof_member(union access_masks_all, all)));
 
-typedef u16 layer_mask_t;
-
-/* Makes sure all layers can be checked. */
-static_assert(BITS_PER_TYPE(layer_mask_t) >= LANDLOCK_MAX_NUM_LAYERS);
-
 /*
  * Tracks domains responsible of a denied access.  This is required to avoid
  * storing in each object the full layer_masks[] required by update_request().
+ *
+ * Each nibble represents the layer index of the newest layer which denied a
+ * certain access right.  For file system access rights, the upper four bits are
+ * the index of the layer which denies LANDLOCK_ACCESS_FS_IOCTL_DEV and the
+ * lower nibble represents LANDLOCK_ACCESS_FS_TRUNCATE.
  */
 typedef u8 deny_masks_t;
 
@@ -95,6 +95,12 @@ landlock_upgrade_handled_access_masks(struct access_masks access_masks)
 		access_masks.fs |= _LANDLOCK_ACCESS_FS_INITIALLY_DENIED;
 
 	return access_masks;
+}
+
+/** access_mask_subset - true iff a has a subset of the bits of b. */
+static inline bool access_mask_subset(access_mask_t a, access_mask_t b)
+{
+	return (a | b) == b;
 }
 
 #endif /* _SECURITY_LANDLOCK_ACCESS_H */
