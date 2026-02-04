@@ -2813,6 +2813,7 @@ static inline void *__skb_push(struct sk_buff *skb, unsigned int len)
 	DEBUG_NET_WARN_ON_ONCE(len > INT_MAX);
 
 	skb->data -= len;
+	DEBUG_NET_WARN_ON_ONCE(skb->data < skb->head);
 	skb->len  += len;
 	return skb->data;
 }
@@ -4775,7 +4776,7 @@ static inline void __skb_decr_checksum_unnecessary(struct sk_buff *skb)
 	}
 }
 
-static inline void __skb_incr_checksum_unnecessary(struct sk_buff *skb)
+static __always_inline void __skb_incr_checksum_unnecessary(struct sk_buff *skb)
 {
 	if (skb->ip_summed == CHECKSUM_UNNECESSARY) {
 		if (skb->csum_level < SKB_MAX_CSUM_LEVEL)
