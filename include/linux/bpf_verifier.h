@@ -692,12 +692,16 @@ struct bpf_id_pair {
 
 struct bpf_idmap {
 	u32 tmp_id_gen;
+	u32 cnt;
 	struct bpf_id_pair map[BPF_ID_MAP_SIZE];
 };
 
 struct bpf_idset {
-	u32 count;
-	u32 ids[BPF_ID_MAP_SIZE];
+	u32 num_ids;
+	struct {
+		u32 id;
+		u32 cnt;
+	} entries[BPF_ID_MAP_SIZE];
 };
 
 /* see verifier.c:compute_scc_callchain() */
