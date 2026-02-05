@@ -407,7 +407,43 @@ command line parameters are relevant:
 			 set, the kernel will default to ZONE_MOVABLE when
 			 onlining a memory block, unless other zones can be kept
 			 contiguous.
+
+			 For memory present at boot, ``movable_node`` only
+			 affects NUMA nodes whose memory is marked as
+			 hotpluggable (MEMBLOCK_HOTPLUG). The kernel
+			 automatically clears this flag for any node that
+			 contains kernel memory (text, data, page tables,
+			 memmap, etc.) to prevent the kernel from running
+			 out of memory for unmovable allocations. This
+			 safety mechanism means that even if a node is
+			 marked hotpluggable by firmware or via
+			 ``numa=fake=...:hotplug=...``, it may not end up
+			 using ZONE_MOVABLE if it contains kernel allocations.
 ======================== =======================================================
+
+Verifying movable_node Behavior
++++++++++++++++++++++++++++++++
+
+To verify which nodes have ZONE_MOVABLE after booting with ``movable_node``::
+
+	# Check which nodes have Movable zones
+	grep -E "Node [0-9]+.*zone.*Movable" /proc/zoneinfo
+
+	# Show zone start addresses per node (from boot messages)
+	dmesg | grep "Movable zone start for each node" -A 10
+
+	# Check per-node zone information
+	for node in /sys/devices/system/node/node*; do
+		echo "=== $(basename $node) ==="
+		cat $node/meminfo | head -5
+	done
+
+If a node was marked hotpluggable but did not receive ZONE_MOVABLE, the
+kernel determined that node contains kernel memory. Check ``dmesg`` for
+node allocation messages to understand which nodes received kernel data
+structures::
+
+	dmesg | grep NODE_DATA
 
 See Documentation/admin-guide/kernel-parameters.txt for a more generic
 description of these command line parameters.
