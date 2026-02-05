@@ -128,7 +128,7 @@ enum trace_type {
 
 #define FAULT_STRING "(fault)"
 
-#define HIST_STACKTRACE_DEPTH	16
+#define HIST_STACKTRACE_DEPTH	31
 #define HIST_STACKTRACE_SIZE	(HIST_STACKTRACE_DEPTH * sizeof(unsigned long))
 #define HIST_STACKTRACE_SKIP	5
 
@@ -1411,6 +1411,7 @@ extern int trace_get_user(struct trace_parser *parser, const char __user *ubuf,
 		C(COPY_MARKER,		"copy_trace_marker"),	\
 		C(PAUSE_ON_TRACE,	"pause-on-trace"),	\
 		C(HASH_PTR,		"hash-ptr"),	/* Print hashed pointer */ \
+		C(BITMASK_LIST,		"bitmask-list"),	\
 		FUNCTION_FLAGS					\
 		FGRAPH_FLAGS					\
 		STACK_FLAGS					\
