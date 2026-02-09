@@ -370,11 +370,34 @@ void free_pgd_range(struct mmu_gather *tlb,
 	} while (pgd++, addr = next, addr != end);
 }
 
-void free_pgtables(struct mmu_gather *tlb, struct ma_state *mas,
-		   struct vm_area_struct *vma, unsigned long floor,
-		   unsigned long ceiling, bool mm_wr_locked)
+/**
+ * free_pgtables() - Free a range of page tables
+ * @tlb: The mmu gather
+ * @unmap: The unmap_desc
+ *
+ * Note: pg_start and pg_end are provided to indicate the absolute range of the
+ * page tables that should be removed.  This can differ from the vma mappings on
+ * some archs that may have mappings that need to be removed outside the vmas.
+ * Note that the prev->vm_end and next->vm_start are often used.
+ *
+ * The vma_end differs from the pg_end when a dup_mmap() failed and the tree has
+ * unrelated data to the mm_struct being torn down.
+ */
+void free_pgtables(struct mmu_gather *tlb, struct unmap_desc *unmap)
 {
 	struct unlink_vma_file_batch vb;
+	struct ma_state *mas = unmap->mas;
+	struct vm_area_struct *vma = unmap->first;
+
+	/*
+	 * Note: USER_PGTABLES_CEILING may be passed as the value of pg_end and
+	 * may be 0.  The underflow here is fine and expected.
+	 * The vma_end is exclusive, which is fine until we use the mas_ instead
+	 * of the vma iterators.
+	 * For freeing the page tables to make sense, the vma_end must be larger
+	 * than the pg_end, so check that after the potential underflow.
+	 */
+	WARN_ON_ONCE(unmap->vma_end - 1 > unmap->pg_end - 1);
 
 	tlb_free_vmas(tlb);
 
@@ -382,19 +405,13 @@ void free_pgtables(struct mmu_gather *tlb, struct ma_state *mas,
 		unsigned long addr = vma->vm_start;
 		struct vm_area_struct *next;
 
-		/*
-		 * Note: USER_PGTABLES_CEILING may be passed as ceiling and may
-		 * be 0.  This will underflow and is okay.
-		 */
-		next = mas_find(mas, ceiling - 1);
-		if (unlikely(xa_is_zero(next)))
-			next = NULL;
+		next = mas_find(mas, unmap->tree_end - 1);
 
 		/*
 		 * Hide vma from rmap and truncate_pagecache before freeing
 		 * pgtables
 		 */
-		if (mm_wr_locked)
+		if (unmap->mm_wr_locked)
 			vma_start_write(vma);
 		unlink_anon_vmas(vma);
 
@@ -406,18 +423,16 @@ void free_pgtables(struct mmu_gather *tlb, struct ma_state *mas,
 		 */
 		while (next && next->vm_start <= vma->vm_end + PMD_SIZE) {
 			vma = next;
-			next = mas_find(mas, ceiling - 1);
-			if (unlikely(xa_is_zero(next)))
-				next = NULL;
-			if (mm_wr_locked)
+			next = mas_find(mas, unmap->tree_end - 1);
+			if (unmap->mm_wr_locked)
 				vma_start_write(vma);
 			unlink_anon_vmas(vma);
 			unlink_file_vma_batch_add(&vb, vma);
 		}
 		unlink_file_vma_batch_final(&vb);
 
-		free_pgd_range(tlb, addr, vma->vm_end,
-			floor, next ? next->vm_start : ceiling);
+		free_pgd_range(tlb, addr, vma->vm_end, unmap->pg_start,
+			       next ? next->vm_start : unmap->pg_end);
 		vma = next;
 	} while (vma);
 }
@@ -1821,11 +1836,70 @@ static inline int do_zap_pte_range(struct mmu_gather *tlb,
 	return nr;
 }
 
+static bool pte_table_reclaim_possible(unsigned long start, unsigned long end,
+		struct zap_details *details)
+{
+	if (!IS_ENABLED(CONFIG_PT_RECLAIM))
+		return false;
+	/* Only zap if we are allowed to and cover the full page table. */
+	return details && details->reclaim_pt && (end - start >= PMD_SIZE);
+}
+
+static bool zap_empty_pte_table(struct mm_struct *mm, pmd_t *pmd,
+		spinlock_t *ptl, pmd_t *pmdval)
+{
+	spinlock_t *pml = pmd_lockptr(mm, pmd);
+
+	if (ptl != pml && !spin_trylock(pml))
+		return false;
+
+	*pmdval = pmdp_get(pmd);
+	pmd_clear(pmd);
+	if (ptl != pml)
+		spin_unlock(pml);
+	return true;
+}
+
+static bool zap_pte_table_if_empty(struct mm_struct *mm, pmd_t *pmd,
+		unsigned long addr, pmd_t *pmdval)
+{
+	spinlock_t *pml, *ptl = NULL;
+	pte_t *start_pte, *pte;
+	int i;
+
+	pml = pmd_lock(mm, pmd);
+	start_pte = pte_offset_map_rw_nolock(mm, pmd, addr, pmdval, &ptl);
+	if (!start_pte)
+		goto out_ptl;
+	if (ptl != pml)
+		spin_lock_nested(ptl, SINGLE_DEPTH_NESTING);
+
+	for (i = 0, pte = start_pte; i < PTRS_PER_PTE; i++, pte++) {
+		if (!pte_none(ptep_get(pte)))
+			goto out_ptl;
+	}
+	pte_unmap(start_pte);
+
+	pmd_clear(pmd);
+
+	if (ptl != pml)
+		spin_unlock(ptl);
+	spin_unlock(pml);
+	return true;
+out_ptl:
+	if (start_pte)
+		pte_unmap_unlock(start_pte, ptl);
+	if (ptl != pml)
+		spin_unlock(pml);
+	return false;
+}
+
 static unsigned long zap_pte_range(struct mmu_gather *tlb,
 				struct vm_area_struct *vma, pmd_t *pmd,
 				unsigned long addr, unsigned long end,
 				struct zap_details *details)
 {
+	bool can_reclaim_pt = pte_table_reclaim_possible(addr, end, details);
 	bool force_flush = false, force_break = false;
 	struct mm_struct *mm = tlb->mm;
 	int rss[NR_MM_COUNTERS];
@@ -1834,7 +1908,6 @@ static unsigned long zap_pte_range(struct mmu_gather *tlb,
 	pte_t *pte;
 	pmd_t pmdval;
 	unsigned long start = addr;
-	bool can_reclaim_pt = reclaim_pt_is_enabled(start, end, details);
 	bool direct_reclaim = true;
 	int nr;
 
@@ -1875,7 +1948,7 @@ retry:
 	 * from being repopulated by another thread.
 	 */
 	if (can_reclaim_pt && direct_reclaim && addr == end)
-		direct_reclaim = try_get_and_clear_pmd(mm, pmd, &pmdval);
+		direct_reclaim = zap_empty_pte_table(mm, pmd, ptl, &pmdval);
 
 	add_mm_rss_vec(mm, rss);
 	lazy_mmu_mode_disable();
@@ -1904,10 +1977,10 @@ retry:
 	}
 
 	if (can_reclaim_pt) {
-		if (direct_reclaim)
-			free_pte(mm, start, tlb, pmdval);
-		else
-			try_to_free_pte(mm, pmd, start, tlb);
+		if (direct_reclaim || zap_pte_table_if_empty(mm, pmd, start, &pmdval)) {
+			pte_free_tlb(tlb, pmd_pgtable(pmdval), addr);
+			mm_dec_nr_ptes(mm);
+		}
 	}
 
 	return addr;
@@ -2066,11 +2139,7 @@ static void unmap_single_vma(struct mmu_gather *tlb,
 /**
  * unmap_vmas - unmap a range of memory covered by a list of vma's
  * @tlb: address of the caller's struct mmu_gather
- * @mas: the maple state
- * @vma: the starting vma
- * @start_addr: virtual address at which to start unmapping
- * @end_addr: virtual address at which to end unmapping
- * @tree_end: The maximum index to check
+ * @unmap: The unmap_desc
  *
  * Unmap all pages in the vma list.
  *
@@ -2083,10 +2152,9 @@ static void unmap_single_vma(struct mmu_gather *tlb,
  * ensure that any thus-far unmapped pages are flushed before unmap_vmas()
  * drops the lock and schedules.
  */
-void unmap_vmas(struct mmu_gather *tlb, struct ma_state *mas,
-		struct vm_area_struct *vma, unsigned long start_addr,
-		unsigned long end_addr, unsigned long tree_end)
+void unmap_vmas(struct mmu_gather *tlb, struct unmap_desc *unmap)
 {
+	struct vm_area_struct *vma;
 	struct mmu_notifier_range range;
 	struct zap_details details = {
 		.zap_flags = ZAP_FLAG_DROP_MARKER | ZAP_FLAG_UNMAP,
@@ -2094,17 +2162,18 @@ void unmap_vmas(struct mmu_gather *tlb, struct ma_state *mas,
 		.even_cows = true,
 	};
 
+	vma = unmap->first;
 	mmu_notifier_range_init(&range, MMU_NOTIFY_UNMAP, 0, vma->vm_mm,
-				start_addr, end_addr);
+				unmap->vma_start, unmap->vma_end);
 	mmu_notifier_invalidate_range_start(&range);
 	do {
-		unsigned long start = start_addr;
-		unsigned long end = end_addr;
+		unsigned long start = unmap->vma_start;
+		unsigned long end = unmap->vma_end;
 		hugetlb_zap_begin(vma, &start, &end);
 		unmap_single_vma(tlb, vma, start, end, &details);
 		hugetlb_zap_end(vma, &details);
-		vma = mas_find(mas, tree_end - 1);
-	} while (vma && likely(!xa_is_zero(vma)));
+		vma = mas_find(unmap->mas, unmap->tree_end - 1);
+	} while (vma);
 	mmu_notifier_invalidate_range_end(&range);
 }
 
@@ -2499,7 +2568,6 @@ static int __vm_map_pages(struct vm_area_struct *vma, struct page **pages,
 {
 	unsigned long count = vma_pages(vma);
 	unsigned long uaddr = vma->vm_start;
-	int ret, i;
 
 	/* Fail if the user requested offset is beyond the end of the object */
 	if (offset >= num)
@@ -2509,14 +2577,7 @@ static int __vm_map_pages(struct vm_area_struct *vma, struct page **pages,
 	if (count > num - offset)
 		return -ENXIO;
 
-	for (i = 0; i < count; i++) {
-		ret = vm_insert_page(vma, uaddr, pages[offset + i]);
-		if (ret < 0)
-			return ret;
-		uaddr += PAGE_SIZE;
-	}
-
-	return 0;
+	return vm_insert_pages(vma, uaddr, pages + offset, &count);
 }
 
 /**
@@ -2898,7 +2959,7 @@ static inline int remap_p4d_range(struct mm_struct *mm, pgd_t *pgd,
 	return 0;
 }
 
-static int get_remap_pgoff(vm_flags_t vm_flags, unsigned long addr,
+static int get_remap_pgoff(bool is_cow, unsigned long addr,
 		unsigned long end, unsigned long vm_start, unsigned long vm_end,
 		unsigned long pfn, pgoff_t *vm_pgoff_p)
 {
@@ -2908,7 +2969,7 @@ static int get_remap_pgoff(vm_flags_t vm_flags, unsigned long addr,
 	 * un-COW'ed pages by matching them up with "vma->vm_pgoff".
 	 * See vm_normal_page() for details.
 	 */
-	if (is_cow_mapping(vm_flags)) {
+	if (is_cow) {
 		if (addr != vm_start || end != vm_end)
 			return -EINVAL;
 		*vm_pgoff_p = pfn;
@@ -2929,7 +2990,7 @@ static int remap_pfn_range_internal(struct vm_area_struct *vma, unsigned long ad
 	if (WARN_ON_ONCE(!PAGE_ALIGNED(addr)))
 		return -EINVAL;
 
-	VM_WARN_ON_ONCE((vma->vm_flags & VM_REMAP_FLAGS) != VM_REMAP_FLAGS);
+	VM_WARN_ON_ONCE(!vma_test_all_flags_mask(vma, VMA_REMAP_FLAGS));
 
 	BUG_ON(addr >= end);
 	pfn -= addr >> PAGE_SHIFT;
@@ -3053,9 +3114,9 @@ void remap_pfn_range_prepare(struct vm_area_desc *desc, unsigned long pfn)
 	 * check it again on complete and will fail there if specified addr is
 	 * invalid.
 	 */
-	get_remap_pgoff(desc->vm_flags, desc->start, desc->end,
+	get_remap_pgoff(vma_desc_is_cow_mapping(desc), desc->start, desc->end,
 			desc->start, desc->end, pfn, &desc->pgoff);
-	desc->vm_flags |= VM_REMAP_FLAGS;
+	vma_desc_set_flags_mask(desc, VMA_REMAP_FLAGS);
 }
 
 static int remap_pfn_range_prepare_vma(struct vm_area_struct *vma, unsigned long addr,
@@ -3064,13 +3125,12 @@ static int remap_pfn_range_prepare_vma(struct vm_area_struct *vma, unsigned long
 	unsigned long end = addr + PAGE_ALIGN(size);
 	int err;
 
-	err = get_remap_pgoff(vma->vm_flags, addr, end,
-			      vma->vm_start, vma->vm_end,
-			      pfn, &vma->vm_pgoff);
+	err = get_remap_pgoff(is_cow_mapping(vma->vm_flags), addr, end,
+			      vma->vm_start, vma->vm_end, pfn, &vma->vm_pgoff);
 	if (err)
 		return err;
 
-	vm_flags_set(vma, VM_REMAP_FLAGS);
+	vma_set_flags_mask(vma, VMA_REMAP_FLAGS);
 	return 0;
 }
 
@@ -7266,7 +7326,7 @@ void folio_zero_user(struct folio *folio, unsigned long addr_hint)
 	const unsigned long base_addr = ALIGN_DOWN(addr_hint, folio_size(folio));
 	const long fault_idx = (addr_hint - base_addr) / PAGE_SIZE;
 	const struct range pg = DEFINE_RANGE(0, folio_nr_pages(folio) - 1);
-	const int radius = FOLIO_ZERO_LOCALITY_RADIUS;
+	const long radius = FOLIO_ZERO_LOCALITY_RADIUS;
 	struct range r[3];
 	int i;
 
@@ -7274,24 +7334,23 @@ void folio_zero_user(struct folio *folio, unsigned long addr_hint)
 	 * Faulting page and its immediate neighbourhood. Will be cleared at the
 	 * end to keep its cachelines hot.
 	 */
-	r[2] = DEFINE_RANGE(clamp_t(s64, fault_idx - radius, pg.start, pg.end),
-			    clamp_t(s64, fault_idx + radius, pg.start, pg.end));
+	r[2] = DEFINE_RANGE(fault_idx - radius < (long)pg.start ? pg.start : fault_idx - radius,
+			    fault_idx + radius > (long)pg.end   ? pg.end   : fault_idx + radius);
+
 
 	/* Region to the left of the fault */
-	r[1] = DEFINE_RANGE(pg.start,
-			    clamp_t(s64, r[2].start - 1, pg.start - 1, r[2].start));
+	r[1] = DEFINE_RANGE(pg.start, r[2].start - 1);
 
 	/* Region to the right of the fault: always valid for the common fault_idx=0 case. */
-	r[0] = DEFINE_RANGE(clamp_t(s64, r[2].end + 1, r[2].end, pg.end + 1),
-			    pg.end);
+	r[0] = DEFINE_RANGE(r[2].end + 1, pg.end);
 
 	for (i = 0; i < ARRAY_SIZE(r); i++) {
 		const unsigned long addr = base_addr + r[i].start * PAGE_SIZE;
-		const unsigned int nr_pages = range_len(&r[i]);
+		const long nr_pages = (long)range_len(&r[i]);
 		struct page *page = folio_page(folio, r[i].start);
 
 		if (nr_pages > 0)
-			clear_contig_highpages(page, addr, nr_pages);
+			clear_contig_highpages(page, addr, (unsigned int)nr_pages);
 	}
 }
 
