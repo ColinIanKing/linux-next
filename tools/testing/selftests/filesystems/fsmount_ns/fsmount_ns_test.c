@@ -100,7 +100,7 @@ static void dump_mounts(struct __test_metadata *_metadata, uint64_t mnt_ns_id)
 				     STATMOUNT_MNT_BASIC |
 				     STATMOUNT_FS_TYPE |
 				     STATMOUNT_MNT_ROOT |
-				     STATMOUNT_MNT_POINT);
+				     STATMOUNT_MNT_POINT, 0);
 		if (!sm) {
 			TH_LOG("  [%zd] mnt_id %llu: statmount failed: %s",
 			       i, (unsigned long long)list[i], strerror(errno));
@@ -352,7 +352,7 @@ TEST_F(fsmount_ns, verify_tmpfs_type)
 	nr_mounts = listmount(LSMT_ROOT, new_ns_id, 0, list, 256, 0);
 	ASSERT_GE(nr_mounts, 1);
 
-	sm = statmount_alloc(list[0], new_ns_id, STATMOUNT_FS_TYPE);
+	sm = statmount_alloc(list[0], new_ns_id, STATMOUNT_FS_TYPE, 0);
 	ASSERT_NE(sm, NULL);
 
 	fs_type = sm->str + sm->fs_type;
@@ -749,7 +749,7 @@ TEST_F(fsmount_ns_userns, umount_fails_einval)
 			const char *mnt_point;
 
 			sm = statmount_alloc(list[i], new_ns_id,
-					     STATMOUNT_MNT_POINT);
+					     STATMOUNT_MNT_POINT, 0);
 			if (!sm)
 				_exit(15);
 
@@ -881,7 +881,7 @@ TEST_F(fsmount_ns_userns, umount_succeeds)
 			const char *mnt_point;
 
 			sm = statmount_alloc(list[i], new_ns_id,
-					     STATMOUNT_MNT_POINT);
+					     STATMOUNT_MNT_POINT, 0);
 			if (!sm)
 				_exit(15);
 

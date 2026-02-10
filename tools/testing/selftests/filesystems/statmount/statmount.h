@@ -88,7 +88,8 @@ static inline ssize_t listmount(uint64_t mnt_id, uint64_t mnt_ns_id,
 	return syscall(__NR_listmount, &req, list, num, flags);
 }
 
-static inline struct statmount *statmount_alloc(uint64_t mnt_id, uint64_t mnt_ns_id, uint64_t mask)
+static inline struct statmount *statmount_alloc(uint64_t mnt_id, uint64_t mnt_ns_id,
+						 uint64_t mask, unsigned int flags)
 {
 	struct statmount *buf;
 	size_t bufsize = STATMOUNT_BUFSIZE;
@@ -99,7 +100,30 @@ static inline struct statmount *statmount_alloc(uint64_t mnt_id, uint64_t mnt_ns
 		if (!buf)
 			return NULL;
 
-		ret = statmount(mnt_id, mnt_ns_id, 0, mask, buf, bufsize, 0);
+		ret = statmount(mnt_id, mnt_ns_id, 0, mask, buf, bufsize, flags);
+		if (ret == 0)
+			return buf;
+
+		free(buf);
+		if (errno != EOVERFLOW)
+			return NULL;
+
+		bufsize <<= 1;
+	}
+}
+
+static inline struct statmount *statmount_alloc_by_fd(int fd, uint64_t mask)
+{
+	struct statmount *buf;
+	size_t bufsize = STATMOUNT_BUFSIZE;
+	int ret;
+
+	for (;;) {
+		buf = malloc(bufsize);
+		if (!buf)
+			return NULL;
+
+		ret = statmount(0, 0, fd, mask, buf, bufsize, STATMOUNT_BY_FD);
 		if (ret == 0)
 			return buf;
 

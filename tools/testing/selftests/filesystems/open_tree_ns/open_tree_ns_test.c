@@ -92,7 +92,7 @@ static void dump_mounts(struct __test_metadata *_metadata, uint64_t mnt_ns_id)
 				     STATMOUNT_MNT_BASIC |
 				     STATMOUNT_FS_TYPE |
 				     STATMOUNT_MNT_ROOT |
-				     STATMOUNT_MNT_POINT);
+				     STATMOUNT_MNT_POINT, 0);
 		if (!sm) {
 			TH_LOG("  [%zd] mnt_id %llu: statmount failed: %s",
 			       i, (unsigned long long)list[i], strerror(errno));
@@ -723,7 +723,7 @@ TEST_F(open_tree_ns_userns, umount_fails_einval)
 			const char *mnt_point;
 
 			sm = statmount_alloc(list[i], new_ns_id,
-					     STATMOUNT_MNT_POINT);
+					     STATMOUNT_MNT_POINT, 0);
 			if (!sm)
 				_exit(11);
 
@@ -840,7 +840,7 @@ TEST_F(open_tree_ns_userns, umount_succeeds)
 			const char *mnt_point;
 
 			sm = statmount_alloc(list[i], new_ns_id,
-					     STATMOUNT_MNT_POINT);
+					     STATMOUNT_MNT_POINT, 0);
 			if (!sm)
 				_exit(11);
 
@@ -980,7 +980,7 @@ TEST_F(open_tree_ns_unbindable, recursive_skips_on_unbindable)
 		struct statmount *sm;
 		const char *mnt_point;
 
-		sm = statmount_alloc(list[i], new_ns_id, STATMOUNT_MNT_POINT);
+		sm = statmount_alloc(list[i], new_ns_id, STATMOUNT_MNT_POINT, 0);
 		ASSERT_NE(sm, NULL) {
 			TH_LOG("statmount_alloc failed for mnt_id %llu",
 			       (unsigned long long)list[i]);
