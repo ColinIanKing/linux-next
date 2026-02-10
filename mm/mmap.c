@@ -1309,7 +1309,7 @@ void exit_mmap(struct mm_struct *mm)
 	mmap_write_lock(mm);
 	unmap.mm_wr_locked = true;
 	mt_clear_in_rcu(&mm->mm_mt);
-	vma_iter_set(&vmi, unmap.tree_reset);
+	unmap_pgtable_init(&unmap, &vmi);
 	free_pgtables(&tlb, &unmap);
 	tlb_finish_mmu(&tlb);
 

@@ -391,11 +391,9 @@ void free_pgtables(struct mmu_gather *tlb, struct unmap_desc *unmap)
 
 	/*
 	 * Note: USER_PGTABLES_CEILING may be passed as the value of pg_end and
-	 * may be 0.  The underflow here is fine and expected.
-	 * The vma_end is exclusive, which is fine until we use the mas_ instead
-	 * of the vma iterators.
-	 * For freeing the page tables to make sense, the vma_end must be larger
-	 * than the pg_end, so check that after the potential underflow.
+	 * may be 0.  Underflow is expected in this case.  Otherwise the
+	 * pagetable end is exclusive.  vma_end is exclusive.  The last vma
+	 * address should never be larger than the pagetable end.
 	 */
 	WARN_ON_ONCE(unmap->vma_end - 1 > unmap->pg_end - 1);
 
