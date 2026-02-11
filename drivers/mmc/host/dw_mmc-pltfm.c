@@ -125,7 +125,7 @@ static struct platform_driver dw_mci_pltfm_driver = {
 		.name		= "dw_mmc",
 		.probe_type	= PROBE_PREFER_ASYNCHRONOUS,
 		.of_match_table	= dw_mci_pltfm_match,
-		.pm		= &dw_mci_pltfm_pmops,
+		.pm		= pm_ptr(&dw_mci_pmops),
 	},
 };
 

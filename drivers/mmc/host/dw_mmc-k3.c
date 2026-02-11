@@ -455,7 +455,7 @@ static struct platform_driver dw_mci_k3_pltfm_driver = {
 		.name		= "dwmmc_k3",
 		.probe_type	= PROBE_PREFER_ASYNCHRONOUS,
 		.of_match_table	= dw_mci_k3_match,
-		.pm		= pm_ptr(&dw_mci_pltfm_pmops),
+		.pm		= pm_ptr(&dw_mci_pmops),
 	},
 };
 

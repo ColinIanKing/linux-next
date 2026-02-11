@@ -84,7 +84,7 @@ static struct pci_driver dw_mci_pci_driver = {
 	.probe		= dw_mci_pci_probe,
 	.remove		= dw_mci_pci_remove,
 	.driver		=	{
-		.pm =   pm_ptr(&dw_mci_pltfm_pmops),
+		.pm =   pm_ptr(&dw_mci_pmops),
 	},
 };
 

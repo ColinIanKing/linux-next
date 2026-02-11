@@ -3523,11 +3523,11 @@ err:
 }
 EXPORT_SYMBOL(dw_mci_runtime_resume);
 
-const struct dev_pm_ops dw_mci_pltfm_pmops = {
+const struct dev_pm_ops dw_mci_pmops = {
 	SYSTEM_SLEEP_PM_OPS(pm_runtime_force_suspend, pm_runtime_force_resume)
 	RUNTIME_PM_OPS(dw_mci_runtime_suspend, dw_mci_runtime_resume, NULL)
 };
-EXPORT_SYMBOL_GPL(dw_mci_pltfm_pmops);
+EXPORT_SYMBOL_GPL(dw_mci_pmops);
 
 MODULE_DESCRIPTION("DW Multimedia Card Interface driver");
 MODULE_AUTHOR("NXP Semiconductor VietNam");
