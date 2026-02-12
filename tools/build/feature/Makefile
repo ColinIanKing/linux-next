@@ -13,7 +13,7 @@ FILES=                                          \
          test-gtk2-infobar.bin                  \
          test-hello.bin                         \
          test-libbfd.bin                        \
-         test-libbfd-buildid.bin		\
+	 test-libbfd-threadsafe.bin      	\
          test-disassembler-four-args.bin        \
          test-disassembler-init-styled.bin	\
          test-reallocarray.bin			\
@@ -73,6 +73,7 @@ FILES=                                          \
          test-clang-bpf-co-re.bin		\
          test-file-handle.bin			\
          test-libpfm4.bin			\
+         test-rust.bin				\
          test-libopenssl.bin
 
 FILES := $(addprefix $(OUTPUT),$(FILES))
@@ -111,6 +112,9 @@ __BUILD = $(CC) $(CFLAGS) -MD -Wall -Werror -o $@ $(patsubst %.bin,%.c,$(@F)) $(
 
 __BUILDXX = $(CXX) $(CXXFLAGS) -MD -Wall -Werror -o $@ $(patsubst %.bin,%.cpp,$(@F)) $(LDFLAGS)
   BUILDXX = $(__BUILDXX) > $(@:.bin=.make.output) 2>&1
+
+__BUILDRS = $(RUSTC) $(RUSTC_FLAGS) --emit=dep-info=$(patsubst %.bin,%.d,$(@F)),link -o $@ $(patsubst %.bin,%.rs,$(@F))
+  BUILDRS = $(__BUILDRS) > $(@:.bin=.make.output) 2>&1
 
 ###############################
 
@@ -268,7 +272,7 @@ $(OUTPUT)test-libpython.bin:
 $(OUTPUT)test-libbfd.bin:
 	$(BUILD_BFD)
 
-$(OUTPUT)test-libbfd-buildid.bin:
+$(OUTPUT)test-libbfd-threadsafe.bin:
 	$(BUILD_BFD) || $(BUILD_BFD) -liberty || $(BUILD_BFD) -liberty -lz
 
 $(OUTPUT)test-disassembler-four-args.bin:
@@ -388,6 +392,10 @@ $(OUTPUT)test-libopenssl.bin:
 $(OUTPUT)test-bpftool-skeletons.bin:
 	$(SYSTEM_BPFTOOL) version | grep '^features:.*skeletons' \
 		> $(@:.bin=.make.output) 2>&1
+
+$(OUTPUT)test-rust.bin:
+	$(BUILDRS) > $(@:.bin=.make.output) 2>&1
+
 ###############################
 
 clean:
