@@ -2302,6 +2302,7 @@ static __cold void io_ring_exit_work(struct work_struct *work)
 	unsigned long interval = HZ / 20;
 	struct io_tctx_exit exit;
 	struct io_tctx_node *node;
+	bool timed_out = false;
 	int ret;
 
 	/*
@@ -2338,9 +2339,13 @@ static __cold void io_ring_exit_work(struct work_struct *work)
 
 		io_req_caches_free(ctx);
 
-		if (WARN_ON_ONCE(time_after(jiffies, timeout))) {
+		if (!timed_out && time_after(jiffies, timeout)) {
 			/* there is little hope left, don't run it too often */
 			interval = HZ * 60;
+			mutex_lock(&ctx->uring_lock);
+			io_uring_dump_reqs(ctx, "io_uring exit timeout");
+			mutex_unlock(&ctx->uring_lock);
+			timed_out = true;
 		}
 		/*
 		 * This is really an uninterruptible wait, as it has to be
@@ -2398,7 +2403,7 @@ static __cold void io_ring_exit_work(struct work_struct *work)
 static __cold void io_ring_ctx_wait_and_kill(struct io_ring_ctx *ctx)
 {
 	unsigned long index;
-	struct creds *creds;
+	struct cred *creds;
 
 	mutex_lock(&ctx->uring_lock);
 	percpu_ref_kill(&ctx->refs);
@@ -2949,8 +2954,7 @@ static __cold int io_uring_create(struct io_ctx_config *config)
 		static_branch_inc(&io_key_has_sqarray);
 
 	if ((ctx->flags & IORING_SETUP_DEFER_TASKRUN) &&
-	    !(ctx->flags & IORING_SETUP_IOPOLL) &&
-	    !(ctx->flags & IORING_SETUP_SQPOLL))
+	    !(ctx->flags & IORING_SETUP_IOPOLL))
 		ctx->task_complete = true;
 
 	if (ctx->task_complete || (ctx->flags & IORING_SETUP_IOPOLL))
