@@ -3073,16 +3073,13 @@ static struct file *open_detached_copy(struct path *path, unsigned int flags)
 	return file;
 }
 
-DEFINE_FREE(put_empty_mnt_ns, struct mnt_namespace *,
-	    if (!IS_ERR_OR_NULL(_T)) free_mnt_ns(_T))
-
 static struct mnt_namespace *create_new_namespace(struct path *path, unsigned int flags)
 {
-	struct mnt_namespace *new_ns __free(put_empty_mnt_ns) = NULL;
-	struct path to_path __free(path_put) = {};
 	struct mnt_namespace *ns = current->nsproxy->mnt_ns;
 	struct user_namespace *user_ns = current_user_ns();
+	struct mnt_namespace *new_ns;
 	struct mount *new_ns_root;
+	struct path to_path;
 	struct mount *mnt;
 	unsigned int copy_flags = 0;
 	bool locked = false;
@@ -3096,8 +3093,10 @@ static struct mnt_namespace *create_new_namespace(struct path *path, unsigned in
 
 	scoped_guard(namespace_excl) {
 		new_ns_root = clone_mnt(ns->root, ns->root->mnt.mnt_root, copy_flags);
-		if (IS_ERR(new_ns_root))
+		if (IS_ERR(new_ns_root)) {
+			emptied_ns = new_ns;
 			return ERR_CAST(new_ns_root);
+		}
 
 		/*
 		 * If the real rootfs had a locked mount on top of it somewhere
@@ -3122,12 +3121,17 @@ static struct mnt_namespace *create_new_namespace(struct path *path, unsigned in
 
 	/* Borrow the reference from clone_mnt(). */
 	to_path.mnt = &new_ns_root->mnt;
-	to_path.dentry = dget(new_ns_root->mnt.mnt_root);
+	to_path.dentry = new_ns_root->mnt.mnt_root;
 
 	/* Now lock for actual mounting. */
 	LOCK_MOUNT_EXACT(mp, &to_path);
-	if (unlikely(IS_ERR(mp.parent)))
+	if (unlikely(IS_ERR(mp.parent))) {
+		guard(namespace_excl)();
+		emptied_ns = new_ns;
+		guard(mount_writer)();
+		umount_tree(new_ns_root, 0);
 		return ERR_CAST(mp.parent);
+	}
 
 	/*
 	 * We don't emulate unshare()ing a mount namespace. We stick to the
@@ -3135,10 +3139,13 @@ static struct mnt_namespace *create_new_namespace(struct path *path, unsigned in
 	 * saner and simpler semantics.
 	 */
 	mnt = __do_loopback(path, flags, copy_flags);
-	if (IS_ERR(mnt))
-		return ERR_CAST(mnt);
-
 	scoped_guard(mount_writer) {
+		if (IS_ERR(mnt)) {
+			emptied_ns = new_ns;
+			umount_tree(new_ns_root, 0);
+			return ERR_CAST(mnt);
+		}
+
 		if (locked)
 			mnt->mnt.mnt_flags |= MNT_LOCKED;
 		/*
@@ -3151,14 +3158,14 @@ static struct mnt_namespace *create_new_namespace(struct path *path, unsigned in
 	}
 
 	/* Add all mounts to the new namespace. */
-	for (struct mount *p = new_ns_root; p; p = next_mnt(p, new_ns_root)) {
-		mnt_add_to_ns(new_ns, p);
+	for (mnt = new_ns_root; mnt; mnt = next_mnt(mnt, new_ns_root)) {
+		mnt_add_to_ns(new_ns, mnt);
 		new_ns->nr_mounts++;
 	}
 
-	new_ns->root = real_mount(no_free_ptr(to_path.mnt));
+	new_ns->root = real_mount(to_path.mnt);
 	ns_tree_add_raw(new_ns);
-	return no_free_ptr(new_ns);
+	return new_ns;
 }
 
 static struct file *open_new_namespace(struct path *path, unsigned int flags)
