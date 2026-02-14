@@ -12,6 +12,7 @@ map_hugetlb
 map_populate
 thuge-gen
 compaction_test
+memory-failure
 migration
 mlock2-tests
 mrelease_test
@@ -32,7 +33,6 @@ uffd-unit-tests
 uffd-wp-mremap
 mlock-intersect-test
 mlock-random-test
-virtual_address_range
 gup_test
 va_128TBswitch
 map_fixed_noreplace
