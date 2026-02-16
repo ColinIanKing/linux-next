@@ -256,13 +256,14 @@ static int tsync_works_grow_by(struct tsync_works *s, size_t n, gfp_t flags)
  * tsync_works_contains - checks for presence of task in s
  */
 static bool tsync_works_contains_task(const struct tsync_works *s,
-				      struct task_struct *task)
+				      const struct task_struct *task)
 {
 	size_t i;
 
 	for (i = 0; i < s->size; i++)
 		if (s->works[i]->task == task)
 			return true;
+
 	return false;
 }
 
@@ -284,6 +285,7 @@ static void tsync_works_release(struct tsync_works *s)
 
 	for (i = 0; i < s->capacity; i++)
 		kfree(s->works[i]);
+
 	kfree(s->works);
 	s->works = NULL;
 	s->size = 0;
@@ -295,7 +297,7 @@ static void tsync_works_release(struct tsync_works *s)
  */
 static size_t count_additional_threads(const struct tsync_works *works)
 {
-	struct task_struct *thread, *caller;
+	const struct task_struct *caller, *thread;
 	size_t n = 0;
 
 	caller = current;
@@ -334,7 +336,8 @@ static bool schedule_task_work(struct tsync_works *works,
 			       struct tsync_shared_context *shared_ctx)
 {
 	int err;
-	struct task_struct *thread, *caller;
+	const struct task_struct *caller;
+	struct task_struct *thread;
 	struct tsync_work *ctx;
 	bool found_more_threads = false;
 
@@ -415,10 +418,10 @@ static bool schedule_task_work(struct tsync_works *works,
  * shared_ctx->num_preparing and shared_ctx->num_unfished and mark the two
  * completions if needed, as if the task was never scheduled.
  */
-static void cancel_tsync_works(struct tsync_works *works,
+static void cancel_tsync_works(const struct tsync_works *works,
 			       struct tsync_shared_context *shared_ctx)
 {
-	int i;
+	size_t i;
 
 	for (i = 0; i < works->size; i++) {
 		if (WARN_ON_ONCE(!works->works[i]->task))
