@@ -276,7 +276,7 @@ static void tsync_works_release(struct tsync_works *s)
 	size_t i;
 
 	for (i = 0; i < s->size; i++) {
-		if (!s->works[i]->task)
+		if (WARN_ON_ONCE(!s->works[i]->task))
 			continue;
 
 		put_task_struct(s->works[i]->task);
@@ -389,6 +389,15 @@ static bool schedule_task_work(struct tsync_works *works,
 			 */
 			put_task_struct(ctx->task);
 			ctx->task = NULL;
+			ctx->shared_ctx = NULL;
+
+			/*
+			 * Cancel the tsync_works_provide() change to recycle the reserved
+			 * memory for the next thread, if any.  This also ensures that
+			 * cancel_tsync_works() and tsync_works_release() do not see any
+			 * NULL task pointers.
+			 */
+			works->size--;
 
 			atomic_dec(&shared_ctx->num_preparing);
 			atomic_dec(&shared_ctx->num_unfinished);
@@ -412,6 +421,9 @@ static void cancel_tsync_works(struct tsync_works *works,
 	int i;
 
 	for (i = 0; i < works->size; i++) {
+		if (WARN_ON_ONCE(!works->works[i]->task))
+			continue;
+
 		if (!task_work_cancel(works->works[i]->task,
 				      &works->works[i]->work))
 			continue;
