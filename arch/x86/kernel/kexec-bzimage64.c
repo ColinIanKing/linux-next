@@ -313,6 +313,12 @@ setup_boot_parameters(struct kimage *image, struct boot_params *params,
 
 	/* Always fill in RSDP: it is either 0 or a valid value */
 	params->acpi_rsdp_addr = boot_params.acpi_rsdp_addr;
+	if (IS_ENABLED(CONFIG_EFI) && !params->acpi_rsdp_addr) {
+		if (efi.acpi20 != EFI_INVALID_TABLE_ADDR)
+			params->acpi_rsdp_addr = efi.acpi20;
+		else if (efi.acpi != EFI_INVALID_TABLE_ADDR)
+			params->acpi_rsdp_addr = efi.acpi;
+	}
 
 	/* Default APM info */
 	memset(&params->apm_bios_info, 0, sizeof(params->apm_bios_info));
