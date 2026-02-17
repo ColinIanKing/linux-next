@@ -36,7 +36,6 @@
 #include "../common/smb2status.h"
 #include "smb2glob.h"
 #include "cifs_spnego.h"
-#include "../common/smbdirect/smbdirect.h"
 #include "smbdirect.h"
 #include "trace.h"
 #ifdef CONFIG_CIFS_DFS_UPCALL
@@ -2908,6 +2907,7 @@ int smb311_posix_mkdir(const unsigned int xid, struct inode *inode,
 
 replay_again:
 	/* reinitialize for possible replay */
+	pc_buf = NULL;
 	flags = 0;
 	n_iov = 2;
 	server = cifs_pick_channel(ses);
@@ -4578,9 +4578,7 @@ smb2_new_read_req(void **buf, unsigned int *total_len,
 		req->ReadChannelInfoLength =
 			cpu_to_le16(sizeof(struct smbdirect_buffer_descriptor_v1));
 		v1 = (struct smbdirect_buffer_descriptor_v1 *) &req->Buffer[0];
-		v1->offset = cpu_to_le64(rdata->mr->mr->iova);
-		v1->token = cpu_to_le32(rdata->mr->mr->rkey);
-		v1->length = cpu_to_le32(rdata->mr->mr->length);
+		smbd_mr_fill_buffer_descriptor(rdata->mr, v1);
 
 		*total_len += sizeof(*v1) - 1;
 	}
@@ -5179,9 +5177,7 @@ smb2_async_writev(struct cifs_io_subrequest *wdata)
 		req->WriteChannelInfoLength =
 			cpu_to_le16(sizeof(struct smbdirect_buffer_descriptor_v1));
 		v1 = (struct smbdirect_buffer_descriptor_v1 *) &req->Buffer[0];
-		v1->offset = cpu_to_le64(wdata->mr->mr->iova);
-		v1->token = cpu_to_le32(wdata->mr->mr->rkey);
-		v1->length = cpu_to_le32(wdata->mr->mr->length);
+		smbd_mr_fill_buffer_descriptor(wdata->mr, v1);
 
 		rqst.rq_iov[0].iov_len += sizeof(*v1);
 
