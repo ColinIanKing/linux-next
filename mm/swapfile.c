@@ -1624,7 +1624,7 @@ static int __swap_cluster_dup_entry(struct swap_cluster_info *ci,
 		}
 	} else if (count == SWP_TB_COUNT_MAX) {
 		VM_WARN_ON_ONCE(ci->extend_table[ci_off] >=
-				(BIT(BITS_PER_TYPE(ci->extend_table[0]))) - 1);
+                               type_max(typeof(ci->extend_table[0])));
 		++ci->extend_table[ci_off];
 	} else {
 		/* Never happens unless counting went wrong */
