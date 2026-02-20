@@ -854,10 +854,12 @@ static void print_tainted_seq(struct seq_buf *s, bool verbose)
 	}
 }
 
+/* 350 can accomadate all taint flags in verbose mode, with some headroom */
+#define TAINT_BUF_MAX 350
+
 static const char *_print_tainted(bool verbose)
 {
-	/* FIXME: what should the size be? */
-	static char buf[sizeof(taint_flags)];
+	static char buf[TAINT_BUF_MAX];
 	struct seq_buf s;
 
 	BUILD_BUG_ON(ARRAY_SIZE(taint_flags) != TAINT_FLAGS_COUNT);
