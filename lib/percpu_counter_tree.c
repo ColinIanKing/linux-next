@@ -297,6 +297,7 @@ int percpu_counter_tree_init(struct percpu_counter_tree *counter, struct percpu_
 {
 	return percpu_counter_tree_init_many(counter, items, 1, batch_size, gfp_flags);
 }
+EXPORT_SYMBOL_GPL(percpu_counter_tree_init);
 
 /**
  * percpu_counter_tree_destroy_many() - Destroy many per-CPU counter trees.
@@ -321,6 +322,7 @@ void percpu_counter_tree_destroy(struct percpu_counter_tree *counter)
 {
 	return percpu_counter_tree_destroy_many(counter, 1);
 }
+EXPORT_SYMBOL_GPL(percpu_counter_tree_destroy);
 
 static
 long percpu_counter_tree_carry(long orig, long res, long inc, unsigned long bit_mask)
@@ -423,7 +425,7 @@ void percpu_counter_tree_add(struct percpu_counter_tree *counter, long inc)
 		return;
 	percpu_counter_tree_add_slowpath(counter, inc);
 }
-
+EXPORT_SYMBOL_GPL(percpu_counter_tree_add);
 
 static
 long percpu_counter_tree_precise_sum_unbiased(struct percpu_counter_tree *counter)
@@ -450,6 +452,7 @@ long percpu_counter_tree_precise_sum(struct percpu_counter_tree *counter)
 {
 	return percpu_counter_tree_precise_sum_unbiased(counter) + READ_ONCE(counter->bias);
 }
+EXPORT_SYMBOL_GPL(percpu_counter_tree_precise_sum);
 
 static
 int compare_delta(long delta, unsigned long accuracy_neg, unsigned long accuracy_pos)
@@ -491,6 +494,7 @@ int percpu_counter_tree_approximate_compare(struct percpu_counter_tree *a, struc
 			     a->approx_accuracy_range.over + b->approx_accuracy_range.under,
 			     a->approx_accuracy_range.under + b->approx_accuracy_range.over);
 }
+EXPORT_SYMBOL_GPL(percpu_counter_tree_approximate_compare);
 
 /**
  * percpu_counter_tree_approximate_compare_value - Approximated comparison of a counter tree against a given value.
@@ -514,6 +518,7 @@ int percpu_counter_tree_approximate_compare_value(struct percpu_counter_tree *co
 			     counter->approx_accuracy_range.under,
 			     counter->approx_accuracy_range.over);
 }
+EXPORT_SYMBOL_GPL(percpu_counter_tree_approximate_compare_value);
 
 /**
  * percpu_counter_tree_precise_compare - Precise comparison of two counter trees.
@@ -582,6 +587,7 @@ int percpu_counter_tree_precise_compare(struct percpu_counter_tree *a, struct pe
 		return 1;
 	return 0;
 }
+EXPORT_SYMBOL_GPL(percpu_counter_tree_precise_compare);
 
 /**
  * percpu_counter_tree_precise_compare_value - Precise comparison of a counter tree against a given value.
@@ -619,6 +625,7 @@ int percpu_counter_tree_precise_compare_value(struct percpu_counter_tree *counte
 		return 1;
 	return 0;
 }
+EXPORT_SYMBOL_GPL(percpu_counter_tree_precise_compare_value);
 
 static
 void percpu_counter_tree_set_bias(struct percpu_counter_tree *counter, long bias)
@@ -657,6 +664,7 @@ size_t percpu_counter_tree_items_size(void)
 		return 0;
 	return counter_config->nr_items * sizeof(struct percpu_counter_tree_level_item);
 }
+EXPORT_SYMBOL_GPL(percpu_counter_tree_items_size);
 
 static void __init calculate_accuracy_topology(void)
 {
