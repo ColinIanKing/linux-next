@@ -262,6 +262,10 @@ static int uhid_hid_get_report(struct hid_device *hid, unsigned char rnum,
 	req = &uhid->report_buf.u.get_report_reply;
 	if (req->err) {
 		ret = -EIO;
+	} else if (rnum != req->data[0]) {
+		hid_err(hid, "Report ID mismatch - refusing to overwrite the data buffer\n");
+		ret = -EINVAL;
+		goto unlock;
 	} else {
 		ret = min3(count, (size_t)req->size, (size_t)UHID_DATA_MAX);
 		memcpy(buf, req->data, ret);
