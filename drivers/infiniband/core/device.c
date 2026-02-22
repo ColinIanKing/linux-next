@@ -345,6 +345,7 @@ out:
  */
 void ib_device_put(struct ib_device *device)
 {
+	BUG_ON(!device->device_was_fully_initialized);
 	if (refcount_dec_and_test(&device->refcount))
 		complete(&device->unreg_completion);
 }
@@ -1320,6 +1321,7 @@ static int enable_device_and_get(struct ib_device *device)
 	 * thread. This is needed to guard against parallel unregistration.
 	 */
 	refcount_set(&device->refcount, 2);
+	device->device_was_fully_initialized = true;
 	down_write(&devices_rwsem);
 	xa_set_mark(&devices, device->index, DEVICE_REGISTERED);
 
