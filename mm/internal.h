@@ -521,10 +521,10 @@ void pmd_install(struct mm_struct *mm, pmd_t *pmd, pgtable_t *pte);
  * @mm: The mm_struct.
  * @pmdp: Pointer to the pmd that was found to be pmd_none().
  *
- * When we stumble over a pmd_none() without holding the PTL while unmapping a
- * folio that could have been mapped at that PMD, it could be that concurrent
- * zapping of the PMD is not complete yet. While the PMD might be pmd_none()
- * already, the folio might still appear to be mapped (folio_mapped()).
+ * When we find a pmd_none() while unmapping a folio without holding the PTL,
+ * zap_huge_pmd() may have cleared the PMD but not yet modified the folio to
+ * indicate that it's unmapped. Skipping the PMD without synchronization could
+ * make folio unmapping code assume that unmapping failed.
  *
  * Wait for concurrent zapping to complete by grabbing the PTL.
  */
