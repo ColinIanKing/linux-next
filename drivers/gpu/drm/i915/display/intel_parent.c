@@ -92,6 +92,28 @@ void intel_parent_pc8_unblock(struct intel_display *display)
 	display->parent->pc8->unblock(display->drm);
 }
 
+/* pcode */
+int intel_parent_pcode_read(struct intel_display *display, u32 mbox, u32 *val, u32 *val1)
+{
+	return display->parent->pcode->read(display->drm, mbox, val, val1);
+}
+
+int intel_parent_pcode_write_timeout(struct intel_display *display, u32 mbox, u32 val, int timeout_ms)
+{
+	return display->parent->pcode->write(display->drm, mbox, val, timeout_ms);
+}
+
+int intel_parent_pcode_write(struct intel_display *display, u32 mbox, u32 val)
+{
+	return intel_parent_pcode_write_timeout(display, mbox, val, 1);
+}
+
+int intel_parent_pcode_request(struct intel_display *display, u32 mbox, u32 request,
+			       u32 reply_mask, u32 reply, int timeout_base_ms)
+{
+	return display->parent->pcode->request(display->drm, mbox, request, reply_mask, reply, timeout_base_ms);
+}
+
 /* rps */
 bool intel_parent_rps_available(struct intel_display *display)
 {

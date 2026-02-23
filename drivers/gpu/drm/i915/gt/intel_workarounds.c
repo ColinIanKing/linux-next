@@ -3,6 +3,8 @@
  * Copyright © 2014-2018 Intel Corporation
  */
 
+#include <drm/intel/intel_gmd_misc_regs.h>
+
 #include "i915_drv.h"
 #include "i915_reg.h"
 #include "i915_mmio_range.h"

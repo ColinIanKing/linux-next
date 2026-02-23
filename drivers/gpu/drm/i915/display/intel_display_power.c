@@ -7,8 +7,8 @@
 #include <linux/string_helpers.h>
 
 #include <drm/drm_print.h>
+#include <drm/intel/intel_pcode_regs.h>
 
-#include "i915_reg.h"
 #include "intel_backlight_regs.h"
 #include "intel_cdclk.h"
 #include "intel_clock_gating.h"
@@ -26,7 +26,6 @@
 #include "intel_mchbar_regs.h"
 #include "intel_parent.h"
 #include "intel_pch_refclk.h"
-#include "intel_pcode.h"
 #include "intel_pmdemand.h"
 #include "intel_pps_regs.h"
 #include "intel_snps_phy.h"
@@ -1260,7 +1259,7 @@ static u32 hsw_read_dcomp(struct intel_display *display)
 static void hsw_write_dcomp(struct intel_display *display, u32 val)
 {
 	if (display->platform.haswell) {
-		if (intel_pcode_write(display->drm, GEN6_PCODE_WRITE_D_COMP, val))
+		if (intel_parent_pcode_write(display, GEN6_PCODE_WRITE_D_COMP, val))
 			drm_dbg_kms(display->drm, "Failed to write to D_COMP\n");
 	} else {
 		intel_de_write(display, D_COMP_BDW, val);
