@@ -2907,6 +2907,7 @@ struct ib_device {
 	struct list_head subdev_list;
 
 	enum rdma_nl_name_assign_type name_assign_type;
+	bool device_was_fully_initialized;
 };
 
 static inline void *rdma_zalloc_obj(struct ib_device *dev, size_t size,
@@ -4607,6 +4608,7 @@ int ib_check_mr_status(struct ib_mr *mr, u32 check_mask,
  */
 static inline bool ib_device_try_get(struct ib_device *dev)
 {
+	BUG_ON(!dev->device_was_fully_initialized);
 	return refcount_inc_not_zero(&dev->refcount);
 }
 
