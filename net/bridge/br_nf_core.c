@@ -69,6 +69,9 @@ void br_netfilter_rtable_init(struct net_bridge *br)
 {
 	struct rtable *rt = &br->fake_rtable;
 
+#ifdef CONFIG_NET_DEV_REFCNT_TRACKER
+	atomic_add(65536, &rt->dst.num_rcuref_init_calls);
+#endif
 	rcuref_init(&rt->dst.__rcuref, 1);
 	rt->dst.dev = br->dev;
 	dst_init_metrics(&rt->dst, br->metrics, false);

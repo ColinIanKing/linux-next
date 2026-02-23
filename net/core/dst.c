@@ -44,6 +44,28 @@ const struct dst_metrics dst_default_metrics = {
 };
 EXPORT_SYMBOL(dst_default_metrics);
 
+#ifdef CONFIG_NET_DEV_REFCNT_TRACKER
+static LIST_HEAD(dst_list);
+static DEFINE_SPINLOCK(dst_list_lock);
+
+void print_dst_list(const struct net_device *dev) {
+	struct dst_entry *dst;
+	unsigned long flags;
+
+	spin_lock_irqsave(&dst_list_lock, flags);
+	list_for_each_entry(dst, &dst_list, dst_list) {
+		if (dst->dev == dev)
+			printk("dst(%p): hold=%u+%u release=%u init=%u+%u\n", &dev->refcnt_tracker,
+			       atomic_read(&dst->num_dst_hold_calls),
+			       atomic_read(&dst->num_sk_dst_get_calls),
+			       atomic_read(&dst->num_dst_release_calls),
+			       ((unsigned int) atomic_read(&dst->num_rcuref_init_calls)) >> 16,
+			       ((unsigned int) atomic_read(&dst->num_rcuref_init_calls)) & 65535);
+	}
+	spin_unlock_irqrestore(&dst_list_lock, flags);
+}
+#endif
+
 void dst_init(struct dst_entry *dst, struct dst_ops *ops,
 	      struct net_device *dev, int initial_obsolete,
 	      unsigned short flags)
@@ -66,6 +88,20 @@ void dst_init(struct dst_entry *dst, struct dst_ops *ops,
 	dst->tclassid = 0;
 #endif
 	dst->lwtstate = NULL;
+
+#ifdef CONFIG_NET_DEV_REFCNT_TRACKER
+	if (list_empty(&dst->dst_list)) {
+		unsigned long flags;
+
+		atomic_set(&dst->num_dst_hold_calls, 0);
+		atomic_set(&dst->num_dst_release_calls, 0);
+		atomic_set(&dst->num_sk_dst_get_calls, 0);
+		atomic_inc(&dst->num_rcuref_init_calls);
+		spin_lock_irqsave(&dst_list_lock, flags);
+		list_add_tail(&dst->dst_list, &dst_list);
+		spin_unlock_irqrestore(&dst_list_lock, flags);
+	}
+#endif
 	rcuref_init(&dst->__rcuref, 1);
 	INIT_LIST_HEAD(&dst->rt_uncached);
 	dst->rt_uncached_list = NULL;
@@ -91,6 +127,9 @@ void *dst_alloc(struct dst_ops *ops, struct net_device *dev,
 	if (!dst)
 		return NULL;
 
+#ifdef CONFIG_NET_DEV_REFCNT_TRACKER
+	INIT_LIST_HEAD(&dst->dst_list);
+#endif
 	dst_init(dst, ops, dev, initial_obsolete, flags);
 
 	return dst;
@@ -115,6 +154,16 @@ static void dst_destroy(struct dst_entry *dst)
 	netdev_put(dst->dev, &dst->dev_tracker);
 
 	lwtstate_put(dst->lwtstate);
+
+#ifdef CONFIG_NET_DEV_REFCNT_TRACKER
+	if (!list_empty(&dst->dst_list)) {
+		unsigned long flags;
+
+		spin_lock_irqsave(&dst_list_lock, flags);
+		list_del_init(&dst->dst_list);
+		spin_unlock_irqrestore(&dst_list_lock, flags);
+	}
+#endif
 
 	if (dst->flags & DST_METADATA)
 		metadata_dst_free((struct metadata_dst *)dst);
@@ -165,6 +214,10 @@ static void dst_count_dec(struct dst_entry *dst)
 
 void dst_release(struct dst_entry *dst)
 {
+#ifdef CONFIG_NET_DEV_REFCNT_TRACKER
+	if (dst)
+		atomic_inc(&dst->num_dst_release_calls);
+#endif
 	if (dst && rcuref_put(&dst->__rcuref)) {
 #ifdef CONFIG_DST_CACHE
 		if (dst->flags & DST_METADATA) {
@@ -182,6 +235,10 @@ EXPORT_SYMBOL(dst_release);
 
 void dst_release_immediate(struct dst_entry *dst)
 {
+#ifdef CONFIG_NET_DEV_REFCNT_TRACKER
+	if (dst)
+		atomic_inc(&dst->num_dst_release_calls);
+#endif
 	if (dst && rcuref_put(&dst->__rcuref)) {
 		dst_count_dec(dst);
 		dst_destroy(dst);

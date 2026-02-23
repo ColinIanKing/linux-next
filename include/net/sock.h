@@ -2193,8 +2193,14 @@ sk_dst_get(const struct sock *sk)
 
 	rcu_read_lock();
 	dst = rcu_dereference(sk->sk_dst_cache);
-	if (dst && !rcuref_get(&dst->__rcuref))
-		dst = NULL;
+	if (dst) {
+		if (!rcuref_get(&dst->__rcuref))
+			dst = NULL;
+#ifdef CONFIG_NET_DEV_REFCNT_TRACKER
+		else
+			atomic_inc(&dst->num_sk_dst_get_calls);
+#endif
+	}
 	rcu_read_unlock();
 	return dst;
 }
