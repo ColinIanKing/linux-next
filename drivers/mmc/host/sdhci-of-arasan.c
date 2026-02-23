@@ -1512,6 +1512,17 @@ static struct sdhci_arasan_of_data intel_keembay_sdio_data = {
 	.clk_ops = &arasan_clk_ops,
 };
 
+static const struct sdhci_pltfm_data sdhci_arasan_axiado_pdata = {
+	.ops = &sdhci_arasan_ops,
+	.quirks = SDHCI_QUIRK_CAP_CLOCK_BASE_BROKEN |
+			SDHCI_QUIRK_BROKEN_CQE,
+};
+
+static struct sdhci_arasan_of_data sdhci_arasan_axiado_data = {
+	.pdata = &sdhci_arasan_axiado_pdata,
+	.clk_ops = &arasan_clk_ops,
+};
+
 static const struct of_device_id sdhci_arasan_of_match[] = {
 	/* SoC-specific compatible strings w/ soc_ctl_map */
 	{
@@ -1537,6 +1548,10 @@ static const struct of_device_id sdhci_arasan_of_match[] = {
 	{
 		.compatible = "intel,keembay-sdhci-5.1-sdio",
 		.data = &intel_keembay_sdio_data,
+	},
+	{
+		.compatible = "axiado,ax3000-sdhci-5.1-emmc",
+		.data = &sdhci_arasan_axiado_data,
 	},
 	/* Generic compatible below here */
 	{
