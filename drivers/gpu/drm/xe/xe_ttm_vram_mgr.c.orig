@@ -82,7 +82,7 @@ static int xe_ttm_vram_mgr_new(struct ttm_resource_manager *man,
 		vres->flags |= DRM_BUDDY_TOPDOWN_ALLOCATION;
 
 	if (place->flags & TTM_PL_FLAG_CONTIGUOUS)
-		vres->flags |= DRM_BUDDY_CONTIGUOUS_ALLOCATION;
+		vres->flags |= GPU_BUDDY_CONTIGUOUS_ALLOCATION;
 
 	if (place->fpfn || lpfn != man->size >> PAGE_SHIFT)
 		vres->flags |= DRM_BUDDY_RANGE_ALLOCATION;
