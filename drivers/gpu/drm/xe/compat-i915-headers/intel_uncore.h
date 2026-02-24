@@ -38,6 +38,14 @@ static inline u8 intel_uncore_read8(struct intel_uncore *uncore,
 	return xe_mmio_read8(__compat_uncore_to_mmio(uncore), reg);
 }
 
+static inline void intel_uncore_write8(struct intel_uncore *uncore,
+				       i915_reg_t i915_reg, u8 val)
+{
+	struct xe_reg reg = XE_REG(i915_mmio_reg_offset(i915_reg));
+
+	xe_mmio_write8(__compat_uncore_to_mmio(uncore), reg, val);
+}
+
 static inline u16 intel_uncore_read16(struct intel_uncore *uncore,
 				      i915_reg_t i915_reg)
 {

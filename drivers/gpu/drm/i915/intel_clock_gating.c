@@ -26,11 +26,13 @@
  */
 
 #include <drm/drm_print.h>
+#include <drm/intel/intel_gmd_misc_regs.h>
+#include <drm/intel/intel_gmd_interrupt_regs.h>
 
 #include "display/i9xx_plane_regs.h"
 #include "display/intel_display.h"
 #include "display/intel_display_core.h"
-
+#include "display/intel_display_regs.h"
 #include "gt/intel_engine_regs.h"
 #include "gt/intel_gt.h"
 #include "gt/intel_gt_mcr.h"

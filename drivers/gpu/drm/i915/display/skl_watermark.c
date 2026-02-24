@@ -7,8 +7,8 @@
 
 #include <drm/drm_blend.h>
 #include <drm/drm_print.h>
+#include <drm/intel/intel_pcode_regs.h>
 
-#include "i915_reg.h"
 #include "i9xx_wm.h"
 #include "intel_atomic.h"
 #include "intel_bw.h"
@@ -26,7 +26,7 @@
 #include "intel_fb.h"
 #include "intel_fixed.h"
 #include "intel_flipq.h"
-#include "intel_pcode.h"
+#include "intel_parent.h"
 #include "intel_plane.h"
 #include "intel_vblank.h"
 #include "intel_wm.h"
@@ -115,9 +115,8 @@ intel_sagv_block_time(struct intel_display *display)
 		u32 val = 0;
 		int ret;
 
-		ret = intel_pcode_read(display->drm,
-				       GEN12_PCODE_READ_SAGV_BLOCK_TIME_US,
-				       &val, NULL);
+		ret = intel_parent_pcode_read(display, GEN12_PCODE_READ_SAGV_BLOCK_TIME_US,
+					      &val, NULL);
 		if (ret) {
 			drm_dbg_kms(display->drm, "Couldn't read SAGV block time!\n");
 			return 0;
@@ -184,8 +183,8 @@ static void skl_sagv_enable(struct intel_display *display)
 		return;
 
 	drm_dbg_kms(display->drm, "Enabling SAGV\n");
-	ret = intel_pcode_write(display->drm, GEN9_PCODE_SAGV_CONTROL,
-				GEN9_SAGV_ENABLE);
+	ret = intel_parent_pcode_write(display, GEN9_PCODE_SAGV_CONTROL,
+				       GEN9_SAGV_ENABLE);
 
 	/* We don't need to wait for SAGV when enabling */
 
@@ -217,9 +216,9 @@ static void skl_sagv_disable(struct intel_display *display)
 
 	drm_dbg_kms(display->drm, "Disabling SAGV\n");
 	/* bspec says to keep retrying for at least 1 ms */
-	ret = intel_pcode_request(display->drm, GEN9_PCODE_SAGV_CONTROL,
-				  GEN9_SAGV_DISABLE,
-				  GEN9_SAGV_IS_DISABLED, GEN9_SAGV_IS_DISABLED, 1);
+	ret = intel_parent_pcode_request(display, GEN9_PCODE_SAGV_CONTROL,
+					 GEN9_SAGV_DISABLE,
+					 GEN9_SAGV_IS_DISABLED, GEN9_SAGV_IS_DISABLED, 1);
 	/*
 	 * Some skl systems, pre-release machines in particular,
 	 * don't actually have SAGV.
@@ -3283,7 +3282,7 @@ static void skl_read_wm_latency(struct intel_display *display)
 
 	/* read the first set of memory latencies[0:3] */
 	val = 0; /* data0 to be programmed to 0 for first set */
-	ret = intel_pcode_read(display->drm, GEN9_PCODE_READ_MEM_LATENCY, &val, NULL);
+	ret = intel_parent_pcode_read(display, GEN9_PCODE_READ_MEM_LATENCY, &val, NULL);
 	if (ret) {
 		drm_err(display->drm, "SKL Mailbox read error = %d\n", ret);
 		return;
@@ -3296,7 +3295,7 @@ static void skl_read_wm_latency(struct intel_display *display)
 
 	/* read the second set of memory latencies[4:7] */
 	val = 1; /* data0 to be programmed to 1 for second set */
-	ret = intel_pcode_read(display->drm, GEN9_PCODE_READ_MEM_LATENCY, &val, NULL);
+	ret = intel_parent_pcode_read(display, GEN9_PCODE_READ_MEM_LATENCY, &val, NULL);
 	if (ret) {
 		drm_err(display->drm, "SKL Mailbox read error = %d\n", ret);
 		return;

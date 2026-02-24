@@ -14,6 +14,7 @@ struct drm_gem_object;
 struct drm_plane_state;
 struct drm_scanout_buffer;
 struct i915_vma;
+struct intel_dsb_buffer;
 struct intel_hdcp_gsc_context;
 struct intel_initial_plane_config;
 struct intel_panic;
@@ -21,6 +22,16 @@ struct intel_stolen_node;
 struct ref_tracker;
 
 /* Keep struct definitions sorted */
+
+struct intel_display_dsb_interface {
+	u32 (*ggtt_offset)(struct intel_dsb_buffer *dsb_buf);
+	void (*write)(struct intel_dsb_buffer *dsb_buf, u32 idx, u32 val);
+	u32 (*read)(struct intel_dsb_buffer *dsb_buf, u32 idx);
+	void (*fill)(struct intel_dsb_buffer *dsb_buf, u32 idx, u32 val, size_t size);
+	struct intel_dsb_buffer *(*create)(struct drm_device *drm, size_t size);
+	void (*cleanup)(struct intel_dsb_buffer *dsb_buf);
+	void (*flush_map)(struct intel_dsb_buffer *dsb_buf);
+};
 
 struct intel_display_hdcp_interface {
 	ssize_t (*gsc_msg_send)(struct intel_hdcp_gsc_context *gsc_context,
@@ -53,6 +64,13 @@ struct intel_display_panic_interface {
 struct intel_display_pc8_interface {
 	void (*block)(struct drm_device *drm);
 	void (*unblock)(struct drm_device *drm);
+};
+
+struct intel_display_pcode_interface {
+	int (*read)(struct drm_device *drm, u32 mbox, u32 *val, u32 *val1);
+	int (*write)(struct drm_device *drm, u32 mbox, u32 val, int timeout_ms);
+	int (*request)(struct drm_device *drm, u32 mbox, u32 request,
+		       u32 reply_mask, u32 reply, int timeout_base_ms);
 };
 
 struct intel_display_rpm_interface {
@@ -106,6 +124,9 @@ struct intel_display_stolen_interface {
  * check the optional pointers.
  */
 struct intel_display_parent_interface {
+	/** @dsb: DSB buffer interface */
+	const struct intel_display_dsb_interface *dsb;
+
 	/** @hdcp: HDCP GSC interface */
 	const struct intel_display_hdcp_interface *hdcp;
 
@@ -120,6 +141,9 @@ struct intel_display_parent_interface {
 
 	/** @pc8: PC8 interface. Optional. */
 	const struct intel_display_pc8_interface *pc8;
+
+	/** @pcode: Pcode interface */
+	const struct intel_display_pcode_interface *pcode;
 
 	/** @rpm: Runtime PM functions */
 	const struct intel_display_rpm_interface *rpm;
