@@ -231,7 +231,7 @@ static __always_inline const struct page *page_fixed_fake_head(const struct page
 	return page;
 }
 
-static __always_inline bool page_count_writable(const struct page *page, int u)
+static __always_inline bool page_count_writable(const struct page *page)
 {
 	if (!static_branch_unlikely(&hugetlb_optimize_vmemmap_key))
 		return true;
@@ -257,7 +257,7 @@ static __always_inline bool page_count_writable(const struct page *page, int u)
 	 * The refcount check also prevents modification attempts to other (r/o)
 	 * tail pages that are not fake heads.
 	 */
-	if (atomic_read_acquire(&page->_refcount) == u)
+	if (!atomic_read_acquire(&page->_refcount))
 		return false;
 
 	return page_fixed_fake_head(page) == page;
@@ -268,7 +268,7 @@ static inline const struct page *page_fixed_fake_head(const struct page *page)
 	return page;
 }
 
-static inline bool page_count_writable(const struct page *page, int u)
+static inline bool page_count_writable(const struct page *page)
 {
 	return true;
 }
@@ -722,6 +722,11 @@ PAGEFLAG_FALSE(VmemmapSelfHosted, vmemmap_self_hosted)
 static __always_inline bool folio_test_anon(const struct folio *folio)
 {
 	return ((unsigned long)folio->mapping & FOLIO_MAPPING_ANON) != 0;
+}
+
+static __always_inline bool folio_test_lazyfree(const struct folio *folio)
+{
+	return folio_test_anon(folio) && !folio_test_swapbacked(folio);
 }
 
 static __always_inline bool PageAnonNotKsm(const struct page *page)
