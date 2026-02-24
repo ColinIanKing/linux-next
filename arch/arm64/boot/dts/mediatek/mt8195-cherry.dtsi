@@ -1495,6 +1495,7 @@
 };
 
 &u3phy1 {
+	/* shared between xhci1 and pcie1. */
 	status = "okay";
 };
 
@@ -1561,16 +1562,6 @@
 
 	rx-fifo-depth = <3072>;
 	vbus-supply = <&usb_vbus>;
-};
-
-&xhci1 {
-	status = "okay";
-
-	phys = <&u2port1 PHY_TYPE_USB2>;
-	rx-fifo-depth = <3072>;
-	vusb33-supply = <&mt6359_vusb_ldo_reg>;
-	vbus-supply = <&usb_vbus>;
-	mediatek,u3p-dis-msk = <1>;
 };
 
 &xhci2 {
