@@ -695,8 +695,8 @@ static int admv8818_init(struct admv8818_state *st)
 
 	if (st->clkin)
 		return admv8818_rfin_band_select(st);
-	else
-		return 0;
+
+	return 0;
 }
 
 static int admv8818_clk_setup(struct admv8818_state *st)

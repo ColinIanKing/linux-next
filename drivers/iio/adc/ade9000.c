@@ -1589,10 +1589,9 @@ static int ade9000_reset(struct ade9000_state *st)
 	/* Only wait for completion if IRQ1 is available to signal reset done */
 	if (fwnode_irq_get_byname(dev_fwnode(dev), "irq1") >= 0) {
 		if (!wait_for_completion_timeout(&st->reset_completion,
-						 msecs_to_jiffies(1000))) {
-			dev_err(dev, "Reset timeout after 1s\n");
-			return -ETIMEDOUT;
-		}
+						 msecs_to_jiffies(1000)))
+			return dev_err_probe(dev, -ETIMEDOUT,
+					     "Reset timeout after 1s\n");
 	}
 	/* If no IRQ available, reset is already complete after the 50ms delay above */
 

@@ -148,14 +148,16 @@ struct bmc150_magn_data {
 static const struct {
 	int freq;
 	u8 reg_val;
-} bmc150_magn_samp_freq_table[] = { {2, 0x01},
-				    {6, 0x02},
-				    {8, 0x03},
-				    {10, 0x00},
-				    {15, 0x04},
-				    {20, 0x05},
-				    {25, 0x06},
-				    {30, 0x07} };
+} bmc150_magn_samp_freq_table[] = {
+	{ 2, 0x01 },
+	{ 6, 0x02 },
+	{ 8, 0x03 },
+	{ 10, 0x00 },
+	{ 15, 0x04 },
+	{ 20, 0x05 },
+	{ 25, 0x06 },
+	{ 30, 0x07 },
+};
 
 enum bmc150_magn_presets {
 	LOW_POWER_PRESET,
@@ -169,10 +171,10 @@ static const struct bmc150_magn_preset {
 	u8 rep_z;
 	u8 odr;
 } bmc150_magn_presets_table[] = {
-	[LOW_POWER_PRESET] = {3, 3, 10},
-	[REGULAR_PRESET] =  {9, 15, 10},
-	[ENHANCED_REGULAR_PRESET] =  {15, 27, 10},
-	[HIGH_ACCURACY_PRESET] =  {47, 83, 20},
+	[LOW_POWER_PRESET] = { 3, 3, 10 },
+	[REGULAR_PRESET] = { 9, 15, 10 },
+	[ENHANCED_REGULAR_PRESET] = { 15, 27, 10 },
+	[HIGH_ACCURACY_PRESET] = { 47, 83, 20 },
 };
 
 #define BMC150_MAGN_DEFAULT_PRESET REGULAR_PRESET
@@ -655,8 +657,9 @@ static const struct iio_info bmc150_magn_info = {
 };
 
 static const unsigned long bmc150_magn_scan_masks[] = {
-					BIT(AXIS_X) | BIT(AXIS_Y) | BIT(AXIS_Z),
-					0};
+	BIT(AXIS_X) | BIT(AXIS_Y) | BIT(AXIS_Z),
+	0
+};
 
 static irqreturn_t bmc150_magn_trigger_handler(int irq, void *p)
 {
@@ -695,7 +698,7 @@ static int bmc150_magn_init(struct bmc150_magn_data *data)
 	 * 3ms power-on time according to datasheet, let's better
 	 * be safe than sorry and set this delay to 5ms.
 	 */
-	msleep(5);
+	fsleep(5 * USEC_PER_MSEC);
 
 	ret = bmc150_magn_set_power_mode(data, BMC150_MAGN_POWER_MODE_SUSPEND,
 					 false);
