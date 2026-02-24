@@ -1,12 +1,16 @@
 // SPDX-License-Identifier: GPL-2.0 or MIT
 
-use kernel::drm;
-use kernel::prelude::*;
-use kernel::uaccess::UserSlice;
-use kernel::uapi;
+use kernel::{
+    drm,
+    prelude::*,
+    uaccess::UserSlice,
+    uapi, //
+};
 
-use crate::driver::TyrDevice;
-use crate::TyrDriver;
+use crate::{
+    driver::TyrDevice,
+    TyrDriver, //
+};
 
 #[pin_data]
 pub(crate) struct File {}
