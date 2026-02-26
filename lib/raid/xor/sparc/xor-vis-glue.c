@@ -26,10 +26,9 @@ void xor_vis_5(unsigned long bytes, unsigned long * __restrict p1,
 
 /* XXX Ugh, write cheetah versions... -DaveM */
 
+DO_XOR_BLOCKS(vis, xor_vis_2, xor_vis_3, xor_vis_4, xor_vis_5);
+
 struct xor_block_template xor_block_VIS = {
-        .name	= "VIS",
-        .do_2	= xor_vis_2,
-        .do_3	= xor_vis_3,
-        .do_4	= xor_vis_4,
-        .do_5	= xor_vis_5,
+        .name		= "VIS",
+	.xor_gen	= xor_gen_vis,
 };

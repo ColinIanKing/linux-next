@@ -24,10 +24,10 @@ void xor_niagara_5(unsigned long bytes, unsigned long * __restrict p1,
 		   const unsigned long * __restrict p4,
 		   const unsigned long * __restrict p5);
 
+DO_XOR_BLOCKS(niagara, xor_niagara_2, xor_niagara_3, xor_niagara_4,
+		xor_niagara_5);
+
 struct xor_block_template xor_block_niagara = {
-        .name	= "Niagara",
-        .do_2	= xor_niagara_2,
-        .do_3	= xor_niagara_3,
-        .do_4	= xor_niagara_4,
-        .do_5	= xor_niagara_5,
+        .name		= "Niagara",
+	.xor_gen	= xor_gen_niagara,
 };
