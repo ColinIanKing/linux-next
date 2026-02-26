@@ -1023,6 +1023,20 @@ static int virtballoon_probe(struct virtio_device *vdev)
 		}
 
 		/*
+		 * page_reporting_register() takes the order either
+		 * from the driver or the commandline. If neither
+		 * are provided, it falls back to MAX_PAGE_ORDER.
+		 *
+		 * Order given by the driver is required to be in the
+		 * range [0, MAX_PAGE_ORDER].
+		 *
+		 * One way for the driver to not provide any order
+		 * is by setting it to -1.
+		 */
+
+		vb->pr_dev_info.order = -1;
+
+		/*
 		 * The default page reporting order is @pageblock_order, which
 		 * corresponds to 512MB in size on ARM64 when 64KB base page
 		 * size is used. The page reporting won't be triggered if the
