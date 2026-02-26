@@ -285,6 +285,7 @@ config ARM64
 	select USER_STACKTRACE_SUPPORT
 	select VDSO_GETRANDOM
 	select VMAP_STACK
+	select XOR_BLOCKS_ARCH
 	help
 	  ARM 64-bit (AArch64) Linux support.
 

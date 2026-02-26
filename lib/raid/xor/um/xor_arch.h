@@ -1,7 +1,4 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-#ifndef _ASM_UM_XOR_H
-#define _ASM_UM_XOR_H
-
 #ifdef CONFIG_64BIT
 #undef CONFIG_X86_32
 #else
@@ -9,6 +6,4 @@
 #endif
 
 #include <asm/cpufeature.h>
-#include <../../x86/include/asm/xor.h>
-
-#endif
+#include <../x86/xor_arch.h>

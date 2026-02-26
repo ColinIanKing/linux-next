@@ -287,6 +287,7 @@ config S390
 	select VDSO_GETRANDOM
 	select VIRT_CPU_ACCOUNTING
 	select VMAP_STACK
+	select XOR_BLOCKS_ARCH
 	select ZONE_DMA
 	# Note: keep the above list sorted alphabetically
 
