@@ -7,4 +7,7 @@
 extern void xor_blocks(unsigned int count, unsigned int bytes,
 	void *dest, void **srcs);
 
+void xor_gen(void *dest, void **srcss, unsigned int src_cnt,
+		unsigned int bytes);
+
 #endif /* _XOR_H */
