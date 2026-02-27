@@ -2835,12 +2835,14 @@ static struct kunit_suite cs_dsp_bin_test_halo = {
 	.init = cs_dsp_bin_test_halo_init,
 	.exit = cs_dsp_bin_test_exit,
 	.test_cases = cs_dsp_bin_test_cases_halo,
+	.attr.speed = KUNIT_SPEED_SLOW,
 };
 
 static struct kunit_suite cs_dsp_bin_test_halo_wmdr3 = {
 	.name = "cs_dsp_bin_halo_wmdr_v3",
 	.init = cs_dsp_bin_test_halo_wmdr3_init,
 	.test_cases = cs_dsp_bin_test_cases_halo_wmdr3,
+	.attr.speed = KUNIT_SPEED_SLOW,
 };
 
 static struct kunit_suite cs_dsp_bin_test_adsp2_32bit = {
@@ -2848,6 +2850,7 @@ static struct kunit_suite cs_dsp_bin_test_adsp2_32bit = {
 	.init = cs_dsp_bin_test_adsp2_32bit_init,
 	.exit = cs_dsp_bin_test_exit,
 	.test_cases = cs_dsp_bin_test_cases_adsp2,
+	.attr.speed = KUNIT_SPEED_SLOW,
 };
 
 static struct kunit_suite cs_dsp_bin_test_adsp2_16bit = {
@@ -2855,6 +2858,7 @@ static struct kunit_suite cs_dsp_bin_test_adsp2_16bit = {
 	.init = cs_dsp_bin_test_adsp2_16bit_init,
 	.exit = cs_dsp_bin_test_exit,
 	.test_cases = cs_dsp_bin_test_cases_adsp2,
+	.attr.speed = KUNIT_SPEED_SLOW,
 };
 
 kunit_test_suites(&cs_dsp_bin_test_halo,
