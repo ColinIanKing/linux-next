@@ -63,6 +63,11 @@ properties:
 
       - items:
           - enum:
+              - qcom,glymur-crd
+          - const: qcom,glymur
+
+      - items:
+          - enum:
               - fairphone,fp6
           - const: qcom,milos
 
@@ -241,6 +246,13 @@ properties:
               - arrow,apq8096-db820c
               - inforce,ifc6640
           - const: qcom,apq8096-sbc
+          - const: qcom,apq8096
+
+      - items:
+          - const: arrow,apq8096sg-db820c
+          - const: arrow,apq8096-db820c
+          - const: qcom,apq8096-sbc
+          - const: qcom,apq8096sg
           - const: qcom,apq8096
 
       - items:
@@ -1131,6 +1143,7 @@ properties:
 
       - items:
           - enum:
+              - asus,vivobook-s15-x1p4
               - hp,omnibook-x14-fe1
               - lenovo,thinkbook-16
               - qcom,x1p42100-crd
