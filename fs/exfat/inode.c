@@ -686,7 +686,7 @@ out:
 
 void exfat_evict_inode(struct inode *inode)
 {
-	truncate_inode_pages(&inode->i_data, 0);
+	truncate_inode_pages_final(&inode->i_data);
 
 	if (!inode->i_nlink) {
 		i_size_write(inode, 0);
