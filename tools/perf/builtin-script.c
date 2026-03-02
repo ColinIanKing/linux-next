@@ -1271,11 +1271,11 @@ static int ip__fprintf_jump(uint64_t ip, struct branch_entry *en,
 
 	if (PRINT_FIELD(BRCNTR)) {
 		struct evsel *pos = evsel__leader(evsel);
-		unsigned int i = 0, j, num, mask, width;
+		unsigned int i = 0, j, num, mask, width, numprinted = 0;
 
 		perf_env__find_br_cntr_info(evsel__env(evsel), NULL, &width);
 		mask = (1L << width) - 1;
-		printed += fprintf(fp, "br_cntr: ");
+		printed += fprintf(fp, "\t# br_cntr: ");
 		evlist__for_each_entry_from(evsel->evlist, pos) {
 			if (!(pos->core.attr.branch_sample_type & PERF_SAMPLE_BRANCH_COUNTERS))
 				continue;
@@ -1283,16 +1283,20 @@ static int ip__fprintf_jump(uint64_t ip, struct branch_entry *en,
 				break;
 
 			num = (br_cntr >> (i++ * width)) & mask;
+			numprinted += num;
 			if (!verbose) {
 				for (j = 0; j < num; j++)
 					printed += fprintf(fp, "%s", pos->abbr_name);
 			} else
 				printed += fprintf(fp, "%s %d ", pos->name, num);
 		}
-		printed += fprintf(fp, "\t");
+		if (numprinted == 0 && !verbose)
+			printed += fprintf(fp, "-");
+		printed += fprintf(fp, " ");
 	}
 
-	printed += fprintf(fp, "#%s%s%s%s",
+	printed += fprintf(fp, "%s%s%s%s%s",
+			      !PRINT_FIELD(BRCNTR) ? "#" : "",
 			      en->flags.predicted ? " PRED" : "",
 			      en->flags.mispred ? " MISPRED" : "",
 			      en->flags.in_tx ? " INTX" : "",
