@@ -73,6 +73,8 @@ enum dw_edma_chip_flags {
  * @ll_region_rd:	 DMA descriptor link list memory for read channel
  * @dt_region_wr:	 DMA data memory for write channel
  * @dt_region_rd:	 DMA data memory for read channel
+ * @db_irq:		 Virtual IRQ dedicated to interrupt emulation
+ * @db_offset:		 Offset from DMA register base
  * @mf:			 DMA register map format
  * @dw:			 struct dw_edma that is filled by dw_edma_probe()
  */
@@ -93,6 +95,10 @@ struct dw_edma_chip {
 	/* data region */
 	struct dw_edma_region	dt_region_wr[EDMA_MAX_WR_CH];
 	struct dw_edma_region	dt_region_rd[EDMA_MAX_RD_CH];
+
+	/* interrupt emulation */
+	int			db_irq;
+	resource_size_t		db_offset;
 
 	enum dw_edma_map_format	mf;
 
