@@ -171,6 +171,7 @@ struct sca3000_state {
 
 /**
  * struct sca3000_chip_info - model dependent parameters
+ * @name:			name of the chip
  * @scale:			scale * 10^-6
  * @temp_output:		some devices have temperature sensors.
  * @measurement_mode_freq:	normal mode sampling frequency
@@ -193,6 +194,7 @@ struct sca3000_state {
  * sca3000 variant.
  **/
 struct sca3000_chip_info {
+	const char		*name;
 	unsigned int		scale;
 	bool			temp_output;
 	int			measurement_mode_freq;
@@ -207,69 +209,59 @@ struct sca3000_chip_info {
 	int			mot_det_mult_y[7];
 };
 
-enum sca3000_variant {
-	d01,
-	e02,
-	e04,
-	e05,
+static const struct sca3000_chip_info sca3000_chip_info_d01 = {
+	.name = "sca3000_d01",
+	.scale = 7357,
+	.temp_output = true,
+	.measurement_mode_freq = 250,
+	.measurement_mode_3db_freq = 45,
+	.option_mode_1 = SCA3000_OP_MODE_BYPASS,
+	.option_mode_1_freq = 250,
+	.option_mode_1_3db_freq = 70,
+	.mot_det_mult_xz = { 50, 100, 200, 350, 650, 1300 },
+	.mot_det_mult_y = { 50, 100, 150, 250, 450, 850, 1750 },
 };
 
-/*
- * Note where option modes are not defined, the chip simply does not
- * support any.
- * Other chips in the sca3000 series use i2c and are not included here.
- *
- * Some of these devices are only listed in the family data sheet and
- * do not actually appear to be available.
- */
-static const struct sca3000_chip_info sca3000_spi_chip_info_tbl[] = {
-	[d01] = {
-		.scale = 7357,
-		.temp_output = true,
-		.measurement_mode_freq = 250,
-		.measurement_mode_3db_freq = 45,
-		.option_mode_1 = SCA3000_OP_MODE_BYPASS,
-		.option_mode_1_freq = 250,
-		.option_mode_1_3db_freq = 70,
-		.mot_det_mult_xz = {50, 100, 200, 350, 650, 1300},
-		.mot_det_mult_y = {50, 100, 150, 250, 450, 850, 1750},
-	},
-	[e02] = {
-		.scale = 9810,
-		.measurement_mode_freq = 125,
-		.measurement_mode_3db_freq = 40,
-		.option_mode_1 = SCA3000_OP_MODE_NARROW,
-		.option_mode_1_freq = 63,
-		.option_mode_1_3db_freq = 11,
-		.mot_det_mult_xz = {100, 150, 300, 550, 1050, 2050},
-		.mot_det_mult_y = {50, 100, 200, 350, 700, 1350, 2700},
-	},
-	[e04] = {
-		.scale = 19620,
-		.measurement_mode_freq = 100,
-		.measurement_mode_3db_freq = 38,
-		.option_mode_1 = SCA3000_OP_MODE_NARROW,
-		.option_mode_1_freq = 50,
-		.option_mode_1_3db_freq = 9,
-		.option_mode_2 = SCA3000_OP_MODE_WIDE,
-		.option_mode_2_freq = 400,
-		.option_mode_2_3db_freq = 70,
-		.mot_det_mult_xz = {200, 300, 600, 1100, 2100, 4100},
-		.mot_det_mult_y = {100, 200, 400, 7000, 1400, 2700, 54000},
-	},
-	[e05] = {
-		.scale = 61313,
-		.measurement_mode_freq = 200,
-		.measurement_mode_3db_freq = 60,
-		.option_mode_1 = SCA3000_OP_MODE_NARROW,
-		.option_mode_1_freq = 50,
-		.option_mode_1_3db_freq = 9,
-		.option_mode_2 = SCA3000_OP_MODE_WIDE,
-		.option_mode_2_freq = 400,
-		.option_mode_2_3db_freq = 75,
-		.mot_det_mult_xz = {600, 900, 1700, 3200, 6100, 11900},
-		.mot_det_mult_y = {300, 600, 1200, 2000, 4100, 7800, 15600},
-	},
+static const struct sca3000_chip_info sca3000_chip_info_e02 = {
+	.name = "sca3000_e02",
+	.scale = 9810,
+	.measurement_mode_freq = 125,
+	.measurement_mode_3db_freq = 40,
+	.option_mode_1 = SCA3000_OP_MODE_NARROW,
+	.option_mode_1_freq = 63,
+	.option_mode_1_3db_freq = 11,
+	.mot_det_mult_xz = { 100, 150, 300, 550, 1050, 2050 },
+	.mot_det_mult_y = { 50, 100, 200, 350, 700, 1350, 2700 },
+};
+
+static const struct sca3000_chip_info sca3000_chip_info_e04 = {
+	.name = "sca3000_e04",
+	.scale = 19620,
+	.measurement_mode_freq = 100,
+	.measurement_mode_3db_freq = 38,
+	.option_mode_1 = SCA3000_OP_MODE_NARROW,
+	.option_mode_1_freq = 50,
+	.option_mode_1_3db_freq = 9,
+	.option_mode_2 = SCA3000_OP_MODE_WIDE,
+	.option_mode_2_freq = 400,
+	.option_mode_2_3db_freq = 70,
+	.mot_det_mult_xz = { 200, 300, 600, 1100, 2100, 4100 },
+	.mot_det_mult_y = { 100, 200, 400, 7000, 1400, 2700, 54000 },
+};
+
+static const struct sca3000_chip_info sca3000_chip_info_e05 = {
+	.name = "sca3000_e05",
+	.scale = 61313,
+	.measurement_mode_freq = 200,
+	.measurement_mode_3db_freq = 60,
+	.option_mode_1 = SCA3000_OP_MODE_NARROW,
+	.option_mode_1_freq = 50,
+	.option_mode_1_3db_freq = 9,
+	.option_mode_2 = SCA3000_OP_MODE_WIDE,
+	.option_mode_2_freq = 400,
+	.option_mode_2_3db_freq = 75,
+	.mot_det_mult_xz = { 600, 900, 1700, 3200, 6100, 11900 },
+	.mot_det_mult_y = { 300, 600, 1200, 2000, 4100, 7800, 15600 },
 };
 
 static int sca3000_write_reg(struct sca3000_state *st, u8 address, u8 val)
@@ -1449,10 +1441,9 @@ static int sca3000_probe(struct spi_device *spi)
 	spi_set_drvdata(spi, indio_dev);
 	st->us = spi;
 	mutex_init(&st->lock);
-	st->info = &sca3000_spi_chip_info_tbl[spi_get_device_id(spi)
-					      ->driver_data];
+	st->info = spi_get_device_match_data(spi);
 
-	indio_dev->name = spi_get_device_id(spi)->name;
+	indio_dev->name = st->info->name;
 	indio_dev->info = &sca3000_info;
 	if (st->info->temp_output) {
 		indio_dev->channels = sca3000_channels_with_temp;
@@ -1532,10 +1523,10 @@ static void sca3000_remove(struct spi_device *spi)
 }
 
 static const struct spi_device_id sca3000_id[] = {
-	{"sca3000_d01", d01},
-	{"sca3000_e02", e02},
-	{"sca3000_e04", e04},
-	{"sca3000_e05", e05},
+	{ "sca3000_d01", (kernel_ulong_t)&sca3000_chip_info_d01 },
+	{ "sca3000_e02", (kernel_ulong_t)&sca3000_chip_info_e02 },
+	{ "sca3000_e04", (kernel_ulong_t)&sca3000_chip_info_e04 },
+	{ "sca3000_e05", (kernel_ulong_t)&sca3000_chip_info_e05 },
 	{ }
 };
 MODULE_DEVICE_TABLE(spi, sca3000_id);
