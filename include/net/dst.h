@@ -95,7 +95,20 @@ struct dst_entry {
 #ifdef CONFIG_64BIT
 	struct lwtunnel_state   *lwtstate;
 #endif
+#ifdef CONFIG_NET_DEV_REFCNT_TRACKER
+	struct list_head dst_list;
+	atomic_t num_rcuref_init_calls;
+	atomic_t num_dst_hold_calls;
+	atomic_t num_dst_release_calls;
+	atomic_t num_sk_dst_get_calls;
+#endif
 };
+
+#ifdef CONFIG_NET_DEV_REFCNT_TRACKER
+void print_dst_list(const struct net_device *dev);
+#else
+static inline void print_dst_list(const struct net_device *dev) { };
+#endif
 
 struct dst_metrics {
 	u32		metrics[RTAX_MAX];
@@ -244,7 +257,12 @@ static inline void dst_hold(struct dst_entry *dst)
 	 * the placement of __rcuref in struct dst_entry
 	 */
 	BUILD_BUG_ON(offsetof(struct dst_entry, __rcuref) & 63);
-	WARN_ON(!rcuref_get(&dst->__rcuref));
+	if (!rcuref_get(&dst->__rcuref))
+		WARN_ON(1);
+#ifdef CONFIG_NET_DEV_REFCNT_TRACKER
+	else
+		atomic_inc(&dst->num_dst_hold_calls);
+#endif
 }
 
 static inline void dst_use_noref(struct dst_entry *dst, unsigned long time)
@@ -308,7 +326,13 @@ static inline void skb_dst_copy(struct sk_buff *nskb, const struct sk_buff *oskb
  */
 static inline bool dst_hold_safe(struct dst_entry *dst)
 {
-	return rcuref_get(&dst->__rcuref);
+	const bool ret = rcuref_get(&dst->__rcuref);
+
+#ifdef CONFIG_NET_DEV_REFCNT_TRACKER
+	if (ret)
+		atomic_inc(&dst->num_dst_hold_calls);
+#endif
+	return ret;
 }
 
 /**
