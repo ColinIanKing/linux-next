@@ -2823,6 +2823,8 @@ static int davinci_mcasp_runtime_resume(struct device *dev)
 #endif
 
 static const struct dev_pm_ops davinci_mcasp_pm_ops = {
+	SET_SYSTEM_SLEEP_PM_OPS(pm_runtime_force_suspend,
+				pm_runtime_force_resume)
 	SET_RUNTIME_PM_OPS(davinci_mcasp_runtime_suspend,
 			   davinci_mcasp_runtime_resume,
 			   NULL)

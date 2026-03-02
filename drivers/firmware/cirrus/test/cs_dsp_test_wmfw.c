@@ -2182,6 +2182,7 @@ static struct kunit_suite cs_dsp_wmfw_test_halo = {
 	.init = cs_dsp_wmfw_test_halo_init,
 	.exit = cs_dsp_wmfw_test_exit,
 	.test_cases = cs_dsp_wmfw_test_cases_halo,
+	.attr.speed = KUNIT_SPEED_SLOW,
 };
 
 static struct kunit_suite cs_dsp_wmfw_test_adsp2_32bit_wmfw0 = {
@@ -2189,6 +2190,7 @@ static struct kunit_suite cs_dsp_wmfw_test_adsp2_32bit_wmfw0 = {
 	.init = cs_dsp_wmfw_test_adsp2_32bit_wmfw0_init,
 	.exit = cs_dsp_wmfw_test_exit,
 	.test_cases = cs_dsp_wmfw_test_cases_adsp2,
+	.attr.speed = KUNIT_SPEED_SLOW,
 };
 
 static struct kunit_suite cs_dsp_wmfw_test_adsp2_32bit_wmfw1 = {
@@ -2196,6 +2198,7 @@ static struct kunit_suite cs_dsp_wmfw_test_adsp2_32bit_wmfw1 = {
 	.init = cs_dsp_wmfw_test_adsp2_32bit_wmfw1_init,
 	.exit = cs_dsp_wmfw_test_exit,
 	.test_cases = cs_dsp_wmfw_test_cases_adsp2,
+	.attr.speed = KUNIT_SPEED_SLOW,
 };
 
 static struct kunit_suite cs_dsp_wmfw_test_adsp2_32bit_wmfw2 = {
@@ -2203,6 +2206,7 @@ static struct kunit_suite cs_dsp_wmfw_test_adsp2_32bit_wmfw2 = {
 	.init = cs_dsp_wmfw_test_adsp2_32bit_wmfw2_init,
 	.exit = cs_dsp_wmfw_test_exit,
 	.test_cases = cs_dsp_wmfw_test_cases_adsp2,
+	.attr.speed = KUNIT_SPEED_SLOW,
 };
 
 static struct kunit_suite cs_dsp_wmfw_test_adsp2_16bit_wmfw0 = {
@@ -2210,6 +2214,7 @@ static struct kunit_suite cs_dsp_wmfw_test_adsp2_16bit_wmfw0 = {
 	.init = cs_dsp_wmfw_test_adsp2_16bit_wmfw0_init,
 	.exit = cs_dsp_wmfw_test_exit,
 	.test_cases = cs_dsp_wmfw_test_cases_adsp2,
+	.attr.speed = KUNIT_SPEED_SLOW,
 };
 
 static struct kunit_suite cs_dsp_wmfw_test_adsp2_16bit_wmfw1 = {
@@ -2217,6 +2222,7 @@ static struct kunit_suite cs_dsp_wmfw_test_adsp2_16bit_wmfw1 = {
 	.init = cs_dsp_wmfw_test_adsp2_16bit_wmfw1_init,
 	.exit = cs_dsp_wmfw_test_exit,
 	.test_cases = cs_dsp_wmfw_test_cases_adsp2,
+	.attr.speed = KUNIT_SPEED_SLOW,
 };
 
 static struct kunit_suite cs_dsp_wmfw_test_adsp2_16bit_wmfw2 = {
@@ -2224,6 +2230,7 @@ static struct kunit_suite cs_dsp_wmfw_test_adsp2_16bit_wmfw2 = {
 	.init = cs_dsp_wmfw_test_adsp2_16bit_wmfw2_init,
 	.exit = cs_dsp_wmfw_test_exit,
 	.test_cases = cs_dsp_wmfw_test_cases_adsp2,
+	.attr.speed = KUNIT_SPEED_SLOW,
 };
 
 kunit_test_suites(&cs_dsp_wmfw_test_halo,
