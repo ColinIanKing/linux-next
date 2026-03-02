@@ -21,7 +21,7 @@
 static __attribute__((unused))
 int sys_setns(int fd, int nstype)
 {
-	return my_syscall2(__NR_setns, fd, nstype);
+	return __nolibc_syscall2(__NR_setns, fd, nstype);
 }
 
 static __attribute__((unused))
@@ -38,7 +38,7 @@ int setns(int fd, int nstype)
 static __attribute__((unused))
 int sys_unshare(int flags)
 {
-	return my_syscall1(__NR_unshare, flags);
+	return __nolibc_syscall1(__NR_unshare, flags);
 }
 
 static __attribute__((unused))

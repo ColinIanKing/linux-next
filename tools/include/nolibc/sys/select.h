@@ -70,7 +70,8 @@ int sys_select(int nfds, fd_set *rfds, fd_set *wfds, fd_set *efds, struct timeva
 		t.tv_sec  = timeout->tv_sec;
 		t.tv_nsec = (uint32_t)timeout->tv_usec * 1000;
 	}
-	return my_syscall6(__NR_pselect6_time64, nfds, rfds, wfds, efds, timeout ? &t : NULL, NULL);
+	return __nolibc_syscall6(__NR_pselect6_time64, nfds, rfds, wfds, efds,
+				 timeout ? &t : NULL, NULL);
 #else
 	struct __kernel_old_timespec t;
 
@@ -78,7 +79,8 @@ int sys_select(int nfds, fd_set *rfds, fd_set *wfds, fd_set *efds, struct timeva
 		t.tv_sec  = timeout->tv_sec;
 		t.tv_nsec = (uint32_t)timeout->tv_usec * 1000;
 	}
-	return my_syscall6(__NR_pselect6, nfds, rfds, wfds, efds, timeout ? &t : NULL, NULL);
+	return __nolibc_syscall6(__NR_pselect6, nfds, rfds, wfds, efds,
+				 timeout ? &t : NULL, NULL);
 #endif
 }
 

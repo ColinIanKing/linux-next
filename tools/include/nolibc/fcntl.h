@@ -21,7 +21,7 @@
 static __attribute__((unused))
 int sys_openat(int dirfd, const char *path, int flags, mode_t mode)
 {
-	return my_syscall4(__NR_openat, dirfd, path, flags, mode);
+	return __nolibc_syscall4(__NR_openat, dirfd, path, flags, mode);
 }
 
 static __attribute__((unused))
@@ -47,7 +47,7 @@ int openat(int dirfd, const char *path, int flags, ...)
 static __attribute__((unused))
 int sys_open(const char *path, int flags, mode_t mode)
 {
-	return my_syscall4(__NR_openat, AT_FDCWD, path, flags, mode);
+	return __nolibc_syscall4(__NR_openat, AT_FDCWD, path, flags, mode);
 }
 
 static __attribute__((unused))

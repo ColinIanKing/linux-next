@@ -21,7 +21,7 @@
 static __attribute__((unused))
 ssize_t sys_readv(int fd, const struct iovec *iovec, int count)
 {
-	return my_syscall3(__NR_readv, fd, iovec, count);
+	return __nolibc_syscall3(__NR_readv, fd, iovec, count);
 }
 
 static __attribute__((unused))
@@ -36,7 +36,7 @@ ssize_t readv(int fd, const struct iovec *iovec, int count)
 static __attribute__((unused))
 ssize_t sys_writev(int fd, const struct iovec *iovec, int count)
 {
-	return my_syscall3(__NR_writev, fd, iovec, count);
+	return __nolibc_syscall3(__NR_writev, fd, iovec, count);
 }
 
 static __attribute__((unused))

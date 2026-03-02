@@ -21,7 +21,7 @@
 static __attribute__((unused))
 long sys_ptrace(int op, pid_t pid, void *addr, void *data)
 {
-	return my_syscall4(__NR_ptrace, op, pid, addr, data);
+	return __nolibc_syscall4(__NR_ptrace, op, pid, addr, data);
 }
 
 static __attribute__((unused))

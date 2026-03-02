@@ -30,7 +30,7 @@ struct utsname {
 static __attribute__((unused))
 int sys_uname(struct utsname *buf)
 {
-	return my_syscall1(__NR_uname, buf);
+	return __nolibc_syscall1(__NR_uname, buf);
 }
 
 static __attribute__((unused))

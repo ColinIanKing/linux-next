@@ -12,14 +12,14 @@
  *
  * Syscalls are split into 3 levels:
  *   - The lower level is the arch-specific syscall() definition, consisting in
- *     assembly code in compound expressions. These are called my_syscall0() to
- *     my_syscall6() depending on the number of arguments. All input arguments
+ *     assembly code in compound expressions. These are called __nolibc_syscall0() to
+ *     __nolibc_syscall6() depending on the number of arguments. All input arguments
  *     are castto a long stored in a register. These expressions always return
  *     the syscall's return value as a signed long value which is often either
  *     a pointer or the negated errno value.
  *
  *   - The second level is mostly architecture-independent. It is made of
- *     static functions called sys_<name>() which rely on my_syscallN()
+ *     static functions called sys_<name>() which rely on __nolibc_syscallN()
  *     depending on the syscall definition. These functions are responsible
  *     for exposing the appropriate types for the syscall arguments (int,
  *     pointers, etc) and for setting the appropriate return type (often int).

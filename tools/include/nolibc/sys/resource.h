@@ -23,7 +23,7 @@ static __attribute__((unused))
 int sys_prlimit64(pid_t pid, int resource,
 		  const struct rlimit64 *new_limit, struct rlimit64 *old_limit)
 {
-	return my_syscall4(__NR_prlimit64, pid, resource, new_limit, old_limit);
+	return __nolibc_syscall4(__NR_prlimit64, pid, resource, new_limit, old_limit);
 }
 
 static __attribute__((unused))

@@ -26,7 +26,7 @@ static __attribute__((unused))
 int sys_statx(int fd, const char *path, int flags, unsigned int mask, struct statx *buf)
 {
 #ifdef __NR_statx
-	return my_syscall5(__NR_statx, fd, path, flags, mask, buf);
+	return __nolibc_syscall5(__NR_statx, fd, path, flags, mask, buf);
 #else
 	return __nolibc_enosys(__func__, fd, path, flags, mask, buf);
 #endif

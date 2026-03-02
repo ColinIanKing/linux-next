@@ -22,7 +22,7 @@
 static __attribute__((unused))
 ssize_t sys_reboot(int magic1, int magic2, int cmd, void *arg)
 {
-	return my_syscall4(__NR_reboot, magic1, magic2, cmd, arg);
+	return __nolibc_syscall4(__NR_reboot, magic1, magic2, cmd, arg);
 }
 
 static __attribute__((unused))
