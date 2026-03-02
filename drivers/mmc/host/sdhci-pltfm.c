@@ -215,19 +215,6 @@ const struct dev_pm_ops sdhci_pltfm_pmops = {
 };
 EXPORT_SYMBOL_GPL(sdhci_pltfm_pmops);
 
-static int __init sdhci_pltfm_drv_init(void)
-{
-	pr_info("sdhci-pltfm: SDHCI platform and OF driver helper\n");
-
-	return 0;
-}
-module_init(sdhci_pltfm_drv_init);
-
-static void __exit sdhci_pltfm_drv_exit(void)
-{
-}
-module_exit(sdhci_pltfm_drv_exit);
-
 MODULE_DESCRIPTION("SDHCI platform and OF driver helper");
 MODULE_AUTHOR("Intel Corporation");
 MODULE_LICENSE("GPL v2");
