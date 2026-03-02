@@ -432,6 +432,11 @@ end_enum:
 		ni->mi.dirty = true;
 	}
 
+	if (!links) {
+		err = -EINVAL;
+		goto out;
+	}
+
 	set_nlink(inode, links);
 
 	if (S_ISDIR(mode)) {
