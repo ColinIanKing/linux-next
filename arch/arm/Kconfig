@@ -159,6 +159,7 @@ config ARM
 	select HAVE_ARCH_VMAP_STACK if MMU && ARM_HAS_GROUP_RELOCS
 	select TRACE_IRQFLAGS_SUPPORT if !CPU_V7M
 	select USE_OF if !(ARCH_FOOTBRIDGE || ARCH_RPC || ARCH_SA1100)
+	select XOR_BLOCKS_ARCH
 	# Above selects are sorted alphabetically; please add new ones
 	# according to that.  Thanks.
 	help

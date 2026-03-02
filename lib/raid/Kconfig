@@ -1,0 +1,7 @@
+
+config XOR_BLOCKS
+	tristate
+
+# selected by architectures that provide an optimized XOR implementation
+config XOR_BLOCKS_ARCH
+	bool

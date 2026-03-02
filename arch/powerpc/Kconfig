@@ -328,6 +328,7 @@ config PPC
 	select THREAD_INFO_IN_TASK
 	select TRACE_IRQFLAGS_SUPPORT
 	select VDSO_GETRANDOM
+	select XOR_BLOCKS_ARCH
 	#
 	# Please keep this list sorted alphabetically.
 	#

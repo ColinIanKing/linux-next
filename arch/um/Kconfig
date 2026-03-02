@@ -43,6 +43,7 @@ config UML
 	select THREAD_INFO_IN_TASK
 	select SPARSE_IRQ
 	select MMU_GATHER_RCU_TABLE_FREE
+	select XOR_BLOCKS_ARCH
 
 config MMU
 	bool
