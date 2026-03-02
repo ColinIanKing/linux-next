@@ -667,7 +667,6 @@ static struct platform_driver atcspi_driver = {
 	.probe = atcspi_probe,
 	.driver = {
 		.name = "atcspi200",
-		.owner	= THIS_MODULE,
 		.of_match_table = atcspi_of_match,
 		.pm = pm_sleep_ptr(&atcspi_pm_ops)
 	}

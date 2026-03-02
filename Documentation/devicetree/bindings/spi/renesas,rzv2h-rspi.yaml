@@ -58,12 +58,16 @@ properties:
       - const: tresetn
 
   dmas:
-    maxItems: 2
+    minItems: 2
+    maxItems: 10
 
   dma-names:
+    minItems: 2
+    maxItems: 10
     items:
-      - const: rx
-      - const: tx
+      enum:
+        - rx
+        - tx
 
   power-domains:
     maxItems: 1
@@ -120,6 +124,12 @@ allOf:
 
         resets: false
         reset-names: false
+
+        dmas:
+          maxItems: 6
+
+        dma-names:
+          maxItems: 6
 
 unevaluatedProperties: false
 
