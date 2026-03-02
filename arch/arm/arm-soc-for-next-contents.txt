@@ -1,0 +1,4 @@
+soc/dt
+	patch
+		ARM: dts: arm: Use lowercase hex
+
