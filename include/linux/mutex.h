@@ -87,12 +87,12 @@ do {									\
 	struct mutex mutexname = __MUTEX_INITIALIZER(mutexname)
 
 #ifdef CONFIG_DEBUG_LOCK_ALLOC
-void mutex_init_lockep(struct mutex *lock, const char *name, struct lock_class_key *key);
+void mutex_init_lockdep(struct mutex *lock, const char *name, struct lock_class_key *key);
 
 static inline void __mutex_init(struct mutex *lock, const char *name,
 				struct lock_class_key *key)
 {
-	mutex_init_lockep(lock, name, key);
+	mutex_init_lockdep(lock, name, key);
 }
 #else
 extern void mutex_init_generic(struct mutex *lock);
@@ -146,7 +146,7 @@ static inline void __mutex_init(struct mutex *lock, const char *name,
 {
 	mutex_rt_init_generic(lock);
 }
-#endif /* !CONFIG_LOCKDEP */
+#endif /* !CONFIG_DEBUG_LOCK_ALLOC */
 #endif /* CONFIG_PREEMPT_RT */
 
 #ifdef CONFIG_DEBUG_MUTEXES
@@ -253,6 +253,7 @@ extern int atomic_dec_and_mutex_lock(atomic_t *cnt, struct mutex *lock) __cond_a
 DEFINE_LOCK_GUARD_1(mutex, struct mutex, mutex_lock(_T->lock), mutex_unlock(_T->lock))
 DEFINE_LOCK_GUARD_1_COND(mutex, _try, mutex_trylock(_T->lock))
 DEFINE_LOCK_GUARD_1_COND(mutex, _intr, mutex_lock_interruptible(_T->lock), _RET == 0)
+DEFINE_LOCK_GUARD_1_COND(mutex, _kill, mutex_lock_killable(_T->lock), _RET == 0)
 DEFINE_LOCK_GUARD_1(mutex_init, struct mutex, mutex_init(_T->lock), /* */)
 
 DECLARE_LOCK_GUARD_1_ATTRS(mutex,	__acquires(_T), __releases(*(struct mutex **)_T))
@@ -261,6 +262,8 @@ DECLARE_LOCK_GUARD_1_ATTRS(mutex_try,	__acquires(_T), __releases(*(struct mutex 
 #define class_mutex_try_constructor(_T) WITH_LOCK_GUARD_1_ATTRS(mutex_try, _T)
 DECLARE_LOCK_GUARD_1_ATTRS(mutex_intr,	__acquires(_T), __releases(*(struct mutex **)_T))
 #define class_mutex_intr_constructor(_T) WITH_LOCK_GUARD_1_ATTRS(mutex_intr, _T)
+DECLARE_LOCK_GUARD_1_ATTRS(mutex_kill,	__acquires(_T), __releases(*(struct mutex **)_T))
+#define class_mutex_kill_constructor(_T) WITH_LOCK_GUARD_1_ATTRS(mutex_kill, _T)
 DECLARE_LOCK_GUARD_1_ATTRS(mutex_init,	__acquires(_T), __releases(*(struct mutex **)_T))
 #define class_mutex_init_constructor(_T) WITH_LOCK_GUARD_1_ATTRS(mutex_init, _T)
 
