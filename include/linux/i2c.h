@@ -29,6 +29,7 @@ extern const struct device_type i2c_client_type;
 
 /* --- General options ------------------------------------------------	*/
 
+struct fwnode_handle;
 struct i2c_msg;
 struct i2c_adapter;
 struct i2c_client;
@@ -761,12 +762,27 @@ struct i2c_adapter {
 	struct irq_domain *host_notify_domain;
 	struct regulator *bus_regulator;
 
+	/* Device configuration. */
+	struct device *parent;
+	struct device_node *of_node;
+
 	struct dentry *debugfs;
 
 	/* 7bit address space */
 	DECLARE_BITMAP(addrs_in_instantiation, 1 << 7);
 };
 #define to_i2c_adapter(d) container_of(d, struct i2c_adapter, dev)
+
+#define i2c_err(adap, fmt, ...) dev_err(&(adap)->dev, fmt, ##__VA_ARGS__)
+#define i2c_warn(adap, fmt, ...) dev_warn(&(adap)->dev, fmt, ##__VA_ARGS__)
+#define i2c_notice(adap, fmt, ...) dev_notice(&(adap)->dev, fmt, ##__VA_ARGS__)
+#define i2c_info(adap, fmt, ...) dev_info(&(adap)->dev, fmt, ##__VA_ARGS__)
+#define i2c_dbg(adap, fmt, ...) dev_dbg(&(adap)->dev, fmt, ##__VA_ARGS__)
+
+static inline struct device *i2c_adapter_dev(struct i2c_adapter *adap)
+{
+	return &adap->dev;
+}
 
 static inline void *i2c_get_adapdata(const struct i2c_adapter *adap)
 {
@@ -776,6 +792,12 @@ static inline void *i2c_get_adapdata(const struct i2c_adapter *adap)
 static inline void i2c_set_adapdata(struct i2c_adapter *adap, void *data)
 {
 	dev_set_drvdata(&adap->dev, data);
+}
+
+static inline void i2c_adapter_set_node(struct i2c_adapter *adap,
+					struct fwnode_handle *fwnode)
+{
+	device_set_node(&adap->dev, fwnode);
 }
 
 static inline struct i2c_adapter *

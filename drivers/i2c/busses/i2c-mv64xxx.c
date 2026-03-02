@@ -747,7 +747,7 @@ mv64xxx_i2c_xfer_core(struct i2c_adapter *adap, struct i2c_msg msgs[], int num)
 	struct mv64xxx_i2c_data *drv_data = i2c_get_adapdata(adap);
 	int rc, ret = num;
 
-	rc = pm_runtime_resume_and_get(&adap->dev);
+	rc = pm_runtime_resume_and_get(i2c_adapter_dev(adap));
 	if (rc)
 		return rc;
 
@@ -766,7 +766,7 @@ mv64xxx_i2c_xfer_core(struct i2c_adapter *adap, struct i2c_msg msgs[], int num)
 	drv_data->num_msgs = 0;
 	drv_data->msgs = NULL;
 
-	pm_runtime_put_autosuspend(&adap->dev);
+	pm_runtime_put_autosuspend(i2c_adapter_dev(adap));
 
 	return ret;
 }

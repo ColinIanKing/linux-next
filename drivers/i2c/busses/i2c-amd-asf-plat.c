@@ -209,7 +209,7 @@ static int amd_asf_xfer(struct i2c_adapter *adap, struct i2c_msg *msgs, int num)
 	asf_data[0] = dev_msgs->len;
 	memcpy(asf_data + 1, dev_msgs[0].buf, dev_msgs->len);
 
-	ret = piix4_sb800_region_request(&adap->dev, &dev->mmio_cfg);
+	ret = piix4_sb800_region_request(i2c_adapter_dev(adap), &dev->mmio_cfg);
 	if (ret)
 		return ret;
 
@@ -224,7 +224,7 @@ static int amd_asf_xfer(struct i2c_adapter *adap, struct i2c_msg *msgs, int num)
 	ret = amd_asf_access(adap, msgs->addr, msgs[0].buf[0], asf_data);
 	piix4_sb800_port_sel(prev_port, &dev->mmio_cfg);
 	amd_asf_setup_target(dev);
-	piix4_sb800_region_release(&adap->dev, &dev->mmio_cfg);
+	piix4_sb800_region_release(i2c_adapter_dev(adap), &dev->mmio_cfg);
 	return ret;
 }
 

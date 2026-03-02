@@ -882,7 +882,7 @@ int i2c_dw_probe(struct dw_i2c_dev *dev)
 	unsigned long irq_flags;
 	int ret;
 
-	device_set_node(&dev->adapter.dev, dev_fwnode(dev->dev));
+	i2c_adapter_set_node(adap, dev_fwnode(dev->dev));
 
 	ret = i2c_dw_init_regmap(dev);
 	if (ret)

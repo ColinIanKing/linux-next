@@ -61,7 +61,7 @@ static int amd_isp_dw_i2c_plat_probe(struct platform_device *pdev)
 	adap = &isp_i2c_dev->adapter;
 	adap->owner = THIS_MODULE;
 	scnprintf(adap->name, sizeof(adap->name), AMDISP_I2C_ADAP_NAME);
-	ACPI_COMPANION_SET(&adap->dev, ACPI_COMPANION(&pdev->dev));
+	i2c_adapter_set_node(adap, dev_fwnode(&pdev->dev));
 	adap->dev.of_node = pdev->dev.of_node;
 	/* use dynamically allocated adapter id */
 	adap->nr = -1;

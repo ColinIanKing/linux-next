@@ -278,7 +278,7 @@ static int usbio_i2c_probe(struct auxiliary_device *adev,
 	snprintf(i2c->adap.name, sizeof(i2c->adap.name), "%s.%d",
 		 USBIO_I2C_CLIENT, i2c->adev->id);
 
-	device_set_node(&i2c->adap.dev, dev_fwnode(&adev->dev));
+	i2c_adapter_set_node(&i2c->adap, dev_fwnode(&adev->dev));
 
 	auxiliary_set_drvdata(adev, i2c);
 	i2c_set_adapdata(&i2c->adap, i2c);

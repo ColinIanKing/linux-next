@@ -323,7 +323,7 @@ static int zxi2c_probe(struct platform_device *pdev)
 	adap->algo = &zxi2c_algorithm;
 	adap->quirks = &zxi2c_quirks;
 	adap->dev.parent = &pdev->dev;
-	ACPI_COMPANION_SET(&adap->dev, ACPI_COMPANION(&pdev->dev));
+	i2c_adapter_set_node(adap, dev_fwnode(&pdev->dev));
 	snprintf(adap->name, sizeof(adap->name), "zhaoxin-%s-%s",
 		 dev_name(pdev->dev.parent), dev_name(i2c->dev));
 	i2c_set_adapdata(adap, i2c);

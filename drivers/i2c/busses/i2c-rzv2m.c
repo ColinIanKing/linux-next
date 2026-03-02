@@ -451,7 +451,7 @@ static int rzv2m_i2c_probe(struct platform_device *pdev)
 	adap->quirks = &rzv2m_i2c_quirks;
 	adap->dev.parent = dev;
 	adap->owner = THIS_MODULE;
-	device_set_node(&adap->dev, dev_fwnode(dev));
+	i2c_adapter_set_node(adap, dev_fwnode(dev));
 	i2c_set_adapdata(adap, priv);
 	strscpy(adap->name, pdev->name, sizeof(adap->name));
 	init_completion(&priv->msg_tia_done);
