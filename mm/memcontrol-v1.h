@@ -4,6 +4,7 @@
 #define __MM_MEMCONTROL_V1_H
 
 #include <linux/cgroup-defs.h>
+#include <linux/seq_buf.h>
 
 /* Cgroup v1 and v2 common declarations */
 
@@ -27,8 +28,11 @@ void drain_all_stock(struct mem_cgroup *root_memcg);
 unsigned long memcg_events(struct mem_cgroup *memcg, int event);
 int memory_stat_show(struct seq_file *m, void *v);
 
-void mem_cgroup_private_id_get_many(struct mem_cgroup *memcg, unsigned int n);
-struct mem_cgroup *mem_cgroup_private_id_get_online(struct mem_cgroup *memcg);
+struct mem_cgroup *mem_cgroup_private_id_get_online(struct mem_cgroup *memcg,
+						    unsigned int n);
+
+void memcg_seq_buf_print_stat(struct seq_buf *s, const char *prefix,
+			      const char *name, char sep, u64 val);
 
 /* Cgroup v1-specific declarations */
 #ifdef CONFIG_MEMCG_V1
