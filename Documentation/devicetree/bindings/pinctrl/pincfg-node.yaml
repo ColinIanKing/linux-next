@@ -162,12 +162,103 @@ properties:
       this affects the expected delay in ps before latching a value to
       an output pin.
 
-if:
-  required:
-    - skew-delay
-then:
-  properties:
-    skew-delay-input-ps: false
-    skew-delay-output-ps: false
+allOf:
+  - if:
+      required:
+        - skew-delay
+    then:
+      properties:
+        skew-delay-input-ps: false
+        skew-delay-output-ps: false
+
+  - if:
+      required:
+        - input-disable
+    then:
+      properties:
+        input-enable: false
+
+  - if:
+      required:
+        - output-disable
+    then:
+      properties:
+        output-enable: false
+        output-impedance-ohms: false
+
+  - if:
+      required:
+        - output-low
+    then:
+      properties:
+        output-high: false
+
+  - if:
+      required:
+        - low-power-enable
+    then:
+      properties:
+        low-power-disable: false
+
+  - if:
+      required:
+        - input-schmitt-disable
+    then:
+      properties:
+        input-schmitt-enable: false
+        input-schmitt-microvolt: false
+
+  - if:
+      required:
+        - drive-strength
+    then:
+      properties:
+        drive-strength-microamp: false
+
+  - if:
+      anyOf:
+        - required:
+            - drive-open-source
+        - required:
+            - drive-open-drain
+        - required:
+            - drive-push-pull
+    then:
+      oneOf:
+        - required:
+            - drive-open-source
+        - required:
+            - drive-open-drain
+        - required:
+            - drive-push-pull
+
+  - if:
+      anyOf:
+        - required:
+            - bias-disable
+        - required:
+            - bias-high-impedance
+        - required:
+            - bias-bus-hold
+        - required:
+            - bias-pull-up
+        - required:
+            - bias-pull-down
+        - required:
+            - bias-pull-pin-default
+    then:
+      oneOf:
+        - required:
+            - bias-disable
+        - required:
+            - bias-high-impedance
+        - required:
+            - bias-bus-hold
+        - required:
+            - bias-pull-up
+        - required:
+            - bias-pull-down
+        - required:
+            - bias-pull-pin-default
 
 additionalProperties: true

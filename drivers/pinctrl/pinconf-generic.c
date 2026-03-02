@@ -222,7 +222,10 @@ static int parse_dt_cfg(struct device_node *np,
 			unsigned int count, unsigned long *cfg,
 			unsigned int *ncfg)
 {
-	int i;
+	unsigned long *properties;
+	int i, test;
+
+	properties = bitmap_zalloc(count, GFP_KERNEL);
 
 	for (i = 0; i < count; i++) {
 		u32 val;
@@ -251,11 +254,45 @@ static int parse_dt_cfg(struct device_node *np,
 		if (ret)
 			val = par->default_value;
 
+		/* if param is greater than count, these are custom properties */
+		if (par->param <= count) {
+			ret = test_and_set_bit(par->param, properties);
+			if (ret) {
+				pr_err("%s: conflicting setting detected for %s\n",
+				       np->name, par->property);
+				bitmap_free(properties);
+				return -EINVAL;
+			}
+		}
+
 		pr_debug("found %s with value %u\n", par->property, val);
 		cfg[*ncfg] = pinconf_to_config_packed(par->param, val);
 		(*ncfg)++;
 	}
 
+	if (test_bit(PIN_CONFIG_DRIVE_STRENGTH, properties) &&
+			test_bit(PIN_CONFIG_DRIVE_STRENGTH_UA, properties))
+		pr_err("%s: cannot have multiple drive strength properties\n",
+		       np->name);
+
+	test = test_bit(PIN_CONFIG_BIAS_BUS_HOLD, properties) +
+		test_bit(PIN_CONFIG_BIAS_DISABLE, properties) +
+		test_bit(PIN_CONFIG_BIAS_HIGH_IMPEDANCE, properties) +
+		test_bit(PIN_CONFIG_BIAS_PULL_UP, properties) +
+		test_bit(PIN_CONFIG_BIAS_PULL_PIN_DEFAULT, properties) +
+		test_bit(PIN_CONFIG_BIAS_PULL_DOWN, properties);
+	if (test > 1)
+		pr_err("%s: cannot have multiple bias configurations\n",
+		       np->name);
+
+	test = test_bit(PIN_CONFIG_DRIVE_OPEN_DRAIN, properties) +
+		test_bit(PIN_CONFIG_DRIVE_OPEN_SOURCE, properties) +
+		test_bit(PIN_CONFIG_DRIVE_PUSH_PULL, properties);
+	if (test > 1)
+		pr_err("%s: cannot have multiple drive configurations\n",
+		       np->name);
+
+	bitmap_free(properties);
 	return 0;
 }
 
