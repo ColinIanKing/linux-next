@@ -2762,7 +2762,7 @@ static void scx_watchdog_workfn(struct work_struct *work)
 
 		cond_resched();
 	}
-	queue_delayed_work(system_unbound_wq, to_delayed_work(work),
+	queue_delayed_work(system_dfl_wq, to_delayed_work(work),
 			   scx_watchdog_timeout / 2);
 }
 
@@ -5059,7 +5059,7 @@ static int scx_enable(struct sched_ext_ops *ops, struct bpf_link *link)
 
 	WRITE_ONCE(scx_watchdog_timeout, timeout);
 	WRITE_ONCE(scx_watchdog_timestamp, jiffies);
-	queue_delayed_work(system_unbound_wq, &scx_watchdog_work,
+	queue_delayed_work(system_dfl_wq, &scx_watchdog_work,
 			   scx_watchdog_timeout / 2);
 
 	/*
