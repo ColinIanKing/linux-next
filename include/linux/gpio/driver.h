@@ -20,6 +20,8 @@
 #include <asm/msi.h>
 #endif
 
+#include "defs.h"
+
 struct device;
 struct irq_chip;
 struct irq_data;
@@ -41,9 +43,6 @@ union gpio_irq_fwspec {
 	msi_alloc_info_t	msiinfo;
 #endif
 };
-
-#define GPIO_LINE_DIRECTION_IN	1
-#define GPIO_LINE_DIRECTION_OUT	0
 
 /**
  * struct gpio_irq_chip - GPIO interrupt controller
