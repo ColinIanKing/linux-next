@@ -217,9 +217,7 @@ extern struct amdgpu_watchdog_timer amdgpu_watchdog_timer;
 extern int amdgpu_async_gfx_ring;
 extern int amdgpu_mcbp;
 extern int amdgpu_discovery;
-extern int amdgpu_mes;
 extern int amdgpu_mes_log_enable;
-extern int amdgpu_mes_kiq;
 extern int amdgpu_uni_mes;
 extern int amdgpu_noretry;
 extern int amdgpu_force_asic_type;
@@ -791,6 +789,12 @@ struct amd_powerplay {
 					  (rid == 0x01) || \
 					  (rid == 0x10))))
 
+enum amdgpu_mqd_update_flag {
+       AMDGPU_UPDATE_FLAG_DBG_WA_ENABLE = 1,
+       AMDGPU_UPDATE_FLAG_DBG_WA_DISABLE = 2,
+       AMDGPU_UPDATE_FLAG_IS_GWS = 4, /* quirk for gfx9 IP */
+};
+
 struct amdgpu_mqd_prop {
 	uint64_t mqd_gpu_addr;
 	uint64_t hqd_base_gpu_addr;
@@ -811,6 +815,10 @@ struct amdgpu_mqd_prop {
 	uint64_t fence_address;
 	bool tmz_queue;
 	bool kernel_queue;
+	uint32_t *cu_mask;
+	uint32_t cu_mask_count;
+	uint32_t cu_flags;
+	bool is_user_cu_masked;
 };
 
 struct amdgpu_mqd {
@@ -1536,6 +1544,8 @@ struct dma_fence *amdgpu_device_enforce_isolation(struct amdgpu_device *adev,
 bool amdgpu_device_has_display_hardware(struct amdgpu_device *adev);
 ssize_t amdgpu_get_soft_full_reset_mask(struct amdgpu_ring *ring);
 ssize_t amdgpu_show_reset_mask(char *buf, uint32_t supported_reset);
+void amdgpu_sdma_set_vm_pte_scheds(struct amdgpu_device *adev,
+				   const struct amdgpu_vm_pte_funcs *vm_pte_funcs);
 
 /* atpx handler */
 #if defined(CONFIG_VGA_SWITCHEROO)
