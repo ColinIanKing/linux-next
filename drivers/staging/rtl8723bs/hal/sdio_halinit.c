@@ -30,7 +30,7 @@ static u8 CardEnable(struct adapter *padapter)
 
 		ret = HalPwrSeqCmdParsing(padapter, PWR_CUT_ALL_MSK, PWR_FAB_ALL_MSK, PWR_INTF_SDIO_MSK, rtl8723B_card_enable_flow);
 		if (ret == _SUCCESS) {
-			u8 bMacPwrCtrlOn = true;
+			bMacPwrCtrlOn = true;
 			rtw_hal_set_hwreg(padapter, HW_VAR_APFM_ON_MAC, &bMacPwrCtrlOn);
 		}
 	} else
@@ -388,7 +388,7 @@ static void _InitWMACSetting(struct adapter *padapter)
 
 	/*  2010.09.08 hpfan */
 	/*  Since ADF is removed from RCR, ps-poll will not be indicate to driver, */
-	/*  RxFilterMap should mask ps-poll to gurantee AP mode can rx ps-poll. */
+	/*  RxFilterMap should mask ps-poll to guarantee AP mode can rx ps-poll. */
 	value16 = 0x400;
 	rtw_write16(padapter, REG_RXFLTMAP1, value16);
 
@@ -606,7 +606,7 @@ u32 rtl8723bs_hal_init(struct adapter *padapter)
 		cpwm_orig = 0;
 		rtw_hal_get_hwreg(padapter, HW_VAR_CPWM, &cpwm_orig);
 
-		/* ser rpwm */
+		/* set rpwm */
 		val8 = rtw_read8(padapter, SDIO_LOCAL_BASE | SDIO_REG_HRPWM1);
 		val8 &= 0x80;
 		val8 += 0x80;
@@ -901,7 +901,7 @@ u32 rtl8723bs_hal_deinit(struct adapter *padapter)
 				} while (cnt < 100 && (val8 != 0));
 				/* H2C done, enter 32k */
 				if (val8 == 0) {
-					/* ser rpwm to enter 32k */
+					/* set rpwm to enter 32k */
 					val8 = rtw_read8(padapter, SDIO_LOCAL_BASE | SDIO_REG_HRPWM1);
 					val8 += 0x80;
 					val8 |= BIT(0);
