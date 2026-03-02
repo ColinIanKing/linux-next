@@ -117,6 +117,12 @@ static void fuse_file_put(struct fuse_file *ff, bool sync)
 			fuse_simple_request(ff->fm, args);
 			fuse_release_end(ff->fm, args, 0);
 		} else {
+			/*
+			 * DAX inodes may need to issue a number of synchronous
+			 * request for clearing the mappings.
+			 */
+			if (ra && ra->inode && FUSE_IS_DAX(ra->inode))
+				args->may_block = true;
 			args->end = fuse_release_end;
 			if (fuse_simple_background(ff->fm, args,
 						   GFP_KERNEL | __GFP_NOFAIL))
@@ -667,6 +673,18 @@ static void fuse_aio_complete(struct fuse_io_priv *io, int err, ssize_t pos)
 			struct inode *inode = file_inode(io->iocb->ki_filp);
 			struct fuse_conn *fc = get_fuse_conn(inode);
 			struct fuse_inode *fi = get_fuse_inode(inode);
+			struct address_space *mapping = io->iocb->ki_filp->f_mapping;
+
+			/*
+			 * As in generic_file_direct_write(), invalidate after the
+			 * write, to invalidate read-ahead cache that may have competed
+			 * with the write.
+			 */
+			if (io->write && res && mapping->nrpages) {
+				invalidate_inode_pages2_range(mapping,
+						io->offset >> PAGE_SHIFT,
+						(io->offset + res - 1) >> PAGE_SHIFT);
+			}
 
 			spin_lock(&fi->lock);
 			fi->attr_version = atomic64_inc_return(&fc->attr_version);
@@ -1144,9 +1162,11 @@ static ssize_t fuse_send_write(struct fuse_io_args *ia, loff_t pos,
 {
 	struct kiocb *iocb = ia->io->iocb;
 	struct file *file = iocb->ki_filp;
+	struct address_space *mapping = file->f_mapping;
 	struct fuse_file *ff = file->private_data;
 	struct fuse_mount *fm = ff->fm;
 	struct fuse_write_in *inarg = &ia->write.in;
+	ssize_t written;
 	ssize_t err;
 
 	fuse_write_args_fill(ia, ff, pos, count);
@@ -1160,10 +1180,26 @@ static ssize_t fuse_send_write(struct fuse_io_args *ia, loff_t pos,
 		return fuse_async_req_send(fm, ia, count);
 
 	err = fuse_simple_request(fm, &ia->ap.args);
-	if (!err && ia->write.out.size > count)
+	written = ia->write.out.size;
+	if (!err && written > count)
 		err = -EIO;
 
-	return err ?: ia->write.out.size;
+	/*
+	 * Without FOPEN_DIRECT_IO, generic_file_direct_write() does the
+	 * invalidation for us.
+	 */
+	if (!err && written && mapping->nrpages &&
+	    (ff->open_flags & FOPEN_DIRECT_IO)) {
+		/*
+		 * As in generic_file_direct_write(), invalidate after the
+		 * write, to invalidate read-ahead cache that may have competed
+		 * with the write.
+		 */
+		invalidate_inode_pages2_range(mapping, pos >> PAGE_SHIFT,
+					(pos + written - 1) >> PAGE_SHIFT);
+	}
+
+	return err ?: written;
 }
 
 bool fuse_write_update_attr(struct inode *inode, loff_t pos, ssize_t written)
@@ -1242,7 +1278,6 @@ static ssize_t fuse_fill_write_pages(struct fuse_io_args *ia,
 {
 	struct fuse_args_pages *ap = &ia->ap;
 	struct fuse_conn *fc = get_fuse_conn(mapping->host);
-	unsigned offset = pos & (PAGE_SIZE - 1);
 	size_t count = 0;
 	unsigned int num;
 	int err = 0;
@@ -1269,7 +1304,7 @@ static ssize_t fuse_fill_write_pages(struct fuse_io_args *ia,
 		if (mapping_writably_mapped(mapping))
 			flush_dcache_folio(folio);
 
-		folio_offset = ((index - folio->index) << PAGE_SHIFT) + offset;
+		folio_offset = offset_in_folio(folio, pos);
 		bytes = min(folio_size(folio) - folio_offset, num);
 
 		tmp = copy_folio_from_iter_atomic(folio, folio_offset, bytes, ii);
@@ -1299,9 +1334,6 @@ static ssize_t fuse_fill_write_pages(struct fuse_io_args *ia,
 		count += tmp;
 		pos += tmp;
 		num -= tmp;
-		offset += tmp;
-		if (offset == folio_size(folio))
-			offset = 0;
 
 		/* If we copied full folio, mark it uptodate */
 		if (tmp == folio_size(folio))
@@ -1313,7 +1345,9 @@ static ssize_t fuse_fill_write_pages(struct fuse_io_args *ia,
 			ia->write.folio_locked = true;
 			break;
 		}
-		if (!fc->big_writes || offset != 0)
+		if (!fc->big_writes)
+			break;
+		if (folio_offset + tmp != folio_size(folio))
 			break;
 	}
 
@@ -1737,15 +1771,6 @@ ssize_t fuse_direct_io(struct fuse_io_priv *io, struct iov_iter *iter,
 		fuse_io_free(ia);
 	if (res > 0)
 		*ppos = pos;
-
-	if (res > 0 && write && fopen_direct_io) {
-		/*
-		 * As in generic_file_direct_write(), invalidate after the
-		 * write, to invalidate read-ahead cache that may have competed
-		 * with the write.
-		 */
-		invalidate_inode_pages2_range(mapping, idx_from, idx_to);
-	}
 
 	return res > 0 ? res : err;
 }
