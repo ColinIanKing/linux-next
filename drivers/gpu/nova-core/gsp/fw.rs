@@ -10,7 +10,6 @@ use core::ops::Range;
 
 use kernel::{
     dma::CoherentAllocation,
-    fmt,
     prelude::*,
     ptr::{
         Alignable,
@@ -223,43 +222,6 @@ pub(crate) enum MsgFunction {
     UcodeLibOsPrint = bindings::NV_VGPU_MSG_EVENT_UCODE_LIBOS_PRINT,
 }
 
-impl fmt::Display for MsgFunction {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            // Common function codes
-            MsgFunction::Nop => write!(f, "NOP"),
-            MsgFunction::SetGuestSystemInfo => write!(f, "SET_GUEST_SYSTEM_INFO"),
-            MsgFunction::AllocRoot => write!(f, "ALLOC_ROOT"),
-            MsgFunction::AllocDevice => write!(f, "ALLOC_DEVICE"),
-            MsgFunction::AllocMemory => write!(f, "ALLOC_MEMORY"),
-            MsgFunction::AllocCtxDma => write!(f, "ALLOC_CTX_DMA"),
-            MsgFunction::AllocChannelDma => write!(f, "ALLOC_CHANNEL_DMA"),
-            MsgFunction::MapMemory => write!(f, "MAP_MEMORY"),
-            MsgFunction::BindCtxDma => write!(f, "BIND_CTX_DMA"),
-            MsgFunction::AllocObject => write!(f, "ALLOC_OBJECT"),
-            MsgFunction::Free => write!(f, "FREE"),
-            MsgFunction::Log => write!(f, "LOG"),
-            MsgFunction::GetGspStaticInfo => write!(f, "GET_GSP_STATIC_INFO"),
-            MsgFunction::SetRegistry => write!(f, "SET_REGISTRY"),
-            MsgFunction::GspSetSystemInfo => write!(f, "GSP_SET_SYSTEM_INFO"),
-            MsgFunction::GspInitPostObjGpu => write!(f, "GSP_INIT_POST_OBJGPU"),
-            MsgFunction::GspRmControl => write!(f, "GSP_RM_CONTROL"),
-            MsgFunction::GetStaticInfo => write!(f, "GET_STATIC_INFO"),
-
-            // Event codes
-            MsgFunction::GspInitDone => write!(f, "INIT_DONE"),
-            MsgFunction::GspRunCpuSequencer => write!(f, "RUN_CPU_SEQUENCER"),
-            MsgFunction::PostEvent => write!(f, "POST_EVENT"),
-            MsgFunction::RcTriggered => write!(f, "RC_TRIGGERED"),
-            MsgFunction::MmuFaultQueued => write!(f, "MMU_FAULT_QUEUED"),
-            MsgFunction::OsErrorLog => write!(f, "OS_ERROR_LOG"),
-            MsgFunction::GspPostNoCat => write!(f, "NOCAT"),
-            MsgFunction::GspLockdownNotice => write!(f, "LOCKDOWN_NOTICE"),
-            MsgFunction::UcodeLibOsPrint => write!(f, "LIBOS_PRINT"),
-        }
-    }
-}
-
 impl TryFrom<u32> for MsgFunction {
     type Error = kernel::error::Error;
 
@@ -330,22 +292,6 @@ pub(crate) enum SeqBufOpcode {
     RegWrite = bindings::GSP_SEQ_BUF_OPCODE_GSP_SEQ_BUF_OPCODE_REG_WRITE,
 }
 
-impl fmt::Display for SeqBufOpcode {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            SeqBufOpcode::CoreReset => write!(f, "CORE_RESET"),
-            SeqBufOpcode::CoreResume => write!(f, "CORE_RESUME"),
-            SeqBufOpcode::CoreStart => write!(f, "CORE_START"),
-            SeqBufOpcode::CoreWaitForHalt => write!(f, "CORE_WAIT_FOR_HALT"),
-            SeqBufOpcode::DelayUs => write!(f, "DELAY_US"),
-            SeqBufOpcode::RegModify => write!(f, "REG_MODIFY"),
-            SeqBufOpcode::RegPoll => write!(f, "REG_POLL"),
-            SeqBufOpcode::RegStore => write!(f, "REG_STORE"),
-            SeqBufOpcode::RegWrite => write!(f, "REG_WRITE"),
-        }
-    }
-}
-
 impl TryFrom<u32> for SeqBufOpcode {
     type Error = kernel::error::Error;
 
@@ -384,7 +330,7 @@ impl From<SeqBufOpcode> for u32 {
 
 /// Wrapper for GSP sequencer register write payload.
 #[repr(transparent)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub(crate) struct RegWritePayload(bindings::GSP_SEQ_BUF_PAYLOAD_REG_WRITE);
 
 impl RegWritePayload {
@@ -407,7 +353,7 @@ unsafe impl AsBytes for RegWritePayload {}
 
 /// Wrapper for GSP sequencer register modify payload.
 #[repr(transparent)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub(crate) struct RegModifyPayload(bindings::GSP_SEQ_BUF_PAYLOAD_REG_MODIFY);
 
 impl RegModifyPayload {
@@ -435,7 +381,7 @@ unsafe impl AsBytes for RegModifyPayload {}
 
 /// Wrapper for GSP sequencer register poll payload.
 #[repr(transparent)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub(crate) struct RegPollPayload(bindings::GSP_SEQ_BUF_PAYLOAD_REG_POLL);
 
 impl RegPollPayload {
@@ -468,7 +414,7 @@ unsafe impl AsBytes for RegPollPayload {}
 
 /// Wrapper for GSP sequencer delay payload.
 #[repr(transparent)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub(crate) struct DelayUsPayload(bindings::GSP_SEQ_BUF_PAYLOAD_DELAY_US);
 
 impl DelayUsPayload {
@@ -486,7 +432,7 @@ unsafe impl AsBytes for DelayUsPayload {}
 
 /// Wrapper for GSP sequencer register store payload.
 #[repr(transparent)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Debug)]
 pub(crate) struct RegStorePayload(bindings::GSP_SEQ_BUF_PAYLOAD_REG_STORE);
 
 impl RegStorePayload {
@@ -526,13 +472,7 @@ impl SequencerBufferCmd {
             return Err(EINVAL);
         }
         // SAFETY: Opcode is verified to be `RegWrite`, so union contains valid `RegWritePayload`.
-        let payload_bytes = unsafe {
-            core::slice::from_raw_parts(
-                core::ptr::addr_of!(self.0.payload.regWrite).cast::<u8>(),
-                core::mem::size_of::<RegWritePayload>(),
-            )
-        };
-        Ok(*RegWritePayload::from_bytes(payload_bytes).ok_or(EINVAL)?)
+        Ok(RegWritePayload(unsafe { self.0.payload.regWrite }))
     }
 
     /// Returns the register modify payload by value.
@@ -543,13 +483,7 @@ impl SequencerBufferCmd {
             return Err(EINVAL);
         }
         // SAFETY: Opcode is verified to be `RegModify`, so union contains valid `RegModifyPayload`.
-        let payload_bytes = unsafe {
-            core::slice::from_raw_parts(
-                core::ptr::addr_of!(self.0.payload.regModify).cast::<u8>(),
-                core::mem::size_of::<RegModifyPayload>(),
-            )
-        };
-        Ok(*RegModifyPayload::from_bytes(payload_bytes).ok_or(EINVAL)?)
+        Ok(RegModifyPayload(unsafe { self.0.payload.regModify }))
     }
 
     /// Returns the register poll payload by value.
@@ -560,13 +494,7 @@ impl SequencerBufferCmd {
             return Err(EINVAL);
         }
         // SAFETY: Opcode is verified to be `RegPoll`, so union contains valid `RegPollPayload`.
-        let payload_bytes = unsafe {
-            core::slice::from_raw_parts(
-                core::ptr::addr_of!(self.0.payload.regPoll).cast::<u8>(),
-                core::mem::size_of::<RegPollPayload>(),
-            )
-        };
-        Ok(*RegPollPayload::from_bytes(payload_bytes).ok_or(EINVAL)?)
+        Ok(RegPollPayload(unsafe { self.0.payload.regPoll }))
     }
 
     /// Returns the delay payload by value.
@@ -577,13 +505,7 @@ impl SequencerBufferCmd {
             return Err(EINVAL);
         }
         // SAFETY: Opcode is verified to be `DelayUs`, so union contains valid `DelayUsPayload`.
-        let payload_bytes = unsafe {
-            core::slice::from_raw_parts(
-                core::ptr::addr_of!(self.0.payload.delayUs).cast::<u8>(),
-                core::mem::size_of::<DelayUsPayload>(),
-            )
-        };
-        Ok(*DelayUsPayload::from_bytes(payload_bytes).ok_or(EINVAL)?)
+        Ok(DelayUsPayload(unsafe { self.0.payload.delayUs }))
     }
 
     /// Returns the register store payload by value.
@@ -594,13 +516,7 @@ impl SequencerBufferCmd {
             return Err(EINVAL);
         }
         // SAFETY: Opcode is verified to be `RegStore`, so union contains valid `RegStorePayload`.
-        let payload_bytes = unsafe {
-            core::slice::from_raw_parts(
-                core::ptr::addr_of!(self.0.payload.regStore).cast::<u8>(),
-                core::mem::size_of::<RegStorePayload>(),
-            )
-        };
-        Ok(*RegStorePayload::from_bytes(payload_bytes).ok_or(EINVAL)?)
+        Ok(RegStorePayload(unsafe { self.0.payload.regStore }))
     }
 }
 

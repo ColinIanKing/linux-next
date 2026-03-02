@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
 use core::{
-    cmp,
     mem,
     sync::atomic::{
         fence,
@@ -161,12 +160,14 @@ struct GspMem {
     /// Self-mapping page table entries.
     ptes: PteArray<{ GSP_PAGE_SIZE / size_of::<u64>() }>,
     /// CPU queue: the driver writes commands here, and the GSP reads them. It also contains the
-    /// write and read pointers that the CPU updates.
+    /// write and read pointers that the CPU updates. This means that the read pointer here is an
+    /// index into the GSP queue.
     ///
     /// This member is read-only for the GSP.
     cpuq: Msgq,
     /// GSP queue: the GSP writes messages here, and the driver reads them. It also contains the
-    /// write and read pointers that the GSP updates.
+    /// write and read pointers that the GSP updates. This means that the read pointer here is an
+    /// index into the CPU queue.
     ///
     /// This member is read-only for the driver.
     gspq: Msgq,
@@ -222,24 +223,30 @@ impl DmaGspMem {
         // - We will only access the driver-owned part of the shared memory.
         // - Per the safety statement of the function, no concurrent access will be performed.
         let gsp_mem = &mut unsafe { self.0.as_slice_mut(0, 1) }.unwrap()[0];
-        // PANIC: per the invariant of `cpu_write_ptr`, `tx` is `<= MSGQ_NUM_PAGES`.
+        // PANIC: per the invariant of `cpu_write_ptr`, `tx` is `< MSGQ_NUM_PAGES`.
         let (before_tx, after_tx) = gsp_mem.cpuq.msgq.data.split_at_mut(tx);
 
-        if rx <= tx {
-            // The area from `tx` up to the end of the ring, and from the beginning of the ring up
-            // to `rx`, minus one unit, belongs to the driver.
-            if rx == 0 {
-                let last = after_tx.len() - 1;
-                (&mut after_tx[..last], &mut before_tx[0..0])
-            } else {
-                (after_tx, &mut before_tx[..rx])
-            }
+        // The area starting at `tx` and ending at `rx - 2` modulo MSGQ_NUM_PAGES, inclusive,
+        // belongs to the driver for writing.
+
+        if rx == 0 {
+            // Since `rx` is zero, leave an empty slot at end of the buffer.
+            let last = after_tx.len() - 1;
+            (&mut after_tx[..last], &mut [])
+        } else if rx <= tx {
+            // The area is discontiguous and we leave an empty slot before `rx`.
+            // PANIC:
+            // - The index `rx - 1` is non-negative because `rx != 0` in this branch.
+            // - The index does not exceed `before_tx.len()` (which equals `tx`) because
+            //   `rx <= tx` in this branch.
+            (after_tx, &mut before_tx[..(rx - 1)])
         } else {
-            // The area from `tx` to `rx`, minus one unit, belongs to the driver.
-            //
-            // PANIC: per the invariants of `cpu_write_ptr` and `gsp_read_ptr`, `rx` and `tx` are
-            // `<= MSGQ_NUM_PAGES`, and the test above ensured that `rx > tx`.
-            (after_tx.split_at_mut(rx - tx).0, &mut before_tx[0..0])
+            // The area is contiguous and we leave an empty slot before `rx`.
+            // PANIC:
+            // - The index `rx - tx - 1` is non-negative because `rx > tx` in this branch.
+            // - The index does not exceed `after_tx.len()` (which is `MSGQ_NUM_PAGES - tx`)
+            //   because `rx < MSGQ_NUM_PAGES` by the `gsp_read_ptr` invariant.
+            (&mut after_tx[..(rx - tx - 1)], &mut [])
         }
     }
 
@@ -257,13 +264,19 @@ impl DmaGspMem {
         // - We will only access the driver-owned part of the shared memory.
         // - Per the safety statement of the function, no concurrent access will be performed.
         let gsp_mem = &unsafe { self.0.as_slice(0, 1) }.unwrap()[0];
-        // PANIC: per the invariant of `cpu_read_ptr`, `xx` is `<= MSGQ_NUM_PAGES`.
-        let (before_rx, after_rx) = gsp_mem.gspq.msgq.data.split_at(rx);
+        let data = &gsp_mem.gspq.msgq.data;
 
-        match tx.cmp(&rx) {
-            cmp::Ordering::Equal => (&after_rx[0..0], &after_rx[0..0]),
-            cmp::Ordering::Greater => (&after_rx[..tx], &before_rx[0..0]),
-            cmp::Ordering::Less => (after_rx, &before_rx[..tx]),
+        // The area starting at `rx` and ending at `tx - 1` modulo MSGQ_NUM_PAGES, inclusive,
+        // belongs to the driver for reading.
+        // PANIC:
+        // - per the invariant of `cpu_read_ptr`, `rx < MSGQ_NUM_PAGES`
+        // - per the invariant of `gsp_write_ptr`, `tx < MSGQ_NUM_PAGES`
+        if rx <= tx {
+            // The area is contiguous.
+            (&data[rx..tx], &[])
+        } else {
+            // The area is discontiguous.
+            (&data[rx..], &data[..tx])
         }
     }
 
@@ -315,7 +328,7 @@ impl DmaGspMem {
     //
     // # Invariants
     //
-    // - The returned value is between `0` and `MSGQ_NUM_PAGES`.
+    // - The returned value is within `0..MSGQ_NUM_PAGES`.
     fn gsp_write_ptr(&self) -> u32 {
         let gsp_mem = self.0.start_ptr();
 
@@ -329,7 +342,7 @@ impl DmaGspMem {
     //
     // # Invariants
     //
-    // - The returned value is between `0` and `MSGQ_NUM_PAGES`.
+    // - The returned value is within `0..MSGQ_NUM_PAGES`.
     fn gsp_read_ptr(&self) -> u32 {
         let gsp_mem = self.0.start_ptr();
 
@@ -343,7 +356,7 @@ impl DmaGspMem {
     //
     // # Invariants
     //
-    // - The returned value is between `0` and `MSGQ_NUM_PAGES`.
+    // - The returned value is within `0..MSGQ_NUM_PAGES`.
     fn cpu_read_ptr(&self) -> u32 {
         let gsp_mem = self.0.start_ptr();
 
@@ -372,7 +385,7 @@ impl DmaGspMem {
     //
     // # Invariants
     //
-    // - The returned value is between `0` and `MSGQ_NUM_PAGES`.
+    // - The returned value is within `0..MSGQ_NUM_PAGES`.
     fn cpu_write_ptr(&self) -> u32 {
         let gsp_mem = self.0.start_ptr();
 
@@ -384,7 +397,7 @@ impl DmaGspMem {
 
     // Informs the GSP that it can process `elem_count` new pages from the command queue.
     fn advance_cpu_write_ptr(&mut self, elem_count: u32) {
-        let wptr = self.cpu_write_ptr().wrapping_add(elem_count) & MSGQ_NUM_PAGES;
+        let wptr = self.cpu_write_ptr().wrapping_add(elem_count) % MSGQ_NUM_PAGES;
         let gsp_mem = self.0.start_ptr_mut();
 
         // SAFETY:
@@ -531,7 +544,7 @@ impl Cmdq {
 
         dev_dbg!(
             &self.dev,
-            "GSP RPC: send: seq# {}, function={}, length=0x{:x}\n",
+            "GSP RPC: send: seq# {}, function={:?}, length=0x{:x}\n",
             self.seq,
             M::FUNCTION,
             dst.header.length(),
@@ -661,7 +674,17 @@ impl Cmdq {
             let (cmd, contents_1) = M::Message::from_bytes_prefix(message.contents.0).ok_or(EIO)?;
             let mut sbuffer = SBufferIter::new_reader([contents_1, message.contents.1]);
 
-            M::read(cmd, &mut sbuffer).map_err(|e| e.into())
+            M::read(cmd, &mut sbuffer)
+                .map_err(|e| e.into())
+                .inspect(|_| {
+                    if !sbuffer.is_empty() {
+                        dev_warn!(
+                            &self.dev,
+                            "GSP message {:?} has unprocessed data\n",
+                            function
+                        );
+                    }
+                })
         } else {
             Err(ERANGE)
         };
