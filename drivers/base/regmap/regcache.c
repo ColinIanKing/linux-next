@@ -42,16 +42,10 @@ void regcache_sort_defaults(struct reg_default *defaults, unsigned int ndefaults
 }
 EXPORT_SYMBOL_GPL(regcache_sort_defaults);
 
-static int regcache_hw_init(struct regmap *map)
+static int regcache_count_cacheable_registers(struct regmap *map)
 {
-	int i, j;
-	int ret;
 	int count;
-	unsigned int reg, val;
-	void *tmp_buf;
-
-	if (!map->num_reg_defaults_raw)
-		return -EINVAL;
+	int i;
 
 	/* calculate the size of reg_defaults */
 	for (count = 0, i = 0; i < map->num_reg_defaults_raw; i++)
@@ -60,10 +54,18 @@ static int regcache_hw_init(struct regmap *map)
 			count++;
 
 	/* all registers are unreadable or volatile, so just bypass */
-	if (!count) {
+	if (!count)
 		map->cache_bypass = true;
-		return 0;
-	}
+
+	return count;
+}
+
+static int regcache_hw_init(struct regmap *map, int count)
+{
+	int i, j;
+	int ret;
+	unsigned int reg, val;
+	void *tmp_buf;
 
 	map->num_reg_defaults = count;
 	map->reg_defaults = kmalloc_objs(struct reg_default, count);
@@ -132,6 +134,7 @@ err_free:
 
 int regcache_init(struct regmap *map, const struct regmap_config *config)
 {
+	int count = 0;
 	int ret;
 	int i;
 	void *tmp_buf;
@@ -196,15 +199,17 @@ int regcache_init(struct regmap *map, const struct regmap_config *config)
 			return -ENOMEM;
 		map->reg_defaults = tmp_buf;
 	} else if (map->num_reg_defaults_raw) {
+		count = regcache_count_cacheable_registers(map);
+		if (map->cache_bypass)
+			return 0;
+
 		/* Some devices such as PMICs don't have cache defaults,
 		 * we cope with this by reading back the HW registers and
 		 * crafting the cache defaults by hand.
 		 */
-		ret = regcache_hw_init(map);
+		ret = regcache_hw_init(map, count);
 		if (ret < 0)
 			return ret;
-		if (map->cache_bypass)
-			return 0;
 	}
 
 	if (!map->max_register_is_set && map->num_reg_defaults_raw) {
