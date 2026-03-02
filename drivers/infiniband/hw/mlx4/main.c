@@ -2525,6 +2525,7 @@ static const struct ib_device_ops mlx4_ib_dev_ops = {
 	.attach_mcast = mlx4_ib_mcg_attach,
 	.create_ah = mlx4_ib_create_ah,
 	.create_cq = mlx4_ib_create_cq,
+	.create_user_cq = mlx4_ib_create_user_cq,
 	.create_qp = mlx4_ib_create_qp,
 	.create_srq = mlx4_ib_create_srq,
 	.dealloc_pd = mlx4_ib_dealloc_pd,

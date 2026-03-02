@@ -1032,6 +1032,9 @@ static int create_cq(struct uverbs_attr_bundle *attrs,
 	if (cmd->comp_vector >= attrs->ufile->device->num_comp_vectors)
 		return -EINVAL;
 
+	if (!cmd->cqe)
+		return -EINVAL;
+
 	obj = (struct ib_ucq_object *)uobj_alloc(UVERBS_OBJECT_CQ, attrs,
 						 &ib_dev);
 	if (IS_ERR(obj))
@@ -1068,7 +1071,10 @@ static int create_cq(struct uverbs_attr_bundle *attrs,
 	rdma_restrack_new(&cq->res, RDMA_RESTRACK_CQ);
 	rdma_restrack_set_name(&cq->res, NULL);
 
-	ret = ib_dev->ops.create_cq(cq, &attr, attrs);
+	if (ib_dev->ops.create_user_cq)
+		ret = ib_dev->ops.create_user_cq(cq, &attr, attrs);
+	else
+		ret = ib_dev->ops.create_cq(cq, &attr, attrs);
 	if (ret)
 		goto err_free;
 	rdma_restrack_add(&cq->res);
@@ -1085,6 +1091,7 @@ static int create_cq(struct uverbs_attr_bundle *attrs,
 	return uverbs_response(attrs, &resp, sizeof(resp));
 
 err_free:
+	ib_umem_release(cq->umem);
 	rdma_restrack_put(&cq->res);
 	kfree(cq);
 err_file:

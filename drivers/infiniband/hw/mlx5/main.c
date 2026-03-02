@@ -4517,6 +4517,7 @@ static const struct ib_device_ops mlx5_ib_dev_ops = {
 	.check_mr_status = mlx5_ib_check_mr_status,
 	.create_ah = mlx5_ib_create_ah,
 	.create_cq = mlx5_ib_create_cq,
+	.create_user_cq = mlx5_ib_create_user_cq,
 	.create_qp = mlx5_ib_create_qp,
 	.create_srq = mlx5_ib_create_srq,
 	.create_user_ah = mlx5_ib_create_ah,

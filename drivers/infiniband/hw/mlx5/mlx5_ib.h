@@ -561,6 +561,7 @@ struct mlx5_ib_cq_buf {
 enum mlx5_ib_cq_pr_flags {
 	MLX5_IB_CQ_PR_FLAGS_CQE_128_PAD	= 1 << 0,
 	MLX5_IB_CQ_PR_FLAGS_REAL_TIME_TS = 1 << 1,
+	MLX5_IB_CQ_PR_TIMESTAMP_COMPLETION = 1 << 2,
 };
 
 struct mlx5_ib_cq {
@@ -581,7 +582,6 @@ struct mlx5_ib_cq {
 	int			cqe_size;
 	struct list_head	list_send_qp;
 	struct list_head	list_recv_qp;
-	u32			create_flags;
 	struct list_head	wc_list;
 	enum ib_cq_notify_flags notify_flags;
 	struct work_struct	notify_work;
@@ -1371,6 +1371,9 @@ int mlx5_ib_read_wqe_srq(struct mlx5_ib_srq *srq, int wqe_index, void *buffer,
 			 size_t buflen, size_t *bc);
 int mlx5_ib_create_cq(struct ib_cq *ibcq, const struct ib_cq_init_attr *attr,
 		      struct uverbs_attr_bundle *attrs);
+int mlx5_ib_create_user_cq(struct ib_cq *ibcq,
+			   const struct ib_cq_init_attr *attr,
+			   struct uverbs_attr_bundle *attrs);
 int mlx5_ib_destroy_cq(struct ib_cq *cq, struct ib_udata *udata);
 int mlx5_ib_poll_cq(struct ib_cq *ibcq, int num_entries, struct ib_wc *wc);
 int mlx5_ib_pre_destroy_cq(struct ib_cq *cq);
