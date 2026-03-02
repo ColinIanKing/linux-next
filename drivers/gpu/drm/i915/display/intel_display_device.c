@@ -10,7 +10,6 @@
 #include <drm/drm_print.h>
 #include <drm/intel/pciids.h>
 
-#include "i915_reg.h"
 #include "intel_cx0_phy_regs.h"
 #include "intel_de.h"
 #include "intel_display.h"
@@ -1539,9 +1538,9 @@ probe_gmdid_display(struct intel_display *display, struct intel_display_ip_ver *
 		return NULL;
 	}
 
-	gmd_id.ver = REG_FIELD_GET(GMD_ID_ARCH_MASK, val);
-	gmd_id.rel = REG_FIELD_GET(GMD_ID_RELEASE_MASK, val);
-	gmd_id.step = REG_FIELD_GET(GMD_ID_STEP, val);
+	gmd_id.ver = REG_FIELD_GET(GMD_ID_DISPLAY_ARCH_MASK, val);
+	gmd_id.rel = REG_FIELD_GET(GMD_ID_DISPLAY_RELEASE_MASK, val);
+	gmd_id.step = REG_FIELD_GET(GMD_ID_DISPLAY_STEP, val);
 
 	for (i = 0; i < ARRAY_SIZE(gmdid_display_map); i++) {
 		if (gmd_id.ver == gmdid_display_map[i].ver &&

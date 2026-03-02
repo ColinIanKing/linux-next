@@ -7,6 +7,8 @@
 #include <linux/string_helpers.h>
 
 #include <drm/drm_print.h>
+#include <drm/intel/intel_pcode_regs.h>
+#include <drm/intel/intel_gmd_interrupt_regs.h>
 
 #include "display/vlv_clock.h"
 #include "gem/i915_gem_region.h"

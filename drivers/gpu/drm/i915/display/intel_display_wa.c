@@ -5,7 +5,6 @@
 
 #include <drm/drm_print.h>
 
-#include "i915_reg.h"
 #include "intel_de.h"
 #include "intel_display_core.h"
 #include "intel_display_regs.h"
@@ -32,9 +31,17 @@ static void adlp_display_wa_apply(struct intel_display *display)
 	intel_de_rmw(display, GEN8_CHICKEN_DCPR_1, DDI_CLOCK_REG_ACCESS, 0);
 }
 
+static void xe3plpd_display_wa_apply(struct intel_display *display)
+{
+	/* Wa_22021451799 */
+	intel_de_rmw(display, GEN9_CLKGATE_DIS_0, 0, DMG_GATING_DIS);
+}
+
 void intel_display_wa_apply(struct intel_display *display)
 {
-	if (display->platform.alderlake_p)
+	if (DISPLAY_VER(display) == 35)
+		xe3plpd_display_wa_apply(display);
+	else if (display->platform.alderlake_p)
 		adlp_display_wa_apply(display);
 	else if (DISPLAY_VER(display) == 12)
 		xe_d_display_wa_apply(display);
@@ -63,7 +70,8 @@ bool __intel_display_wa(struct intel_display *display, enum intel_display_wa wa,
 {
 	switch (wa) {
 	case INTEL_DISPLAY_WA_13012396614:
-		return DISPLAY_VERx100(display) == 3000;
+		return DISPLAY_VERx100(display) == 3000 ||
+			DISPLAY_VERx100(display) == 3500;
 	case INTEL_DISPLAY_WA_14011503117:
 		return DISPLAY_VER(display) == 13;
 	case INTEL_DISPLAY_WA_14025769978:
@@ -76,6 +84,8 @@ bool __intel_display_wa(struct intel_display *display, enum intel_display_wa wa,
 		return intel_display_needs_wa_16025573575(display);
 	case INTEL_DISPLAY_WA_22014263786:
 		return IS_DISPLAY_VERx100(display, 1100, 1400);
+	case INTEL_DISPLAY_WA_22021048059:
+		return IS_DISPLAY_VER(display, 14, 35);
 	default:
 		drm_WARN(display->drm, 1, "Missing Wa number: %s\n", name);
 		break;

@@ -8,7 +8,6 @@
 #include "i915_vma.h"
 #include "intel_display_core.h"
 #include "intel_display_types.h"
-#include "intel_dpt.h"
 #include "intel_fb.h"
 #include "intel_fb_pin.h"
 #include "intel_fbdev.h"
@@ -450,25 +449,6 @@ void intel_plane_unpin_fb(struct intel_plane_state *old_plane_state)
 {
 	__xe_unpin_fb_vma(old_plane_state->ggtt_vma);
 	old_plane_state->ggtt_vma = NULL;
-}
-
-/*
- * For Xe introduce dummy intel_dpt_create which just return NULL,
- * intel_dpt_destroy which does nothing, and fake intel_dpt_ofsset returning 0;
- */
-struct i915_address_space *intel_dpt_create(struct intel_framebuffer *fb)
-{
-	return NULL;
-}
-
-void intel_dpt_destroy(struct i915_address_space *vm)
-{
-	return;
-}
-
-u64 intel_dpt_offset(struct i915_vma *dpt_vma)
-{
-	return 0;
 }
 
 void intel_fb_get_map(struct i915_vma *vma, struct iosys_map *map)
